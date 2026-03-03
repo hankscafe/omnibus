@@ -6,10 +6,7 @@
   <em>The ultimate all-in-one, self-hosted comic book and manga app.</em>
 </p>
 
-<p align="center">
-  <a href="https://github.com/hankscafe/omnibus/actions">
-    <img src="https://github.com/hankscafe/omnibus/actions/workflows/docker-publish.yml/badge.svg?branch=main" alt="Build Status">
-  </a>
+</a>
   <a href="https://github.com/hankscafe/omnibus/pkgs/container/omnibus">
     <img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker&logoColor=white" alt="Docker Image">
   </a>

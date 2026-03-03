@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 
-export default function ComicReader() {
+function ReaderContent() {
   if (typeof document !== 'undefined') {
     document.title = "Omnibus - Reader";
   }
@@ -599,5 +599,14 @@ export default function ComicReader() {
           </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// Add this at the absolute bottom of app/reader/page.tsx
+export default function ReaderPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center text-white">Loading Reader...</div>}>
+      <ReaderContent />
+    </Suspense>
   )
 }

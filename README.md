@@ -1,4 +1,4 @@
-# 📚 Omnibus
+# Omnibus
 
 <p align="center">
   <img src="docs/images/banner.png" alt="Omnibus Banner" />
@@ -6,47 +6,135 @@
 
 **Omnibus** is the ultimate all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection. 
 
-Built with a modern, lightning-fast tech stack (Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine), Omnibus is designed to be lightweight, performant, and responsive across all your devices. Whether you are managing a massive archive of `.cbz` and `.cbr` files, hunting down missing issues of your favorite run, or just looking for a clean, distraction-free web reader, Omnibus brings your entire comic universe under one roof.
+Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omnibus is designed to be lightweight, performant, and responsive across all your devices. Whether you are managing a massive archive of `.cbz` and `.cbr` files, hunting down missing issues of your favorite run, or just looking for a clean, distraction-free web reader, Omnibus brings your entire comic universe under one roof.
 
 ---
 
-## 📑 Table of Contents
+## Table of Contents
 - [About Omnibus](#about-omnibus)
 - [Features & Navigation](#features--navigation)
-  - [🏠 Dashboard](#-dashboard)
-  - [📚 The Library](#-the-library)
-  - [📖 Web Reader](#-web-reader)
-  - [🔍 Discovery & Search](#-discovery--search)
-  - [⬇️ Requests & Downloads](#️-requests--downloads)
-  - [📋 Reading Lists](#-reading-lists)
-  - [⚙️ Settings & Administration](#️-settings--administration)
-- [🚀 Installation (Docker)](#-installation-docker)
-- [🙏 Acknowledgements](#-acknowledgements)
+  - [Authentication & Login](#-authentication--login)
+  - [Homepage](#-homepage)
+  - [Library](#-library)
+  - [Series Page](#-series-page)
+  - [Web Reader](#-web-reader)
+  - [Reading Lists](#-reading-lists)
+  - [User Profile & Preferences](#-user-profile--preferences)
+  - [Settings & Administration](#️-settings--administration)
+  - [Additional Screenshots](#-additional-screenshots)
+- [Installation (Docker)](#-installation-docker)
+- [Acknowledgements](#-acknowledgements)
 
 ---
 
 ## Features & Navigation
 
-### 🏠 Dashboard
-The Dashboard is the personalized nerve center of your collection. It dynamically updates based on the logged-in user to provide a tailored snapshot of their reading journey.
-![Dashboard Screenshot](docs/images/dashboard-screenshot.png) * **"Continue Reading" Shelf:** A dynamically updated carousel that tracks your exact page in ongoing issues. Jump back into the action with a single click.
-* **"Up Next" Suggestions:** Once you finish an issue, Omnibus automatically queues up the next chronological issue in that series so you never lose your momentum.
-* **Recently Added:** Highlights the newest volumes and issues that have been successfully imported and processed into the library over the last 30 days.
-* **Global Server Statistics:** Real-time data visualization showing your total series, total issues, distinct publishers, and overall storage footprint.
-* **Active Queue Widget:** A quick-glance view of your current download clients, showing what is actively pulling in without needing to leave the dashboard.
+### Authentication & Login
+The secure gateway to your personal comic universe. Omnibus ensures your collection remains private while offering a beautiful, welcoming entry point for you and your authorized users.
 
-### 📚 The Library
+<p align="center">
+  <img src="docs/images/login_page.png" alt="Login page" />
+  <br>
+  <strong>Login page.</strong>
+</p>
+
+* **Secure Access:** Powered by NextAuth, featuring industry-standard encrypted sessions to keep your server, database, and physical files completely safe from the public internet.
+* **Multi-User Gateway:** A single portal for the server administrator, family members, or friends to log into their distinct, personalized accounts.
+* **Responsive Design:** A beautifully styled, mobile-first interface that provides a frictionless login experience whether you are on a smartphone, tablet, or desktop monitor.
+* **First-Time Setup Detection:** If the database is completely fresh and no administrator account exists yet, the login system intelligently redirects to the built-in Setup Wizard to help you configure your libraries.
+
+### Homepage
+The Dashboard is the personalized nerve center of your collection. It dynamically updates based on the logged-in user to provide a tailored snapshot of their reading journey.
+
+<p align="center">
+  <img src="docs/images/home_page.png" alt="Homepage with Jump Back In section" />
+  <br>
+  <strong>Jump Back In section.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/home_page_discovery.png" alt="Homepage discoery sections" />
+  <br>
+  <strong>Homepage discovery section with Popular Issues and New Releases.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/request_1.png" alt="Series request from home page" />
+  <br>
+  <strong>Series window when clicking issue/series from the discover sections.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/request_2.png" alt="Series request and monitor" />
+  <br>
+  <strong>Users can choose to monitor the series when they are making a request so future releases to a series will be automatically downloaded.</strong>
+</p>
+
+* **"Jump Back In" Shelf:** A dynamically updated carousel that tracks your exact page in ongoing issues. Jump back into the action with a single click.
+* **Popular Issues:** Uses ComicVines api to pull a list of popular issues/series that is cached to help performance and is updated using a scheduled task in the admin section, or using the "Refresh Data" button on the homepage.
+* **New Releases:** Uses ComicVines api to pull a list of new releases that is cached to help performance and is updated using a scheduled task in the admin section, or using the "Refresh Data" button on the homepage.
+* **Manual Search:** A manual search powered by ComicVines api where users can input any series they want and choose from the results which show cover images, publisher, year, and issue count to ensure they are selecting the issue or series they are looking for.
+* **One-Click Requests:** Found a missing issue or an entire story arc? Click "Request" to instantly send it to your automated download queue.
+* **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
+* **Requests & Downloads:** Your automated librarian. Tell Omnibus what you want, and it handles the complex world of tracking, downloading, and organizing.
+* **Admin Alerts:** When an issue is reported or a request requires approval a banner will be visible on the home page with links to the appropriate pages.
+
+<p align="center">
+  <img src="docs/images/admin_alerts.png" alt="Admin alert banners" />
+  <br>
+  <strong>If a user submits an issue with a series or a request is waiting on admin approval, a banner will be visible to admins on the homepage.</strong>
+</p>
+
+### Library
 A meticulously organized, highly performant view of your physical files, built to handle massive, multi-terabyte collections smoothly.
-![Library Screenshot](docs/images/library-screenshot.png) * **Infinite Scrolling & Virtualization:** Browse thousands of high-resolution covers seamlessly without lagging your browser or consuming excess RAM.
-* **Advanced Metadata Parsing:** Automatically extracts embedded `ComicInfo.xml` and ComicRack metadata to accurately display titles, volume numbers, writers, artists, and summaries.
+
+<p align="center">
+  <img src="docs/images/library.png" alt="Library page" />
+  <br>
+  <strong>The library page which features infinite scrolling.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/library_action_buttons.png" alt="Library page series action buttons" />
+  <br>
+  <strong>The library page action buttons.</strong>
+</p>
+
+* **Advanced Metadata Parsing:** Automatically matches metadata based on automatic imports from requests or when matching a manually added series using ComicVines api to accurately display titles, volume numbers, writers, artists, and summaries.
 * **Series vs. Issue Hierarchy:** Automatically groups individual loose issues into their proper Series or Volume folders for a clean, uncluttered browsing experience.
 * **Deep Filtering & Sorting:** * Filter your collection by Publisher (Marvel, DC, Image, etc.), Genre, Format (Comic vs. Manga vs. Magazine), and Status (Completed/Ongoing).
   * Filter by User Reading Status (Unread, In Progress, Read).
   * Sort by Recently Added, Release Date, Alphabetical, or Last Read.
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.
-* **Manual Metadata Editing:** Override automatic metadata with custom titles, descriptions, and cover image uploads if you prefer your own organization.
+* **Cross-Series Curations:** Create custom lists that span multiple series, volumes, and publishers seamlessly.
+* **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view.
 
-### 📖 Web Reader
+### Series Page
+The dedicated hub for an individual comic run or manga volume. This page aggregates all metadata, reading progress, and file management for a specific series into one beautiful layout.
+
+<p align="center">
+  <img src="docs/images/series_page_complete.png" alt="Series page complete" />
+  <br>
+  <strong>A series page showing a series that currently has all available issues.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/series_page_incomplete.png" alt="Series page incomplete" />
+  <br>
+  <strong>A series page showing a series that currently has all available issues.</strong>
+</p>
+
+* **Hero Banner & Synopsis:** A premium, visually striking header displaying high-resolution cover art, publisher logos, release years, and a full story synopsis pulled directly from embedded metadata or ComicVine.
+* **Granular Metadata:** View detailed credits including Writers, Artists, Colorists, and Cover Artists, alongside genre tags and character appearances.
+* **"Read Next" Prompts:** A smart action button that instantly opens the web reader to your exact saved page on the next unread issue in the run.
+* **Issue Grid & List Modes:** *(Coming Soon)* Toggle between a visual cover grid or a condensed list view to easily navigate massive, 100+ issue runs.
+* **Individual Progress Tracking:** Every issue displays its own distinct status (Unread, In Progress with a visual progress bar, or Read). 
+* **Bulk Actions:** Effortlessly manage your collection with one-click buttons to "Mark All as Read," "Refresh Metadata," or delete specific files right from the browser.
+* **Missing Issue Detection:** Visually highlights gaps in your collection (e.g., if you have issues #1, #2, and #4, it will flag #3 as missing) and offers a one-click button to send the missing issue to your download queue.
+* **Sorting Options:** Sort issues sequentially (Issue #1 to #100) or reverse chronological (newest releases first) for ongoing weekly pulls.
+* **Download Option:** Admins can enable a per-user permission for users to download individual issues for viewing offline if they have a comic reader.
+
+### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.
 ![Reader Screenshot](docs/images/reader-screenshot.png) * **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, `.zip`, `.rar`, and `.epub` archives.
 * **Reading Directions:** One-click toggles for Left-to-Right (Standard Comics), Right-to-Left (Manga), and continuous Vertical Scrolling (Webtoons).
@@ -56,17 +144,71 @@ A completely custom, zero-friction reading experience built natively into the br
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
 * **Brightness & Contrast Overlay:** Adjust the brightness of the reader independently of your device settings for late-night reading sessions.
 
-### 🔍 Discovery & Search
-Integrated directly with powerful external APIs to help you identify and find the missing pieces of your collection.
-![Discovery Screenshot](docs/images/discovery-screenshot.png) * **Native ComicVine Integration:** Search the definitive comic database to pull highly accurate metadata, original release dates, character appearances, and high-res variant covers.
-* **Smart Series Matching:** Easily distinguish between different volumes and runs with the same name (e.g., separating *Batman (1940)* from *Batman (2011)*).
-* **Unified Global Search:** Instantly search across both your local physical files and the external ComicVine database simultaneously from one search bar.
-* **"Missing Issue" Detection:** Omnibus compares your local files against the ComicVine API to visually highlight which issues you are missing to complete a run.
-* **One-Click Requests:** Found a missing issue or an entire story arc? Click "Request" to instantly send it to your automated download queue.
+### Reading Lists
+Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.
 
-### ⬇️ Requests & Downloads
-Your automated librarian. Tell Omnibus what you want, and it handles the complex world of tracking, downloading, and organizing.
-![Downloads Screenshot](docs/images/downloads-screenshot.png) * **Download Client Integration:** Connects seamlessly with your favorite Torrent clients (qBittorrent, Transmission) and USENET clients (SABnzbd, NZBGet) behind the scenes.
+<p align="center">
+  <img src="docs/images/reading_lists.png" alt="Reading lists page" />
+  <br>
+  <strong>Reading lists page showing 2 story arcs added.</strong>
+</p>
+
+* **Event Tracking:** Build and follow complex chronological reading orders for major events (e.g., *Infinity Gauntlet*, *Secret Wars*, *Crisis on Infinite Earths*) without having to jump back and forth between folders.
+* **Manual Drag-and-Drop:** Easily reorder issues within your lists with a simple drag-and-drop interface.
+* **Dynamic Smart Lists:** Create lists that automatically populate based on tags, characters, or publishers.
+* **Shareable Lists:** *(Coming Soon)* Import or export reading lists with the wider Omnibus community.
+
+### User Profile & Preferences
+A personalized space for each user on your server to manage their identity, track their unique reading habits, and customize their Omnibus experience to fit their workflow.
+
+<p align="center">
+  <img src="docs/images/profile_1.png" alt="User profile page" />
+  <br>
+  <strong>Users profile page showing customizable header and avatar.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/profile_2.png" alt="User profile page" />
+  <br>
+  <strong>Users profile page reading progress cards.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/profile_3.png" alt="User profile page" />
+  <br>
+  <strong>Users profile page showing recent request history.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/profile_header.png" alt="User profile page" />
+  <br>
+  <strong>Users profile menu from header where you can log out or change password.</strong>
+</p>
+
+* **Personal Identity:** Customize your account by uploading a unique profile avatar and a custom hero banner for your user dashboard.
+* **Reading Statistics:** Track your all-time reading habits. View your total issues read, estimated pages turned, and your most-read publishers or genres.
+* **UI Customization:** Set your own personal theme preferences (Dark mode, Light mode, or System default) and UI accent colors. These settings are tied to your account and persist across any device you log into.
+* **Default Reader Settings:** Save your preferred Web Reader behaviors (e.g., always default to "Fit to Width" or default to "Right-to-Left" for manga libraries) so you never have to adjust settings when starting a new book.
+* **Account Security:** Safely update your password and view or revoke active login sessions *(Coming Soon)* across your different devices.
+* **Personal API Keys:** *(Coming Soon)* Generate secure, user-specific API tokens to integrate your Omnibus reading progress with third-party trackers (like MyAnimeList, AniList, or custom scripts) without giving out Admin access.
+* **Theme Customization:** Toggle Dark/Light modes, adjust UI accent colors, and tailor the app to your visual preferences.
+
+### Settings & Administration
+Complete, granular control over your instance, your users, and your underlying automation.
+
+<p align="center">
+  <img src="docs/images/admin_1.png" alt="Admin page" />
+  <br>
+  <strong>Admin page showing data cards and configuration pages.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/admin_2.png" alt="Admin page" />
+  <br>
+  <strong>Admin page showing active downloads and request management sections.</strong>
+</p> 
+
+* **Download Client Integration:** Connects seamlessly with your favorite Torrent clients (qBittorrent, Transmission) and USENET clients (SABnzbd, NZBGet) behind the scenes.
 * **Indexer Support:** Plug in Prowlarr or Jackett to search dozens of trackers simultaneously.
 * **Queue & History Management:** View active, pending, paused, and completed downloads with real-time progress bars, speeds, and ETA.
 * **Automated Post-Processing:** Once a comic is downloaded, Omnibus automatically:
@@ -74,31 +216,63 @@ Your automated librarian. Tell Omnibus what you want, and it handles the complex
   2. Renames the file to your customized standard format.
   3. Moves it to the correct publisher/series directory on your NAS.
   4. Triggers a local library scan to make it instantly readable.
-* **Release Profiles & Quality Gates:** Specify your preferred file types (e.g., prefer `.cbz`, ignore `.pdf`) and preferred release groups.
-* **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
-
-### 📋 Reading Lists
-Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.
-![Reading Lists Screenshot](docs/images/reading-lists-screenshot.png) * **Cross-Series Curations:** Create custom lists that span multiple series, volumes, and publishers seamlessly.
-* **Event Tracking:** Build and follow complex chronological reading orders for major events (e.g., *Infinity Gauntlet*, *Secret Wars*, *Crisis on Infinite Earths*) without having to jump back and forth between folders.
-* **Manual Drag-and-Drop:** Easily reorder issues within your lists with a simple drag-and-drop interface.
-* **Dynamic Smart Lists:** Create lists that automatically populate based on tags, characters, or publishers.
-* **Shareable Lists:** *(Coming Soon)* Import or export reading lists with the wider Omnibus community.
-
-### ⚙️ Settings & Administration
-Complete, granular control over your instance, your users, and your underlying automation.
-![Settings Screenshot](docs/images/settings-screenshot.png) * **User & Role Management:** * Create independent accounts for friends and family so everyone has their own reading progress.
-  * Restrict access to certain libraries (e.g., hiding mature content from younger users).
-  * Assign Admin, Contributor, or Reader roles.
+* **User & Role Management:** * Create independent accounts for friends and family so everyone has their own reading progress.
+  * Admin or User roles
+  * Users can be assigned auto-approval permission and download permission
 * **Library Path Mapping:** Easily map multiple root directories from your NAS (e.g., separate folders for `/comics`, `/manga`, and `/magazines`).
 * **API & Service Configuration:** Securely plug in your ComicVine API keys, Indexer credentials, and Download Client details.
 * **Scheduled Tasks (Cron):** Configure how often Omnibus should scan your disk for new files, refresh metadata, or check indexers for missing requested issues.
 * **System Logs:** A built-in log viewer to easily troubleshoot API limits, failed downloads, or matching errors.
-* **Theme Customization:** Toggle Dark/Light modes, adjust UI accent colors, and tailor the app to your visual preferences.
 
 ---
 
-## 🚀 Installation (Docker)
+## Additional Screenshots
+
+<p align="center">
+  <a href="docs/images/analytics_1.png">
+    <img src="docs/images/analytics_1.png" width="250" alt="Analytics page showing data cards" style="margin: 10px;">
+  </a>
+  <a href="docs/images/analytics_2.png">
+    <img src="docs/images/analytics_2.png" width="250" alt="Analytics page showing purge option for unread series" style="margin: 10px;">
+  </a>
+  <a href="docs/images/approvals.png">
+    <img src="docs/images/approvals.png" width="250" alt="Requests awaiting approval" style="margin: 10px;">
+  </a>
+  <a href="docs/images/diagnostics.png">
+    <img src="docs/images/diagnostics.png" width="250" alt="Library diagnostics page" style="margin: 10px;">
+  </a>
+  <a href="docs/images/issue_reports_1.png">
+    <img src="docs/images/issue_reports_2.png" width="250" alt="Issue reports page" style="margin: 10px;">
+  </a>
+  <a href="docs/images/issue_reports_2.png">
+    <img src="docs/images/issue_reports_2.png" width="250" alt="Issue reports admin response" style="margin: 10px;">
+  </a>
+  <a href="docs/images/issue_reports_3.png">
+    <img src="docs/images/issue_reports_3.png" width="250" alt="Issue reports reesolution" style="margin: 10px;">
+  </a>
+  <a href="docs/images/my_requests.png">
+    <img src="docs/images/my_requests.png" width="250" alt="My Reqeusts page" style="margin: 10px;">
+  </a>
+  <a href="docs/images/smart_matcher.png">
+    <img src="docs/images/smart_matcher.png" width="250" alt="Smart Matcher page" style="margin: 10px;">
+  </a>
+  <a href="docs/images/storage_deep_dive.png">
+    <img src="docs/images/storage_deep_dive.png" width="250" alt="Storage Deep Dive page" style="margin: 10px;">
+  </a>
+  <a href="docs/images/system_logs_1.png">
+    <img src="docs/images/system_logs_1.png" width="250" alt="System Logs live terminal" style="margin: 10px;">
+  </a>
+  <a href="docs/images/system_logs_2.png">
+    <img src="docs/images/system_logs_2.png" width="250" alt="System Logs page" style="margin: 10px;">
+  </a>
+  <a href="docs/images/users.png">
+    <img src="docs/images/users.png" width="250" alt="User Management page" style="margin: 10px;">
+  </a>
+</p>
+
+---
+
+## Installation (Docker)
 
 Omnibus is built to be deployed via Docker. Because it utilizes a serverless SQLite engine through Prisma, **all necessary database files and dependencies are bundled directly into the image.** There are no external database containers required!
 
@@ -132,7 +306,7 @@ services:
 
 ---
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
 Omnibus stands on the shoulders of giants. This project was heavily inspired by and built with immense respect for the developers of the following incredible self-hosted applications:
 

@@ -4,9 +4,15 @@
   <img src="docs/images/banner.png" alt="Omnibus Banner" />
 </p>
 
-**Omnibus** is the ultimate all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection. 
+**Omnibus** is the ultimate all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection.
+
+I am not a programming but I was inspired to vibe-code this project after coming across [ReadMeABook](https://github.com/kikootwo/ReadMeABook) on Reddit.  Audiobooks, eBooks and comic books have been a challenge for myself when self hosting.  Having a system like [AudioBookShelf](https://github.com/advplyr/audiobookshelf) for managing the metadata and allowing users to listen to the books is fantastic, but how do you get them to AudioBookShelf?  Users would ask and I would add them manually or rely on a separate system that would autodownload Audible books into a library.
+
+I once I started using [ReadMeABook](https://github.com/kikootwo/ReadMeABook) I wanted something that would work for comics, understanding that indexers and other sites for comics can be tricky due to naming and availability (single issue or series vs a collection of every comic realted to a certain character).  I took the initial look of [ReadMeABook](https://github.com/kikootwo/ReadMeABook) and begin using AI to help create something specific for comics.  It eventaully moved beyone just a requesting tool, into a library management and metadata tool, and then into a reader as well.
 
 Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omnibus is designed to be lightweight, performant, and responsive across all your devices. Whether you are managing a massive archive of `.cbz` and `.cbr` files, hunting down missing issues of your favorite run, or just looking for a clean, distraction-free web reader, Omnibus brings your entire comic universe under one roof.
+
+I know people aren't fond of AI built (vibe-coded) projects, but I enjoyed the process and it was interesting to see it come tegether and into something usable.  If you have issues or suggestions, please let me know.  I will gladly take additional help or insight to making the project better.
 
 ---
 

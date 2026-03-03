@@ -1,65 +1,207 @@
-import Image from "next/image";
+"use client"
+
+import { useState, useEffect } from "react"
+import { useSession } from "next-auth/react"
+import { RequestSearch } from "@/components/request-search"
+import { ComicGrid } from "@/components/comic-grid"
+import { ContinueReading } from "@/components/ContinueReading"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { 
+  Bell, 
+  ArrowRight, 
+  RefreshCw, 
+  Loader2, 
+  AlertTriangle, 
+  DownloadCloud // Added for the manual intervention banner
+} from "lucide-react" 
+import Link from "next/link"
 
 export default function Home() {
+  const { data: session } = useSession()
+  const [pendingCount, setPendingCount] = useState(0)
+  const [openReportsCount, setOpenReportsCount] = useState(0)
+  const [manualDownloadsCount, setManualDownloadsCount] = useState(0)
+  const isAdmin = session?.user?.role === 'ADMIN'
+
+  // State to manage hard cache resets
+  const [refreshSignal, setRefreshSignal] = useState(0)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+
+  // Fix title flashing
+  useEffect(() => {
+    document.title = "Omnibus - Home"
+  }, []);
+
+  // Fetch requests and reports to check for pending approvals/issues if the user is an admin
+  useEffect(() => {
+    if (!isAdmin) return
+
+    const checkAdminAlerts = async () => {
+      try {
+        // Fetch All Requests
+        const resReq = await fetch('/api/admin/requests')
+        if (resReq.ok) {
+          const data = await resReq.json()
+          
+          // Count Pending Approvals
+          const pending = data.filter((r: any) => r.status === 'PENDING_APPROVAL')
+          setPendingCount(pending.length)
+
+          // Count Manual Intervention Required (MANUAL_DDL)
+          const manual = data.filter((r: any) => r.status === 'MANUAL_DDL')
+          setManualDownloadsCount(manual.length)
+        }
+
+        // Fetch Open Reports
+        const resRep = await fetch('/api/admin/reports')
+        if (resRep.ok) {
+          const data = await resRep.json()
+          const openReports = data.filter((r: any) => r.status === 'OPEN')
+          setOpenReportsCount(openReports.length)
+        }
+      } catch (e) {
+        console.error("Failed to check admin alerts", e)
+      }
+    }
+
+    checkAdminAlerts()
+    const interval = setInterval(checkAdminAlerts, 300000)
+    return () => clearInterval(interval)
+  }, [isAdmin])
+
+  // Hard Refresh Handler
+  const handleRefreshData = async () => {
+    setIsRefreshing(true);
+    try {
+        // 1. Tell the backend to rebuild the cache instantly
+        await fetch('/api/admin/jobs/trigger', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job: 'popular' }) 
+        });
+        
+        // 2. Trigger the child ComicGrids to pull the fresh cache
+        setRefreshSignal(Date.now()); 
+    } catch (e) {
+        console.error("Failed to refresh data", e);
+    } finally {
+        setTimeout(() => setIsRefreshing(false), 2000); 
+    }
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="bg-slate-50 dark:bg-slate-950 min-h-full pb-20">
+      <div className="container mx-auto px-6 py-12 space-y-10">
+        
+        {/* Admin Notification Banners */}
+        <div className="space-y-4">
+          {/* Pending Approvals (Orange) */}
+          {isAdmin && pendingCount > 0 && (
+            <Alert className="bg-orange-50 border-orange-200 dark:bg-orange-950/20 dark:border-orange-900/50 animate-in fade-in slide-in-from-top-4">
+              <Bell className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+              <AlertTitle className="text-orange-800 dark:text-orange-300 font-bold flex items-center gap-2">
+                Action Required
+                <Badge className="bg-orange-500 hover:bg-orange-600 text-white border-none text-[10px] h-5">
+                  {pendingCount}
+                </Badge>
+              </AlertTitle>
+              <AlertDescription className="text-orange-700/80 dark:text-orange-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                There are new comic requests waiting for your approval in the dashboard.
+                <Button asChild variant="outline" size="sm" className="border-orange-300 text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:text-orange-400 dark:hover:bg-orange-900/40 h-8 font-bold">
+                  <Link href="/admin">
+                    Go to Approvals <ArrowRight className="ml-2 h-3 w-3" />
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Manual Downloads Needed (Indigo) */}
+          {isAdmin && manualDownloadsCount > 0 && (
+            <Alert className="bg-indigo-50 border-indigo-200 dark:bg-indigo-950/20 dark:border-indigo-900/50 animate-in fade-in slide-in-from-top-4">
+              <DownloadCloud className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+              <AlertTitle className="text-indigo-800 dark:text-indigo-300 font-bold flex items-center gap-2">
+                Manual Downloads Required
+                <Badge className="bg-indigo-500 hover:bg-indigo-600 text-white border-none text-[10px] h-5">
+                  {manualDownloadsCount}
+                </Badge>
+              </AlertTitle>
+              <AlertDescription className="text-indigo-700/80 dark:text-indigo-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                Some issues weren&apos;t found automatically and require manual download from GetComics.
+                <Button asChild variant="outline" size="sm" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:text-indigo-400 dark:hover:bg-indigo-900/40 h-8 font-bold">
+                  <Link href="/admin">
+                    Open Queue <ArrowRight className="ml-2 h-3 w-3" />
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Open Issues/Reports (Red) */}
+          {isAdmin && openReportsCount > 0 && (
+            <Alert className="bg-red-50 border-red-200 dark:bg-red-950/20 dark:border-red-900/50 animate-in fade-in slide-in-from-top-4">
+              <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
+              <AlertTitle className="text-red-800 dark:text-red-300 font-bold flex items-center gap-2">
+                Issues Reported
+                <Badge className="bg-red-500 hover:bg-red-600 text-white border-none text-[10px] h-5">
+                  {openReportsCount}
+                </Badge>
+              </AlertTitle>
+              <AlertDescription className="text-red-700/80 dark:text-red-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                Users have reported broken files or missing metadata that need your attention.
+                <Button asChild variant="outline" size="sm" className="border-red-300 text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/40 h-8 font-bold">
+                  <Link href="/admin/reports">
+                    Review Reports <ArrowRight className="ml-2 h-3 w-3" />
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+
+        {/* Hero / Search Section */}
+        <div className="text-center space-y-6 relative">
+          
+          <div className="absolute right-0 top-0 hidden md:block z-10">
+             <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="bg-white/50 backdrop-blur-sm dark:bg-slate-900/50 dark:border-slate-800 text-slate-600 dark:text-slate-400">
+               {isRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+               Refresh Data
+             </Button>
+          </div>
+
+          <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl text-slate-900 dark:text-slate-100">
+            What are we reading today?
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-lg text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
+            Search for a specific series or discover something new below.
           </p>
+          
+          <div className="pt-2 max-w-2xl mx-auto relative z-20">
+            <RequestSearch />
+          </div>
+
+          <div className="md:hidden pt-4 flex justify-center">
+             <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="w-full max-w-xs dark:border-slate-800 text-slate-600 dark:text-slate-400">
+               {isRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+               Force Refresh Data
+             </Button>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Jump Back In Shelf */}
+        <div className="w-full relative z-10">
+          <ContinueReading />
         </div>
-      </main>
+
+        {/* Popular Issues Grid */}
+        <ComicGrid title="Popular Issues" type="popular" refreshSignal={refreshSignal} />
+
+        {/* New Releases Grid */}
+        <ComicGrid title="New Releases" type="new" refreshSignal={refreshSignal} />
+        
+      </div>
     </div>
-  );
+  )
 }

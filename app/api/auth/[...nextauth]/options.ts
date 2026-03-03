@@ -1,0 +1,210 @@
+import { NextAuthOptions } from "next-auth";
+import CredentialsProvider from "next-auth/providers/credentials";
+import { prisma } from "@/lib/db";
+import bcrypt from "bcryptjs";
+import { cookies } from "next/headers";
+
+export async function getAuthOptions(): Promise<NextAuthOptions> {
+  let oidcEnabled = false;
+  let oidcIssuer = "";
+  let oidcClientId = "";
+  let oidcClientSecret = "";
+
+  try {
+    const configs = await prisma.systemSetting.findMany({
+      where: { key: { in: ['oidc_enabled', 'oidc_issuer', 'oidc_client_id', 'oidc_client_secret'] } }
+    });
+    const configMap = Object.fromEntries(configs.map(c => [c.key, c.value]));
+    
+    oidcEnabled = configMap.oidc_enabled === 'true';
+    oidcIssuer = configMap.oidc_issuer || "";
+    oidcClientId = configMap.oidc_client_id || "";
+    oidcClientSecret = configMap.oidc_client_secret || "";
+  } catch (e) {}
+
+  const providers: any[] = [
+    CredentialsProvider({
+      name: "Credentials",
+      credentials: {
+        username: { label: "Username", type: "text" },
+        password: { label: "Password", type: "password" }
+      },
+      async authorize(credentials) {
+        if (!credentials?.username || !credentials?.password) return null;
+        
+        // SECURE FIX: Ask the database to do the lowercase comparison securely
+        const input = credentials.username.toLowerCase();
+        
+        const users: any[] = await prisma.$queryRaw`
+          SELECT * FROM User 
+          WHERE LOWER(username) = ${input} OR LOWER(email) = ${input} 
+          LIMIT 1
+        `;
+        
+        const user = users[0];
+
+        if (!user) throw new Error("Invalid username or password");
+        if (!user.password) throw new Error("Please log in using SSO.");
+
+        const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
+        if (!isPasswordValid) throw new Error("Invalid username or password");
+        if (!user.isApproved) throw new Error("Account pending admin approval.");
+
+        return { 
+            id: user.id, 
+            name: user.username, 
+            email: user.email,
+            role: user.role,
+            autoApproveRequests: user.autoApproveRequests, 
+            canDownload: user.canDownload,
+            image: user.avatar 
+        };
+      }
+    })
+  ];
+
+  if (oidcEnabled && oidcIssuer && oidcClientId && oidcClientSecret) {
+    providers.push({
+      id: "oidc",
+      name: "OpenID Connect",
+      type: "oauth",
+      version: "2.0",
+      wellKnown: `${oidcIssuer.replace(/\/$/, '')}/.well-known/openid-configuration`,
+      authorization: { params: { scope: "openid email profile" } },
+      idToken: true,
+      checks: ["pkce", "state"],
+      clientId: oidcClientId,
+      clientSecret: oidcClientSecret,
+      profile(profile: any) {
+        return {
+          id: profile.sub,
+          name: profile.name || profile.preferred_username || profile.nickname || profile.email?.split('@')[0] || "SSO User",
+          email: profile.email,
+        }
+      },
+    });
+  }
+
+  return {
+    providers,
+    callbacks: {
+      async signIn({ user, account }) {
+        if (account?.provider === "credentials") return true;
+        if (account?.provider === "oidc") {
+          if (!user.email) return false;
+          
+          // SECURE FIX: Database-level lowercase check for SSO
+          const inputEmail = user.email.toLowerCase();
+          const dbUsers: any[] = await prisma.$queryRaw`
+            SELECT * FROM User WHERE LOWER(email) = ${inputEmail} LIMIT 1
+          `;
+          
+          let dbUser = dbUsers[0];
+          
+          if (!dbUser) {
+            const userCount = await prisma.user.count();
+            const isFirstUser = userCount === 0;
+            dbUser = await prisma.user.create({
+              data: {
+                username: user.name || user.email.split('@')[0],
+                email: user.email,
+                password: '',
+                role: isFirstUser ? "ADMIN" : "USER",
+                isApproved: isFirstUser ? true : false,
+                autoApproveRequests: isFirstUser ? true : false,
+                canDownload: isFirstUser ? true : false,
+              }
+            });
+          }
+          if (!dbUser.isApproved) return false;
+          user.id = dbUser.id;
+          (user as any).role = dbUser.role;
+          (user as any).autoApproveRequests = dbUser.autoApproveRequests;
+          (user as any).canDownload = dbUser.canDownload;
+          user.image = dbUser.avatar; 
+          return true;
+        }
+        return false;
+      },
+      
+      async jwt({ token, user, trigger, session }) {
+        const ADMIN_TIMEOUT_MS = 2 * 60 * 60 * 1000; 
+        const USER_TIMEOUT_MS = 6 * 60 * 60 * 1000;  
+
+        if (user) {
+          token.id = user.id;
+          token.role = (user as any).role;
+          token.autoApproveRequests = (user as any).autoApproveRequests;
+          token.canDownload = (user as any).canDownload;
+          token.picture = user.image;
+          token.lastActive = Date.now();
+        }
+
+        if (trigger === "update" && session?.user?.image !== undefined) {
+            token.picture = session.user.image;
+            token.lastActive = Date.now();
+        }
+
+        if (token.lastActive) {
+            const timeoutLimit = token.role === "ADMIN" ? ADMIN_TIMEOUT_MS : USER_TIMEOUT_MS;
+            if (Date.now() - (token.lastActive as number) > timeoutLimit) {
+                return { error: "SessionExpired" };
+            } else {
+                token.lastActive = Date.now();
+            }
+        }
+
+        // --- IMPERSONATION LOGIC ---
+        const cookieStore = await cookies();
+        const impersonateId = cookieStore.get('omnibus_impersonate')?.value;
+
+        if (token.role === "ADMIN" && !token.originalAdminId) {
+            token.originalAdminId = token.id;
+        }
+
+        if (impersonateId && token.originalAdminId) {
+            if (token.id !== impersonateId) {
+                const targetUser = await prisma.user.findUnique({ where: { id: impersonateId } });
+                if (targetUser) {
+                    token.id = targetUser.id;
+                    token.role = targetUser.role;
+                    token.autoApproveRequests = targetUser.autoApproveRequests;
+                    token.canDownload = targetUser.canDownload;
+                    token.picture = targetUser.avatar;
+                    token.isImpersonating = true;
+                }
+            }
+        } else if (!impersonateId && token.isImpersonating) {
+            const adminUser = await prisma.user.findUnique({ where: { id: token.originalAdminId as string } });
+            if (adminUser) {
+                token.id = adminUser.id;
+                token.role = adminUser.role;
+                token.autoApproveRequests = adminUser.autoApproveRequests;
+                token.canDownload = adminUser.canDownload;
+                token.picture = adminUser.avatar;
+                token.isImpersonating = false;
+            }
+        }
+
+        return token;
+      },
+      
+      async session({ session, token }) {
+        if (token.error === "SessionExpired") {
+            return { ...session, user: undefined, error: "SessionExpired" } as any;
+        }
+        if (session?.user) {
+          (session.user as any).id = token.id;
+          (session.user as any).role = token.role;
+          (session.user as any).autoApproveRequests = token.autoApproveRequests;
+          (session.user as any).canDownload = token.canDownload;
+          (session.user as any).isImpersonating = token.isImpersonating;
+          session.user.image = (token.picture as string) || null;
+        }
+        return session;
+      }
+    },
+    pages: { signIn: "/login", error: "/login" },
+    session: { strategy: "jwt", maxAge: 6 * 60 * 60, updateAge: 15 * 60 }
+  };
+}

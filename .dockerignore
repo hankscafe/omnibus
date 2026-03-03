@@ -1,0 +1,30 @@
+# Ignore node_modules and Next.js build folders
+node_modules
+npm-debug.log
+.next
+out
+build
+
+# Ignore environment variables (keeps your personal keys safe)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Ignore local SQLite databases
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# Ignore Git files and Mac OS hidden files
+.git
+.gitignore
+.DS_Store
+
+# Ignore uploaded assets from testing
+public/avatars/*
+public/banners/*
+!public/avatars/.gitkeep
+!public/banners/.gitkeep

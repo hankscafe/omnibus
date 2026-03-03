@@ -9,7 +9,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - NEXTAUTH_URL=http://192.168.1.100:3000 
+      - NEXTAUTH_URL=http://YOURIPADDRESS:3000 
       - NEXTAUTH_SECRET=change_this_to_a_random_secure_string_123!
       # Maps Prisma to save the database in the persistent config folder
       - DATABASE_URL=file:/config/omnibus.db 

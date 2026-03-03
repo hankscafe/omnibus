@@ -19,17 +19,17 @@ I know people aren't fond of AI built (vibe-coded) projects, but I enjoyed the p
 ## Table of Contents
 - [About Omnibus](#about-omnibus)
 - [Features & Navigation](#features--navigation)
-  - [Authentication & Login](#-authentication--login)
-  - [Homepage](#-homepage)
-  - [Library](#-library)
-  - [Series Page](#-series-page)
-  - [Web Reader](#-web-reader)
-  - [Reading Lists](#-reading-lists)
-  - [User Profile & Preferences](#-user-profile--preferences)
-  - [Settings & Administration](#️-settings--administration)
-  - [Additional Screenshots](#-additional-screenshots)
-- [Installation (Docker)](#-installation-docker)
-- [Acknowledgements](#-acknowledgements)
+  - [Authentication & Login](#authentication--login)
+  - [Homepage](#homepage)
+  - [Library](#library)
+  - [Series Page](#series-page)
+  - [Web Reader](#web-reader)
+  - [Reading Lists](#reading-lists)
+  - [User Profile & Preferences](#user-profile--preferences)
+  - [Settings & Administration](#settings--administration)
+  - [Additional Screenshots](#additional-screenshots)
+- [Installation (Docker)](#installation-docker)
+- [Acknowledgements](#acknowledgements)
 
 ---
 

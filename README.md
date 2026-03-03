@@ -33,7 +33,7 @@ Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omni
 The secure gateway to your personal comic universe. Omnibus ensures your collection remains private while offering a beautiful, welcoming entry point for you and your authorized users.
 
 <p align="center">
-  <img src="docs/images/login_page.png" alt="Login page" />
+  <img src="docs/images/login_page.png" width="500" alt="Login page" />
   <br>
   <strong>Login page.</strong>
 </p>
@@ -47,25 +47,25 @@ The secure gateway to your personal comic universe. Omnibus ensures your collect
 The Dashboard is the personalized nerve center of your collection. It dynamically updates based on the logged-in user to provide a tailored snapshot of their reading journey.
 
 <p align="center">
-  <img src="docs/images/home_page.png" alt="Homepage with Jump Back In section" />
+  <img src="docs/images/home_page.png" width="500" alt="Homepage with Jump Back In section" />
   <br>
   <strong>Jump Back In section.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/home_page_discovery.png" alt="Homepage discoery sections" />
+  <img src="docs/images/home_page_discovery.png" width="500" alt="Homepage discoery sections" />
   <br>
   <strong>Homepage discovery section with Popular Issues and New Releases.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/request_1.png" alt="Series request from home page" />
+  <img src="docs/images/request_1.png" width="500" alt="Series request from home page" />
   <br>
   <strong>Series window when clicking issue/series from the discover sections.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/request_2.png" alt="Series request and monitor" />
+  <img src="docs/images/request_2.png" width="500" alt="Series request and monitor" />
   <br>
   <strong>Users can choose to monitor the series when they are making a request so future releases to a series will be automatically downloaded.</strong>
 </p>
@@ -80,7 +80,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 * **Admin Alerts:** When an issue is reported or a request requires approval a banner will be visible on the home page with links to the appropriate pages.
 
 <p align="center">
-  <img src="docs/images/admin_alerts.png" alt="Admin alert banners" />
+  <img src="docs/images/admin_alerts.png" width="500" alt="Admin alert banners" />
   <br>
   <strong>If a user submits an issue with a series or a request is waiting on admin approval, a banner will be visible to admins on the homepage.</strong>
 </p>
@@ -89,13 +89,13 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 A meticulously organized, highly performant view of your physical files, built to handle massive, multi-terabyte collections smoothly.
 
 <p align="center">
-  <img src="docs/images/library.png" alt="Library page" />
+  <img src="docs/images/library.png" width="500" alt="Library page" />
   <br>
   <strong>The library page which features infinite scrolling.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/library_action_buttons.png" alt="Library page series action buttons" />
+  <img src="docs/images/library_action_buttons.png" width="500" alt="Library page series action buttons" />
   <br>
   <strong>The library page action buttons.</strong>
 </p>
@@ -113,13 +113,13 @@ A meticulously organized, highly performant view of your physical files, built t
 The dedicated hub for an individual comic run or manga volume. This page aggregates all metadata, reading progress, and file management for a specific series into one beautiful layout.
 
 <p align="center">
-  <img src="docs/images/series_page_complete.png" alt="Series page complete" />
+  <img src="docs/images/series_page_complete.png" width="500" alt="Series page complete" />
   <br>
   <strong>A series page showing a series that currently has all available issues.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/series_page_incomplete.png" alt="Series page incomplete" />
+  <img src="docs/images/series_page_incomplete.png" width="500" alt="Series page incomplete" />
   <br>
   <strong>A series page showing a series that currently has all available issues.</strong>
 </p>
@@ -148,7 +148,7 @@ A completely custom, zero-friction reading experience built natively into the br
 Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.
 
 <p align="center">
-  <img src="docs/images/reading_lists.png" alt="Reading lists page" />
+  <img src="docs/images/reading_lists.png" width="500" alt="Reading lists page" />
   <br>
   <strong>Reading lists page showing 2 story arcs added.</strong>
 </p>
@@ -162,25 +162,25 @@ Perfect for navigating the complex web of massive comic book crossover events or
 A personalized space for each user on your server to manage their identity, track their unique reading habits, and customize their Omnibus experience to fit their workflow.
 
 <p align="center">
-  <img src="docs/images/profile_1.png" alt="User profile page" />
+  <img src="docs/images/profile_1.png" width="500" alt="User profile page" />
   <br>
   <strong>Users profile page showing customizable header and avatar.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/profile_2.png" alt="User profile page" />
+  <img src="docs/images/profile_2.png" width="500" alt="User profile page" />
   <br>
   <strong>Users profile page reading progress cards.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/profile_3.png" alt="User profile page" />
+  <img src="docs/images/profile_3.png" width="500" alt="User profile page" />
   <br>
   <strong>Users profile page showing recent request history.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/profile_header.png" alt="User profile page" />
+  <img src="docs/images/profile_header.png" width="500" alt="User profile page" />
   <br>
   <strong>Users profile menu from header where you can log out or change password.</strong>
 </p>
@@ -197,13 +197,13 @@ A personalized space for each user on your server to manage their identity, trac
 Complete, granular control over your instance, your users, and your underlying automation.
 
 <p align="center">
-  <img src="docs/images/admin_1.png" alt="Admin page" />
+  <img src="docs/images/admin_1.png" width="500" alt="Admin page" />
   <br>
   <strong>Admin page showing data cards and configuration pages.</strong>
 </p>
 
 <p align="center">
-  <img src="docs/images/admin_2.png" alt="Admin page" />
+  <img src="docs/images/admin_2.png" width="500" alt="Admin page" />
   <br>
   <strong>Admin page showing active downloads and request management sections.</strong>
 </p> 

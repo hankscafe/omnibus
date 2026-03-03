@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useTransition } from "react"
+import { useState, useEffect, useTransition, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
@@ -40,7 +40,7 @@ function SeriesDetailSkeleton() {
   );
 }
 
-export default function SeriesReaderHub() {
+function SeriesContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -855,5 +855,14 @@ export default function SeriesReaderHub() {
           </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// Add this at the absolute bottom of app/library/series/page.tsx
+export default function SeriesPage() {
+  return (
+    <Suspense fallback={<div className="p-10 text-center">Loading series data...</div>}>
+      <SeriesContent />
+    </Suspense>
   )
 }

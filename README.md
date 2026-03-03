@@ -2,6 +2,26 @@
 
 <p align="center">
   <img src="docs/images/banner.png" alt="Omnibus Banner" />
+  <br>
+  <em>The ultimate all-in-one, self-hosted comic book and manga app.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/hankscafe/omnibus/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/hankscafe/omnibus/docker-publish.yml?branch=main&label=Build&logo=github" alt="Build Status">
+  </a>
+  <a href="https://github.com/hankscafe/omnibus/pkgs/container/omnibus">
+    <img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker&logoColor=white" alt="Docker Image">
+  </a>
+  <a href="https://github.com/hankscafe/omnibus/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/hankscafe/omnibus?color=green" alt="License">
+  </a>
+  <a href="https://github.com/hankscafe/omnibus/stargazers">
+    <img src="https://img.shields.io/github/stars/hankscafe/omnibus?style=flat&logo=github&color=yellow" alt="GitHub Stars">
+  </a>
+  <a href="https://discord.gg/YOUR_INVITE_LINK">
+    <img src="https://img.shields.io/discord/123456789012345678?color=5865F2&logo=discord&logoColor=white&label=Discord" alt="Discord">
+  </a>
 </p>
 
 **Omnibus** is the ultimate all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection.

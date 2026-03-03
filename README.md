@@ -1,6 +1,8 @@
 # 📚 Omnibus
 
-![Omnibus Banner](docs/images/banner.png) **Omnibus** is an all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection. 
+![Omnibus Banner](docs/images/banner.png) 
+
+**Omnibus** is an all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection. 
 
 Built with a modern tech stack (Next.js 15, Tailwind v4, Prisma, and SQLite), Omnibus is designed to be lightweight, incredibly fast, and beautiful across all your devices. Whether you are managing a massive archive of `.cbz` and `.cbr` files or just looking for a clean web reader, Omnibus brings your entire comic universe under one roof.
 
@@ -25,7 +27,7 @@ Built with a modern tech stack (Next.js 15, Tailwind v4, Prisma, and SQLite), Om
 
 ### 🏠 Dashboard
 The nerve center of your collection, providing a quick glance at your ongoing reading journey.
-![Dashboard Screenshot](docs/images/homepage.png) * **Continue Reading:** Instantly jump back into the exact page of the issue you were reading last.
+![Dashboard Screenshot](docs/images/home_page.png) * **Continue Reading:** Instantly jump back into the exact page of the issue you were reading last.
 * **Recently Added:** Browse the latest issues and volumes that have hit your server.
 * **Server Statistics:** Get a quick overview of your total series, issues, and storage usage.
 
@@ -45,7 +47,7 @@ A completely custom, zero-friction reading experience right in your browser.
 
 ### 🔍 Discovery & Search
 Integrated directly with ComicVine to help you find the missing pieces of your collection.
-![Discovery Screenshot](docs/images/homepage_discovery.png) * **ComicVine Integration:** Pull accurate metadata, release dates, and high-res covers.
+![Discovery Screenshot](docs/images/home_page_discovery.png) * **ComicVine Integration:** Pull accurate metadata, release dates, and high-res covers.
 * **Smart Search:** Find distinct series runs (e.g., distinguishing between Batman 1940 and Batman 2011).
 * **One-Click Requests:** Instantly send a missing issue or whole series to your download queue.
 
@@ -57,7 +59,7 @@ Your automated librarian. Tell Omnibus what you want, and it handles the rest.
 
 ### 📋 Reading Lists
 Perfect for massive comic book crossover events or curated reading orders.
-![Reading Lists Screenshot](docs/images/reading_lists_.png) * **Custom Curations:** Create custom lists spanning multiple series and publishers.
+![Reading Lists Screenshot](docs/images/reading_lists.png) * **Custom Curations:** Create custom lists spanning multiple series and publishers.
 * **Event Tracking:** Keep track of complex reading orders (e.g., *Infinity Gauntlet*, *Secret Wars*).
 * **Shareable:** (Coming Soon) Share your reading orders with other users on your server.
 

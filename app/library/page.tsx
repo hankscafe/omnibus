@@ -38,7 +38,7 @@ function LibrarySkeleton({ count = 24 }: { count?: number }) {
   );
 }
 
-function LibraryPage() {
+function LibraryContent() {
   if (typeof document !== 'undefined') document.title = "Omnibus - Library";
 
   const { data: session } = useSession()

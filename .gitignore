@@ -61,3 +61,6 @@ public/images/omnibus-logo.BAK
 public/images/omnibus-logo.png
 public/images/omnibus-logo-2.png
 public/images/omnibus-logo-3.png
+
+# Ignore Prisma backup files
+prisma/schema - BACKUP.prisma

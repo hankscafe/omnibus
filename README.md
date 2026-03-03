@@ -338,11 +338,21 @@ services:
       # REQUIRED: Generate a random string for security
       - NEXTAUTH_SECRET=super_secret_generated_key_123!
     volumes:
-      # Map your local config folder to store the SQLite database securely on your NAS
+      # REQUIRED: Map your local config folder to store the SQLite database securely
       - /path/to/your/nas/config:/app/prisma
-      # Map your comic/manga storage directories
-      - /path/to/your/nas/comics:/comics
-      - /path/to/your/nas/downloads:/downloads
+      
+      # -------------------------------------------------------------------------
+      # OPTION 1: The Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
+      # -------------------------------------------------------------------------
+      - /path/to/your/nas/data:/data 
+
+      # -------------------------------------------------------------------------
+      # OPTION 2: Separate Mounts (Slower copy/paste/delete operations)
+      # Uncomment these and remove Option 1 if your folders are on different drives
+      # -------------------------------------------------------------------------
+      # - /path/to/your/nas/comics:/comics
+      # - /path/to/your/nas/manga:/manga
+      # - /path/to/your/nas/downloads:/downloads
 ```
 
 2. Run `docker-compose up -d`.

@@ -53,3 +53,11 @@ public/avatars/*
 public/banners/*
 !public/avatars/.gitkeep
 !public/banners/.gitkeep
+
+# Old test images to ignore
+public/images/omnibus-branding.BAK
+public/images/omnibus-branding.jpg
+public/images/omnibus-logo.BAK
+public/images/omnibus-logo.png
+public/images/omnibus-logo-2.png
+public/images/omnibus-logo-3.png

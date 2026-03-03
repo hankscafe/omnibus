@@ -20,7 +20,7 @@
     <img src="https://img.shields.io/github/stars/hankscafe/omnibus?style=flat&logo=github&color=yellow" alt="GitHub Stars">
   </a>
   <a href="https://discord.gg/YOUR_INVITE_LINK">
-    <img src="https://img.shields.io/discord/123456789012345678?color=5865F2&logo=discord&logoColor=white&label=Discord" alt="Discord">
+    <img src="https://img.shields.io/discord/YOUR_SERVER_ID?color=5865F2&logo=discord&logoColor=white&label=Discord" alt="Discord">
   </a>
 </p>
 

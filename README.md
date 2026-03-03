@@ -1,6 +1,5 @@
 # 📚 Omnibus
 
-```html
 <p align="center">
   <img src="docs/images/banner.png" alt="Omnibus Banner" />
 </p>

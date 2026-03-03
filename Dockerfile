@@ -1,8 +1,10 @@
 FROM node:20-alpine AS base
 
+# Install OpenSSL for Prisma and libc-compat for Next.js
+RUN apk add --no-cache libc6-compat openssl
+
 # Step 1: Install dependencies
 FROM base AS deps
-RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci

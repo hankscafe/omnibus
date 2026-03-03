@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card } from "@/components/ui/card"
@@ -38,7 +38,7 @@ function LibrarySkeleton({ count = 24 }: { count?: number }) {
   );
 }
 
-export default function LibraryPage() {
+function LibraryPage() {
   if (typeof document !== 'undefined') document.title = "Omnibus - Library";
 
   const { data: session } = useSession()
@@ -949,5 +949,14 @@ export default function LibraryPage() {
           confirmText="Delete List" 
       />
     </div>
+  )
+}
+
+// Add this at the absolute bottom of app/library/page.tsx
+export default function LibraryPage() {
+  return (
+    <Suspense fallback={<LibrarySkeleton />}>
+      <LibraryContent />
+    </Suspense>
   )
 }

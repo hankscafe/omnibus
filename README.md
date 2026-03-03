@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/hankscafe/omnibus/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/hankscafe/omnibus/docker-publish.yml?branch=main&label=Build&logo=github" alt="Build Status">
+    <img src="https://github.com/hankscafe/omnibus/actions/workflows/docker-publish.yml/badge.svg?branch=main" alt="Build Status">
   </a>
   <a href="https://github.com/hankscafe/omnibus/pkgs/container/omnibus">
     <img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker&logoColor=white" alt="Docker Image">

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useSession } from "next-auth/react"
 import { useSearchParams } from "next/navigation"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
@@ -20,7 +20,7 @@ import {
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 
-export default function ReadingListsPage() {
+function ReadingListsContent() {
   const { data: session } = useSession()
   const isAdmin = session?.user?.role === 'ADMIN'
   const searchParams = useSearchParams()
@@ -605,5 +605,14 @@ export default function ReadingListsPage() {
         confirmText="Delete List"
       />
     </div>
+  )
+}
+
+// Add this at the absolute bottom
+export default function ReadingListsPage() {
+  return (
+    <Suspense fallback={<div className="p-10 text-center text-muted-foreground">Loading...</div>}>
+      <ReadingListsContent />
+    </Suspense>
   )
 }

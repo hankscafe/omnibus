@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -54,7 +54,7 @@ function QueueSkeleton() {
   );
 }
 
-function AdminContent() {
+export default function AdminPage() {
   if (typeof document !== 'undefined') {
     document.title = "Omnibus - Admin";
   }
@@ -812,14 +812,5 @@ function AdminContent() {
         confirmText="Remove Request"
       />
     </div>
-  )
-}
-
-// Add this at the absolute bottom of app/reader/page.tsx
-export default function AdminPage() {
-  return (
-    <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center text-white">Loading Reader...</div>}>
-      <AdminContent />
-    </Suspense>
   )
 }

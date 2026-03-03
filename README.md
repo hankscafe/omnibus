@@ -228,47 +228,85 @@ Complete, granular control over your instance, your users, and your underlying a
 
 ## Additional Screenshots
 
-<p align="center">
-  <a href="docs/images/analytics_1.png">
-    <img src="docs/images/analytics_1.png" width="250" alt="Analytics page showing data cards" style="margin: 10px;">
-  </a>
-  <a href="docs/images/analytics_2.png">
-    <img src="docs/images/analytics_2.png" width="250" alt="Analytics page showing purge option for unread series" style="margin: 10px;">
-  </a>
-  <a href="docs/images/approvals.png">
-    <img src="docs/images/approvals.png" width="250" alt="Requests awaiting approval" style="margin: 10px;">
-  </a>
-  <a href="docs/images/diagnostics.png">
-    <img src="docs/images/diagnostics.png" width="250" alt="Library diagnostics page" style="margin: 10px;">
-  </a>
-  <a href="docs/images/issue_reports_1.png">
-    <img src="docs/images/issue_reports_2.png" width="250" alt="Issue reports page" style="margin: 10px;">
-  </a>
-  <a href="docs/images/issue_reports_2.png">
-    <img src="docs/images/issue_reports_2.png" width="250" alt="Issue reports admin response" style="margin: 10px;">
-  </a>
-  <a href="docs/images/issue_reports_3.png">
-    <img src="docs/images/issue_reports_3.png" width="250" alt="Issue reports reesolution" style="margin: 10px;">
-  </a>
-  <a href="docs/images/my_requests.png">
-    <img src="docs/images/my_requests.png" width="250" alt="My Reqeusts page" style="margin: 10px;">
-  </a>
-  <a href="docs/images/smart_matcher.png">
-    <img src="docs/images/smart_matcher.png" width="250" alt="Smart Matcher page" style="margin: 10px;">
-  </a>
-  <a href="docs/images/storage_deep_dive.png">
-    <img src="docs/images/storage_deep_dive.png" width="250" alt="Storage Deep Dive page" style="margin: 10px;">
-  </a>
-  <a href="docs/images/system_logs_1.png">
-    <img src="docs/images/system_logs_1.png" width="250" alt="System Logs live terminal" style="margin: 10px;">
-  </a>
-  <a href="docs/images/system_logs_2.png">
-    <img src="docs/images/system_logs_2.png" width="250" alt="System Logs page" style="margin: 10px;">
-  </a>
-  <a href="docs/images/users.png">
-    <img src="docs/images/users.png" width="250" alt="User Management page" style="margin: 10px;">
-  </a>
-</p>
+<table align="center" style="border: none;">
+  <tr>
+    <td align="center">
+      <a href="docs/images/analytics_1.png">
+        <img src="docs/images/analytics_1.png" width="250" alt="Analytics page showing data cards">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/analytics_2.png">
+        <img src="docs/images/analytics_2.png" width="250" alt="Analytics page showing purge option for unread series">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/approvals.png">
+        <img src="docs/images/approvals.png" width="250" alt="Requests awaiting approval">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="docs/images/diagnostics.png">
+        <img src="docs/images/diagnostics.png" width="250" alt="Library diagnostics page">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/issue_reports_1.png">
+        <img src="docs/images/issue_reports_1.png" width="250" alt="Issue reports page">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/issue_reports_2.png">
+        <img src="docs/images/issue_reports_2.png" width="250" alt="Issue reports admin response">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="docs/images/issue_reports_3.png">
+        <img src="docs/images/issue_reports_3.png" width="250" alt="Issue reports resolution">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/my_requests.png">
+        <img src="docs/images/my_requests.png" width="250" alt="My Requests page">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/smart_matcher.png">
+        <img src="docs/images/smart_matcher.png" width="250" alt="Smart Matcher page">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="docs/images/storage_deep_dive.png">
+        <img src="docs/images/storage_deep_dive.png" width="250" alt="Storage Deep Dive page">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/system_logs_1.png">
+        <img src="docs/images/system_logs_1.png" width="250" alt="System Logs live terminal">
+      </a>
+    </td>
+    <td align="center">
+      <a href="docs/images/system_logs_2.png">
+        <img src="docs/images/system_logs_2.png" width="250" alt="System Logs page">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="docs/images/users.png">
+        <img src="docs/images/users.png" width="250" alt="User Management page">
+      </a>
+    </td>
+    <td></td>
+    <td></td>
+  </tr>
+</table>
 
 ---
 

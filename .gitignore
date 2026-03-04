@@ -56,7 +56,6 @@ public/banners/*
 
 # Old test images to ignore
 public/images/omnibus-branding.BAK
-public/images/omnibus-branding.jpg
 public/images/omnibus-logo.BAK
 public/images/omnibus-logo.png
 public/images/omnibus-logo-2.png

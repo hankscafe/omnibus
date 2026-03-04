@@ -353,19 +353,22 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # REQUIRED: Change to your NAS IP or your domain (e.g., [https://omnibus.mydomain.com](https://omnibus.mydomain.com))
-      - NEXTAUTH_URL=[http://192.168.1.100:3000](http://192.168.1.100:3000) 
+      # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., https://omnibus.mydomain.com)
+      # or your NAS IP (e.g., http://192.168.1.100:3000)
+      - NEXTAUTH_URL=http://192.168.1.100:3000
       # REQUIRED: Generate a random string for security
       - NEXTAUTH_SECRET=super_secret_generated_key_123!
+      # REQUIRED: Tells the app to store the database in our persistent config mount
+      - DATABASE_URL=file:/config/omnibus.db
     volumes:
-      # REQUIRED: Map your local config folder to store the SQLite database securely
-      - /path/to/your/nas/config:/app/prisma
+      # REQUIRED: Persistent storage for your database, logs, and settings
+      - /path/to/your/nas/config:/config
       
       # -------------------------------------------------------------------------
       # OPTION 1: The Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
       # -------------------------------------------------------------------------
+      # Maps your entire media/download root to /data for optimal performance
       - /path/to/your/nas/data:/data 
-
       # -------------------------------------------------------------------------
       # OPTION 2: Separate Mounts (Slower copy/paste/delete operations)
       # Uncomment these and remove Option 1 if your folders are on different drives

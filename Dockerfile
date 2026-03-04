@@ -38,6 +38,9 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# THE FIX: Install the Prisma CLI directly into the final image
+RUN npm install prisma@5.10.2
+
 USER nextjs
 
 EXPOSE 3000

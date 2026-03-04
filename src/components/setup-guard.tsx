@@ -1,4 +1,3 @@
-// src/components/setup-guard.tsx
 "use client"
 
 import { useEffect, useState } from "react"
@@ -12,17 +11,17 @@ export function SetupGuard({ children }: { children: React.ReactNode }) {
     const [setupComplete, setSetupComplete] = useState(false)
 
     useEffect(() => {
-        // 1. If we already know the app is set up, do nothing and let them browse fast!
+        // 1. If we already know the app is set up, do nothing
         if (setupComplete) return;
 
-        // 2. If they are already on the setup page, drop the shield immediately
+        // 2. If they are already on the setup page, drop the shield
         if (pathname === '/setup') {
             setIsChecking(false);
             return;
         }
 
-        // 3. Ping the database to check initialization status
-        fetch('/api/setup/check')
+        // 3. Ping the database (with cache-busting for Next.js strict caching)
+        fetch(`/api/setup/check?t=${Date.now()}`, { cache: 'no-store' })
             .then(res => res.json())
             .then(data => {
                 if (data.requiresSetup) {
@@ -33,12 +32,11 @@ export function SetupGuard({ children }: { children: React.ReactNode }) {
                 }
             })
             .catch(() => {
-                // If the API fails for some reason, fail open so we don't lock you out
+                // Fail open so users aren't locked out during a transient network error
                 setIsChecking(false);
             });
     }, [pathname, router, setupComplete]);
 
-    // 4. Block the UI completely until the check is done to prevent "flashing"
     if (isChecking && pathname !== '/setup') {
         return (
             <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 dark:bg-slate-950">

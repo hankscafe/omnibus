@@ -7,7 +7,11 @@ import { AuthProvider } from "@/components/AuthProvider";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationWrapper } from "@/components/navigation-wrapper";
 import { TitleManager } from "@/components/title-manager";
-import { SetupGuard } from "@/components/setup-guard"; // <-- NEW IMPORT
+
+// --- NEW IMPORTS FOR SERVER-SIDE REDIRECT ---
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { prisma } from "@/lib/db";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -21,36 +25,68 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  
+  // --- INSTANT SERVER-SIDE SETUP GUARD ---
+  const headersList = await headers();
+  const pathname = headersList.get("x-pathname") || "";
+  
+  let requiresSetup = false;
+
+  // Only query the database if they aren't already on the setup page
+  if (!pathname.startsWith("/setup")) {
+    try {
+      const userCount = await prisma.user.count();
+      let setupSetting = await prisma.systemSetting.findUnique({
+        where: { key: "setup_complete" },
+      });
+
+      // Auto-Heal Legacy Databases
+      if (userCount > 0 && setupSetting?.value !== "true") {
+        setupSetting = await prisma.systemSetting.upsert({
+          where: { key: "setup_complete" },
+          update: { value: "true" },
+          create: { key: "setup_complete", value: "true" },
+        });
+      }
+
+      if (userCount === 0 || setupSetting?.value !== "true") {
+        requiresSetup = true;
+      }
+    } catch (error) {
+      // If the DB connection fails (meaning it's totally fresh/uninitialized), force setup
+      requiresSetup = true;
+    }
+  }
+
+  // If setup is required, redirect IMMEDIATELY at the network level (Zero Flash)
+  if (requiresSetup) {
+    redirect("/setup");
+  }
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.className} min-h-screen flex flex-col bg-background text-foreground antialiased`}>
         <AuthProvider>
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
             
-            {/* The global Title Manager enforces tab names */}
             <TitleManager />
             
-            {/* The Global Setup Guard */}
-            <SetupGuard>
-              {/* Logic to hide Header on Login and Reader pages */}
-              <NavigationWrapper>
-                <SiteHeader />
-              </NavigationWrapper>
-              
-              <main className="flex-1">
-                {children}
-              </main>
+            <NavigationWrapper>
+              <SiteHeader />
+            </NavigationWrapper>
+            
+            <main className="flex-1">
+              {children}
+            </main>
 
-              {/* Logic to hide Footer on Login and Reader pages */}
-              <NavigationWrapper>
-                <SiteFooter />
-              </NavigationWrapper>
-            </SetupGuard>
+            <NavigationWrapper>
+              <SiteFooter />
+            </NavigationWrapper>
 
           </ThemeProvider>
         </AuthProvider>

@@ -32,19 +32,21 @@ RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/prisma ./prisma
+
+# FIX 1: Grant the nextjs user ownership of the prisma folder so it can read/write
+COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
 # Automatically leverage output traces to reduce image size
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# THE FIX: Install the Prisma CLI directly into the final image
-RUN npm install prisma@5.10.2
+# FIX 2: Install Prisma globally (-g) so it doesn't corrupt Next.js's standalone files
+RUN npm install -g prisma@5.10.2
 
 USER nextjs
 
 EXPOSE 3000
 ENV PORT=3000
 
-# Start the app and run database migrations automatically on boot
-CMD ["sh", "-c", "npx prisma db push && node server.js"]
+# FIX 3: Force the exact schema path and skip generation (since the client was already built in stage 2!)
+CMD ["sh", "-c", "prisma db push --schema=./prisma/schema.prisma --skip-generate && node server.js"]

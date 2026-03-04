@@ -363,7 +363,6 @@ services:
     volumes:
       # REQUIRED: Persistent storage for your database, logs, and settings
       - /path/to/your/nas/config:/config
-      
       # -------------------------------------------------------------------------
       # OPTION 1: The Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
       # -------------------------------------------------------------------------

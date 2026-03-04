@@ -1,6 +1,6 @@
 FROM node:20-alpine AS base
 
-# Install OpenSSL for Prisma and libc-compat for Next.js
+# Install OpenSSL for Prisma and libc-compat for Next.js 
 RUN apk add --no-cache libc6-compat openssl
 
 # Step 1: Install dependencies
@@ -13,11 +13,11 @@ RUN npm ci
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY . . [cite: 41]
 
 # Generate Prisma Client
 RUN npx prisma generate
-# Build Next.js app
+# Build Next.js app [cite: 41]
 RUN npm run build
 
 # Step 3: Production image
@@ -27,26 +27,27 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Create a non-root user for security
-RUN addgroup --system --gid 1000 nodejs
-RUN adduser --system --uid 1000 nextjs
+# --- USER CONFIGURATION ---
+# We use the existing 'node' user (UID/GID 1000) provided by the base image.
+# This avoids build conflicts.
 
+# Copy public assets and prisma schema
 COPY --from=builder /app/public ./public
+COPY --from=builder --chown=node:node /app/prisma ./prisma
 
-# FIX 1: Grant the nextjs user ownership of the prisma folder so it can read/write
-COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
+# Automatically leverage output traces to reduce image size 
+# Using the 'node' user for ownership
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 
-# Automatically leverage output traces to reduce image size
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Install Prisma locally in the runner stage to ensure npx finds it
+RUN npm install prisma@5.10.2
 
-# FIX 2: Install Prisma globally (-g) so it doesn't corrupt Next.js's standalone files
-RUN npm install -g prisma@5.10.2
-
-USER nextjs
+# Switch to the non-root 'node' user for runtime security
+USER node
 
 EXPOSE 3000
 ENV PORT=3000
 
-# FIX 3: Force the exact schema path and skip generation (since the client was already built in stage 2!)
-CMD ["sh", "-c", "prisma db push --schema=./prisma/schema.prisma --skip-generate && node server.js"]
+# Execute database push with an absolute path and start the server 
+CMD ["sh", "-c", "npx prisma db push --schema=/app/prisma/schema.prisma --skip-generate && node server.js"]

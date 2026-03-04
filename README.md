@@ -162,13 +162,26 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 
 ### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.
-![Reader Screenshot](docs/images/reader-screenshot.png) * **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, `.zip`, `.rar`, and `.epub` archives.
+
+<p align="center">
+  <img src="docs/images/reader_page.png" width="500" alt="Reader page" />
+  <br>
+  <strong>Reader page and controls.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/reader_page_2.png" width="500" alt="Reader page settings" />
+  <br>
+  <strong>Reader page settings.</strong>
+</p>
+
+* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, `.zip`, `.rar`, and `.epub` archives.
 * **Reading Directions:** One-click toggles for Left-to-Right (Standard Comics), Right-to-Left (Manga), and continuous Vertical Scrolling (Webtoons).
 * **Dynamic Page Layouts:** * Choose between Single Page or Double Page spreads (perfect for splash pages).
   * Auto-Fit toggles: Fit to Width, Fit to Height, or Original Resolution.
 * **Smart Preloading:** Silently caches the next several pages in the background so you never experience loading spinners while reading.
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
-* **Brightness & Contrast Overlay:** Adjust the brightness of the reader independently of your device settings for late-night reading sessions.
+* **Brightness & Contrast Overlay:** *(Coming Soon)* Adjust the brightness of the reader independently of your device settings for late-night reading sessions.
 
 ### Reading Lists
 Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.

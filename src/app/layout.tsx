@@ -6,15 +6,16 @@ import { SiteFooter } from "@/components/site-footer";
 import { AuthProvider } from "@/components/AuthProvider";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationWrapper } from "@/components/navigation-wrapper";
-import { TitleManager } from "@/components/title-manager"; // <-- NEW IMPORT
+import { TitleManager } from "@/components/title-manager";
+import { SetupGuard } from "@/components/setup-guard"; // <-- NEW IMPORT
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Omnibus",
-  description: "A self-hosted comic book manager.  Your Universe.  Organized.",
+  description: "A self-hosted comic book manager. Your Universe. Organized.",
   icons: {
-    icon: '/favicon.ico', // <-- Forces the browser to strictly use the root icon
+    icon: '/favicon.ico',
     shortcut: '/favicon.ico',
     apple: '/favicon.ico',
   },
@@ -34,19 +35,22 @@ export default function RootLayout({
             {/* The global Title Manager enforces tab names */}
             <TitleManager />
             
-            {/* Logic to hide Header on Login and Reader pages */}
-            <NavigationWrapper>
-              <SiteHeader />
-            </NavigationWrapper>
-            
-            <main className="flex-1">
-              {children}
-            </main>
+            {/* The Global Setup Guard */}
+            <SetupGuard>
+              {/* Logic to hide Header on Login and Reader pages */}
+              <NavigationWrapper>
+                <SiteHeader />
+              </NavigationWrapper>
+              
+              <main className="flex-1">
+                {children}
+              </main>
 
-            {/* Logic to hide Footer on Login and Reader pages */}
-            <NavigationWrapper>
-              <SiteFooter />
-            </NavigationWrapper>
+              {/* Logic to hide Footer on Login and Reader pages */}
+              <NavigationWrapper>
+                <SiteFooter />
+              </NavigationWrapper>
+            </SetupGuard>
 
           </ThemeProvider>
         </AuthProvider>

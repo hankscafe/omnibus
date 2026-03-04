@@ -1,13 +1,11 @@
+// src/lib/getcomics.ts
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from './logger';
 
 export const GetComicsService = {
   async search(query: string) {
-    // Strip the year from the fallback search if the strict search fails
     const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
-    
-    // NEW: One-Shot Fallback. Strips the trailing issue number (e.g., "1") entirely
     const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
     
     const searches = [
@@ -15,11 +13,10 @@ export const GetComicsService = {
         query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
         noYearQuery,
         noYearQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
-        noIssueQuery, // <--- One-Shot Fallback
+        noIssueQuery, 
         noIssueQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim() 
     ];
     
-    // Remove duplicates and any empty strings
     const uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
     
     for (const q of uniqueSearches) {
@@ -28,7 +25,7 @@ export const GetComicsService = {
             try {
                 const results = await this.performSearch(q);
                 if (results.length > 0) return results;
-                break; // Found nothing but no server error, move to next query format
+                break; 
             } catch (e: any) { 
                 if (e.response && e.response.status >= 500) {
                     Logger.log(`[GetComics] Server error (${e.response.status}). Retrying in 5s...`, 'info');
@@ -40,7 +37,7 @@ export const GetComicsService = {
                 }
             }
         }
-        await new Promise(r => setTimeout(r, 1000)); // Standard buffer between query formats
+        await new Promise(r => setTimeout(r, 1000)); 
     }
     return [];
   },
@@ -54,8 +51,8 @@ export const GetComicsService = {
     const $ = cheerio.load(data);
     const results: any[] = [];
 
-    // Keep words that contain numbers (e.g., "#1", "2"). Previously, length > 2 deleted them!
-    const queryWords = safeQuery.toLowerCase().split(' ').filter(w => w.length > 2 || /\d/.test(w));
+    // Keep all words to allow strict matching
+    const queryWords = safeQuery.toLowerCase().split(' ').filter(w => w.trim().length > 0);
 
     $('article.post').each((i, el) => {
       const title = $(el).find('h1.post-title a').text().trim();
@@ -65,18 +62,22 @@ export const GetComicsService = {
       let isRelevant = true;
 
       for (let w of queryWords) {
-          // Smart Issue Number Matching (Matches "#1", " 1 ", " 01 ", etc.)
-          if (w.startsWith('#')) {
+          // STRICT NUMERIC MATCHING (Prevents "2" from matching "2026")
+          if (/^\d+$/.test(w) || w.startsWith('#')) {
               const num = parseInt(w.replace('#', ''));
-              // Regex looks for #1, or word boundary 01, 001, etc.
-              const numRegex = new RegExp(`(?:#|\\b0*)${num}\\b`, 'i');
+              const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${num}\\b`, 'i');
               if (!numRegex.test(titleLower)) {
                   isRelevant = false;
                   break;
               }
-          } else if (!titleLower.includes(w)) {
-              isRelevant = false;
-              break;
+          } else {
+              // STRICT WORD BOUNDARY MATCHING
+              const cleanW = w.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+              const wordRegex = new RegExp(`\\b${cleanW}\\b`, 'i');
+              if (!wordRegex.test(titleLower)) {
+                  isRelevant = false;
+                  break;
+              }
           }
       }
 
@@ -86,6 +87,11 @@ export const GetComicsService = {
         });
       }
     });
+
+    // THE FIX: Sort results by title length (shortest first). 
+    // "Rogue #2" (9 chars) will easily beat "Star Wars Rogue Agents #2" (24 chars)
+    results.sort((a, b) => a.title.length - b.title.length);
+
     return results;
   },
 
@@ -110,15 +116,13 @@ export const GetComicsService = {
             return rawHref; 
           };
 
-          // 1. Scan ALL links on the page, avoiding strictly hardcoded CSS classes that break often
           $('a').each((i, el) => {
               const text = $(el).text().toLowerCase();
               const titleAttr = ($(el).attr('title') || "").toLowerCase();
               const href = $(el).attr('href') || "";
               
-              // Optimization: Only parse links that actually look like they contain files or redirects
               if (!href.includes('go.php') && !text.includes('download') && !titleAttr.includes('download')) {
-                  return; // continue loop
+                  return; 
               }
 
               const decoded = decodeLink(href);
@@ -131,16 +135,14 @@ export const GetComicsService = {
               
               const isThirdParty = decoded.includes('mediafire.com') || decoded.includes('mega.nz') || decoded.includes('zippyshare.com') || decoded.includes('userscloud.com');
 
-              // Holy Grail: A direct server link
               if ((isMainServer || decoded.match(/\.(cbz|cbr|zip)$/i)) && !isThirdParty) {
                   bestLink = decoded;
                   isDirect = true;
-                  return false; // Break the loop! We found the absolute best possible link.
+                  return false; 
               } 
-              // Silver Medal: A third-party or unknown link (store it just in case we find nothing better)
               else if (!bestLink) {
                   bestLink = decoded;
-                  isDirect = !isThirdParty; // If it's not explicitly a 3rd party host, guess that it might be direct
+                  isDirect = !isThirdParty; 
               }
           });
 

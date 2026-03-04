@@ -155,10 +155,7 @@ export const DownloadService = {
           });
 
           await pipeline(response.data, writer);
-          
-          Logger.log(`[Internal DL] Download complete. Triggering Import...`, 'success');
-          await new Promise(r => setTimeout(r, 2000));
-          await Importer.importRequest(requestId);
+          Logger.log(`[Internal DL] Download complete. Handing off to Importer...`, 'success');
           return true;
       } catch (error: any) {
           if (fs.existsSync(filePath)) try { fs.unlinkSync(filePath); } catch (e) {}

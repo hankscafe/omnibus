@@ -10,6 +10,7 @@ import { DiscordNotifier } from '@/lib/discord';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
 import { detectManga } from '@/lib/manga-detector'; 
 import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
+import { Importer } from '@/lib/importer';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,6 @@ export async function POST(request: NextRequest) {
 
     const initialStatus = token.autoApproveRequests ? 'PENDING' : 'PENDING_APPROVAL';
 
-    // BLAZING FIX: Fetch missing publisher AND synopsis to populate the rich Discord embed
     if (!publisher || publisher === "Unknown" || publisher === "Other" || !description) {
         try {
             const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -215,7 +215,6 @@ export async function PATCH(request: NextRequest) {
       const searchName = reqRecord.activeDownloadName || "";
       Logger.log(`[Request] Admin approved request: ${searchName}`, 'info');
 
-      // FIXED: Inject rich metadata on approval
       DiscordNotifier.sendAlert('request_approved', {
           title: searchName || reqRecord.volumeId || "Unknown Comic",
           imageUrl: reqRecord.imageUrl,
@@ -325,7 +324,14 @@ async function searchAndDownload(requestId: string, name: string, year: string, 
         }
       });
 
-      DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId).catch(e => console.error(e));
+      DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId)
+        .then(async (success) => {
+            if (success) {
+                await new Promise(r => setTimeout(r, 2000));
+                await Importer.importRequest(requestId);
+            }
+        })
+        .catch(e => console.error(e));
     } else {
       await prisma.request.update({
         where: { id: requestId },

@@ -2,6 +2,7 @@ import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import axios from 'axios';
+import { Importer } from './importer';
 
 export function initCronJobs() {
   Logger.log("[Cron] Initializing background automation...", "info");
@@ -42,7 +43,14 @@ export function initCronJobs() {
               const settings = await prisma.systemSetting.findMany();
               const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
               
-              DownloadService.downloadDirectFile(req.downloadLink, req.activeDownloadName || "comic", config.download_path, req.id).catch(() => {});
+              DownloadService.downloadDirectFile(req.downloadLink, req.activeDownloadName || "comic", config.download_path, req.id)
+                .then(async (success) => {
+                    if (success) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        await Importer.importRequest(req.id);
+                    }
+                })
+                .catch(() => {});
             }
           }
         }
@@ -114,7 +122,7 @@ export function initCronJobs() {
     } catch (error: any) {}
   }, 3600000);
 
-  // 5. Automated Diagnostics (NEW)
+  // 5. Automated Diagnostics
   setInterval(async () => {
     try {
         const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: 'diagnostics_sync_schedule' } });

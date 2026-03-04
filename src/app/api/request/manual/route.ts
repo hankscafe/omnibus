@@ -6,6 +6,7 @@ import { DownloadService } from '@/lib/download-clients';
 import { GetComicsService } from '@/lib/getcomics';
 import { checkTrophies } from '@/lib/trophies'; 
 import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
+import { Importer } from '@/lib/importer';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,7 +62,14 @@ export async function POST(request: NextRequest) {
                   data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
                 });
 
-                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, newReq.id).catch(e => console.error(e));
+                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, newReq.id)
+                    .then(async (success) => {
+                        if (success) {
+                            await new Promise(r => setTimeout(r, 2000));
+                            await Importer.importRequest(newReq.id);
+                        }
+                    })
+                    .catch(e => console.error(e));
             } else {
                 await prisma.request.update({
                   where: { id: newReq.id },
@@ -94,7 +102,14 @@ export async function POST(request: NextRequest) {
                   data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
                 });
 
-                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, newReq.id).catch(e => console.error(e));
+                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, newReq.id)
+                    .then(async (success) => {
+                        if (success) {
+                            await new Promise(r => setTimeout(r, 2000));
+                            await Importer.importRequest(newReq.id);
+                        }
+                    })
+                    .catch(e => console.error(e));
               } else {
                 await prisma.request.update({
                   where: { id: newReq.id },

@@ -4,6 +4,7 @@ import { DownloadService } from '@/lib/download-clients';
 import { Logger } from '@/lib/logger';
 import { GetComicsService } from '@/lib/getcomics';
 import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
+import { Importer } from '@/lib/importer';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +34,14 @@ export async function POST(request: Request) {
                 where: { id },
                 data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeTitle }
             });
-            DownloadService.downloadDirectFile(req.downloadLink, safeTitle, config.download_path, req.id).catch(()=> {});
+            DownloadService.downloadDirectFile(req.downloadLink, safeTitle, config.download_path, req.id)
+                .then(async (success) => {
+                    if (success) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        await Importer.importRequest(req.id);
+                    }
+                })
+                .catch(()=> {});
             return NextResponse.json({ success: true });
         } 
         
@@ -60,7 +68,14 @@ export async function POST(request: Request) {
                     data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeTitle }
                 });
 
-                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, req.id).catch(() => {});
+                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, req.id)
+                    .then(async (success) => {
+                        if (success) {
+                            await new Promise(r => setTimeout(r, 2000));
+                            await Importer.importRequest(req.id);
+                        }
+                    })
+                    .catch(() => {});
                 return NextResponse.json({ success: true, message: "Link recovered and download started." });
             }
         }

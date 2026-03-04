@@ -141,7 +141,7 @@ export async function POST(req: Request) {
         await fs.writeFile(filePath, base64Data, 'base64');
         
         // FIX: Prefix with api/uploads to use the static image handler
-        const avatarUrl = `api/uploads/avatars/${fileName}?t=${Date.now()}`;
+        const avatarUrl = `/api/uploads/avatars/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { avatar: avatarUrl } });
         return NextResponse.json({ success: true, avatarUrl });
     }
@@ -156,7 +156,7 @@ export async function POST(req: Request) {
         await fs.writeFile(filePath, base64Data, 'base64');
         
         // FIX: Prefix with api/uploads to use the static image handler
-        const bannerUrl = `api/uploads/banners/${fileName}?t=${Date.now()}`;
+        const bannerUrl = `/api/uploads/banners/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { banner: bannerUrl } });
         return NextResponse.json({ success: true, bannerUrl });
     }

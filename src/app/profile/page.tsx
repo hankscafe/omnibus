@@ -263,7 +263,7 @@ export default function ProfilePage() {
       {/* --- CUSTOMIZABLE BANNER --- */}
       <div className="relative h-48 sm:h-64 w-full group overflow-hidden bg-slate-900">
         {profile?.user?.banner ? (
-            <img src={`/${profile.user.banner}`} alt="Banner" className="w-full h-full object-cover transition-all duration-300 group-hover:scale-105 group-hover:blur-sm opacity-90" />
+            <img src={profile.user.banner.startsWith('/') ? profile.user.banner : `/${profile.user.banner}`} alt="Banner" className="w-full h-full object-cover transition-all duration-300 group-hover:scale-105 group-hover:blur-sm opacity-90" />
         ) : (
             <div className={`absolute inset-0 bg-gradient-to-r ${getThemeGradient(colorTheme)} transition-all duration-300 group-hover:blur-sm`}>
                 <div className="absolute inset-0 opacity-20 bg-[url('/images/omnibus-branding.jpg')] bg-cover mix-blend-overlay" />
@@ -304,7 +304,7 @@ export default function ProfilePage() {
             {/* AVATAR EDIT */}
             <div className="relative group cursor-pointer" onClick={() => fileAvatarRef.current?.click()}>
                 <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-full border-4 border-white dark:border-slate-950 bg-slate-200 dark:bg-slate-800 overflow-hidden flex items-center justify-center shadow-xl relative z-10 transition-transform group-hover:scale-105">
-                    {uploadingAvatar ? <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /> : profile?.user?.avatar ? <img src={`/${profile.user.avatar}`} alt="Avatar" className="w-full h-full object-cover" /> : <UserIcon className="w-16 h-16 text-slate-400 dark:text-slate-600" />}
+                    {uploadingAvatar ? <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /> : profile?.user?.avatar ? <img src={profile.user.avatar.startsWith('/') ? profile.user.avatar : `/${profile.user.avatar}`} alt="Avatar" className="w-full h-full object-cover" /> : <UserIcon className="w-16 h-16 text-slate-400 dark:text-slate-600" />}
                 </div>
                 <div className="absolute inset-0 z-20 rounded-full bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white border-4 border-transparent">
                     <Upload className="w-6 h-6 mb-1" />

@@ -287,8 +287,12 @@ export function SiteHeader() {
                     <DropdownMenuTrigger asChild>
                         <Button variant="outline" className="relative h-10 w-10 sm:h-10 sm:w-10 rounded-full bg-slate-100 dark:bg-slate-800 border-2 dark:border-slate-700 overflow-hidden p-0 ml-1">
                             {session.user?.image ? (
-                                <img src={session.user.image} alt="Avatar" className="w-full h-full object-cover" />
-                            ) : (
+                              <img 
+                                src={session.user.image.startsWith('/') || session.user.image.startsWith('http') ? session.user.image : `/${session.user.image}`} 
+                                alt="Avatar" 
+                                className="w-full h-full object-cover" 
+                              />
+                              ) : (
                                 <UserIcon className="w-5 h-5 sm:w-5 sm:h-5 text-slate-600 dark:text-slate-300" />
                             )}
                         </Button>

@@ -363,6 +363,9 @@ services:
     volumes:
       # REQUIRED: Persistent storage for your database, logs, and settings
       - /path/to/your/nas/config:/config
+      # REQUIRED: Persistent storage for user avatars and banners
+      - /path/to/your/nas/avatars:/app/public/avatars
+      - /path/to/your/nas/banners:/app/public/banners
       # -------------------------------------------------------------------------
       # OPTION 1: The Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
       # -------------------------------------------------------------------------

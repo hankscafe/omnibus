@@ -31,7 +31,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # --- USER CONFIGURATION ---
 # Use existing 'node' user (UID/GID 1000) for QNAP NAS permission compatibility.
 # Copy public assets and prisma schema
-COPY --from=builder /app/public ./public
+COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/prisma ./prisma
 
 # Automatically leverage output traces to reduce image size

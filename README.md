@@ -395,3 +395,8 @@ Omnibus stands on the shoulders of giants. This project was heavily inspired by 
 * **[Mylar3](https://github.com/mylar3/mylar3):** The absolute titan of comic tracking and downloading that paved the way.
 * **[ReadMeABook](https://github.com/kikootwo/ReadMeABook):** For the beautiful UI/UX inspiration and demonstrating what a modern web reader can look like.
 * **[ComicVine](https://comicvine.gamespot.com/):** For providing the API and metadata backbone that keeps our digital collections accurate and beautiful.
+
+---
+
+## Contributors
+- **Gemini** - AI Technical Collaborator & Project Advisor

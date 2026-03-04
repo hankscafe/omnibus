@@ -1,3 +1,4 @@
+// src/app/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -14,7 +15,8 @@ import {
   RefreshCw, 
   Loader2, 
   AlertTriangle, 
-  DownloadCloud // Added for the manual intervention banner
+  DownloadCloud,
+  UserPlus // Added for the pending users banner
 } from "lucide-react" 
 import Link from "next/link"
 
@@ -23,6 +25,7 @@ export default function Home() {
   const [pendingCount, setPendingCount] = useState(0)
   const [openReportsCount, setOpenReportsCount] = useState(0)
   const [manualDownloadsCount, setManualDownloadsCount] = useState(0)
+  const [pendingUsersCount, setPendingUsersCount] = useState(0) // NEW: State for pending accounts
   const isAdmin = session?.user?.role === 'ADMIN'
 
   // State to manage hard cache resets
@@ -34,7 +37,7 @@ export default function Home() {
     document.title = "Omnibus - Home"
   }, []);
 
-  // Fetch requests and reports to check for pending approvals/issues if the user is an admin
+  // Fetch requests, reports, and users to check for pending approvals/issues if the user is an admin
   useEffect(() => {
     if (!isAdmin) return
 
@@ -60,6 +63,14 @@ export default function Home() {
           const data = await resRep.json()
           const openReports = data.filter((r: any) => r.status === 'OPEN')
           setOpenReportsCount(openReports.length)
+        }
+
+        // NEW: Fetch Users to check for unapproved accounts
+        const resUsers = await fetch('/api/admin/users')
+        if (resUsers.ok) {
+          const data = await resUsers.json()
+          const pendingUsers = data.filter((u: any) => !u.isApproved)
+          setPendingUsersCount(pendingUsers.length)
         }
       } catch (e) {
         console.error("Failed to check admin alerts", e)
@@ -97,6 +108,28 @@ export default function Home() {
         
         {/* Admin Notification Banners */}
         <div className="space-y-4">
+          
+          {/* NEW: Pending User Accounts (Teal) */}
+          {isAdmin && pendingUsersCount > 0 && (
+            <Alert className="bg-teal-50 border-teal-200 dark:bg-teal-950/20 dark:border-teal-900/50 animate-in fade-in slide-in-from-top-4">
+              <UserPlus className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+              <AlertTitle className="text-teal-800 dark:text-teal-300 font-bold flex items-center gap-2">
+                New Accounts Pending
+                <Badge className="bg-teal-500 hover:bg-teal-600 text-white border-none text-[10px] h-5">
+                  {pendingUsersCount}
+                </Badge>
+              </AlertTitle>
+              <AlertDescription className="text-teal-700/80 dark:text-teal-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                There are new user accounts waiting for your approval to access the library.
+                <Button asChild variant="outline" size="sm" className="border-teal-300 text-teal-700 hover:bg-teal-100 dark:border-teal-800 dark:text-teal-400 dark:hover:bg-teal-900/40 h-8 font-bold">
+                  <Link href="/admin/users">
+                    Review Users <ArrowRight className="ml-2 h-3 w-3" />
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Pending Approvals (Orange) */}
           {isAdmin && pendingCount > 0 && (
             <Alert className="bg-orange-50 border-orange-200 dark:bg-orange-950/20 dark:border-orange-900/50 animate-in fade-in slide-in-from-top-4">

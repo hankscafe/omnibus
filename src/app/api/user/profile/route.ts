@@ -19,7 +19,6 @@ export async function GET(req: Request) {
         orderBy: { createdAt: 'desc' }
     });
 
-    // Fetch counts for the progress bar and stats
     const historyStats = await prisma.$transaction([
         prisma.readProgress.count({ 
             where: { userId: token.id as string } 
@@ -44,17 +43,15 @@ export async function GET(req: Request) {
         completionRate: completionRate
     };
 
-    // --- FETCH RECENT READING HISTORY ---
     const recentProgresses = await prisma.readProgress.findMany({
         where: { userId: token.id as string },
         include: { 
             issue: { include: { series: true } } 
         },
         orderBy: { updatedAt: 'desc' },
-        take: 24 // Increased from 6 to 24 so the carousel has items to scroll through
+        take: 24 
     });
 
-    // Fetch high-quality original request covers
     const seriesCvIds = recentProgresses.map(rp => rp.issue?.series?.cvId?.toString()).filter(Boolean) as string[];
     const relatedRequests = await prisma.request.findMany({
         where: { volumeId: { in: seriesCvIds } },
@@ -70,8 +67,6 @@ export async function GET(req: Request) {
         const progressPct = rp.totalPages > 0 ? Math.round((rp.currentPage / rp.totalPages) * 100) : 0;
         const cvIdStr = rp.issue?.series?.cvId?.toString();
         const folderPath = rp.issue?.series?.folderPath;
-        
-        // Construct the correct path to the folder's cover image
         const localCoverPath = folderPath ? path.join(folderPath, 'cover.jpg') : null;
         
         return {
@@ -88,7 +83,6 @@ export async function GET(req: Request) {
         };
     });
 
-    // Fetch Trophies
     const allTrophies = await prisma.trophy.findMany({ orderBy: { targetValue: 'asc' } });
     const userTrophies = await prisma.userTrophy.findMany({ where: { userId: token.id as string } });
     const earnedTrophyIds = new Set(userTrophies.map(ut => ut.trophyId));
@@ -122,19 +116,22 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: 'No image or action provided' }, { status: 400 });
     }
 
+    // --- REMOVE BANNER ---
     if (removeBanner) {
         const currentUser = await prisma.user.findUnique({ where: { id: token.id as string } });
         if (currentUser?.banner) {
+            // Updated to handle path logic with the api/uploads prefix
             const oldFileName = currentUser.banner.split('?')[0].split('/').pop();
             if (oldFileName) {
                 const oldPath = path.join(process.cwd(), 'public', 'banners', oldFileName);
-                if (fs.existsSync(oldPath)) await fs.unlink(oldPath);
+                if (await fs.exists(oldPath)) await fs.unlink(oldPath);
             }
         }
         await prisma.user.update({ where: { id: token.id as string }, data: { banner: null } });
         return NextResponse.json({ success: true, bannerUrl: null });
     }
 
+    // --- UPLOAD AVATAR ---
     if (avatarBase64) {
         const avatarDir = path.join(process.cwd(), 'public', 'avatars');
         await fs.ensureDir(avatarDir);
@@ -142,11 +139,14 @@ export async function POST(req: Request) {
         const filePath = path.join(avatarDir, fileName);
         const base64Data = avatarBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
-        const avatarUrl = `/avatars/${fileName}?t=${Date.now()}`;
+        
+        // FIX: Prefix with api/uploads to use the static image handler
+        const avatarUrl = `api/uploads/avatars/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { avatar: avatarUrl } });
         return NextResponse.json({ success: true, avatarUrl });
     }
 
+    // --- UPLOAD BANNER ---
     if (bannerBase64) {
         const bannerDir = path.join(process.cwd(), 'public', 'banners');
         await fs.ensureDir(bannerDir);
@@ -154,7 +154,9 @@ export async function POST(req: Request) {
         const filePath = path.join(bannerDir, fileName);
         const base64Data = bannerBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
-        const bannerUrl = `/banners/${fileName}?t=${Date.now()}`;
+        
+        // FIX: Prefix with api/uploads to use the static image handler
+        const bannerUrl = `api/uploads/banners/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { banner: bannerUrl } });
         return NextResponse.json({ success: true, bannerUrl });
     }

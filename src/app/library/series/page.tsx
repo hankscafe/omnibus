@@ -134,7 +134,6 @@ function SeriesContent() {
                 monitored: data.monitored || false
             });
             
-            // Populates the existing Edit Info switches
             setEditForm({
                 name: data.seriesName || data.name || "",
                 publisher: data.publisher || "", 
@@ -388,7 +387,6 @@ function SeriesContent() {
       }
   }
 
-  // Pure rely on the existing monitored toggle 
   const handleManualEditSave = async () => {
       setIsSavingEdit(true);
       try {
@@ -531,8 +529,22 @@ function SeriesContent() {
               <div className="space-y-3">
                   
                   {(seriesInfo.publisher || seriesInfo.year) && (
-                      <div className="flex items-center justify-between text-[11px] font-black text-muted-foreground uppercase tracking-widest px-1">
+                      <div className="flex items-center justify-between text-[11px] font-black text-muted-foreground uppercase tracking-widest px-1 mb-1">
                           <span className="truncate pr-2 text-slate-500 dark:text-slate-400">{seriesInfo.publisher || "Unknown Publisher"}</span>
+                          
+                          <div className="flex items-center gap-1.5 shrink-0 mx-2">
+                              {seriesInfo.status && (
+                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'dark:bg-slate-800'}`}>
+                                      {seriesInfo.status}
+                                  </Badge>
+                              )}
+                              {seriesInfo.id && (
+                                  <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.monitored ? 'bg-blue-600 hover:bg-blue-700 text-white border-0' : 'text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800'}`}>
+                                      {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
+                                  </Badge>
+                              )}
+                          </div>
+
                           <span className="shrink-0 text-slate-400 dark:text-slate-500">{seriesInfo.year}</span>
                       </div>
                   )}
@@ -543,20 +555,6 @@ function SeriesContent() {
                   
                   <div className="text-center md:text-left space-y-1">
                       <h1 className="text-2xl font-black tracking-tight dark:text-slate-100">{seriesInfo.name}</h1>
-                      
-                      {/* FIXED BADGE ROW: Restored native Status and added Monitored toggle visibility */}
-                      <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 pt-1">
-                          {seriesInfo.status && (
-                              <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`uppercase tracking-wider text-[9px] font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'dark:bg-slate-800'}`}>
-                                  {seriesInfo.status}
-                              </Badge>
-                          )}
-                          {seriesInfo.id && (
-                              <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`uppercase tracking-wider text-[9px] font-black ${seriesInfo.monitored ? 'bg-blue-600 hover:bg-blue-700 text-white border-0' : 'text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800'}`}>
-                                  {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
-                              </Badge>
-                          )}
-                      </div>
                   </div>
               </div>
 

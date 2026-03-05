@@ -1,3 +1,4 @@
+// src/lib/metadata-fetcher.ts
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -13,9 +14,9 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
     Logger.log(`[Metadata] Fetching Volume data for CV ID: ${cvId}`, 'info');
 
-    // 1. Fetch Volume
+    // 1. Fetch Volume (ADDED end_year to field_list)
     const volRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
-        params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits' },
+        params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,end_year' },
         headers: { 'User-Agent': 'Omnibus/1.0' },
         timeout: 15000
     });
@@ -43,7 +44,8 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
             publisher: volData.publisher?.name || 'Other',
             year: parseInt(volData.start_year) || series.year,
             description: volData.description || volData.deck || null,
-            coverUrl: imageUrl
+            coverUrl: imageUrl,
+            status: volData.end_year ? 'Ended' : 'Ongoing' // AUTOMATED STATUS
         }
     });
 
@@ -92,10 +94,8 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
             const characters = cvIssue.character_credits ? cvIssue.character_credits.map((c: any) => c.name) : [];
 
-            // Standardize Issue Number
             const issueNumStr = parseFloat(cvIssue.issue_number?.toString() || "0").toString();
 
-            // Fallback to Volume-level credits if the individual issue leaves them blank
             const finalWriters = writers.length > 0 ? writers : volWriters;
             const finalArtists = artists.length > 0 ? artists : volArtists;
             const finalCharacters = characters.length > 0 ? characters : volCharacters;

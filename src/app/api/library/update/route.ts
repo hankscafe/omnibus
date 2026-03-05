@@ -1,3 +1,4 @@
+// src/app/api/library/update/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -27,7 +28,6 @@ export async function POST(request: Request) {
         ? path.join(libraryRoot, safePublisher, safeSeries)
         : path.join(libraryRoot, safeSeries);
 
-    // BLAZING FIX: Force all paths to use forward slashes to prevent frontend URI encoding loops!
     newPath = newPath.replace(/\\/g, '/');
     let activePath = currentPath.replace(/\\/g, '/');
 
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     const cleanName = name ? name.trim() : "Unknown Series";
 
     const existingRecord = await prisma.series.findFirst({
-        where: { folderPath: currentPath } // Search using original path string
+        where: { folderPath: currentPath } 
     });
 
     if (existingRecord) {
@@ -63,7 +63,6 @@ export async function POST(request: Request) {
             }
         });
 
-        // Update all child issues with the new forward-slash path
         if (currentPath.replace(/\\/g, '/').toLowerCase() !== activePath.toLowerCase()) {
             const issues = await prisma.issue.findMany({ where: { seriesId: existingRecord.id } });
             const pathUpdates = [];

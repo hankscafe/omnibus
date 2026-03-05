@@ -1,3 +1,4 @@
+// src/app/api/library/match-series/route.ts
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
@@ -35,11 +36,12 @@ export async function POST(request: Request) {
     let realName = name && name !== 'Unknown Series' ? name : '';
     let realYear = year ? parseInt(year) : 0;
     let imageUrl = null;
+    let status = 'Ongoing'; // Default to ongoing
     
-    // FAIL-FAST CV FETCH (Max 2 seconds. If CV rate-limits us, skip it and keep going!)
+    // FAIL-FAST CV FETCH
     try {
         const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
-            params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image' },
+            params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image,end_year' }, // Added end_year
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 2000 
         });
@@ -49,6 +51,7 @@ export async function POST(request: Request) {
             if (!realName && vol.name) realName = vol.name;
             if (!realYear && vol.start_year) realYear = parseInt(vol.start_year) || 0;
             imageUrl = vol.image?.medium_url || vol.image?.super_url;
+            if (vol.end_year) status = 'Ended'; // Auto-detect ended
         }
     } catch(e) { 
         console.warn("[Matcher] ComicVine connection throttled or timed out. Using fallback data.");
@@ -88,10 +91,12 @@ export async function POST(request: Request) {
         publisher: realPublisher,
         folderPath: newFolderPath,
         isManga: isManga,
+        status: status, // Apply detected status
         coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null
     };
 
     if (existingRecord) {
+        // WIPE OUT THE OLD "MISSING ISSUES" GHOSTS
         await prisma.issue.deleteMany({
             where: {
                 seriesId: existingRecord.id,
@@ -101,6 +106,7 @@ export async function POST(request: Request) {
                 ]
             }
         });
+
         existingRecord = await prisma.series.update({ where: { id: existingRecord.id }, data: updateData });
     } else {
         existingRecord = await prisma.series.create({ data: updateData });
@@ -166,7 +172,6 @@ export async function POST(request: Request) {
             await prisma.$transaction(pathUpdates).catch(() => {});
         }
 
-        // FAIL-FAST IMAGE DOWNLOAD (Max 3 seconds)
         if (imageUrl) {
             try {
                 const imgRes = await axios.get(imageUrl, { 
@@ -182,51 +187,48 @@ export async function POST(request: Request) {
         
     } catch (err) { }
 
-    
-try {
-            const pendingRequests = await prisma.request.findMany({
-                where: { 
-                    volumeId: targetCvId.toString(),
-                    status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } 
-                }
+    try {
+        const pendingRequests = await prisma.request.findMany({
+            where: { 
+                volumeId: targetCvId.toString(),
+                status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } 
+            }
+        });
+
+        if (pendingRequests.length > 0) {
+            const seriesIssues = await prisma.issue.findMany({
+                where: { series: { cvId: targetCvId } }
             });
 
-            if (pendingRequests.length > 0) {
-                // Grab all issues for this series
-                const seriesIssues = await prisma.issue.findMany({
-                    where: { series: { cvId: targetCvId } }
-                });
+            for (const req of pendingRequests) {
+                const searchStr = (req.activeDownloadName || req.title || req.name || "");
+                const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
+                const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
 
-                for (const req of pendingRequests) {
-                    const searchStr = (req.activeDownloadName || req.title || req.name || "");
-                    const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
-                    const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
+                if (issueNum === null) continue;
 
-                    if (issueNum === null) continue;
+                const matchingIssue = seriesIssues.find(i => 
+                    parseFloat(i.number) === issueNum && 
+                    i.filePath && i.filePath.length > 0
+                );
 
-                    // Bulletproof match: Convert both to numbers (ignores 01 vs 1) AND verify it has a file
-                    const matchingIssue = seriesIssues.find(i => 
-                        parseFloat(i.number) === issueNum && 
-                        i.filePath && i.filePath.length > 0
-                    );
-
-                    if (matchingIssue) {
-                        await prisma.request.update({
-                            where: { id: req.id },
-                            data: { status: 'COMPLETED', progress: 100 }
-                        });
-                    }
+                if (matchingIssue) {
+                    await prisma.request.update({
+                        where: { id: req.id },
+                        data: { status: 'COMPLETED', progress: 100 }
+                    });
                 }
             }
-        } catch (e) {
-            console.error("Match Auto-Healer Error:", e);
         }
-        
-        revalidateTag('library');
-        revalidatePath('/library');
-        revalidatePath('/library/series');
+    } catch (e) {
+        console.error("Match Auto-Healer Error:", e);
+    }
+    
+    revalidateTag('library');
+    revalidatePath('/library');
+    revalidatePath('/library/series');
 
-        return NextResponse.json({ success: true, newPath: activeFolderPath, cvId: targetCvId });
+    return NextResponse.json({ success: true, newPath: activeFolderPath, cvId: targetCvId });
 
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

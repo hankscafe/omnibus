@@ -1,3 +1,4 @@
+// src/app/library/series/page.tsx
 "use client"
 
 import { useState, useEffect, useTransition, Suspense } from "react"
@@ -9,7 +10,8 @@ import {
   ChevronLeft, BookOpen, Layers, Loader2, Image as ImageIcon, 
   Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
-  CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle
+  CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
+  LayoutGrid, List // Added LayoutGrid and List icons
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -48,6 +50,9 @@ function SeriesContent() {
   
   const [loading, setLoading] = useState(true);
   
+  // NEW: View Mode State
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+
   const [downloadedIssues, setDownloadedIssues] = useState<any[]>([]);
   const [missingIssues, setMissingIssues] = useState<any[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
@@ -64,7 +69,7 @@ function SeriesContent() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isMatching, setIsMatching] = useState(false);
-
+  
   const [searchPage, setSearchPage] = useState(1);
   const [hasMoreSearch, setHasMoreSearch] = useState(false);
   const [isSearchingMore, setIsSearchingMore] = useState(false);
@@ -99,7 +104,15 @@ function SeriesContent() {
 
   useEffect(() => {
     document.title = "Omnibus - Series";
+    // NEW: Load saved view mode
+    const savedView = localStorage.getItem('omnibus-series-view') as 'grid' | 'list';
+    if (savedView === 'grid' || savedView === 'list') setViewMode(savedView);
   }, [loading]);
+
+  const toggleViewMode = (mode: 'grid' | 'list') => {
+      setViewMode(mode);
+      localStorage.setItem('omnibus-series-view', mode);
+  };
 
   useEffect(() => {
     if (!folderPath) return;
@@ -163,7 +176,6 @@ function SeriesContent() {
     return () => { isMounted = false; };
   }, [activeIssue?.id]);
 
-  // --- AUTO-DEEP SCAN LOGIC ---
   const runAutoDeepScan = async (cvId: string, currentPath: string) => {
       setIsRefreshingMetadata(true);
       
@@ -421,11 +433,9 @@ function SeriesContent() {
           
           toast({ title: "Series Deleted", description: "The series has been removed from your library." });
           
-          // INSTANTLY clean up state before routing so nothing spins or hangs
           setIsDeleting(false);
           setDeleteModalOpen(false);
           
-          // Force the library to realize it needs to fetch fresh data via URL param
           router.push(`/library?refetch=${Date.now()}`);
       } catch (e: any) {
           toast({ title: "Delete Failed", description: e.message, variant: "destructive" });
@@ -434,7 +444,6 @@ function SeriesContent() {
       }
   }
 
-  // --- FIXED: ISSUE DELETION WITHOUT RELOADING ---
   const handleDeleteIssue = async () => {
       if (!issueToDelete) return;
       setIsDeletingIssue(true);
@@ -453,11 +462,10 @@ function SeriesContent() {
           
           toast({ title: "Issue Deleted", description: "The issue has been successfully removed." });
           
-          // Instantly remove it from the UI state without needing to refresh the page!
           setDownloadedIssues(prev => prev.filter(i => i.id !== issueToDelete.id));
           
           if (activeIssue?.id === issueToDelete.id) {
-              setActiveIssue(null); // Clear the top info area if they deleted the currently viewed issue
+              setActiveIssue(null); 
           }
 
           setIsDeletingIssue(false);
@@ -548,7 +556,7 @@ function SeriesContent() {
               </div>
 
               <div className="flex flex-col gap-2">
-                  {/* --- NEW DYNAMIC ACTION BUTTON --- */}
+                  {/* DYNAMIC ACTION BUTTON */}
                   {activeIssue && !activeIssue.fullPath ? (
                       <Button 
                           className="w-full font-black shadow-md bg-blue-600 hover:bg-blue-700 text-white border-0" 
@@ -634,7 +642,7 @@ function SeriesContent() {
               </div>
           </div>
 
-          <div className="space-y-10">
+          <div className="space-y-10 min-w-0">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div className="flex flex-col h-full bg-white dark:bg-slate-900 p-6 rounded-2xl border dark:border-slate-800 shadow-sm">
                       <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">
@@ -681,53 +689,114 @@ function SeriesContent() {
                   <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground px-1">
                     {activeIssue ? `${activeIssue.name} Synopsis` : 'Synopsis'}
                   </h4>
-                  <div className="text-sm leading-relaxed bg-white dark:bg-slate-900 p-6 rounded-2xl border dark:border-slate-800 min-h-[120px] dark:text-slate-300 shadow-sm">
+                  <div className="text-sm leading-relaxed bg-white dark:bg-slate-900 p-6 rounded-2xl border dark:border-slate-800 min-h-[120px] dark:text-slate-300 shadow-sm break-words">
                       <div dangerouslySetInnerHTML={{__html: displayDescription}} />
                   </div>
               </div>
 
+              {/* --- DOWNLOADED ISSUES SECTION --- */}
               <div className="space-y-6">
                   <div className="flex items-center justify-between border-b-2 dark:border-slate-800 pb-4">
                       <h4 className="font-black flex items-center gap-2 text-xl dark:text-slate-200 tracking-tight"><Layers className="w-6 h-6 text-blue-500"/> Downloaded Issues ({downloadedIssues.length})</h4>
+                      <div className="flex items-center gap-1 border dark:border-slate-800 rounded-md p-1 bg-white dark:bg-slate-950 shadow-sm shrink-0">
+                          <Button variant={viewMode === 'grid' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('grid')}><LayoutGrid className="w-4 h-4" /></Button>
+                          <Button variant={viewMode === 'list' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('list')}><List className="w-4 h-4" /></Button>
+                      </div>
                   </div>
                   
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-4">
-                      {downloadedIssues.map((issue) => {
-                          const isSelected = activeIssue?.id === issue.id;
-                          const isRead = issue.isRead || (issue.readProgress || 0) >= 100;
-                          return (
-                              <div 
-                                key={issue.id} 
-                                onClick={() => setActiveIssue(issue)}
-                                className={`flex gap-4 p-4 bg-white dark:bg-slate-900 border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer ${isSelected ? 'border-primary ring-4 ring-primary/10' : 'border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-900'}`}
-                              >
-                                <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-slate-100 dark:bg-slate-800 border dark:border-slate-700 relative">
-                                  {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-slate-300" />}
-                                  <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-blue-600 border-0 text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
-                                  {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-blue-500" style={{ width: `${issue.readProgress}%` }} /></div>}
-                                </div>
-                                <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
-                                  <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'dark:text-slate-200'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
-                                  <div className="flex items-center gap-2 mt-3">
-                                    <Button size="sm" variant={isSelected ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => e.stopPropagation()}>
-                                        <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
-                                            {getReadButtonLabel(issue)}
-                                        </Link>
-                                    </Button>
-                                    {canDownload && <Button size="sm" variant="secondary" className="h-9 px-3 dark:bg-slate-800" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
-                                    {isAdmin && (
-                                        <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200 dark:hover:border-red-900/50" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
-                                            <Trash2 className="w-4 h-4" />
+                  {viewMode === 'grid' ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-4">
+                          {downloadedIssues.map((issue) => {
+                              const isSelected = activeIssue?.id === issue.id;
+                              const isRead = issue.isRead || (issue.readProgress || 0) >= 100;
+                              return (
+                                  <div 
+                                    key={issue.id} 
+                                    onClick={() => setActiveIssue(issue)}
+                                    className={`flex gap-4 p-4 bg-white dark:bg-slate-900 border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer ${isSelected ? 'border-primary ring-4 ring-primary/10' : 'border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-900'}`}
+                                  >
+                                    <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-slate-100 dark:bg-slate-800 border dark:border-slate-700 relative">
+                                      {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-slate-300" />}
+                                      <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-blue-600 border-0 text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
+                                      {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-blue-500" style={{ width: `${issue.readProgress}%` }} /></div>}
+                                    </div>
+                                    <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
+                                      <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'dark:text-slate-200'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
+                                      <div className="flex items-center gap-2 mt-3">
+                                        <Button size="sm" variant={isSelected ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => e.stopPropagation()}>
+                                            <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
+                                                {getReadButtonLabel(issue)}
+                                            </Link>
                                         </Button>
-                                    )}
+                                        {canDownload && <Button size="sm" variant="secondary" className="h-9 px-3 dark:bg-slate-800" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                        {isAdmin && (
+                                            <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200 dark:hover:border-red-900/50" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
+                                                <Trash2 className="w-4 h-4" />
+                                            </Button>
+                                        )}
+                                      </div>
+                                    </div>
                                   </div>
-                                </div>
-                              </div>
-                            );
-                      })}
-                  </div>
+                                );
+                          })}
+                      </div>
+                  ) : (
+                      <div className="border dark:border-slate-800 rounded-lg overflow-hidden bg-white dark:bg-slate-950 shadow-sm mt-4">
+                          <div className="overflow-x-auto">
+                              <table className="w-full text-sm text-left">
+                                  <thead className="text-xs text-muted-foreground uppercase bg-slate-50 dark:bg-slate-900/50 border-b dark:border-slate-800">
+                                      <tr>
+                                          <th className="w-16 px-4 py-3 text-center">Cover</th>
+                                          <th className="px-4 py-3">Issue</th>
+                                          <th className="px-4 py-3 text-center">Progress</th>
+                                          <th className="px-4 py-3 text-right">Actions</th>
+                                      </tr>
+                                  </thead>
+                                  <tbody className="divide-y dark:divide-slate-800">
+                                      {downloadedIssues.map((issue) => {
+                                          const isSelected = activeIssue?.id === issue.id;
+                                          const isRead = issue.isRead || (issue.readProgress || 0) >= 100;
+                                          return (
+                                              <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={`cursor-pointer transition-colors ${isSelected ? 'bg-blue-50/50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}>
+                                                  <td className="px-4 py-2">
+                                                      <div className="w-10 h-14 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden flex items-center justify-center shrink-0 border dark:border-slate-700 relative">
+                                                          {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-4 h-4 text-slate-300 dark:text-slate-600" />}
+                                                          {isRead && <div className="absolute inset-0 flex items-center justify-center bg-green-500/20 z-20"><Check className="w-4 h-4 text-green-500 font-bold"/></div>}
+                                                      </div>
+                                                  </td>
+                                                  <td className="px-4 py-3 font-bold">
+                                                      <div className={`line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-slate-900 dark:text-slate-100'}`}>{issue.name}</div>
+                                                      {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</div>}
+                                                  </td>
+                                                  <td className="px-4 py-3 text-center">
+                                                      {isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3 mr-1"/> Read</Badge> : issue.readProgress > 0 ? <Badge className="bg-blue-600 border-0 text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : <span className="text-muted-foreground text-xs">-</span>}
+                                                  </td>
+                                                  <td className="px-4 py-3 text-right">
+                                                      <div className="flex items-center justify-end gap-2">
+                                                          <Button size="sm" variant={isSelected ? "default" : "outline"} className="h-8 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => e.stopPropagation()}>
+                                                              <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
+                                                                  {getReadButtonLabel(issue)}
+                                                              </Link>
+                                                          </Button>
+                                                          {canDownload && <Button size="sm" variant="secondary" className="h-8 px-3 dark:bg-slate-800 hidden sm:flex" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                                          {isAdmin && (
+                                                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 hidden sm:flex" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
+                                                                  <Trash2 className="w-4 h-4" />
+                                                              </Button>
+                                                          )}
+                                                      </div>
+                                                  </td>
+                                              </tr>
+                                          )
+                                      })}
+                                  </tbody>
+                              </table>
+                          </div>
+                      </div>
+                  )}
               </div>
 
+              {/* --- MISSING ISSUES SECTION --- */}
               {seriesInfo.cvId && (
                   <div className="space-y-6 pt-4 border-t-2 dark:border-slate-800">
                       <h4 className="font-black flex items-center gap-2 text-xl dark:text-slate-400 opacity-80 tracking-tight"><CloudOff className="w-6 h-6"/> Missing Issues ({missingIssues.length})</h4>
@@ -738,7 +807,7 @@ function SeriesContent() {
                               <p className="text-lg font-black text-green-800 dark:text-green-400 uppercase tracking-tight">Your collection is complete!</p>
                               <p className="text-sm text-green-700/70 dark:text-green-500/70 mt-1">All known issues are currently in your library.</p>
                           </div>
-                      ) : (
+                      ) : viewMode === 'grid' ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-10">
                               {missingIssues.map((issue) => {
                                   const isRequesting = requestingIds.has(issue.id);
@@ -748,11 +817,55 @@ function SeriesContent() {
                                         <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-slate-200 dark:bg-slate-800 border dark:border-slate-700 grayscale">{issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-slate-400" />}</div>
                                         <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
                                             <div><h5 className="font-bold text-base line-clamp-2 dark:text-slate-300 leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span></div>
-                                            <div className="flex items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
+                                            <div className="flex items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
                                         </div>
                                       </div>
                                   );
                               })}
+                          </div>
+                      ) : (
+                          <div className="border dark:border-slate-800 rounded-lg overflow-hidden bg-white dark:bg-slate-950 shadow-sm mt-4 pb-10">
+                              <div className="overflow-x-auto">
+                                  <table className="w-full text-sm text-left">
+                                      <thead className="text-xs text-muted-foreground uppercase bg-slate-50 dark:bg-slate-900/50 border-b dark:border-slate-800">
+                                          <tr>
+                                              <th className="w-16 px-4 py-3 text-center">Cover</th>
+                                              <th className="px-4 py-3">Issue</th>
+                                              <th className="px-4 py-3 text-right">Actions</th>
+                                          </tr>
+                                      </thead>
+                                      <tbody className="divide-y dark:divide-slate-800">
+                                          {missingIssues.map((issue) => {
+                                              const isRequesting = requestingIds.has(issue.id);
+                                              const isAlreadyRequested = requestedIds.has(issue.id);
+                                              return (
+                                                  <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={`cursor-pointer transition-colors ${requestingIds.has(issue.id) ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}>
+                                                      <td className="px-4 py-2">
+                                                          <div className="w-10 h-14 bg-slate-200 dark:bg-slate-800 rounded overflow-hidden flex items-center justify-center shrink-0 border dark:border-slate-700 grayscale relative">
+                                                              {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-slate-400" />}
+                                                          </div>
+                                                      </td>
+                                                      <td className="px-4 py-3 font-bold">
+                                                          <div className="line-clamp-2 leading-tight dark:text-slate-300">{issue.name}</div>
+                                                          {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</div>}
+                                                      </td>
+                                                      <td className="px-4 py-3 text-right">
+                                                          {isAlreadyRequested ? (
+                                                              <Button size="sm" variant="secondary" disabled className="h-8 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed">
+                                                                  <Check className="w-3.5 h-3.5 mr-1"/> Requested
+                                                              </Button>
+                                                          ) : (
+                                                              <Button size="sm" variant="outline" className="h-8 font-bold text-[10px] uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>
+                                                                  {isRequesting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1"/> : <CloudDownload className="w-3.5 h-3.5 mr-1"/>} Request
+                                                              </Button>
+                                                          )}
+                                                      </td>
+                                                  </tr>
+                                              )
+                                          })}
+                                      </tbody>
+                                  </table>
+                              </div>
                           </div>
                       )}
                   </div>
@@ -770,10 +883,7 @@ function SeriesContent() {
                   <Button type="submit" disabled={isSearching}><Search className="w-4 h-4" /></Button>
               </form>
               
-              {/* WRAPPER DIV: This holds BOTH the grid and the Load More button */}
               <div className="flex-1 overflow-y-auto mt-4 pb-4 px-1">
-                  
-                  {/* The Grid of Comics */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
                       {searchResults.map((item) => (
                           <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleMatch(item)}>
@@ -796,7 +906,6 @@ function SeriesContent() {
                       ))}
                   </div>
 
-                  {/* The Load More Button (Safely inside the wrapper) */}
                   {hasMoreSearch && (
                       <div className="mt-8 mb-4 flex justify-center">
                           <Button 
@@ -920,7 +1029,6 @@ function SeriesContent() {
   )
 }
 
-// Add this at the absolute bottom of app/library/series/page.tsx
 export default function SeriesPage() {
   return (
     <Suspense fallback={<div className="p-10 text-center">Loading series data...</div>}>

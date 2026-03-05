@@ -199,7 +199,11 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           (session.user as any).autoApproveRequests = token.autoApproveRequests;
           (session.user as any).canDownload = token.canDownload;
           (session.user as any).isImpersonating = token.isImpersonating;
-          session.user.image = (token.picture as string) || null;
+          let pic = token.picture as string | null;
+          if (pic && !pic.startsWith('/') && !pic.startsWith('http')) {
+              pic = `/${pic}`;
+          }
+          session.user.image = pic || null;
         }
         return session;
       }

@@ -10,10 +10,9 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
   
-  // NEW: Add pagination parameters
+  // Extract page for pagination
   const page = parseInt(searchParams.get('page') || '1', 10);
   const limit = 20;
-  const offset = (page - 1) * limit;
 
   if (!query) {
     return NextResponse.json({ error: 'Query parameter "q" is required' }, { status: 400 });
@@ -36,7 +35,7 @@ export async function GET(request: Request) {
         query: query,
         resources: 'volume', 
         limit: limit,           
-        offset: offset, // NEW: Tell CV which page we want
+        page: page, // FIX: The ComicVine search endpoint specifically requires 'page', not 'offset'!
         field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description' 
       },
       headers: {
@@ -62,9 +61,9 @@ export async function GET(request: Request) {
       };
     });
 
-    // NEW: Calculate if there are more pages left
+    // Calculate if there are more pages left based on the current page
     const totalResults = response.data.number_of_total_results || 0;
-    const hasMore = offset + limit < totalResults;
+    const hasMore = (page * limit) < totalResults;
 
     return NextResponse.json({ results, hasMore });
 

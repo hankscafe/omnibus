@@ -63,3 +63,6 @@ public/images/omnibus-logo-3.png
 
 # Ignore Prisma backup files
 prisma/schema - BACKUP.prisma
+
+# Ignore .cache for .CBR files
+.cache/

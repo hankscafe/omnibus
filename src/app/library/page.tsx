@@ -603,18 +603,36 @@ function LibraryContent() {
                         <Button 
                             variant="default" 
                             size="sm" 
-                            className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold bg-purple-600 hover:bg-purple-700 text-white border-0" 
+                            className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold bg-purple-600 hover:bg-purple-700 text-white border-0 min-w-0 px-2" 
                             onClick={(e) => handleNavigate(e, item.path, navId)}
                         >
-                            {navigatingTo === navId ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : <BookOpen className="w-3 h-3 mr-2" />} 
-                            {navigatingTo === navId ? "Loading..." : "Read Series"}
+                            {navigatingTo === navId ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 mr-1.5 shrink-0" />} 
+                            <span className="truncate">{navigatingTo === navId ? "Loading..." : "Read Series"}</span>
                         </Button>
-                        <div className="flex gap-2 w-full">
-                            <Button variant="secondary" size="sm" className="h-10 sm:h-8 flex-1 shadow-lg text-xs sm:text-[10px] font-bold" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}><ListPlus className="w-3 h-3" /> List</Button>
-                            {isAdmin && (<Button variant="secondary" size="sm" className="h-10 sm:h-8 flex-1 shadow-lg text-xs sm:text-[10px] font-bold" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}><Settings2 className="w-3 h-3" /> Edit</Button>)}
+                        <div className="flex gap-1.5 w-full">
+                            <Button variant="secondary" size="sm" className="h-10 sm:h-8 flex-1 shadow-lg text-xs sm:text-[10px] font-bold px-1.5 min-w-0" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}>
+                                <ListPlus className="w-3 h-3 mr-1 shrink-0" /> 
+                                <span className="truncate">List</span>
+                            </Button>
+                            {isAdmin && (
+                                <Button variant="secondary" size="sm" className="h-10 sm:h-8 flex-1 shadow-lg text-xs sm:text-[10px] font-bold px-1.5 min-w-0" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}>
+                                    <Settings2 className="w-3 h-3 mr-1 shrink-0" /> 
+                                    <span className="truncate">Edit</span>
+                                </Button>
+                            )}
                         </div>
-                        {isAdmin && (<Button variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg gap-2 text-xs sm:text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white border-0" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.cvId, item.path); }}><RefreshCw className="w-3 h-3" /> Fetch Cover</Button>)}
-                        {activeCollection !== "ALL" && (<Button variant="destructive" size="sm" className="h-10 sm:h-8 w-full shadow-lg gap-2 text-xs sm:text-[10px] font-bold" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}><Minus className="w-3 h-3" /> Remove</Button>)}
+                        {isAdmin && (
+                            <Button variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white border-0 min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.cvId, item.path); }}>
+                                <RefreshCw className="w-3 h-3 mr-1.5 shrink-0" /> 
+                                <span className="truncate">Fetch Cover</span>
+                            </Button>
+                        )}
+                        {activeCollection !== "ALL" && (
+                            <Button variant="destructive" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}>
+                                <Minus className="w-3 h-3 mr-1.5 shrink-0" /> 
+                                <span className="truncate">Remove</span>
+                            </Button>
+                        )}
                       </div>
                   </Card>
                   <div className="px-0.5" onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); }}>

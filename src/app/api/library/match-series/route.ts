@@ -88,11 +88,19 @@ export async function POST(request: Request) {
         publisher: realPublisher,
         folderPath: newFolderPath,
         isManga: isManga,
-        // PERFECT FIX: Store the blazing-fast local proxy URL instead of the broken ComicVine hotlink
         coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null
     };
 
     if (existingRecord) {
+        await prisma.issue.deleteMany({
+            where: {
+                seriesId: existingRecord.id,
+                OR: [
+                    { filePath: null },
+                    { filePath: "" }
+                ]
+            }
+        });
         existingRecord = await prisma.series.update({ where: { id: existingRecord.id }, data: updateData });
     } else {
         existingRecord = await prisma.series.create({ data: updateData });

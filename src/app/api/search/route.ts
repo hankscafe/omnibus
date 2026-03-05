@@ -9,6 +9,11 @@ const BASE_URL = 'https://comicvine.gamespot.com/api';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
+  
+  // NEW: Add pagination parameters
+  const page = parseInt(searchParams.get('page') || '1', 10);
+  const limit = 20;
+  const offset = (page - 1) * limit;
 
   if (!query) {
     return NextResponse.json({ error: 'Query parameter "q" is required' }, { status: 400 });
@@ -29,8 +34,9 @@ export async function GET(request: Request) {
         api_key: CV_API_KEY,
         format: 'json',
         query: query,
-        resources: 'volume', // Good: This limits results to Series only
-        limit: 20,           // Increased to 20 to give users more choices
+        resources: 'volume', 
+        limit: limit,           
+        offset: offset, // NEW: Tell CV which page we want
         field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description' 
       },
       headers: {
@@ -39,7 +45,6 @@ export async function GET(request: Request) {
     });
 
     const results = response.data.results.map((vol: any) => {
-      // Clean HTML from description more thoroughly
       let desc = vol.deck;
       if (!desc && vol.description) {
          desc = vol.description.replace(/<[^>]*>?/gm, '').trim();
@@ -49,7 +54,6 @@ export async function GET(request: Request) {
       return {
         id: vol.id,
         name: vol.name,
-        // Ensure year and publisher are never undefined to prevent "wiping" database fields
         year: vol.start_year || null,
         publisher: vol.publisher?.name || 'Other',
         count: vol.count_of_issues || 0,
@@ -58,7 +62,11 @@ export async function GET(request: Request) {
       };
     });
 
-    return NextResponse.json({ results });
+    // NEW: Calculate if there are more pages left
+    const totalResults = response.data.number_of_total_results || 0;
+    const hasMore = offset + limit < totalResults;
+
+    return NextResponse.json({ results, hasMore });
 
   } catch (error) {
     console.error('ComicVine API Error:', error);

@@ -65,6 +65,10 @@ function SeriesContent() {
   const [isSearching, setIsSearching] = useState(false);
   const [isMatching, setIsMatching] = useState(false);
 
+  const [searchPage, setSearchPage] = useState(1);
+  const [hasMoreSearch, setHasMoreSearch] = useState(false);
+  const [isSearchingMore, setIsSearchingMore] = useState(false);
+
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -311,18 +315,35 @@ function SeriesContent() {
     }
   };
 
-  const performSearch = async (e?: React.FormEvent) => {
+  const performSearch = async (e?: React.FormEvent, isLoadMore = false) => {
       if (e) e.preventDefault();
       if (searchQuery.trim().length < 2) return;
-      setIsSearching(true);
+
+      const nextPage = isLoadMore ? searchPage + 1 : 1;
+
+      if (!isLoadMore) {
+          setIsSearching(true);
+      } else {
+          setIsSearchingMore(true);
+      }
+
       try {
-          const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
+          const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}&page=${nextPage}`);
           const data = await res.json();
-          setSearchResults(data.results || []);
+          
+          if (isLoadMore) {
+              setSearchResults(prev => [...prev, ...(data.results || [])]);
+          } else {
+              setSearchResults(data.results || []);
+          }
+          
+          setHasMoreSearch(data.hasMore || false);
+          setSearchPage(nextPage);
       } catch (e) {
           toast({ title: "Search failed", variant: "destructive" });
       } finally {
           setIsSearching(false);
+          setIsSearchingMore(false);
       }
   }
 
@@ -527,14 +548,33 @@ function SeriesContent() {
               </div>
 
               <div className="flex flex-col gap-2">
-                  <Button 
-                    className={`w-full font-black shadow-md ${activeIssue?.readProgress > 0 && !(activeIssue?.isRead || activeIssue?.readProgress >= 100) ? 'bg-blue-600 hover:bg-blue-700' : ''}`} 
-                    size="lg" 
-                    disabled={downloadedIssues.length === 0 || !activeIssue} 
-                    onClick={() => router.push(`/reader?path=${encodeURIComponent(activeIssue?.fullPath || '')}&series=${encodeURIComponent(folderPath)}`)}>
-                      <BookOpen className="w-5 h-5 mr-2" /> 
-                      {getReadButtonLabel(activeIssue)} Selected
-                  </Button>
+                  {/* --- NEW DYNAMIC ACTION BUTTON --- */}
+                  {activeIssue && !activeIssue.fullPath ? (
+                      <Button 
+                          className="w-full font-black shadow-md bg-blue-600 hover:bg-blue-700 text-white border-0" 
+                          size="lg" 
+                          disabled={requestingIds.has(activeIssue.id) || requestedIds.has(activeIssue.id)}
+                          onClick={() => handleRequestMissing(activeIssue)}
+                      >
+                          {requestingIds.has(activeIssue.id) ? (
+                              <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                          ) : requestedIds.has(activeIssue.id) ? (
+                              <Check className="w-5 h-5 mr-2" />
+                          ) : (
+                              <CloudDownload className="w-5 h-5 mr-2" />
+                          )}
+                          {requestedIds.has(activeIssue.id) ? "Issue Requested" : "Request Selected"}
+                      </Button>
+                  ) : (
+                      <Button 
+                        className={`w-full font-black shadow-md ${activeIssue?.readProgress > 0 && !(activeIssue?.isRead || activeIssue?.readProgress >= 100) ? 'bg-blue-600 hover:bg-blue-700 text-white border-0' : ''}`} 
+                        size="lg" 
+                        disabled={!activeIssue || !activeIssue.fullPath} 
+                        onClick={() => router.push(`/reader?path=${encodeURIComponent(activeIssue?.fullPath || '')}&series=${encodeURIComponent(folderPath || '')}`)}>
+                          <BookOpen className="w-5 h-5 mr-2" /> 
+                          {getReadButtonLabel(activeIssue)} Selected
+                      </Button>
+                  )}
                   
                   <Button variant={seriesInfo.isFavorite ? "default" : "outline"} className={`w-full font-bold transition-all ${seriesInfo.isFavorite ? 'bg-pink-600 hover:bg-pink-700 text-white border-0' : 'dark:border-slate-800'}`} onClick={toggleFavorite} disabled={!seriesInfo.id}>
                       <Heart className={`w-4 h-4 mr-2 ${seriesInfo.isFavorite ? 'fill-current' : ''}`} /> Favorite
@@ -725,30 +765,52 @@ function SeriesContent() {
       <Dialog open={matchModalOpen} onOpenChange={setMatchModalOpen}>
           <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col dark:bg-slate-950 dark:border-slate-800">
               <DialogHeader><DialogTitle>Match Series</DialogTitle></DialogHeader>
-              <form onSubmit={performSearch} className="flex gap-2">
+              <form onSubmit={(e) => performSearch(e, false)} className="flex gap-2">
                   <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                   <Button type="submit" disabled={isSearching}><Search className="w-4 h-4" /></Button>
               </form>
-              <div className="flex-1 overflow-y-auto mt-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 pb-4 px-1">
-                  {searchResults.map((item) => (
-                      <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleMatch(item)}>
-                          <div className="aspect-[2/3] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden border dark:border-slate-800 relative shadow-sm">
-                              {item.image && <img src={getImageUrl(item.image) || ""} className="object-cover w-full h-full" alt="" />}
-                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                  <Button size="sm" className="font-bold shadow-lg" disabled={isMatching}>
-                                      {isMatching ? <Loader2 className="animate-spin w-4 h-4" /> : "Select"}
-                                  </Button>
+              
+              {/* WRAPPER DIV: This holds BOTH the grid and the Load More button */}
+              <div className="flex-1 overflow-y-auto mt-4 pb-4 px-1">
+                  
+                  {/* The Grid of Comics */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                      {searchResults.map((item) => (
+                          <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleMatch(item)}>
+                              <div className="aspect-[2/3] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden border dark:border-slate-800 relative shadow-sm">
+                                  {item.image && <img src={getImageUrl(item.image) || ""} className="object-cover w-full h-full" alt="" />}
+                                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                      <Button size="sm" className="font-bold shadow-lg" disabled={isMatching}>
+                                          {isMatching ? <Loader2 className="animate-spin w-4 h-4" /> : "Select"}
+                                      </Button>
+                                  </div>
+                              </div>
+                              <div className="flex flex-col items-center text-center px-1">
+                                  <h4 className="text-xs font-black line-clamp-1 dark:text-slate-200" title={item.name}>{item.name}</h4>
+                                  <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 line-clamp-1" title={item.publisher}>{item.publisher || "Unknown"}</span>
+                                  <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mt-0.5">
+                                      {item.year || "????"} • {item.count || 0} Issues
+                                  </span>
                               </div>
                           </div>
-                          <div className="flex flex-col items-center text-center px-1">
-                              <h4 className="text-xs font-black line-clamp-1 dark:text-slate-200" title={item.name}>{item.name}</h4>
-                              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 line-clamp-1" title={item.publisher}>{item.publisher || "Unknown"}</span>
-                              <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mt-0.5">
-                                  {item.year || "????"} • {item.count || 0} Issues
-                              </span>
-                          </div>
+                      ))}
+                  </div>
+
+                  {/* The Load More Button (Safely inside the wrapper) */}
+                  {hasMoreSearch && (
+                      <div className="mt-8 mb-4 flex justify-center">
+                          <Button 
+                              variant="secondary" 
+                              onClick={() => performSearch(undefined, true)} 
+                              disabled={isSearchingMore}
+                              className="font-bold shadow-sm"
+                          >
+                              {isSearchingMore ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                              Load More Results
+                          </Button>
                       </div>
-                  ))}
+                  )}
+
               </div>
           </DialogContent>
       </Dialog>

@@ -11,7 +11,7 @@ import {
   Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
-  LayoutGrid, List // Added LayoutGrid and List icons
+  LayoutGrid, List 
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -49,16 +49,14 @@ function SeriesContent() {
   const folderPath = searchParams.get('path');
   
   const [loading, setLoading] = useState(true);
-  
-  // NEW: View Mode State
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const [downloadedIssues, setDownloadedIssues] = useState<any[]>([]);
   const [missingIssues, setMissingIssues] = useState<any[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null}>({ 
-    name: "", cover: null, cvId: null, path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean}>({ 
+    name: "", cover: null, cvId: null, path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false
   });
   
   const [copied, setCopied] = useState(false);
@@ -85,13 +83,11 @@ function SeriesContent() {
   const [requestingIds, setRequestingIds] = useState<Set<number>>(new Set());
   const [requestedIds, setRequestedIds] = useState<Set<number>>(new Set());
 
-  // Series Deletion State
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
 
-  // Issue Deletion State
   const [deleteIssueModalOpen, setDeleteIssueModalOpen] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<any>(null);
   const [deleteIssueFile, setDeleteIssueFile] = useState(false);
@@ -104,7 +100,6 @@ function SeriesContent() {
 
   useEffect(() => {
     document.title = "Omnibus - Series";
-    // NEW: Load saved view mode
     const savedView = localStorage.getItem('omnibus-series-view') as 'grid' | 'list';
     if (savedView === 'grid' || savedView === 'list') setViewMode(savedView);
   }, [loading]);
@@ -135,8 +130,11 @@ function SeriesContent() {
                 publisher: data.publisher || null, 
                 year: data.year ? data.year.toString() : null,
                 description: data.description || null,
-                status: data.status || null
+                status: data.status || null,
+                monitored: data.monitored || false
             });
+            
+            // Populates the existing Edit Info switches
             setEditForm({
                 name: data.seriesName || data.name || "",
                 publisher: data.publisher || "", 
@@ -390,6 +388,7 @@ function SeriesContent() {
       }
   }
 
+  // Pure rely on the existing monitored toggle 
   const handleManualEditSave = async () => {
       setIsSavingEdit(true);
       try {
@@ -403,7 +402,7 @@ function SeriesContent() {
                   publisher: editForm.publisher,
                   cvId: parseInt(editForm.cvId) || 0,
                   monitored: editForm.monitored,
-                  isManga: editForm.isManga 
+                  isManga: editForm.isManga
               })
           });
           if (!res.ok) throw new Error("Failed to save info.");
@@ -545,13 +544,19 @@ function SeriesContent() {
                   <div className="text-center md:text-left space-y-1">
                       <h1 className="text-2xl font-black tracking-tight dark:text-slate-100">{seriesInfo.name}</h1>
                       
-                      {seriesInfo.status && (
-                          <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 pt-1">
-                              <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`uppercase tracking-wider text-[9px] font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 text-white' : ''}`}>
+                      {/* FIXED BADGE ROW: Restored native Status and added Monitored toggle visibility */}
+                      <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 pt-1">
+                          {seriesInfo.status && (
+                              <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`uppercase tracking-wider text-[9px] font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'dark:bg-slate-800'}`}>
                                   {seriesInfo.status}
                               </Badge>
-                          </div>
-                      )}
+                          )}
+                          {seriesInfo.id && (
+                              <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`uppercase tracking-wider text-[9px] font-black ${seriesInfo.monitored ? 'bg-blue-600 hover:bg-blue-700 text-white border-0' : 'text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800'}`}>
+                                  {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
+                              </Badge>
+                          )}
+                      </div>
                   </div>
               </div>
 
@@ -945,7 +950,7 @@ function SeriesContent() {
                       </div>
                   </div>
               </div>
-              <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)}>Cancel</Button><Button className="bg-blue-600 font-bold" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
+              <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)}>Cancel</Button><Button className="bg-blue-600 font-bold hover:bg-blue-700 text-white" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
           </DialogContent>
       </Dialog>
 

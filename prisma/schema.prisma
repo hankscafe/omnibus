@@ -27,7 +27,12 @@ model User {
   collections         Collection[]
   readingLists        ReadingList[]
   trophies            UserTrophy[]
-  issueReports        IssueReport[] 
+  issueReports        IssueReport[]
+
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
+
+  sessionVersion   Int     @default(0) 
 }
 
 model Request {

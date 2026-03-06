@@ -4,6 +4,10 @@ import { prisma } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 
+// FIX: Safely extract authenticator regardless of how Webpack nests the CommonJS export
+const otplib = require('otplib');
+const authenticator = otplib.authenticator || otplib.default?.authenticator || otplib;
+
 export async function getAuthOptions(): Promise<NextAuthOptions> {
   let oidcEnabled = false;
   let oidcIssuer = "";
@@ -27,12 +31,12 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       name: "Credentials",
       credentials: {
         username: { label: "Username", type: "text" },
-        password: { label: "Password", type: "password" }
+        password: { label: "Password", type: "password" },
+        totpCode: { label: "2FA Code", type: "text" }
       },
       async authorize(credentials) {
         if (!credentials?.username || !credentials?.password) return null;
         
-        // SECURE FIX: Ask the database to do the lowercase comparison securely
         const input = credentials.username.toLowerCase();
         
         const users: any[] = await prisma.$queryRaw`
@@ -50,6 +54,23 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         if (!isPasswordValid) throw new Error("Invalid username or password");
         if (!user.isApproved) throw new Error("Account pending admin approval.");
 
+        // --- 2FA VERIFICATION LOGIC ---
+        if (user.twoFactorEnabled && user.twoFactorSecret) {
+            
+            // Strictly catch the "undefined" serialization quirk from NextAuth
+            if (!credentials.totpCode || credentials.totpCode === "undefined" || credentials.totpCode.trim() === "") {
+                throw new Error("2FA_REQUIRED"); 
+            }
+            
+            const isValid = typeof authenticator.verify === 'function'
+                ? authenticator.verify({ token: credentials.totpCode, secret: user.twoFactorSecret })
+                : authenticator.check(credentials.totpCode, user.twoFactorSecret);
+                
+            if (!isValid) {
+                throw new Error("Invalid 2FA code.");
+            }
+        }
+
         return { 
             id: user.id, 
             name: user.username, 
@@ -57,7 +78,8 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             role: user.role,
             autoApproveRequests: user.autoApproveRequests, 
             canDownload: user.canDownload,
-            image: user.avatar 
+            image: user.avatar,
+            sessionVersion: user.sessionVersion // <-- Added for Revoke Sessions
         };
       }
     })
@@ -93,7 +115,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         if (account?.provider === "oidc") {
           if (!user.email) return false;
           
-          // SECURE FIX: Database-level lowercase check for SSO
           const inputEmail = user.email.toLowerCase();
           const dbUsers: any[] = await prisma.$queryRaw`
             SELECT * FROM User WHERE LOWER(email) = ${inputEmail} LIMIT 1
@@ -122,6 +143,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           (user as any).autoApproveRequests = dbUser.autoApproveRequests;
           (user as any).canDownload = dbUser.canDownload;
           user.image = dbUser.avatar; 
+          (user as any).sessionVersion = dbUser.sessionVersion; // <-- Added for Revoke Sessions
           return true;
         }
         return false;
@@ -137,14 +159,18 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           token.autoApproveRequests = (user as any).autoApproveRequests;
           token.canDownload = (user as any).canDownload;
           token.picture = user.image;
+          token.sessionVersion = (user as any).sessionVersion; // <-- Added for Revoke Sessions
           token.lastActive = Date.now();
         }
 
-        if (trigger === "update" && session?.user?.image !== undefined) {
-            token.picture = session.user.image;
+        if (trigger === "update") {
+            if (session?.user?.image !== undefined) token.picture = session.user.image;
+            // Update session version live if the user revoked other sessions from this browser
+            if (session?.sessionVersion !== undefined) token.sessionVersion = session.sessionVersion; 
             token.lastActive = Date.now();
         }
 
+        // 1. Time-based Expiration Check
         if (token.lastActive) {
             const timeoutLimit = token.role === "ADMIN" ? ADMIN_TIMEOUT_MS : USER_TIMEOUT_MS;
             if (Date.now() - (token.lastActive as number) > timeoutLimit) {
@@ -154,7 +180,18 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             }
         }
 
-        // --- IMPERSONATION LOGIC ---
+        // 2. Database Session Version Check (Revoke Sessions)
+        if (token.id) {
+            const dbUser = await prisma.user.findUnique({
+                where: { id: token.id as string },
+                select: { sessionVersion: true }
+            });
+            // FIX: Safely fallback to 0 if the token is from before the DB update
+            if (dbUser && dbUser.sessionVersion !== (token.sessionVersion || 0)) {
+                return { error: "SessionExpired" };
+            }
+        }
+
         const cookieStore = await cookies();
         const impersonateId = cookieStore.get('omnibus_impersonate')?.value;
 

@@ -22,6 +22,10 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [ssoLoading, setSsoLoading] = useState(false)
   const [ssoProvider, setSsoProvider] = useState<boolean>(false)
+  
+  // 2FA State
+  const [showTwoFactor, setShowTwoFactor] = useState(false)
+  const [totpCode, setTotpCode] = useState("")
 
   // Message States
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -64,8 +68,19 @@ export default function LoginPage() {
     setSuccessMsg(null)
 
     try {
-      const res = await signIn("credentials", { username, password, redirect: false })
+      const res = await signIn("credentials", { 
+          username, 
+          password, 
+          totpCode: showTwoFactor ? totpCode : "", // FIX: Pass empty string instead of undefined
+          redirect: false 
+      })
+      
       if (res?.error) {
+        if (res.error === "2FA_REQUIRED") {
+            setShowTwoFactor(true);
+            setLoading(false);
+            return;
+        }
         let message = res.error;
         if (message === "CredentialsSignin") message = "Invalid username or password.";
         setErrorMsg(message);
@@ -126,6 +141,8 @@ export default function LoginPage() {
       setEmail("");
       setPassword("");
       setConfirmPassword("");
+      setShowTwoFactor(false);
+      setTotpCode("");
       setErrorMsg(null);
       setSuccessMsg(null);
   }
@@ -151,6 +168,8 @@ export default function LoginPage() {
           <CardTitle className="flex items-center justify-center gap-2 text-xl font-bold text-slate-900 dark:text-slate-100 leading-tight">
             {isRegistering ? (
                 <><UserPlus className="w-5 h-5 text-primary" /> Create Account</>
+            ) : showTwoFactor ? (
+                <><ShieldCheck className="w-5 h-5 text-primary" /> Two-Factor Auth</>
             ) : (
                 <><ShieldCheck className="w-5 h-5 text-primary" /> Login Required</>
             )}
@@ -159,74 +178,97 @@ export default function LoginPage() {
         
         <CardContent className="relative z-10 pt-6">
           <form suppressHydrationWarning onSubmit={isRegistering ? handleRegister : handleLogin} className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
-            <div className="space-y-2">
-              <Label htmlFor="username" className="font-semibold text-xs text-slate-700 dark:text-slate-300">
-                {isRegistering ? "Username" : "Username / Email"}
-              </Label>
-              <Input 
-                id="username" 
-                suppressHydrationWarning
-                placeholder="Enter username..." 
-                value={username} 
-                onChange={(e) => setUsername(e.target.value)} 
-                className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
-                autoCapitalize="none"
-                autoCorrect="off"
-                autoComplete={isRegistering ? "off" : "username"}
-                required
-              />
-            </div>
             
-            {isRegistering && (
-              <div className="space-y-2">
-                <Label htmlFor="email" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Email Address</Label>
+            {showTwoFactor ? (
+              <div className="space-y-2 animate-in slide-in-from-right-4">
+                <Label htmlFor="totpCode" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Authenticator Code</Label>
                 <Input 
-                  id="email" 
-                  suppressHydrationWarning
-                  type="email"
-                  placeholder="Enter email address..." 
-                  value={email} 
-                  onChange={(e) => setEmail(e.target.value)} 
-                  className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  autoComplete="email"
+                  id="totpCode" 
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  placeholder="Enter 6-digit code..." 
+                  value={totpCode} 
+                  onChange={(e) => setTotpCode(e.target.value)} 
+                  className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-center tracking-widest text-2xl font-mono focus-visible:ring-primary" 
+                  autoComplete="one-time-code"
                   required
+                  autoFocus
                 />
               </div>
-            )}
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="username" className="font-semibold text-xs text-slate-700 dark:text-slate-300">
+                    {isRegistering ? "Username" : "Username / Email"}
+                  </Label>
+                  <Input 
+                    id="username" 
+                    suppressHydrationWarning
+                    placeholder="Enter username..." 
+                    value={username} 
+                    onChange={(e) => setUsername(e.target.value)} 
+                    className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    autoComplete={isRegistering ? "off" : "username"}
+                    required
+                  />
+                </div>
+                
+                {isRegistering && (
+                  <div className="space-y-2">
+                    <Label htmlFor="email" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Email Address</Label>
+                    <Input 
+                      id="email" 
+                      suppressHydrationWarning
+                      type="email"
+                      placeholder="Enter email address..." 
+                      value={email} 
+                      onChange={(e) => setEmail(e.target.value)} 
+                      className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      autoComplete="email"
+                      required
+                    />
+                  </div>
+                )}
 
-            <div className="space-y-2">
-              <Label htmlFor="password" title="Required" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Password</Label>
-              <Input 
-                id="password"
-                suppressHydrationWarning
-                type="password" 
-                placeholder="Enter password..."  
-                value={password} 
-                onChange={(e) => setPassword(e.target.value)} 
-                className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
-                autoComplete={isRegistering ? "new-password" : "current-password"}
-                required
-              />
-              {isRegistering && <p className="text-[10px] text-muted-foreground">Min 12 chars. Must include uppercase, lowercase, number, and symbol.</p>}
-            </div>
+                <div className="space-y-2">
+                  <Label htmlFor="password" title="Required" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Password</Label>
+                  <Input 
+                    id="password"
+                    suppressHydrationWarning
+                    type="password" 
+                    placeholder="Enter password..."  
+                    value={password} 
+                    onChange={(e) => setPassword(e.target.value)} 
+                    className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                    autoComplete={isRegistering ? "new-password" : "current-password"}
+                    required
+                  />
+                  {isRegistering && <p className="text-[10px] text-muted-foreground">Min 12 chars. Must include uppercase, lowercase, number, and symbol.</p>}
+                </div>
 
-            {isRegistering && (
-              <div className="space-y-2">
-                <Label htmlFor="confirmPassword" title="Required" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Confirm Password</Label>
-                <Input 
-                  id="confirmPassword"
-                  suppressHydrationWarning
-                  type="password" 
-                  placeholder="Confirm your password..."  
-                  value={confirmPassword} 
-                  onChange={(e) => setConfirmPassword(e.target.value)} 
-                  className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
-                  autoComplete="new-password"
-                  required
-                />
-              </div>
+                {isRegistering && (
+                  <div className="space-y-2">
+                    <Label htmlFor="confirmPassword" title="Required" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Confirm Password</Label>
+                    <Input 
+                      id="confirmPassword"
+                      suppressHydrationWarning
+                      type="password" 
+                      placeholder="Confirm your password..."  
+                      value={confirmPassword} 
+                      onChange={(e) => setConfirmPassword(e.target.value)} 
+                      className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                      autoComplete="new-password"
+                      required
+                    />
+                  </div>
+                )}
+              </>
             )}
 
             {/* INLINE ERROR/SUCCESS MESSAGES */}
@@ -250,17 +292,27 @@ export default function LoginPage() {
 
             <Button type="submit" className="w-full font-bold h-12 sm:h-11 mt-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-md transition-colors" disabled={loading || ssoLoading}>
               {loading ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : (isRegistering ? <UserPlus className="w-5 h-5 mr-2" /> : <LogIn className="w-5 h-5 mr-2" />)}
-              {isRegistering ? "Register Account" : "Log Into Omnibus"}
+              {isRegistering ? "Register Account" : showTwoFactor ? "Verify Code" : "Log Into Omnibus"}
             </Button>
           </form>
 
-          <div className="text-center mt-4">
-              <Button variant="link" type="button" onClick={toggleView} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
-                  {isRegistering ? "Already have an account? Log in." : "Need an account? Register here."}
-              </Button>
-          </div>
+          {showTwoFactor && (
+            <div className="text-center mt-4">
+                <Button variant="link" type="button" onClick={() => { setShowTwoFactor(false); setTotpCode(""); setErrorMsg(null); }} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
+                    &larr; Back to Password
+                </Button>
+            </div>
+          )}
 
-          {ssoProvider && (
+          {!showTwoFactor && (
+            <div className="text-center mt-4">
+                <Button variant="link" type="button" onClick={toggleView} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
+                    {isRegistering ? "Already have an account? Log in." : "Need an account? Register here."}
+                </Button>
+            </div>
+          )}
+
+          {ssoProvider && !showTwoFactor && (
               <div className="mt-6">
                   <div className="relative mb-6">
                       <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-200 dark:border-slate-800/80" /></div>
@@ -284,7 +336,7 @@ export default function LoginPage() {
         </CardContent>
         
         <CardFooter className="flex justify-between items-center pb-6 pt-2 relative z-10">
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Build: Build: v1.0.0-Beta.1</p>
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Build: v1.0.0-Beta.2</p>
           <div className="flex gap-1.5">
             <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
             <div className="w-2 h-2 bg-slate-300 dark:bg-slate-700 rounded-full" />

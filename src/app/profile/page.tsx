@@ -5,12 +5,15 @@ import { useSession } from "next-auth/react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 import { useColorTheme } from "@/components/ThemeProvider"
 import { 
   User as UserIcon, Upload, Loader2, ListOrdered, CheckCircle2, 
-  Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, ChevronRight
+  Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut
 } from "lucide-react"
 
 // --- Helper Component: Individual Activity Card ---
@@ -93,7 +96,6 @@ function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (stat
   )
 }
 
-// --- Dynamic Banner Gradient Helper ---
 const getThemeGradient = (theme: string) => {
     switch (theme) {
       case 'vigilante': return 'from-red-700 via-red-900 to-slate-900';
@@ -112,13 +114,28 @@ export default function ProfilePage() {
   const [readingLists, setReadingLists] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   
-  // Upload States & Refs
+  // Upload States
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [uploadingBanner, setUploadingBanner] = useState(false)
   const fileAvatarRef = useRef<HTMLInputElement>(null)
   const fileBannerRef = useRef<HTMLInputElement>(null)
   
-  // History Pagination State
+  // 2FA States
+  const [is2FAEnabled, setIs2FAEnabled] = useState(false)
+  const [setup2faModalOpen, setSetup2faModalOpen] = useState(false)
+  const [disable2faModalOpen, setDisable2faModalOpen] = useState(false)
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null)
+  const [totpSecret, setTotpSecret] = useState<string | null>(null)
+  const [verifyCode, setVerifyCode] = useState("")
+  const [isProcessing2fa, setIsProcessing2fa] = useState(false)
+
+  // Security Modal States
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false)
+  const [revokeModalOpen, setRevokeModalOpen] = useState(false)
+  const [isProcessingSecurity, setIsProcessingSecurity] = useState(false)
+  const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" })
+
+  // History Pagination
   const [historyPage, setHistoryPage] = useState(0)
   const historyItemsPerPage = 6;
   const totalHistoryPages = Math.ceil((profile?.recentHistory?.length || 0) / historyItemsPerPage);
@@ -141,8 +158,12 @@ export default function ProfilePage() {
       }
 
       const listRes = await fetch('/api/reading-lists')
-      if (listRes.ok) {
-          setReadingLists(await listRes.json());
+      if (listRes.ok) setReadingLists(await listRes.json());
+
+      const tfaRes = await fetch('/api/user/2fa')
+      if (tfaRes.ok) {
+        const tfaData = await tfaRes.json()
+        setIs2FAEnabled(tfaData.enabled)
       }
     } catch (e) {
       toast({ title: "Error", description: "Failed to load profile data.", variant: "destructive" })
@@ -155,31 +176,138 @@ export default function ProfilePage() {
       if (session?.user?.id) fetchData() 
   }, [session])
 
+  // --- 2FA Handlers ---
+  const handleBegin2FASetup = async () => {
+      setIsProcessing2fa(true)
+      try {
+          const res = await fetch('/api/user/2fa', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'generate' })
+          })
+          const data = await res.json()
+          if (res.ok) {
+              setTotpSecret(data.secret)
+              setQrCodeDataUrl(data.qrCode)
+              setVerifyCode("")
+              setSetup2faModalOpen(true)
+          } else {
+              toast({ title: "Error", description: data.error, variant: "destructive" })
+          }
+      } catch (e) {
+          toast({ title: "Error", description: "Network error", variant: "destructive" })
+      } finally {
+          setIsProcessing2fa(false)
+      }
+  }
+
+  const handleVerifyAndEnable2FA = async () => {
+      if (verifyCode.length !== 6) return toast({ title: "Invalid Code", description: "Code must be 6 digits.", variant: "destructive" });
+      setIsProcessing2fa(true)
+      try {
+          const res = await fetch('/api/user/2fa', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'enable', secret: totpSecret, code: verifyCode })
+          })
+          const data = await res.json()
+          if (res.ok) {
+              toast({ title: "2FA Enabled", description: data.message })
+              setIs2FAEnabled(true)
+              setSetup2faModalOpen(false)
+          } else {
+              toast({ title: "Verification Failed", description: data.error, variant: "destructive" })
+          }
+      } catch (e) {
+          toast({ title: "Error", description: "Network error", variant: "destructive" })
+      } finally {
+          setIsProcessing2fa(false)
+      }
+  }
+
+  const handleDisable2FA = async () => {
+      setIsProcessing2fa(true)
+      try {
+          const res = await fetch('/api/user/2fa', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'disable' })
+          })
+          const data = await res.json()
+          if (res.ok) {
+              toast({ title: "2FA Disabled", description: data.message })
+              setIs2FAEnabled(false)
+              setDisable2faModalOpen(false)
+          } else {
+              toast({ title: "Error", description: data.error, variant: "destructive" })
+          }
+      } catch (e) {
+          toast({ title: "Error", description: "Network error", variant: "destructive" })
+      } finally {
+          setIsProcessing2fa(false)
+      }
+  }
+
+  // --- Security Handlers ---
+  const handlePasswordChange = async () => {
+      if (passwords.new !== passwords.confirm) return toast({ title: "Error", description: "New passwords do not match.", variant: "destructive" });
+      if (passwords.new.length < 12) return toast({ title: "Weak Password", description: "Password must be at least 12 characters.", variant: "destructive" });
+      
+      setIsProcessingSecurity(true);
+      try {
+          const res = await fetch('/api/user/security', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'change_password', currentPassword: passwords.current, newPassword: passwords.new })
+          });
+          const data = await res.json();
+          if (res.ok) {
+              toast({ title: "Success", description: data.message });
+              setPasswordModalOpen(false);
+              setPasswords({ current: "", new: "", confirm: "" });
+          } else throw new Error(data.error);
+      } catch (e: any) {
+          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } finally { setIsProcessingSecurity(false); }
+  }
+
+  const handleRevokeSessions = async () => {
+      setIsProcessingSecurity(true);
+      try {
+          const res = await fetch('/api/user/security', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'revoke_sessions' })
+          });
+          const data = await res.json();
+          if (res.ok) {
+              toast({ title: "Sessions Revoked", description: data.message });
+              setRevokeModalOpen(false); // FIX: Close modal immediately
+              // FIX: Fire and forget. Awaiting this in Next.js causes infinite UI hangs.
+              update({ sessionVersion: data.newSessionVersion }).catch(()=>{});
+          } else throw new Error(data.error);
+      } catch (e: any) {
+          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } finally { setIsProcessingSecurity(false); }
+  }
+
+  // --- Avatar/Banner Handlers ---
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-        toast({ title: "File too large", description: "Avatar must be under 5MB.", variant: "destructive" });
-        return;
-    }
+    if (file.size > 5 * 1024 * 1024) return toast({ title: "File too large", description: "Avatar must be under 5MB.", variant: "destructive" });
     setUploadingAvatar(true);
     const reader = new FileReader();
     reader.onloadend = async () => {
         try {
             const res = await fetch('/api/user/profile', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ avatarBase64: reader.result })
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ avatarBase64: reader.result })
             });
             const data = await res.json();
             if (res.ok) {
-                toast({ title: "Avatar Updated", description: "Your profile picture has been saved." });
+                toast({ title: "Avatar Updated" });
                 setProfile((prev: any) => ({ ...prev, user: { ...prev.user, avatar: data.avatarUrl } }));
                 await update({ user: { image: data.avatarUrl } });
-            } else { throw new Error(data.error); }
-        } catch (err: any) {
-            toast({ title: "Upload Failed", description: err.message, variant: "destructive" });
-        } finally { setUploadingAvatar(false); }
+            } else throw new Error(data.error);
+        } catch (err: any) { toast({ title: "Upload Failed", description: err.message, variant: "destructive" }); } finally { setUploadingAvatar(false); }
     };
     reader.readAsDataURL(file);
   }
@@ -187,52 +315,30 @@ export default function ProfilePage() {
   const handleBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-        toast({ title: "File too large", description: "Banner must be under 10MB.", variant: "destructive" });
-        return;
-    }
+    if (file.size > 10 * 1024 * 1024) return toast({ title: "File too large", description: "Banner must be under 10MB.", variant: "destructive" });
     setUploadingBanner(true);
     const reader = new FileReader();
     reader.onloadend = async () => {
         try {
             const res = await fetch('/api/user/profile', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ bannerBase64: reader.result })
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bannerBase64: reader.result })
             });
             const data = await res.json();
             if (res.ok) {
-                toast({ title: "Banner Updated", description: "Your profile banner has been saved." });
+                toast({ title: "Banner Updated" });
                 setProfile((prev: any) => ({ ...prev, user: { ...prev.user, banner: data.bannerUrl } }));
-            } else { throw new Error(data.error); }
-        } catch (err: any) {
-            toast({ title: "Upload Failed", description: err.message, variant: "destructive" });
-        } finally { setUploadingBanner(false); }
+            } else throw new Error(data.error);
+        } catch (err: any) { toast({ title: "Upload Failed", description: err.message, variant: "destructive" }); } finally { setUploadingBanner(false); }
     };
     reader.readAsDataURL(file);
   }
 
   const handleRemoveBanner = async (e: React.MouseEvent) => {
-    e.stopPropagation(); 
-    setUploadingBanner(true);
+    e.stopPropagation(); setUploadingBanner(true);
     try {
-        const res = await fetch('/api/user/profile', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ removeBanner: true })
-        });
-        if (res.ok) {
-            toast({ title: "Banner Removed", description: "Your profile banner has been reset." });
-            setProfile((prev: any) => ({ ...prev, user: { ...prev.user, banner: null } }));
-        } else {
-            const data = await res.json();
-            throw new Error(data.error);
-        }
-    } catch (err: any) {
-        toast({ title: "Failed to remove banner", description: err.message, variant: "destructive" });
-    } finally {
-        setUploadingBanner(false);
-    }
+        const res = await fetch('/api/user/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeBanner: true }) });
+        if (res.ok) setProfile((prev: any) => ({ ...prev, user: { ...prev.user, banner: null } }));
+    } finally { setUploadingBanner(false); }
   }
 
   const getStatusBadge = (status: string) => {
@@ -260,7 +366,6 @@ export default function ProfilePage() {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 transition-colors duration-300">
       <title>Omnibus - Profile</title>
       
-      {/* --- CUSTOMIZABLE BANNER --- */}
       <div className="relative h-48 sm:h-64 w-full group overflow-hidden bg-slate-900">
         {profile?.user?.banner ? (
             <img src={profile.user.banner.startsWith('/') ? profile.user.banner : `/${profile.user.banner}`} alt="Banner" className="w-full h-full object-cover transition-all duration-300 group-hover:scale-105 group-hover:blur-sm opacity-90" />
@@ -269,24 +374,16 @@ export default function ProfilePage() {
                 <div className="absolute inset-0 opacity-20 bg-[url('/images/omnibus-branding.jpg')] bg-cover mix-blend-overlay" />
             </div>
         )}
-        
-        {/* Banner Edit Overlay */}
         <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4 bg-black/30">
             {uploadingBanner ? <Loader2 className="w-8 h-8 animate-spin text-white" /> : (
                 <>
-                    <div 
-                        className="text-center text-white flex flex-col items-center bg-black/60 px-6 py-4 rounded-xl backdrop-blur-md border border-white/10 shadow-2xl transition-transform hover:scale-105 cursor-pointer"
-                        onClick={() => fileBannerRef.current?.click()}
-                    >
+                    <div className="text-center text-white flex flex-col items-center bg-black/60 px-6 py-4 rounded-xl backdrop-blur-md border border-white/10 shadow-2xl transition-transform hover:scale-105 cursor-pointer" onClick={() => fileBannerRef.current?.click()}>
                         <ImageIcon className="w-8 h-8 mb-2" />
                         <span className="font-black uppercase tracking-widest text-sm">Update Banner</span>
                         <span className="text-[11px] text-white/80 mt-1 font-medium bg-black/50 px-2 py-1 rounded">Recommended: 1920x400 (72 DPI)</span>
                     </div>
                     {profile?.user?.banner && (
-                        <div 
-                            className="text-center text-white flex flex-col items-center bg-red-600/80 px-6 py-4 rounded-xl backdrop-blur-md border border-red-500/50 shadow-2xl transition-transform hover:scale-105 cursor-pointer"
-                            onClick={handleRemoveBanner}
-                        >
+                        <div className="text-center text-white flex flex-col items-center bg-red-600/80 px-6 py-4 rounded-xl backdrop-blur-md border border-red-500/50 shadow-2xl transition-transform hover:scale-105 cursor-pointer" onClick={handleRemoveBanner}>
                             <Trash2 className="w-8 h-8 mb-2" />
                             <span className="font-black uppercase tracking-widest text-sm">Remove</span>
                             <span className="text-[11px] text-white/80 mt-1 font-medium bg-black/20 px-2 py-1 rounded">Reset to Default</span>
@@ -298,10 +395,8 @@ export default function ProfilePage() {
         <input type="file" ref={fileBannerRef} className="hidden" accept="image/png, image/jpeg, image/webp" onChange={handleBannerUpload} />
       </div>
 
-      <div className="container mx-auto px-6 max-w-5xl relative -mt-20 sm:-mt-24 space-y-10">
+      <div className="container mx-auto px-6 max-w-5xl relative -mt-20 sm:-mt-24 space-y-8">
         <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6">
-            
-            {/* AVATAR EDIT */}
             <div className="relative group cursor-pointer" onClick={() => fileAvatarRef.current?.click()}>
                 <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-full border-4 border-white dark:border-slate-950 bg-slate-200 dark:bg-slate-800 overflow-hidden flex items-center justify-center shadow-xl relative z-10 transition-transform group-hover:scale-105">
                     {uploadingAvatar ? <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /> : profile?.user?.avatar ? <img src={profile.user.avatar.startsWith('/') ? profile.user.avatar : `/${profile.user.avatar}`} alt="Avatar" className="w-full h-full object-cover" /> : <UserIcon className="w-16 h-16 text-slate-400 dark:text-slate-600" />}
@@ -322,13 +417,74 @@ export default function ProfilePage() {
             </div>
         </div>
 
+        {/* --- SECURITY (GRID) SECTION --- */}
+        <div className="space-y-3 pt-4">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
+                <ShieldCheck className="w-4 h-4" /> Account Security
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* CARD 1: 2FA */}
+                <Card className={`shadow-sm border-2 flex flex-col ${is2FAEnabled ? 'border-green-200 bg-green-50/20 dark:border-green-900/40 dark:bg-green-900/10' : 'dark:border-slate-800'}`}>
+                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                        <div className="space-y-1 flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                                <h4 className={`font-bold text-lg leading-none ${is2FAEnabled ? 'text-green-800 dark:text-green-400' : 'dark:text-slate-200'}`}>Two-Factor Auth</h4>
+                                {is2FAEnabled && <Badge className="bg-green-500 hover:bg-green-600 border-0 h-5 px-1.5 text-[10px]"><Check className="w-3 h-3 mr-1"/> ON</Badge>}
+                            </div>
+                            <p className={`text-xs ${is2FAEnabled ? 'text-green-700/80 dark:text-green-500/80' : 'text-muted-foreground'}`}>
+                                {is2FAEnabled ? "Secured with a TOTP authenticator app." : "Require a 6-digit code when logging in."}
+                            </p>
+                        </div>
+                        {is2FAEnabled ? (
+                            <Button variant="outline" className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-900/30" onClick={() => setDisable2faModalOpen(true)}>Disable 2FA</Button>
+                        ) : (
+                            <Button className="w-full font-bold bg-blue-600 hover:bg-blue-700 text-white" onClick={handleBegin2FASetup} disabled={isProcessing2fa}>
+                                {isProcessing2fa ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />} Enable 2FA
+                            </Button>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* CARD 2: PASSWORD RESET */}
+                <Card className="shadow-sm dark:border-slate-800 flex flex-col">
+                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                        <div className="space-y-1 flex-1">
+                            <h4 className="font-bold text-lg dark:text-slate-200 flex items-center gap-2 mb-2">
+                                <Key className="w-4 h-4 text-primary" /> Password
+                            </h4>
+                            <p className="text-xs text-muted-foreground">Update your local account password. SSO users must change passwords at their provider.</p>
+                        </div>
+                        <Button variant="outline" className="w-full dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => setPasswordModalOpen(true)}>
+                            Change Password
+                        </Button>
+                    </CardContent>
+                </Card>
+
+                {/* CARD 3: REVOKE SESSIONS */}
+                <Card className="shadow-sm dark:border-slate-800 flex flex-col">
+                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                        <div className="space-y-1 flex-1">
+                            <h4 className="font-bold text-lg dark:text-slate-200 flex items-center gap-2 mb-2">
+                                <LogOut className="w-4 h-4 text-orange-500" /> Active Sessions
+                            </h4>
+                            <p className="text-xs text-muted-foreground">Logged in on a public computer? Sign out of all other devices immediately.</p>
+                        </div>
+                        <Button variant="outline" className="w-full text-orange-600 border-orange-200 hover:bg-orange-50 dark:border-orange-900/50 dark:hover:bg-orange-900/30" onClick={() => setRevokeModalOpen(true)}>
+                            Revoke Sessions
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        </div>
+
         {/* CUSTOM THEME SELECTOR */}
-        <div className="space-y-4 pt-4">
+        <div className="space-y-3">
             <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
                 <Palette className="w-4 h-4" /> App Appearance
             </h3>
             <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50">
-                <CardContent className="p-6">
+                <CardContent className="p-4 sm:p-6">
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
                         {themes.map(t => (
                             <button 
@@ -348,7 +504,7 @@ export default function ProfilePage() {
         </div>
 
         {/* --- CURATED READING LISTS --- */}
-        <div className="space-y-4">
+        <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
                 <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
                     <ListOrdered className="w-4 h-4" /> Curated Reading Lists
@@ -394,9 +550,9 @@ export default function ProfilePage() {
             )}
         </div>
 
-        {/* --- RECENT READING HISTORY PAGINATED GRID --- */}
+        {/* --- RECENT READING HISTORY --- */}
         {profile?.recentHistory && profile.recentHistory.length > 0 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-1 mb-2">
                     <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
                         <History className="w-4 h-4" /> Reading History
@@ -406,18 +562,12 @@ export default function ProfilePage() {
                         <Button variant="ghost" size="sm" className="h-8 text-xs font-bold text-muted-foreground hover:text-foreground hidden sm:flex" asChild>
                             <Link href="/history">View Full History <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
                         </Button>
-
-                        {/* Pagination Controls matching ComicGrid */}
                         <div className="flex items-center gap-2 bg-white dark:bg-slate-900 p-1 rounded-md shadow-sm border dark:border-slate-800">
-                            {/* @ts-ignore - match comic-grid size prop */}
-                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0 dark:hover:bg-slate-800" onClick={() => setHistoryPage(p => Math.max(0, p - 1))} disabled={historyPage === 0}>
-                                <ChevronLeft className="h-4 w-4" />
-                            </Button>
+                            {/* @ts-ignore */}
+                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0 dark:hover:bg-slate-800" onClick={() => setHistoryPage(p => Math.max(0, p - 1))} disabled={historyPage === 0}><ChevronLeft className="h-4 w-4" /></Button>
                             <span className="text-xs font-mono w-4 text-center">{historyPage + 1}</span>
                             {/* @ts-ignore */}
-                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0 dark:hover:bg-slate-800" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages - 1, p + 1))} disabled={historyPage >= totalHistoryPages - 1}>
-                                <ChevronRight className="h-4 w-4" />
-                            </Button>
+                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0 dark:hover:bg-slate-800" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages - 1, p + 1))} disabled={historyPage >= totalHistoryPages - 1}><ChevronRight className="h-4 w-4" /></Button>
                         </div>
                     </div>
                 </div>
@@ -425,39 +575,20 @@ export default function ProfilePage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {displayedHistory.map((item: any) => {
                         const coverSource = item.coverUrl || (item.localCoverPath ? `/api/library/cover?path=${encodeURIComponent(item.localCoverPath)}` : null);
-
                         return (
-                            <Link 
-                                key={item.id} 
-                                href={`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.folderPath)}`}
-                                className="block group"
-                            >
+                            <Link key={item.id} href={`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.folderPath)}`} className="block group">
                                 <Card className="shadow-sm dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-hidden group-hover:border-primary/50 transition-colors h-full">
                                     <CardContent className="p-4 flex items-center gap-4">
                                         <div className="w-14 h-20 bg-slate-100 dark:bg-slate-800 rounded shrink-0 border dark:border-slate-700 flex items-center justify-center overflow-hidden relative">
-                                            {coverSource ? (
-                                                <img 
-                                                    src={coverSource} 
-                                                    className="w-full h-full object-cover absolute inset-0 z-10" 
-                                                    alt="" 
-                                                    onError={(e) => { e.currentTarget.style.opacity = '0'; }} 
-                                                />
-                                            ) : null}
+                                            {coverSource ? <img src={coverSource} className="w-full h-full object-cover absolute inset-0 z-10" alt="" onError={(e) => { e.currentTarget.style.opacity = '0'; }} /> : null}
                                             <BookOpen className="w-5 h-5 text-slate-400 dark:text-slate-500 absolute z-0" />
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <p className="font-bold text-sm truncate dark:text-slate-200 group-hover:text-primary transition-colors" title={item.seriesName}>{item.seriesName}</p>
                                             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mt-0.5">Issue #{item.issueNumber}</p>
                                             <div className="mt-2.5 flex items-center gap-2">
-                                                <div className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
-                                                    <div 
-                                                        className={`h-full ${item.isCompleted ? 'bg-green-500' : 'bg-primary'}`} 
-                                                        style={{ width: `${item.progress}%` }} 
-                                                    />
-                                                </div>
-                                                <span className="text-[9px] font-black text-muted-foreground w-8 text-right">
-                                                    {item.isCompleted ? 'DONE' : `${item.progress}%`}
-                                                </span>
+                                                <div className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden"><div className={`h-full ${item.isCompleted ? 'bg-green-500' : 'bg-primary'}`} style={{ width: `${item.progress}%` }} /></div>
+                                                <span className="text-[9px] font-black text-muted-foreground w-8 text-right">{item.isCompleted ? 'DONE' : `${item.progress}%`}</span>
                                             </div>
                                         </div>
                                     </CardContent>
@@ -466,22 +597,14 @@ export default function ProfilePage() {
                         );
                     })}
                 </div>
-
-                <div className="sm:hidden pt-2">
-                    <Button variant="outline" className="w-full dark:border-slate-700 dark:hover:bg-slate-900" asChild>
-                        <Link href="/history">View Full History</Link>
-                    </Button>
-                </div>
             </div>
         )}
 
-        {/* Reading Progress Section with Bar */}
-        <div className="space-y-4">
-            <div className="px-1">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
-                    <BookOpen className="w-4 h-4" /> Overall Progress
-                </h3>
-            </div>
+        {/* --- STATS SECTION --- */}
+        <div className="space-y-3">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
+                <BookOpen className="w-4 h-4" /> Overall Progress
+            </h3>
             
             <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900/50 overflow-hidden">
                 <CardContent className="p-6">
@@ -494,79 +617,33 @@ export default function ProfilePage() {
                             {profile?.stats?.historyCompleted || 0} / {profile?.stats?.historyStarted || 0} Finished
                         </Badge>
                     </div>
-                    
                     <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                        <div 
-                            className="h-full bg-primary transition-all duration-1000 ease-out"
-                            style={{ width: `${profile?.stats?.completionRate || 0}%` }}
-                        />
+                        <div className="h-full bg-primary transition-all duration-1000 ease-out" style={{ width: `${profile?.stats?.completionRate || 0}%` }} />
                     </div>
                 </CardContent>
             </Card>
 
             <div className="grid grid-cols-2 gap-4">
-                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1">
-                        <History className="w-5 h-5 text-primary mb-1" />
-                        <span className="text-2xl font-black">{profile?.stats?.historyStarted || 0}</span>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Started</span>
-                    </CardContent>
-                </Card>
-                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1">
-                        <Trophy className="w-5 h-5 text-emerald-500 mb-1" />
-                        <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{profile?.stats?.historyCompleted || 0}</span>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Finished</span>
-                    </CardContent>
-                </Card>
+                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><History className="w-5 h-5 text-primary mb-1" /><span className="text-2xl font-black">{profile?.stats?.historyStarted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Started</span></CardContent></Card>
+                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Trophy className="w-5 h-5 text-emerald-500 mb-1" /><span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{profile?.stats?.historyCompleted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Finished</span></CardContent></Card>
             </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
             <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
                 <Upload className="w-4 h-4" /> Request Statistics
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1">
-                        <ListOrdered className="w-5 h-5 text-slate-400 mb-1" />
-                        <span className="text-2xl font-black">{profile?.stats?.total}</span>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total</span>
-                    </CardContent>
-                </Card>
-                <Card className="shadow-sm border-blue-200 bg-blue-50/30 dark:border-blue-900/30 dark:bg-blue-900/10">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1">
-                        <Activity className="w-5 h-5 text-blue-500 mb-1" />
-                        <span className="text-2xl font-black text-blue-600 dark:text-blue-400">{profile?.stats?.active}</span>
-                        <span className="text-[10px] font-bold text-blue-800/70 dark:text-blue-400/70 uppercase tracking-wider">Active</span>
-                    </CardContent>
-                </Card>
-                <Card className="shadow-sm border-orange-200 bg-orange-50/30 dark:border-orange-900/30 dark:bg-orange-900/10">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1">
-                        <Clock className="w-5 h-5 text-orange-500 mb-1" />
-                        <span className="text-2xl font-black text-orange-600 dark:text-orange-400">{profile?.stats?.pendingApproval}</span>
-                        <span className="text-[10px] font-bold text-orange-800/70 dark:text-orange-400/70 uppercase tracking-wider">Pending</span>
-                    </CardContent>
-                </Card>
-                <Card className="shadow-sm border-green-200 bg-green-50/30 dark:border-green-900/30 dark:bg-green-900/10">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1">
-                        <CheckCircle2 className="w-5 h-5 text-green-500 mb-1" />
-                        <span className="text-2xl font-black text-green-600 dark:text-green-400">{profile?.stats?.completed}</span>
-                        <span className="text-[10px] font-bold text-green-800/70 dark:text-green-400/70 uppercase tracking-wider">Ready</span>
-                    </CardContent>
-                </Card>
-                <Card className="shadow-sm border-red-200 bg-red-50/30 dark:border-red-900/30 dark:bg-red-900/10">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1">
-                        <XCircle className="w-5 h-5 text-red-500 mb-1" />
-                        <span className="text-2xl font-black text-red-600 dark:text-red-400">{profile?.stats?.failed}</span>
-                        <span className="text-[10px] font-bold text-red-800/70 dark:text-red-400/70 uppercase tracking-wider">Failed</span>
-                    </CardContent>
-                </Card>
+                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><ListOrdered className="w-5 h-5 text-slate-400 mb-1" /><span className="text-2xl font-black">{profile?.stats?.total}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total</span></CardContent></Card>
+                <Card className="shadow-sm border-blue-200 bg-blue-50/30 dark:border-blue-900/30 dark:bg-blue-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Activity className="w-5 h-5 text-blue-500 mb-1" /><span className="text-2xl font-black text-blue-600 dark:text-blue-400">{profile?.stats?.active}</span><span className="text-[10px] font-bold text-blue-800/70 dark:text-blue-400/70 uppercase tracking-wider">Active</span></CardContent></Card>
+                <Card className="shadow-sm border-orange-200 bg-orange-50/30 dark:border-orange-900/30 dark:bg-orange-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Clock className="w-5 h-5 text-orange-500 mb-1" /><span className="text-2xl font-black text-orange-600 dark:text-orange-400">{profile?.stats?.pendingApproval}</span><span className="text-[10px] font-bold text-orange-800/70 dark:text-orange-400/70 uppercase tracking-wider">Pending</span></CardContent></Card>
+                <Card className="shadow-sm border-green-200 bg-green-50/30 dark:border-green-900/30 dark:bg-green-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><CheckCircle2 className="w-5 h-5 text-green-500 mb-1" /><span className="text-2xl font-black text-green-600 dark:text-green-400">{profile?.stats?.completed}</span><span className="text-[10px] font-bold text-green-800/70 dark:text-green-400/70 uppercase tracking-wider">Ready</span></CardContent></Card>
+                <Card className="shadow-sm border-red-200 bg-red-50/30 dark:border-red-900/30 dark:bg-red-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><XCircle className="w-5 h-5 text-red-500 mb-1" /><span className="text-2xl font-black text-red-600 dark:text-red-400">{profile?.stats?.failed}</span><span className="text-[10px] font-bold text-red-800/70 dark:text-red-400/70 uppercase tracking-wider">Failed</span></CardContent></Card>
             </div>
         </div>
 
         {/* --- TROPHIES SECTION --- */}
-        <div className="space-y-4">
+        <div className="space-y-3">
             <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
                 <Trophy className="w-4 h-4" /> Achievements
             </h3>
@@ -576,11 +653,7 @@ export default function ProfilePage() {
                         <Card key={trophy.id} className={`shadow-sm border-2 transition-all ${trophy.earned ? 'border-yellow-400 dark:border-yellow-500/50 bg-yellow-50/10 dark:bg-yellow-900/10 scale-105 z-10' : 'border-slate-200 dark:border-slate-800 opacity-60 grayscale hover:grayscale-0 hover:opacity-100'}`}>
                             <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-2">
                                 <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-inner border ${trophy.earned ? 'bg-yellow-100 border-yellow-200 dark:bg-yellow-900/30 dark:border-yellow-700' : 'bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700'}`}>
-                                    {trophy.iconUrl ? (
-                                        <img src={trophy.iconUrl} alt={trophy.name} className="w-8 h-8 object-contain" />
-                                    ) : (
-                                        <Trophy className={`w-6 h-6 ${trophy.earned ? 'text-yellow-600 dark:text-yellow-500' : 'text-slate-400'}`} />
-                                    )}
+                                    {trophy.iconUrl ? <img src={trophy.iconUrl} alt={trophy.name} className="w-8 h-8 object-contain" /> : <Trophy className={`w-6 h-6 ${trophy.earned ? 'text-yellow-600 dark:text-yellow-500' : 'text-slate-400'}`} />}
                                 </div>
                                 <div>
                                     <h4 className="font-bold text-[11px] leading-tight dark:text-slate-200">{trophy.name}</h4>
@@ -626,14 +699,121 @@ export default function ProfilePage() {
                         ))
                     )}
                 </div>
-                <div className="p-4 border-t dark:border-slate-800 sm:hidden">
-                    <Button variant="outline" className="w-full dark:border-slate-700 dark:hover:bg-slate-900" asChild>
-                        <Link href="/requests">View All Requests</Link>
-                    </Button>
-                </div>
             </CardContent>
         </Card>
       </div>
+
+      {/* 2FA SETUP MODAL */}
+      <Dialog open={setup2faModalOpen} onOpenChange={setSetup2faModalOpen}>
+          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-blue-500" /> Setup Two-Factor Auth</DialogTitle>
+                  <DialogDescription>Use Google Authenticator, Authy, or Bitwarden to scan the code below.</DialogDescription>
+              </DialogHeader>
+              <div className="py-4 flex flex-col items-center space-y-6">
+                  {qrCodeDataUrl ? (
+                      <div className="bg-white p-4 rounded-xl shadow-inner border border-slate-200">
+                          <img src={qrCodeDataUrl} alt="QR Code" className="w-48 h-48" />
+                      </div>
+                  ) : (
+                      <div className="w-48 h-48 bg-slate-100 dark:bg-slate-900 rounded-xl flex items-center justify-center animate-pulse"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>
+                  )}
+
+                  <div className="text-center space-y-1 w-full">
+                      <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">Manual Setup Key</p>
+                      <code className="bg-slate-100 dark:bg-slate-900 px-3 py-1.5 rounded-md font-mono text-xs block w-full text-center border dark:border-slate-800 select-all">
+                          {totpSecret || 'Loading...'}
+                      </code>
+                  </div>
+
+                  <div className="w-full space-y-2">
+                      <Label htmlFor="verifyCode" className="text-xs font-bold text-slate-500 uppercase tracking-widest">Verify Code</Label>
+                      <Input 
+                          id="verifyCode" 
+                          type="text" 
+                          inputMode="numeric" 
+                          pattern="[0-9]*" 
+                          maxLength={6} 
+                          placeholder="Enter 6-digit code" 
+                          value={verifyCode} 
+                          onChange={(e) => setVerifyCode(e.target.value)} 
+                          className="h-12 text-center text-2xl font-mono tracking-widest dark:bg-slate-900 dark:border-slate-800" 
+                      />
+                  </div>
+              </div>
+              <DialogFooter>
+                  <Button variant="outline" onClick={() => setSetup2faModalOpen(false)} disabled={isProcessing2fa}>Cancel</Button>
+                  <Button onClick={handleVerifyAndEnable2FA} disabled={isProcessing2fa || verifyCode.length !== 6} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                      {isProcessing2fa ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Verify & Enable
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
+      {/* 2FA DISABLE MODAL */}
+      <Dialog open={disable2faModalOpen} onOpenChange={setDisable2faModalOpen}>
+          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl border-red-200 dark:border-red-900/50">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-red-600"><ShieldAlert className="w-5 h-5" /> Disable Two-Factor Auth?</DialogTitle>
+                  <DialogDescription>Disabling 2FA will make your account less secure. Are you sure?</DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="mt-4">
+                  <Button variant="outline" onClick={() => setDisable2faModalOpen(false)} disabled={isProcessing2fa}>Cancel</Button>
+                  <Button variant="destructive" onClick={handleDisable2FA} disabled={isProcessing2fa}>
+                      {isProcessing2fa ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Yes, Disable 2FA"}
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
+      {/* PASSWORD RESET MODAL */}
+      <Dialog open={passwordModalOpen} onOpenChange={setPasswordModalOpen}>
+          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2"><Key className="w-5 h-5 text-primary" /> Change Password</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                      <Label>Current Password</Label>
+                      <Input type="password" value={passwords.current} onChange={e => setPasswords({...passwords, current: e.target.value})} className="dark:bg-slate-900" />
+                  </div>
+                  <div className="space-y-2">
+                      <Label>New Password</Label>
+                      <Input type="password" value={passwords.new} onChange={e => setPasswords({...passwords, new: e.target.value})} className="dark:bg-slate-900" />
+                      <p className="text-[10px] text-muted-foreground">Must be at least 12 characters.</p>
+                  </div>
+                  <div className="space-y-2">
+                      <Label>Confirm New Password</Label>
+                      <Input type="password" value={passwords.confirm} onChange={e => setPasswords({...passwords, confirm: e.target.value})} className="dark:bg-slate-900" />
+                  </div>
+              </div>
+              <DialogFooter>
+                  <Button variant="outline" onClick={() => setPasswordModalOpen(false)} disabled={isProcessingSecurity}>Cancel</Button>
+                  <Button onClick={handlePasswordChange} disabled={isProcessingSecurity || !passwords.current || !passwords.new} className="bg-primary text-primary-foreground">
+                      {isProcessingSecurity ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Update Password
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
+      {/* REVOKE SESSIONS MODAL */}
+      <Dialog open={revokeModalOpen} onOpenChange={setRevokeModalOpen}>
+          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl border-orange-200 dark:border-orange-900/50">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-orange-600"><ShieldAlert className="w-5 h-5" /> Revoke All Sessions?</DialogTitle>
+                  <DialogDescription>
+                      This will immediately log you out of all other browsers, phones, and computers. Your current session will remain active.
+                  </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="mt-4">
+                  <Button variant="outline" onClick={() => setRevokeModalOpen(false)} disabled={isProcessingSecurity}>Cancel</Button>
+                  <Button variant="destructive" className="bg-orange-600 hover:bg-orange-700" onClick={handleRevokeSessions} disabled={isProcessingSecurity}>
+                      {isProcessingSecurity ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Yes, Sign Out Everywhere"}
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
     </div>
   )
 }

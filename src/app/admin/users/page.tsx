@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity } from "lucide-react"
+import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -28,6 +28,11 @@ export default function AdminUsersPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [userToDelete, setUserToDelete] = useState<{ id: string, username: string } | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+
+  // 2FA Reset States
+  const [reset2faConfirmOpen, setReset2faConfirmOpen] = useState(false)
+  const [userToReset, setUserToReset] = useState<{ id: string, username: string } | null>(null)
+  const [isResetting2fa, setIsResetting2fa] = useState(false)
 
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -109,6 +114,34 @@ export default function AdminUsersPage() {
     }
   }
 
+  // --- NEW: 2FA Reset Methods ---
+  const initiateReset2FA = (id: string, username: string) => {
+    setUserToReset({ id, username });
+    setReset2faConfirmOpen(true);
+  }
+
+  const handleConfirmedReset2FA = async () => {
+    if (!userToReset) return;
+    setIsResetting2fa(true);
+    try {
+        const res = await fetch('/api/admin/users', { 
+            method: 'PATCH', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: userToReset.id, reset2FA: true })
+        });
+        if (res.ok) {
+            toast({ title: "2FA Reset", description: `Two-Factor Authentication disabled for ${userToReset.username}.` });
+            setUsers(prev => prev.map(u => u.id === userToReset.id ? { ...u, twoFactorEnabled: false } : u));
+            setReset2faConfirmOpen(false);
+        } else throw new Error("Failed to reset 2FA");
+    } catch (error: any) {
+        toast({ title: "Reset Failed", description: error.message, variant: "destructive" });
+    } finally {
+        setIsResetting2fa(false);
+        setUserToReset(null);
+    }
+  }
+
   const handleCreateUser = async () => {
       if (!newUser.username || !newUser.email || !newUser.password) {
           toast({ title: "Missing Fields", variant: "destructive" });
@@ -161,6 +194,7 @@ export default function AdminUsersPage() {
                 <th className="px-6 py-4 text-center">Login Approved</th>
                 <th className="px-6 py-4 text-center">Auto-Approve</th>
                 <th className="px-6 py-4 text-center">Downloads</th>
+                {/* FIX: Right-aligned header */}
                 <th className="px-6 py-4 text-center">Actions</th>
               </tr>
             </thead>
@@ -184,11 +218,22 @@ export default function AdminUsersPage() {
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} /></td>
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.canDownload} onCheckedChange={(val) => handleUpdateUser(user.id, 'canDownload', val)} /></td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center justify-center gap-2">
-                        <Button variant="outline" size="sm" disabled={user.id === session?.user?.id} onClick={() => handleImpersonate(user.id, user.username)} className="h-8 text-xs font-bold" title="Login as this user">
+                    {/* FIX: justify-end applied here */}
+                    <div className="flex items-center justify-end gap-2">
+                        <Button variant="outline" size="sm" disabled={user.id === session?.user?.id} onClick={() => handleImpersonate(user.id, user.username)} className="h-8 text-xs font-bold shrink-0" title="Login as this user">
                             <Eye className="w-3.5 h-3.5 mr-1.5" /> Login As
                         </Button>
-                        <Button variant="ghost" size="icon" disabled={isDeleting || user.id === session?.user?.id} onClick={() => initiateDelete(user.id, user.username)} className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 h-8 w-8">
+                        
+                        {/* FIX: 2FA Reset button wrapped in a fixed-size invisible container */}
+                        <div className="w-8 h-8 flex shrink-0">
+                            {user.twoFactorEnabled && (
+                                <Button variant="outline" size="icon" onClick={() => initiateReset2FA(user.id, user.username)} className="text-orange-500 hover:text-orange-700 hover:bg-orange-50 dark:hover:bg-orange-900/20 h-8 w-8" title="Reset 2FA">
+                                    <ShieldOff className="w-4 h-4" />
+                                </Button>
+                            )}
+                        </div>
+                        
+                        <Button variant="ghost" size="icon" disabled={isDeleting || user.id === session?.user?.id} onClick={() => initiateDelete(user.id, user.username)} className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 h-8 w-8 shrink-0" title="Delete User">
                             <Trash2 className="w-4 h-4" />
                         </Button>
                     </div>
@@ -254,6 +299,18 @@ export default function AdminUsersPage() {
                 >
                     <Eye className="w-4 h-4 mr-2" /> Login As
                 </Button>
+                
+                {user.twoFactorEnabled && (
+                    <Button 
+                        variant="outline" 
+                        onClick={() => initiateReset2FA(user.id, user.username)} 
+                        className="h-12 w-12 shrink-0 text-orange-500 hover:text-orange-700 hover:bg-orange-50 border-orange-200 dark:border-orange-900/50 dark:hover:bg-orange-900/30 bg-white dark:bg-slate-950"
+                        title="Reset 2FA"
+                    >
+                        <ShieldOff className="w-5 h-5" />
+                    </Button>
+                )}
+
                 <Button 
                     variant="outline" 
                     disabled={isDeleting || user.id === session?.user?.id} 
@@ -303,6 +360,18 @@ export default function AdminUsersPage() {
         title="Delete User Account" 
         description={`Are you sure you want to permanently delete the account for ${userToDelete?.username}?`} 
         confirmText="Delete Account" 
+      />
+
+      {/* 2FA RESET CONFIRMATION */}
+      <ConfirmationDialog 
+        isOpen={reset2faConfirmOpen} 
+        onClose={() => setReset2faConfirmOpen(false)} 
+        onConfirm={handleConfirmedReset2FA} 
+        isLoading={isResetting2fa} 
+        title="Reset Two-Factor Authentication" 
+        description={`Are you sure you want to disable 2FA for ${userToReset?.username}? They will only need their password to log in until they set it up again.`} 
+        confirmText="Reset 2FA" 
+        variant="destructive"
       />
     </div>
   )

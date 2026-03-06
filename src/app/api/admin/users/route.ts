@@ -9,7 +9,11 @@ export async function GET(req: NextRequest) {
 
   try {
     const users = await prisma.user.findMany({
-      select: { id: true, username: true, email: true, role: true, isApproved: true, autoApproveRequests: true, canDownload: true, createdAt: true },
+      select: { 
+          id: true, username: true, email: true, role: true, 
+          isApproved: true, autoApproveRequests: true, canDownload: true, 
+          createdAt: true, twoFactorEnabled: true 
+      },
       orderBy: { createdAt: 'desc' }
     });
     return NextResponse.json(users);
@@ -23,15 +27,27 @@ export async function PATCH(req: NextRequest) {
   if (token?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const { id, isApproved, role, autoApproveRequests, canDownload } = await req.json();
+    const { id, isApproved, role, autoApproveRequests, canDownload, reset2FA } = await req.json();
 
-    if (id === token.id && role !== 'ADMIN') {
+    if (id === token.id && role !== undefined && role !== 'ADMIN') {
         return NextResponse.json({ error: "You cannot remove your own Admin privileges." }, { status: 400 });
+    }
+
+    let updateData: any = {};
+    if (isApproved !== undefined) updateData.isApproved = isApproved;
+    if (role !== undefined) updateData.role = role;
+    if (autoApproveRequests !== undefined) updateData.autoApproveRequests = autoApproveRequests;
+    if (canDownload !== undefined) updateData.canDownload = canDownload;
+    
+    // NEW: Handle the 2FA Reset hook
+    if (reset2FA) {
+        updateData.twoFactorEnabled = false;
+        updateData.twoFactorSecret = null;
     }
 
     const updatedUser = await prisma.user.update({
       where: { id },
-      data: { isApproved, role, autoApproveRequests, canDownload }
+      data: updateData
     });
 
     return NextResponse.json({ success: true, user: updatedUser });
@@ -40,7 +56,7 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// NEW: Delete User endpoint
+// Delete User endpoint
 export async function DELETE(req: NextRequest) {
   const token = await getToken({ req });
   if (token?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -51,17 +67,14 @@ export async function DELETE(req: NextRequest) {
 
     if (!id) return NextResponse.json({ error: 'User ID required' }, { status: 400 });
 
-    // Prevent admins from deleting themselves
     if (id === token.id) {
         return NextResponse.json({ error: "You cannot delete your own account." }, { status: 400 });
     }
 
-    // Clean up associated requests first to avoid foreign key constraint errors
     await prisma.request.deleteMany({
         where: { userId: id }
     });
 
-    // Delete the user
     await prisma.user.delete({
       where: { id }
     });
@@ -72,7 +85,7 @@ export async function DELETE(req: NextRequest) {
   }
 }
 
-// NEW: Create User endpoint
+// Create User endpoint
 export async function POST(req: NextRequest) {
   const token = await getToken({ req });
   if (token?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -81,12 +94,10 @@ export async function POST(req: NextRequest) {
       const body = await req.json();
       const { username, email, password, role, isApproved, autoApproveRequests, canDownload } = body;
 
-      // Validation
       if (!username || !email || !password) {
           return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
       }
 
-      // Check if user already exists
       const existingUser = await prisma.user.findFirst({
           where: {
               OR: [
@@ -100,10 +111,8 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "Username or Email already in use." }, { status: 400 });
       }
 
-      // Hash Password securely
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Create User
       const newUser = await prisma.user.create({
           data: {
               username,
@@ -116,12 +125,10 @@ export async function POST(req: NextRequest) {
           }
       });
 
-      // Strip password before returning the payload to the frontend
       const { password: _, ...safeUser } = newUser;
       return NextResponse.json(safeUser);
 
   } catch (e: any) {
-      console.error("Failed to create user:", e);
       return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

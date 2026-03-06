@@ -24,11 +24,8 @@ export async function GET() {
                 key: {
                     in: [
                         'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule', 'diagnostics_sync_schedule', 'backup_sync_schedule',
-                        // FIX: Added the new Popular interval setting
                         'popular_sync_schedule',
-                        
                         'last_library_sync', 'last_metadata_sync', 'last_monitor_sync', 'last_diagnostics_sync', 'last_backup_sync',
-                        // FIX: Added the new Popular last run timestamp
                         'last_popular_sync'
                     ]
                 }
@@ -54,19 +51,16 @@ export async function GET() {
         checkJob('monitor', 'monitor_sync_schedule', 'last_monitor_sync');
         checkJob('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync');
         checkJob('backup', 'backup_sync_schedule', 'last_backup_sync');
-        
-        // FIX: Added the check for the new Popular job
         checkJob('popular', 'popular_sync_schedule', 'last_popular_sync');
 
-        const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
         for (const job of jobsToRun) {
             Logger.log(`[CRON] External heartbeat triggering job: ${job}`, 'info');
-            fetch(`${baseUrl}/api/admin/jobs/trigger`, {
+            // Force internal loopback routing
+            fetch(`http://127.0.0.1:3000/api/admin/jobs/trigger`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ job })
             }).catch(() => {});
-            // Stagger the jobs slightly so we don't overwhelm the server if multiple trigger at once
             await new Promise(r => setTimeout(r, 2000));
         }
 

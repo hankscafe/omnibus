@@ -73,8 +73,8 @@ export function initCronJobs() {
 
             if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                 Logger.log(`[Cron] Starting Automated ComicVine Metadata Sync...`, "info");
-                const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                await axios.post(`${baseUrl}/api/admin/jobs/trigger`, { job: 'metadata' }).catch(() => {});
+                // Force internal loopback routing
+                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'metadata' }).catch(() => {});
             }
         }
     } catch (error: any) {
@@ -95,8 +95,8 @@ export function initCronJobs() {
 
             if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                 Logger.log(`[Cron] Starting Automated Library Scan...`, "info");
-                const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                await axios.post(`${baseUrl}/api/admin/jobs/trigger`, { job: 'library' }).catch(() => {});
+                // Force internal loopback routing
+                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'library' }).catch(() => {});
             }
         }
     } catch (error: any) {}
@@ -115,8 +115,8 @@ export function initCronJobs() {
 
             if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                 Logger.log(`[Cron] Starting Automated Series Monitor Scan...`, "info");
-                const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                await axios.post(`${baseUrl}/api/admin/jobs/trigger`, { job: 'monitor' }).catch(() => {});
+                // Force internal loopback routing
+                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'monitor' }).catch(() => {});
             }
         }
     } catch (error: any) {}
@@ -135,8 +135,8 @@ export function initCronJobs() {
 
             if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                 Logger.log(`[Cron] Starting Automated Library Diagnostics...`, "info");
-                const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                await axios.post(`${baseUrl}/api/admin/jobs/trigger`, { job: 'diagnostics' }).catch(() => {});
+                // Force internal loopback routing
+                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'diagnostics' }).catch(() => {});
             }
         }
     } catch (error: any) {}

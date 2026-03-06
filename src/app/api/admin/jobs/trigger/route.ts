@@ -6,6 +6,12 @@ import AdmZip from 'adm-zip';
 import fs from 'fs-extra';
 import path from 'path';
 
+import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
+import { ProwlarrService } from '@/lib/prowlarr';
+import { GetComicsService } from '@/lib/getcomics';
+import { DownloadService } from '@/lib/download-clients';
+import { Importer } from '@/lib/importer';
+
 async function getFolderSize(folderPath: string): Promise<number> {
     try {
         if (!folderPath || !fs.existsSync(folderPath)) return 0;
@@ -26,12 +32,105 @@ async function getFolderSize(folderPath: string): Promise<number> {
     }
 }
 
+async function getDownloadClient() {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
+    if (!setting?.value) return null;
+    const clients = JSON.parse(setting.value);
+    return clients.length > 0 ? clients[0] : null;
+}
+
+async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false) {
+    const acronyms = await getCustomAcronyms();
+    const queries = generateSearchQueries(name, year, acronyms);
+    
+    Logger.log(`[Automation] Generated ${queries.length} search variations for: ${name}`, 'info');
+    
+    let healthyResults: any[] = [];
+    let successfulQuery = "";
+
+    for (const query of queries) {
+        Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
+        const prowlarrResults = await ProwlarrService.searchComics(query);
+        healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
+        if (healthyResults.length > 0) {
+            successfulQuery = query;
+            break; 
+        }
+    }
+
+    if (healthyResults.length > 0) {
+      healthyResults.sort((a: any, b: any) => b.score - a.score);
+      const best = healthyResults[0];
+      
+      const config = await getDownloadClient();
+      if (config) {
+        Logger.log(`[Automation] Sending to Client: ${best.title} (Priority: ${best.priority})`, 'info');
+        await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
+        
+        const trackingHash = best.infoHash || best.guid || null;
+        
+        await prisma.request.update({
+          where: { id: requestId },
+          data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadHash: trackingHash }
+        });
+        return; 
+      }
+    }
+
+    Logger.log(`[Automation] Not found on Indexers. Falling back to GetComics...`, 'info');
+    let getComicsResults: any[] = [];
+    
+    for (const query of queries) {
+        Logger.log(`[Automation] Searching GetComics: "${query}"`, 'info');
+        getComicsResults = await GetComicsService.search(query);
+        if (getComicsResults.length > 0) {
+            successfulQuery = query;
+            break;
+        }
+    }
+    
+    if (getComicsResults.length > 0) {
+      const best = getComicsResults[0];
+      const { url, isDirect } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+      
+      if (isDirect) {
+        const settings = await prisma.systemSetting.findMany();
+        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+        const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+
+        await prisma.request.update({
+          where: { id: requestId },
+          data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
+        });
+
+        DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId)
+          .then(async (success) => {
+              if (success) {
+                  await new Promise(r => setTimeout(r, 2000));
+                  await Importer.importRequest(requestId);
+              }
+          })
+          .catch(e => console.error(e));
+      } else {
+        await prisma.request.update({
+          where: { id: requestId },
+          data: { status: 'MANUAL_DDL', downloadLink: url }
+        });
+      }
+    } else {
+       Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
+       await prisma.request.update({
+          where: { id: requestId },
+          data: { status: 'STALLED' }
+       });
+    }
+}
+
 export async function POST(request: Request) {
     try {
         const { job } = await request.json();
         const startTime = Date.now();
 
-        // --- BACKGROUND DATABASE BACKUP ---
         if (job === 'backup') {
             Logger.log("[Background Job] Starting Database Backup...", "info");
 
@@ -86,20 +185,14 @@ export async function POST(request: Request) {
             
             try {
                 const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                
                 await axios.get(`${baseUrl}/api/library`).catch(() => {});
                 
-                const allSeries = await prisma.series.findMany({ 
-                    select: { id: true, folderPath: true } 
-                });
-
+                const allSeries = await prisma.series.findMany({ select: { id: true, folderPath: true } });
                 let processedCount = 0;
                 
-                // OPTIMIZATION: Batch folder size calculations to prevent blocking
                 const batchSize = 10;
                 for (let i = 0; i < allSeries.length; i += batchSize) {
                     const batch = allSeries.slice(i, i + batchSize);
-                    
                     await Promise.all(batch.map(async (s) => {
                         if (s.folderPath) {
                             const size = await getFolderSize(s.folderPath);
@@ -113,27 +206,16 @@ export async function POST(request: Request) {
                 }
                 
                 const nowStr = Date.now().toString();
-                await prisma.systemSetting.upsert({
-                    where: { key: 'last_library_sync' },
-                    update: { value: nowStr },
-                    create: { key: 'last_library_sync', value: nowStr }
-                });
+                await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
 
                 await prisma.jobLog.create({ 
-                    data: { 
-                        jobType: 'LIBRARY_SCAN', 
-                        status: 'COMPLETED', 
-                        durationMs: Date.now() - startTime, 
-                        message: `Scan and storage calculation completed for ${processedCount} series.` 
-                    } 
+                    data: { jobType: 'LIBRARY_SCAN', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Scan and storage calculation completed for ${processedCount} series.` } 
                 });
 
                 Logger.log(`[Manual Job] Local Library Auto-Scan completed. Updated storage for ${processedCount} series.`, "success");
                 return NextResponse.json({ success: true, message: "Library scan and storage calculation completed." });
             } catch (e: any) {
-                await prisma.jobLog.create({ 
-                    data: { jobType: 'LIBRARY_SCAN', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } 
-                });
+                await prisma.jobLog.create({ data: { jobType: 'LIBRARY_SCAN', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } });
                 throw e;
             }
         }
@@ -159,20 +241,12 @@ export async function POST(request: Request) {
                         failCount++;
                         details += `[FAIL] ${series.name} - ${e.message}\n`;
                         Logger.log(`[Manual Job] Failed to sync series: ${series.name}`, "error");
-                        
-                        await prisma.jobLog.create({
-                            data: { jobType: 'METADATA_SYNC', status: 'FAILED', relatedItem: series.name, message: e.message }
-                        });
+                        await prisma.jobLog.create({ data: { jobType: 'METADATA_SYNC', status: 'FAILED', relatedItem: series.name, message: e.message } });
                     }
                 }
 
                 const nowStr = Date.now().toString();
-                await prisma.systemSetting.upsert({
-                    where: { key: 'last_metadata_sync' },
-                    update: { value: nowStr },
-                    create: { key: 'last_metadata_sync', value: nowStr }
-                });
-
+                await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
                 await prisma.jobLog.create({
                     data: {
                         jobType: 'METADATA_SYNC',
@@ -202,75 +276,120 @@ export async function POST(request: Request) {
                     include: { issues: true }
                 });
 
+                if (monitoredSeries.length === 0) {
+                    Logger.log("[Monitor] No series are marked as 'Monitored' in your database.", "warn");
+                } else {
+                    Logger.log(`[Monitor] Found ${monitoredSeries.length} series to check.`, "info");
+                }
+
                 let newIssuesFound = 0;
                 let details = `Scanning ${monitoredSeries.length} monitored series for new issues.\n\n`;
 
                 for (const series of monitoredSeries) {
                     try {
-                        const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
-                            params: { api_key: cvApiKey, format: 'json', filter: `volume:${series.cvId}`, field_list: 'id,name,issue_number,cover_date,store_date,image' },
-                            headers: { 'User-Agent': 'Omnibus/1.0' }
-                        });
+                        Logger.log(`[Monitor] Checking CV for: ${series.name} (CV ID: ${series.cvId})`, 'info');
+                        
+                        let offset = 0;
+                        let totalResults = 1;
+                        let loopCount = 0;
+                        const allCvIssues = [];
 
-                        const cvIssues = cvRes.data.results || [];
-                        const admin = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
-
-                        for (const cvIssue of cvIssues) {
-                            const alreadyOwned = series.issues.some(i => parseFloat(i.number) === parseFloat(cvIssue.issue_number));
-                            if (alreadyOwned) continue;
-
-                            const searchName = `${series.name} #${cvIssue.issue_number}`;
-                            const alreadyRequested = await prisma.request.findFirst({
-                                where: { volumeId: series.cvId.toString(), activeDownloadName: searchName }
+                        while (offset < totalResults && loopCount < 20) {
+                            // CACHE BUSTER: Sort by store_date descending to force CV to serve fresh un-cached data
+                            const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
+                                params: { 
+                                    api_key: cvApiKey, format: 'json', filter: `volume:${series.cvId}`, 
+                                    sort: 'store_date:desc', limit: 100, offset: offset,
+                                    field_list: 'id,name,issue_number,cover_date,store_date,image' 
+                                },
+                                headers: { 'User-Agent': 'Omnibus/1.0' }
                             });
 
-                            if (!alreadyRequested) {
-                                Logger.log(`[Monitor] Found new issue: ${searchName}`, 'success');
-                                details += `[NEW] Found and Queued: ${searchName}\n`;
-                                const issueImage = cvIssue.image?.medium_url || cvIssue.image?.small_url;
-                                const issueYear = (cvIssue.store_date || cvIssue.cover_date || series.year.toString() || "").split('-')[0];
-
-                                await prisma.request.create({
-                                    data: {
-                                        userId: admin?.id || 'system',
-                                        volumeId: series.cvId.toString(),
-                                        status: 'PENDING',
-                                        activeDownloadName: searchName,
-                                        imageUrl: issueImage
-                                    }
-                                });
-
-                                const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                                fetch(`${baseUrl}/api/request/manual`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ cvId: series.cvId, name: searchName, year: issueYear, publisher: series.publisher, image: issueImage, type: 'issue', source: 'getcomics', searchResult: { title: searchName } })
-                                }).catch(() => {});
-
-                                newIssuesFound++;
-                            }
+                            if (offset === 0) totalResults = cvRes.data.number_of_total_results || 0;
+                            const cvIssues = cvRes.data.results || [];
+                            allCvIssues.push(...cvIssues);
+                            
+                            offset += 100;
+                            loopCount++;
+                            await new Promise(r => setTimeout(r, 1500)); 
                         }
-                        await new Promise(r => setTimeout(r, 1500)); 
+
+                        Logger.log(`[Monitor] ComicVine returned ${allCvIssues.length} issues for ${series.name}`, 'info');
+
+                        const admin = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
+                        const existingRequests = await prisma.request.findMany({
+                            where: { volumeId: series.cvId.toString() }
+                        });
+
+                        let seriesNewCount = 0;
+
+                        for (const cvIssue of allCvIssues) {
+                            const cvNum = parseFloat(cvIssue.issue_number);
+                            if (isNaN(cvNum)) continue;
+
+                            // 1. Check Issue Table
+                            const alreadyInLibrary = series.issues.some(i => 
+                                parseFloat(i.number) === cvNum && 
+                                i.filePath && 
+                                i.filePath.length > 0
+                            );
+                            if (alreadyInLibrary) continue;
+
+                            // 2. Check Request Table Thoroughly
+                            const searchName = `${series.name} #${cvIssue.issue_number}`;
+                            
+                            const alreadyReq = existingRequests.find(r => {
+                                if (r.activeDownloadName === searchName) return true;
+                                const match = (r.activeDownloadName || "").match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
+                                if (match && parseFloat(match[1]) === cvNum) return true;
+                                return false;
+                            });
+
+                            if (alreadyReq) {
+                                Logger.log(`[Monitor] Skipping ${searchName} - Already in Request Queue (Status: ${alreadyReq.status})`, 'info');
+                                continue;
+                            }
+
+                            // IT'S TRULY NEW!
+                            Logger.log(`[Monitor] Found NEW missing issue: ${searchName}`, 'success');
+                            details += `[NEW] Found and Queued: ${searchName}\n`;
+                            
+                            const issueImage = cvIssue.image?.medium_url || cvIssue.image?.small_url;
+                            const issueYear = (cvIssue.store_date || cvIssue.cover_date || series.year.toString() || "").split('-')[0];
+
+                            const newReq = await prisma.request.create({
+                                data: {
+                                    userId: admin?.id || 'system',
+                                    volumeId: series.cvId.toString(),
+                                    status: 'PENDING',
+                                    activeDownloadName: searchName,
+                                    imageUrl: issueImage
+                                }
+                            });
+
+                            // Directly execute automation
+                            searchAndDownload(newReq.id, searchName, issueYear, series.publisher || "Unknown", (series as any).isManga)
+                                .catch(e => console.error("Monitor Automation Error:", e));
+
+                            newIssuesFound++;
+                            seriesNewCount++;
+                        }
+
+                        if (seriesNewCount === 0) {
+                            Logger.log(`[Monitor] No new issues needed for ${series.name}.`, 'info');
+                        }
+
                     } catch (err: any) {
-                        Logger.log(`[Monitor] Failed to scan series ${series.name}`, 'error');
+                        Logger.log(`[Monitor] Failed to scan series ${series.name}: ${err.message}`, 'error');
                         details += `[ERROR] Failed to scan ${series.name}: ${err.message}\n`;
                     }
                 }
 
                 const nowStr = Date.now().toString();
-                await prisma.systemSetting.upsert({
-                    where: { key: 'last_monitor_sync' },
-                    update: { value: nowStr },
-                    create: { key: 'last_monitor_sync', value: nowStr }
-                });
+                await prisma.systemSetting.upsert({ where: { key: 'last_monitor_sync' }, update: { value: nowStr }, create: { key: 'last_monitor_sync', value: nowStr } });
 
                 await prisma.jobLog.create({ 
-                    data: { 
-                        jobType: 'SERIES_MONITOR', 
-                        status: 'COMPLETED', 
-                        durationMs: Date.now() - startTime, 
-                        message: details + `\nScan Complete. Total new issues queued: ${newIssuesFound}` 
-                    } 
+                    data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nScan Complete. Total new issues queued: ${newIssuesFound}` } 
                 });
 
                 Logger.log(`[Manual Job] Monitor Scan Complete. Queued ${newIssuesFound} new issues.`, "success");
@@ -336,7 +455,6 @@ export async function POST(request: Request) {
                   select: { id: true, name: true, publisher: true, folderPath: true, isManga: true, _count: { select: { issues: true } } }
                 });
 
-                // OPTIMIZATION: Batched execution to prevent OS out-of-memory crashes
                 const storageData: any[] = [];
                 const batchSize = 10;
                 
@@ -377,7 +495,6 @@ export async function POST(request: Request) {
             }
         }
 
-        // --- DISCOVERY CACHE BUILDER (FIXED LOGGING) ---
         if (job === 'popular') {
             Logger.log("[Background Job] Rebuilding 8-page Discover Cache...", "info");
 
@@ -469,45 +586,20 @@ export async function POST(request: Request) {
                     const nowStr = Date.now().toString();
 
                     await prisma.$transaction([
-                        prisma.systemSetting.upsert({
-                            where: { key: 'discover_cache_new' },
-                            update: { value: JSON.stringify(newReleases) },
-                            create: { key: 'discover_cache_new', value: JSON.stringify(newReleases) }
-                        }),
-                        prisma.systemSetting.upsert({
-                            where: { key: 'discover_cache_popular' },
-                            update: { value: JSON.stringify(popular) },
-                            create: { key: 'discover_cache_popular', value: JSON.stringify(popular) }
-                        }),
-                        prisma.systemSetting.upsert({
-                            where: { key: 'last_popular_sync' },
-                            update: { value: nowStr },
-                            create: { key: 'last_popular_sync', value: nowStr }
-                        })
+                        prisma.systemSetting.upsert({ where: { key: 'discover_cache_new' }, update: { value: JSON.stringify(newReleases) }, create: { key: 'discover_cache_new', value: JSON.stringify(newReleases) } }),
+                        prisma.systemSetting.upsert({ where: { key: 'discover_cache_popular' }, update: { value: JSON.stringify(popular) }, create: { key: 'discover_cache_popular', value: JSON.stringify(popular) } }),
+                        prisma.systemSetting.upsert({ where: { key: 'last_popular_sync' }, update: { value: nowStr }, create: { key: 'last_popular_sync', value: nowStr } })
                     ]);
 
-                    // FIX: This is the missing piece that tells the Admin UI the job completed!
                     await prisma.jobLog.create({
-                        data: {
-                            jobType: 'DISCOVER_SYNC',
-                            status: 'COMPLETED',
-                            durationMs: Date.now() - startTime,
-                            message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}`
-                        }
+                        data: { jobType: 'DISCOVER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}` }
                     });
 
                     Logger.log("[Background Job] Discover Cache Rebuilt (8 Pages).", "success");
                 } catch (e: any) {
-                    // FIX: And here is the missing piece that logs a failure!
                     await prisma.jobLog.create({
-                        data: {
-                            jobType: 'DISCOVER_SYNC',
-                            status: 'FAILED',
-                            durationMs: Date.now() - startTime,
-                            message: e.message
-                        }
+                        data: { jobType: 'DISCOVER_SYNC', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message }
                     });
-                    
                     Logger.log(`[Background Job] Discover Cache Failed: ${e.message}`, "error");
                 }
             })();

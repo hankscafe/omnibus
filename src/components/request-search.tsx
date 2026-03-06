@@ -71,17 +71,18 @@ export function RequestSearch() {
 
   const getVolumeStatus = (volumeId: number, name: string): StatusType => {
       if (ownedSeries.has(volumeId)) return 'LIBRARY';
-      const req = activeRequests.find(r => r.volumeId === volumeId && r.name === name);
-      if (req) return req.status === 'IMPORTED' ? 'LIBRARY' : 'REQUESTED';
-      const reqVol = activeRequests.find(r => r.volumeId === volumeId && !r.name?.includes('#'));
-      if (reqVol) return reqVol.status === 'IMPORTED' ? 'LIBRARY' : 'REQUESTED';
+      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
+      if (activeReqs.length > 0) {
+          const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
+          return allCompleted ? 'LIBRARY' : 'REQUESTED';
+      }
       return null;
   }
 
   const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
       if (ownedIssues.has(issueId)) return 'LIBRARY';
       const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
-      if (req) return req.status === 'IMPORTED' ? 'LIBRARY' : 'REQUESTED';
+      if (req) return ['IMPORTED', 'COMPLETED'].includes(req.status) ? 'LIBRARY' : 'REQUESTED';
       return null;
   }
 
@@ -96,7 +97,6 @@ export function RequestSearch() {
     } finally { setLoading(false) }
   }
 
-  // MAGIC INTERCEPTOR: When clicking a series, fetch issues immediately and select Issue #1
   const handleSelectSearchResult = async (item: SearchResult) => {
       setLoading(true);
       try {
@@ -107,7 +107,6 @@ export function RequestSearch() {
           const sortedDesc = [...issues].sort((a: Issue, b: Issue) => (parseFloat(b.issueNumber) || 0) - (parseFloat(a.issueNumber) || 0));
           setVolumeIssues(sortedDesc);
           
-          // Find Issue #1 (or the earliest available issue)
           const firstIssue = [...issues].sort((a: Issue, b: Issue) => (parseFloat(a.issueNumber) || 0) - (parseFloat(b.issueNumber) || 0))[0];
           
           if (firstIssue) {
@@ -115,10 +114,9 @@ export function RequestSearch() {
                   ...firstIssue,
                   volumeId: item.id,
                   publisher: item.publisher,
-                  isVolume: false // Setting false guarantees it requests the Rich Issue info!
+                  isVolume: false 
               });
           } else {
-              // Fallback just in case the volume has no issues mapped
               setSelectedItem({ ...item, volumeId: item.id, isVolume: true });
           }
       } catch (e) {
@@ -129,7 +127,6 @@ export function RequestSearch() {
       }
   }
 
-  // LIVE API FETCH FOR RICH ISSUE DETAILS
   useEffect(() => {
     if (!selectedItem?.id) return;
     const itemType = selectedItem.isVolume ? 'volume' : 'issue';
@@ -164,6 +161,8 @@ export function RequestSearch() {
       });
       if (res.ok) {
         toast({ title: "Success", description: `${name} added to queue.` })
+        // Instant UI Update
+        setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
         if (type === 'volume') setOpen(false)
       }
     } finally { setRequestingId(null) }
@@ -225,8 +224,8 @@ export function RequestSearch() {
                     const volStatus = getVolumeStatus(item.id, item.name);
                     return (
                     <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleSelectSearchResult(item)}>
-                      <div className="aspect-[2/3] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden border dark:border-slate-800 relative shadow-sm">
-                        <img src={item.image} alt={item.name} className="object-cover w-full h-full transition-transform duration-300 group-hover:scale-105" />
+                      <div className="relative aspect-[2/3] w-full rounded-lg overflow-hidden border bg-slate-100 dark:bg-slate-900 shadow-md dark:border-slate-800">
+                        <img src={item.image} alt={item.name} className="absolute inset-0 w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" />
                         {volStatus === 'LIBRARY' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 z-10 shadow-md"><CheckCircle2 className="w-4 h-4" /></div>)}
                         {volStatus === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 z-10 shadow-md"><Clock className="w-4 h-4" /></div>)}
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-20">
@@ -257,8 +256,8 @@ export function RequestSearch() {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-8 mb-8">
                       <div className="space-y-4">
-                          <div className="aspect-[2/3] w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border bg-slate-100 dark:bg-slate-900 shadow-md dark:border-slate-800">
-                              <img src={selectedItem.image} alt={selectedItem.name} className="object-cover w-full h-full" />
+                          <div className="relative aspect-[2/3] w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border bg-slate-100 dark:bg-slate-900 shadow-md dark:border-slate-800">
+                              <img src={selectedItem.image} alt={selectedItem.name} className="absolute inset-0 w-full h-full object-contain" />
                           </div>
                           
                           {(() => {
@@ -314,13 +313,13 @@ export function RequestSearch() {
                       <div className="w-full">
                           {volumeIssues.length > 0 ? (
                               <ScrollArea className="w-full whitespace-nowrap pb-4">
-                                  <div className="flex gap-4">
+                                  <div className="flex w-max gap-4 px-1">
                                       {volumeIssues.map(issue => {
                                           const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, issue.name);
                                           return (
                                           <div key={issue.id} className="w-[120px] shrink-0 group/issue">
                                               <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-slate-100 dark:bg-slate-900 border dark:border-slate-800 shadow-sm">
-                                                  <img src={issue.image} className="object-cover w-full h-full" alt={issue.name} />
+                                                  <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
                                                   <div className="absolute inset-0 bg-black/70 opacity-0 group-hover/issue:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 gap-2 z-20">
                                                       {!relIssueStatus && (<Button size="sm" variant="default" className="w-full h-7 text-[10px] font-bold bg-blue-600 text-white" disabled={requestingId === issue.id} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue'); }}>{requestingId === issue.id ? <Loader2 className="w-3 h-3 animate-spin"/> : "Get"}</Button>)}
                                                       <Button size="sm" variant="secondary" className="w-full h-7 text-[10px] font-bold" onClick={(e) => { 

@@ -4,9 +4,18 @@ import { prisma } from '@/lib/db';
 
 export async function GET() {
   try {
-    // Fetch from all 3 tables to get a complete picture of ownership and pending requests
-    const series = await prisma.series.findMany({ select: { cvId: true } });
-    const issues = await prisma.issue.findMany({ select: { cvId: true } });
+    // Only return series/issues that actually have a physical file linked to them!
+    // A valid file path will always contain a dot (e.g. .cbz, .cbr)
+    const series = await prisma.series.findMany({ 
+        where: { issues: { some: { filePath: { contains: '.' } } } },
+        select: { cvId: true } 
+    });
+    
+    const issues = await prisma.issue.findMany({ 
+        where: { filePath: { contains: '.' } },
+        select: { cvId: true } 
+    });
+    
     const requests = await prisma.request.findMany({ 
         select: { volumeId: true, status: true, activeDownloadName: true } 
     });

@@ -98,17 +98,18 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
 
   const getVolumeStatus = (volumeId: number, name: string): StatusType => {
       if (ownedSeries.has(volumeId)) return 'LIBRARY';
-      const req = activeRequests.find(r => r.volumeId === volumeId && r.name === name);
-      if (req) return req.status === 'IMPORTED' ? 'LIBRARY' : 'REQUESTED';
-      const reqVol = activeRequests.find(r => r.volumeId === volumeId && !r.name?.includes('#'));
-      if (reqVol) return reqVol.status === 'IMPORTED' ? 'LIBRARY' : 'REQUESTED';
+      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
+      if (activeReqs.length > 0) {
+          const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
+          return allCompleted ? 'LIBRARY' : 'REQUESTED';
+      }
       return null;
   }
 
   const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
       if (ownedIssues.has(issueId)) return 'LIBRARY';
       const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
-      if (req) return req.status === 'IMPORTED' ? 'LIBRARY' : 'REQUESTED';
+      if (req) return ['IMPORTED', 'COMPLETED'].includes(req.status) ? 'LIBRARY' : 'REQUESTED';
       return null;
   }
 
@@ -172,7 +173,11 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored })
       });
-      if (res.ok) toast({ title: "Success", description: `${name} added to queue.` })
+      if (res.ok) {
+          toast({ title: "Success", description: `${name} added to queue.` })
+          // Instant UI Update
+          setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
+      }
     } finally { setRequestingId(null) }
   }
 
@@ -269,7 +274,9 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-6 sm:gap-8 mb-8">
                         <div className="space-y-4">
-                            <div className="aspect-[2/3] w-[180px] sm:w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-md"><img src={selectedComic.image} alt={selectedComic.name} className="object-cover w-full h-full" /></div>
+                            <div className="relative aspect-[2/3] w-[180px] sm:w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-md">
+                                <img src={selectedComic.image} alt={selectedComic.name} className="absolute inset-0 w-full h-full object-contain" />
+                            </div>
                             
                             {(() => {
                                 const volStatus = getVolumeStatus(selectedComic.volumeId, selectedComic.name.split(' #')[0]);
@@ -324,7 +331,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                         <div className="w-full">
                             {loadingRelated ? (<div className="flex gap-3 sm:gap-4 overflow-hidden">{[1,2,3,4,5].map(i => (<div key={i} className="w-[120px] aspect-[2/3] bg-slate-100 dark:bg-slate-900 animate-pulse rounded-md dark:border dark:border-slate-800" />))}</div>) : relatedIssues.length > 0 ? (
                                 <ScrollArea className="w-full whitespace-nowrap pb-4">
-                                    <div className="flex gap-3 sm:gap-4">
+                                    <div className="flex w-max gap-3 sm:gap-4 px-1">
                                         {relatedIssues.map(issue => {
                                             const relIssueStatus = getIssueStatus(issue.id, selectedComic.volumeId, issue.name);
                                             return (
@@ -345,7 +352,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               }}
                                             >
                                                 <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-slate-100 dark:bg-slate-900 border dark:border-slate-800 shadow-sm hover:ring-2 hover:ring-blue-500 transition-all">
-                                                    <img src={issue.image} className="object-cover w-full h-full" alt={issue.name} />
+                                                    <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
                                                     
                                                     {/* Gradient overlay to ensure text is readable */}
                                                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none" />

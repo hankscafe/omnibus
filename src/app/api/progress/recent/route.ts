@@ -41,7 +41,7 @@ export async function GET(request: Request) {
             issue: { include: { series: true } }
         },
         orderBy: { updatedAt: 'desc' },
-        take: 10
+        take: 7
     });
 
     // 2. BLAZING FAST MAPPING (No more physical disk scans!)

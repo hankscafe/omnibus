@@ -153,7 +153,7 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 * **Hero Banner & Synopsis:** A premium, visually striking header displaying high-resolution cover art, publisher logos, release years, and a full story synopsis pulled directly from embedded metadata or ComicVine.
 * **Granular Metadata:** View detailed credits including Writers, Artists, Colorists, and Cover Artists, alongside genre tags and character appearances.
 * **"Read Next" Prompts:** A smart action button that instantly opens the web reader to your exact saved page on the next unread issue in the run.
-* **Issue Grid & List Modes:** *(Coming Soon)* Toggle between a visual cover grid or a condensed list view to easily navigate massive, 100+ issue runs.
+* **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view to easily navigate massive, 100+ issue runs.
 * **Individual Progress Tracking:** Every issue displays its own distinct status (Unread, In Progress with a visual progress bar, or Read). 
 * **Bulk Actions:** Effortlessly manage your collection with one-click buttons to "Mark All as Read," "Refresh Metadata," or delete specific files right from the browser.
 * **Missing Issue Detection:** Visually highlights gaps in your collection (e.g., if you have issues #1, #2, and #4, it will flag #3 as missing) and offers a one-click button to send the missing issue to your download queue.
@@ -175,7 +175,7 @@ A completely custom, zero-friction reading experience built natively into the br
   <strong>Reader page settings.</strong>
 </p>
 
-* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, `.zip`, `.rar`, and `.epub` archives.
+* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, `.zip`, `.rar`, and `.epub` *(Coming Soon)* archives.
 * **Reading Directions:** One-click toggles for Left-to-Right (Standard Comics), Right-to-Left (Manga), and continuous Vertical Scrolling (Webtoons).
 * **Dynamic Page Layouts:** * Choose between Single Page or Double Page spreads (perfect for splash pages).
   * Auto-Fit toggles: Fit to Width, Fit to Height, or Original Resolution.

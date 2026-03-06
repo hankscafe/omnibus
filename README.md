@@ -225,6 +225,8 @@ A personalized space for each user on your server to manage their identity, trac
 </p>
 
 * **Personal Identity:** Customize your account by uploading a unique profile avatar and a custom hero banner for your user dashboard.
+* **2FA Setup:** Users have the option to configure 2FA for their local authentication from their profile page to further protect their account.
+* **Session Revocation:** Users have the ability to revoke all active sessions from their profile page if they feel their account has been compromised, as well as change their password.
 * **Reading Statistics:** Track your all-time reading habits. View your total issues read, estimated pages turned, and your most-read publishers or genres.
 * **UI Customization:** Set your own personal theme preferences (Dark mode, Light mode, or System default) and UI accent colors. These settings are tied to your account and persist across any device you log into.
 * **Default Reader Settings:** Save your preferred Web Reader behaviors (e.g., always default to "Fit to Width" or default to "Right-to-Left" for manga libraries) so you never have to adjust settings when starting a new book.
@@ -373,9 +375,13 @@ services:
       - NEXTAUTH_SECRET=super_secret_generated_key_123!
       # REQUIRED: Tells the app to store the database in our persistent config mount
       - DATABASE_URL=file:/config/omnibus.db
+      # REQUIRED: Tells the app to store the temp extracted .cbr files to the cache mount
+      - OMNIBUS_CACHE_DIR=/cache
     volumes:
       # REQUIRED: Persistent storage for your database, logs, and settings
       - /path/to/your/nas/config:/config
+      # REQUIRED: Persistent storage for .cache directory for .cbr files
+      - /path/to/your/nas/cache:/cache
       # REQUIRED: Persistent storage for user avatars and banners
       - /path/to/your/nas/avatars:/app/public/avatars
       - /path/to/your/nas/banners:/app/public/banners
@@ -391,6 +397,21 @@ services:
       # - /path/to/your/nas/comics:/comics
       # - /path/to/your/nas/manga:/manga
       # - /path/to/your/nas/downloads:/downloads
+
+  # ========================================================================
+  # OPTIONAL: BACKGROUND CRON SIDECAR
+  # Remove the '#' from the lines below to enable the cron sidecar.
+  # This tiny Alpine Linux container uses ~5MB of RAM and pings the Omnibus
+  # API every 15 minutes (900 seconds) to safely trigger background jobs
+  # without getting blocked by the QNAP internal hairpin firewall.
+  # ========================================================================
+  # omnibus-cron:
+  #   image: alpine:latest
+  #   container_name: omnibus-cron
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - omnibus
+  #   command: sh -c "while true; do wget -qO- http://omnibus:3000/api/cron > /dev/null; sleep 900; done"
 ```
 
 2. Run `docker-compose up -d`.

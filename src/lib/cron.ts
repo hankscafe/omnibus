@@ -3,12 +3,19 @@ import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import axios from 'axios';
 import { Importer } from './importer';
+import cron from 'node-cron';
+
+// Prevent multiple instances from spawning during Next.js reloads
+let isCronInitialized = false;
 
 export function initCronJobs() {
-  Logger.log("[Cron] Initializing background automation...", "info");
+  if (isCronInitialized) return;
+  isCronInitialized = true;
 
-  // 1. Download Status Checker (Runs every 60 seconds)
-  setInterval(async () => {
+  Logger.log("[Cron] Initializing native background automation (Node-Cron)...", "info");
+
+  // 1. Download Status Checker (Runs exactly at the top of every minute)
+  cron.schedule('* * * * *', async () => {
     try {
       const stalledRequests = await prisma.request.findMany({
         where: { status: 'STALLED', retryCount: { lt: 3 } }
@@ -58,87 +65,38 @@ export function initCronJobs() {
     } catch (error: any) {
       Logger.log(`[Cron] Download Checker Error: ${error.message}`, 'error');
     }
-  }, 60000);
+  });
 
-  // 2. ComicVine Metadata Auto-Sync
-  setInterval(async () => {
-    try {
-        const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: 'metadata_sync_schedule' } });
-        const scheduleHours = parseInt(scheduleSetting?.value || "0");
+  // 2. General Scheduled Jobs (Runs every 15 minutes)
+  // This replaces the external sidecar container entirely!
+  cron.schedule('*/15 * * * *', async () => {
+    const now = Date.now();
 
-        if (scheduleHours > 0) {
-            const lastSyncSetting = await prisma.systemSetting.findUnique({ where: { key: 'last_metadata_sync' } });
-            const lastSync = parseInt(lastSyncSetting?.value || "0");
-            const now = Date.now();
+    // Reusable helper function to check database schedules and trigger internal API
+    const checkAndTrigger = async (jobName: string, scheduleKey: string, lastSyncKey: string, logName: string) => {
+        try {
+            const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: scheduleKey } });
+            const scheduleHours = parseInt(scheduleSetting?.value || "0");
 
-            if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
-                Logger.log(`[Cron] Starting Automated ComicVine Metadata Sync...`, "info");
-                // Force internal loopback routing
-                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'metadata' }).catch(() => {});
+            if (scheduleHours > 0) {
+                const lastSyncSetting = await prisma.systemSetting.findUnique({ where: { key: lastSyncKey } });
+                const lastSync = parseInt(lastSyncSetting?.value || "0");
+
+                if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
+                    Logger.log(`[Cron] Starting Automated ${logName}...`, "info");
+                    // Force internal loopback routing (127.0.0.1) to bypass QNAP firewall
+                    await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: jobName }).catch(() => {});
+                }
             }
+        } catch (error: any) {
+            Logger.log(`[Cron] ${logName} Interval Error: ${error.message}`, "error");
         }
-    } catch (error: any) {
-        Logger.log(`[Cron] Metadata Sync Interval Error: ${error.message}`, "error");
-    }
-  }, 3600000); 
+    };
 
-  // 3. Local Library Auto-Scan
-  setInterval(async () => {
-    try {
-        const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: 'library_sync_schedule' } });
-        const scheduleHours = parseInt(scheduleSetting?.value || "0");
-
-        if (scheduleHours > 0) {
-            const lastSyncSetting = await prisma.systemSetting.findUnique({ where: { key: 'last_library_sync' } });
-            const lastSync = parseInt(lastSyncSetting?.value || "0");
-            const now = Date.now();
-
-            if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
-                Logger.log(`[Cron] Starting Automated Library Scan...`, "info");
-                // Force internal loopback routing
-                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'library' }).catch(() => {});
-            }
-        }
-    } catch (error: any) {}
-  }, 3600000);
-
-  // 4. Series Monitor Auto-Scan
-  setInterval(async () => {
-    try {
-        const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: 'monitor_sync_schedule' } });
-        const scheduleHours = parseInt(scheduleSetting?.value || "0");
-
-        if (scheduleHours > 0) {
-            const lastSyncSetting = await prisma.systemSetting.findUnique({ where: { key: 'last_monitor_sync' } });
-            const lastSync = parseInt(lastSyncSetting?.value || "0");
-            const now = Date.now();
-
-            if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
-                Logger.log(`[Cron] Starting Automated Series Monitor Scan...`, "info");
-                // Force internal loopback routing
-                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'monitor' }).catch(() => {});
-            }
-        }
-    } catch (error: any) {}
-  }, 3600000);
-
-  // 5. Automated Diagnostics
-  setInterval(async () => {
-    try {
-        const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: 'diagnostics_sync_schedule' } });
-        const scheduleHours = parseInt(scheduleSetting?.value || "0");
-
-        if (scheduleHours > 0) {
-            const lastSyncSetting = await prisma.systemSetting.findUnique({ where: { key: 'last_diagnostics_sync' } });
-            const lastSync = parseInt(lastSyncSetting?.value || "0");
-            const now = Date.now();
-
-            if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
-                Logger.log(`[Cron] Starting Automated Library Diagnostics...`, "info");
-                // Force internal loopback routing
-                await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: 'diagnostics' }).catch(() => {});
-            }
-        }
-    } catch (error: any) {}
-  }, 3600000);
+    // Process all 4 job queues sequentially
+    await checkAndTrigger('metadata', 'metadata_sync_schedule', 'last_metadata_sync', 'ComicVine Metadata Sync');
+    await checkAndTrigger('library', 'library_sync_schedule', 'last_library_sync', 'Library Scan');
+    await checkAndTrigger('monitor', 'monitor_sync_schedule', 'last_monitor_sync', 'Series Monitor Scan');
+    await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
+  });
 }

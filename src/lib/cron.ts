@@ -5,12 +5,12 @@ import axios from 'axios';
 import { Importer } from './importer';
 import cron from 'node-cron';
 
-// Prevent multiple instances from spawning during Next.js reloads
-let isCronInitialized = false;
+// FIX: Attach strictly to globalThis so Next.js internal reloads never bypass the lock
+const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
 export function initCronJobs() {
-  if (isCronInitialized) return;
-  isCronInitialized = true;
+  if (globalForCron._cronInitialized) return;
+  globalForCron._cronInitialized = true;
 
   Logger.log("[Cron] Initializing native background automation (Node-Cron)...", "info");
 
@@ -68,7 +68,6 @@ export function initCronJobs() {
   });
 
   // 2. General Scheduled Jobs (Runs every 15 minutes)
-  // This replaces the external sidecar container entirely!
   cron.schedule('*/15 * * * *', async () => {
     const now = Date.now();
 

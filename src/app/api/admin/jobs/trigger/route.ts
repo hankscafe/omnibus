@@ -71,7 +71,7 @@ async function searchAndDownload(requestId: string, name: string, year: string, 
         
         await prisma.request.update({
           where: { id: requestId },
-          data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadHash: trackingHash }
+          data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash }
         });
         return; 
       }
@@ -130,9 +130,13 @@ export async function POST(request: Request) {
     try {
         const { job } = await request.json();
         const startTime = Date.now();
+        const nowStr = Date.now().toString(); // Generate timestamp immediately
 
         if (job === 'backup') {
             Logger.log("[Background Job] Starting Database Backup...", "info");
+            
+            // FIX: Immediate DB Lock to prevent overlapping triggers
+            await prisma.systemSetting.upsert({ where: { key: 'last_backup_sync' }, update: { value: nowStr }, create: { key: 'last_backup_sync', value: nowStr } });
 
             (async () => {
                 try {
@@ -167,8 +171,6 @@ export async function POST(request: Request) {
                         }
                     }
 
-                    const nowStr = Date.now().toString();
-                    await prisma.systemSetting.upsert({ where: { key: 'last_backup_sync' }, update: { value: nowStr }, create: { key: 'last_backup_sync', value: nowStr } });
                     await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Backup saved successfully to /backups/${fileName}. Retaining last 5 backups.` } });
                     Logger.log(`[Background Job] Database Backup Complete. Saved to ${fileName}`, "success");
                 } catch (e: any) {
@@ -182,6 +184,9 @@ export async function POST(request: Request) {
 
         if (job === 'library') {
             Logger.log("[Manual Job] Starting Local Library Auto-Scan...", "info");
+            
+            // FIX: Immediate DB Lock
+            await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
             
             try {
                 const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
@@ -204,9 +209,6 @@ export async function POST(request: Request) {
                         }
                     }));
                 }
-                
-                const nowStr = Date.now().toString();
-                await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
 
                 await prisma.jobLog.create({ 
                     data: { jobType: 'LIBRARY_SCAN', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Scan and storage calculation completed for ${processedCount} series.` } 
@@ -222,6 +224,9 @@ export async function POST(request: Request) {
 
         if (job === 'metadata') {
             Logger.log("[Manual Job] Initiating background ComicVine Metadata Sync...", "info");
+            
+            // FIX: Immediate DB Lock
+            await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
 
             (async () => {
                 const { syncSeriesMetadata } = await import('@/lib/metadata-fetcher');
@@ -245,8 +250,6 @@ export async function POST(request: Request) {
                     }
                 }
 
-                const nowStr = Date.now().toString();
-                await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
                 await prisma.jobLog.create({
                     data: {
                         jobType: 'METADATA_SYNC',
@@ -269,6 +272,9 @@ export async function POST(request: Request) {
             if (!cvApiKey) return NextResponse.json({ error: "Missing ComicVine API Key" }, { status: 400 });
 
             Logger.log("[Manual Job] Starting scan for monitored series...", "info");
+            
+            // FIX: Immediate DB Lock
+            await prisma.systemSetting.upsert({ where: { key: 'last_monitor_sync' }, update: { value: nowStr }, create: { key: 'last_monitor_sync', value: nowStr } });
 
             (async () => {
                 const monitoredSeries = await prisma.series.findMany({
@@ -295,7 +301,6 @@ export async function POST(request: Request) {
                         const allCvIssues = [];
 
                         while (offset < totalResults && loopCount < 20) {
-                            // CACHE BUSTER: Sort by store_date descending to force CV to serve fresh un-cached data
                             const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
                                 params: { 
                                     api_key: cvApiKey, format: 'json', filter: `volume:${series.cvId}`, 
@@ -327,7 +332,6 @@ export async function POST(request: Request) {
                             const cvNum = parseFloat(cvIssue.issue_number);
                             if (isNaN(cvNum)) continue;
 
-                            // 1. Check Issue Table
                             const alreadyInLibrary = series.issues.some(i => 
                                 parseFloat(i.number) === cvNum && 
                                 i.filePath && 
@@ -335,7 +339,6 @@ export async function POST(request: Request) {
                             );
                             if (alreadyInLibrary) continue;
 
-                            // 2. Check Request Table Thoroughly
                             const searchName = `${series.name} #${cvIssue.issue_number}`;
                             
                             const alreadyReq = existingRequests.find(r => {
@@ -350,7 +353,6 @@ export async function POST(request: Request) {
                                 continue;
                             }
 
-                            // IT'S TRULY NEW!
                             Logger.log(`[Monitor] Found NEW missing issue: ${searchName}`, 'success');
                             details += `[NEW] Found and Queued: ${searchName}\n`;
                             
@@ -367,7 +369,6 @@ export async function POST(request: Request) {
                                 }
                             });
 
-                            // Directly execute automation
                             searchAndDownload(newReq.id, searchName, issueYear, series.publisher || "Unknown", (series as any).isManga)
                                 .catch(e => console.error("Monitor Automation Error:", e));
 
@@ -385,9 +386,6 @@ export async function POST(request: Request) {
                     }
                 }
 
-                const nowStr = Date.now().toString();
-                await prisma.systemSetting.upsert({ where: { key: 'last_monitor_sync' }, update: { value: nowStr }, create: { key: 'last_monitor_sync', value: nowStr } });
-
                 await prisma.jobLog.create({ 
                     data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nScan Complete. Total new issues queued: ${newIssuesFound}` } 
                 });
@@ -400,6 +398,9 @@ export async function POST(request: Request) {
 
         if (job === 'diagnostics') {
             Logger.log("[Background Job] Starting Auto-Diagnostics...", "info");
+            
+            // FIX: Immediate DB Lock
+            await prisma.systemSetting.upsert({ where: { key: 'last_diagnostics_sync' }, update: { value: nowStr }, create: { key: 'last_diagnostics_sync', value: nowStr } });
 
             (async () => {
                 let details = "Diagnostics Scan Started.\n\n";
@@ -434,8 +435,6 @@ export async function POST(request: Request) {
 
                     if (issuesFound === 0) details += "Library is in perfect health. 100% Integrity.\n";
 
-                    const nowStr = Date.now().toString();
-                    await prisma.systemSetting.upsert({ where: { key: 'last_diagnostics_sync' }, update: { value: nowStr }, create: { key: 'last_diagnostics_sync', value: nowStr } });
                     await prisma.jobLog.create({ data: { jobType: 'DIAGNOSTICS', status: issuesFound > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', durationMs: Date.now() - startTime, message: details } });
                     Logger.log(`[Background Job] Diagnostics Complete. Issues found: ${issuesFound}`, issuesFound > 0 ? "warn" : "success");
                 } catch (e: any) {
@@ -449,6 +448,13 @@ export async function POST(request: Request) {
 
         if (job === 'storage_scan' || job === 'analytics') {
             Logger.log("[Background Job] Initiating Storage Deep Dive Scan...", "info");
+            
+            // FIX: Immediate DB Lock
+            await prisma.systemSetting.upsert({
+                where: { key: 'storage_deep_dive_last_run' },
+                update: { value: nowStr },
+                create: { key: 'storage_deep_dive_last_run', value: nowStr }
+            });
 
             (async () => {
                 const seriesList = await prisma.series.findMany({
@@ -472,20 +478,12 @@ export async function POST(request: Request) {
                 }
 
                 storageData.sort((a, b) => b.sizeBytes - a.sizeBytes);
-                const nowStr = Date.now().toString();
 
-                await prisma.$transaction([
-                    prisma.systemSetting.upsert({
-                        where: { key: 'storage_deep_dive_cache' },
-                        update: { value: JSON.stringify(storageData) },
-                        create: { key: 'storage_deep_dive_cache', value: JSON.stringify(storageData) }
-                    }),
-                    prisma.systemSetting.upsert({
-                        where: { key: 'storage_deep_dive_last_run' },
-                        update: { value: nowStr },
-                        create: { key: 'storage_deep_dive_last_run', value: nowStr }
-                    })
-                ]);
+                await prisma.systemSetting.upsert({
+                    where: { key: 'storage_deep_dive_cache' },
+                    update: { value: JSON.stringify(storageData) },
+                    create: { key: 'storage_deep_dive_cache', value: JSON.stringify(storageData) }
+                });
 
                 Logger.log(`[Background Job] Storage Scan Complete. Processed ${storageData.length} series.`, "success");
             })();
@@ -497,6 +495,9 @@ export async function POST(request: Request) {
 
         if (job === 'popular') {
             Logger.log("[Background Job] Rebuilding 8-page Discover Cache...", "info");
+            
+            // FIX: Immediate DB Lock
+            await prisma.systemSetting.upsert({ where: { key: 'last_popular_sync' }, update: { value: nowStr }, create: { key: 'last_popular_sync', value: nowStr } });
 
             (async () => {
                 const allSettings = await prisma.systemSetting.findMany();
@@ -583,12 +584,9 @@ export async function POST(request: Request) {
                         fetchCategory('cover_date:desc') 
                     ]);
 
-                    const nowStr = Date.now().toString();
-
                     await prisma.$transaction([
                         prisma.systemSetting.upsert({ where: { key: 'discover_cache_new' }, update: { value: JSON.stringify(newReleases) }, create: { key: 'discover_cache_new', value: JSON.stringify(newReleases) } }),
                         prisma.systemSetting.upsert({ where: { key: 'discover_cache_popular' }, update: { value: JSON.stringify(popular) }, create: { key: 'discover_cache_popular', value: JSON.stringify(popular) } }),
-                        prisma.systemSetting.upsert({ where: { key: 'last_popular_sync' }, update: { value: nowStr }, create: { key: 'last_popular_sync', value: nowStr } })
                     ]);
 
                     await prisma.jobLog.create({

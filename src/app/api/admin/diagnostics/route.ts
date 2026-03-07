@@ -66,7 +66,7 @@ export async function POST(request: Request) {
         // --- SCAN: ORPHANED FILES ---
         if (action === 'scan-orphans') {
             Logger.log("[UI Job] Manual Orphaned File scan started", "info");
-            const configSetting = await prisma.systemSetting.findMany({ where: { key: { in: ['library_path', 'manga_library_path'] } } });
+            const configSetting = await prisma.systemSetting.findMany({ where: { key: { in: ['library_path', 'manga_library_path', 'ignored_orphans'] } } });
             const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
             
             let physicalFiles: string[] = [];
@@ -75,7 +75,19 @@ export async function POST(request: Request) {
 
             const issues = await prisma.issue.findMany();
             const dbPaths = new Set(issues.map(i => i.filePath ? path.normalize(i.filePath).toLowerCase() : ''));
-            const orphans = physicalFiles.filter(p => !dbPaths.has(path.normalize(p).toLowerCase()));
+            
+            let ignoredPaths = new Set<string>();
+            if (config.ignored_orphans) {
+                try {
+                    const parsed = JSON.parse(config.ignored_orphans);
+                    if (Array.isArray(parsed)) ignoredPaths = new Set(parsed.map(p => path.normalize(p).toLowerCase()));
+                } catch(e) {}
+            }
+
+            const orphans = physicalFiles.filter(p => {
+                const normP = path.normalize(p).toLowerCase();
+                return !dbPaths.has(normP) && !ignoredPaths.has(normP);
+            });
 
             // LOG TO DATABASE
             await prisma.jobLog.create({
@@ -142,6 +154,26 @@ export async function POST(request: Request) {
                 if (fs.existsSync(p)) await fs.remove(p);
             }
             Logger.log(`Deleted physical orphaned files from disk.`, "success");
+            return NextResponse.json({ success: true });
+        }
+
+        if (action === 'ignore-orphans') {
+            const { paths } = payload;
+            const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_orphans' } });
+            let ignored: string[] = [];
+            if (ignoredSetting?.value) {
+                try { ignored = JSON.parse(ignoredSetting.value); } catch(e) {}
+            }
+            
+            const newIgnored = Array.from(new Set([...ignored, ...paths]));
+            
+            await prisma.systemSetting.upsert({
+                where: { key: 'ignored_orphans' },
+                update: { value: JSON.stringify(newIgnored) },
+                create: { key: 'ignored_orphans', value: JSON.stringify(newIgnored) }
+            });
+            
+            Logger.log(`Added ${paths.length} paths to orphan ignore list.`, "success");
             return NextResponse.json({ success: true });
         }
 

@@ -5,7 +5,8 @@ import { useToast } from "@/components/ui/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, ShieldAlert, Ghost, FileQuestion, FileWarning, Trash2, CheckCircle2, Search, ArrowLeft } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Loader2, ShieldAlert, Ghost, FileQuestion, FileWarning, Trash2, CheckCircle2, Search, ArrowLeft, EyeOff } from "lucide-react"
 import Link from "next/link"
 
 export default function DiagnosticsPage() {
@@ -22,6 +23,9 @@ export default function DiagnosticsPage() {
     const [orphans, setOrphans] = useState<any[] | null>(null);
     const [corrupted, setCorrupted] = useState<any[] | null>(null);
 
+    // Multi-select state for orphans
+    const [selectedOrphans, setSelectedOrphans] = useState<Set<string>>(new Set());
+
     const { toast } = useToast();
 
     const runScan = async (type: 'scan-ghosts' | 'scan-orphans' | 'scan-integrity') => {
@@ -35,7 +39,10 @@ export default function DiagnosticsPage() {
             const data = await res.json();
             
             if (type === 'scan-ghosts') setGhosts(data.ghosts);
-            if (type === 'scan-orphans') setOrphans(data.orphans);
+            if (type === 'scan-orphans') {
+                setOrphans(data.orphans);
+                setSelectedOrphans(new Set()); // Reset selection on new scan
+            }
             if (type === 'scan-integrity') setCorrupted(data.corrupted);
             
             toast({ title: "Scan Complete" });
@@ -62,13 +69,26 @@ export default function DiagnosticsPage() {
     };
 
     const deleteOrphans = async () => {
-        if (!orphans || orphans.length === 0) return;
+        if (selectedOrphans.size === 0) return;
         setIsResolving(true);
         try {
-            const paths = orphans.map(o => o.path);
+            const paths = Array.from(selectedOrphans);
             await fetch('/api/admin/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete-orphans', payload: { paths } }) });
             toast({ title: "Orphans Deleted", description: "Physical files removed from disk." });
-            setOrphans([]);
+            setOrphans(prev => prev ? prev.filter(o => !selectedOrphans.has(o.path)) : null);
+            setSelectedOrphans(new Set());
+        } finally { setIsResolving(false); }
+    };
+
+    const ignoreOrphans = async () => {
+        if (selectedOrphans.size === 0) return;
+        setIsResolving(true);
+        try {
+            const paths = Array.from(selectedOrphans);
+            await fetch('/api/admin/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'ignore-orphans', payload: { paths } }) });
+            toast({ title: "Files Ignored", description: "These files will no longer appear in scans." });
+            setOrphans(prev => prev ? prev.filter(o => !selectedOrphans.has(o.path)) : null);
+            setSelectedOrphans(new Set());
         } finally { setIsResolving(false); }
     };
 
@@ -157,15 +177,45 @@ export default function DiagnosticsPage() {
 
                     {orphans && orphans.length > 0 && (
                         <Card className="border-orange-200 dark:border-orange-900/50">
-                            <div className="flex justify-between items-center p-4 border-b border-orange-100 dark:border-orange-900/30 bg-orange-50/50 dark:bg-orange-900/10">
+                            <div className="flex flex-col sm:flex-row justify-between sm:items-center p-4 border-b border-orange-100 dark:border-orange-900/30 bg-orange-50/50 dark:bg-orange-900/10 gap-4">
                                 <span className="font-bold text-orange-600 dark:text-orange-400">Found {orphans.length} Wasted Files</span>
-                                <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={deleteOrphans} disabled={isResolving}>{isResolving ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <Trash2 className="w-4 h-4 mr-2"/>} Delete Physical Files</Button>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Button size="sm" variant="outline" onClick={() => {
+                                        if (selectedOrphans.size === orphans.length) setSelectedOrphans(new Set());
+                                        else setSelectedOrphans(new Set(orphans.map(o => o.path)));
+                                    }}>
+                                        {selectedOrphans.size === orphans.length ? "Deselect All" : "Select All"}
+                                    </Button>
+                                    <Button size="sm" variant="outline" onClick={ignoreOrphans} disabled={selectedOrphans.size === 0 || isResolving} className="text-slate-600 dark:text-slate-300">
+                                        {isResolving ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <EyeOff className="w-4 h-4 mr-2"/>} Ignore ({selectedOrphans.size})
+                                    </Button>
+                                    <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={deleteOrphans} disabled={selectedOrphans.size === 0 || isResolving}>
+                                        {isResolving ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <Trash2 className="w-4 h-4 mr-2"/>} Delete ({selectedOrphans.size})
+                                    </Button>
+                                </div>
                             </div>
                             <div className="divide-y dark:divide-slate-800 max-h-[500px] overflow-y-auto">
                                 {orphans.map((o, i) => (
-                                    <div key={i} className="p-3 text-sm flex flex-col hover:bg-slate-50 dark:hover:bg-slate-900">
-                                        <div className="font-bold">{o.name}</div>
-                                        <div className="text-xs text-muted-foreground font-mono truncate mt-1">{o.path}</div>
+                                    <div key={i} className="p-3 text-sm flex items-start gap-3 hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
+                                        <div className="pt-0.5">
+                                            <Checkbox 
+                                                checked={selectedOrphans.has(o.path)}
+                                                onCheckedChange={(checked) => {
+                                                    const next = new Set(selectedOrphans);
+                                                    if (checked) next.add(o.path);
+                                                    else next.delete(o.path);
+                                                    setSelectedOrphans(next);
+                                                }}
+                                            />
+                                        </div>
+                                        <div className="flex flex-col min-w-0 cursor-pointer" onClick={() => {
+                                            const next = new Set(selectedOrphans);
+                                            if (next.has(o.path)) next.delete(o.path); else next.add(o.path);
+                                            setSelectedOrphans(next);
+                                        }}>
+                                            <div className="font-bold truncate">{o.name}</div>
+                                            <div className="text-xs text-muted-foreground font-mono truncate mt-1">{o.path}</div>
+                                        </div>
                                     </div>
                                 ))}
                             </div>

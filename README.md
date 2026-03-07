@@ -26,7 +26,7 @@
 
 **Omnibus** is the ultimate all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection.
 
-I am not a programming but I was inspired to vibe-code this project after coming across [ReadMeABook](https://github.com/kikootwo/ReadMeABook) on Reddit.  Audiobooks, eBooks and comic books have been a challenge for myself when self hosting.  Having a system like [AudioBookShelf](https://github.com/advplyr/audiobookshelf) for managing the metadata and allowing users to listen to the books is fantastic, but how do you get them to AudioBookShelf?  Users would ask and I would add them manually or rely on a separate system that would autodownload Audible books into a library.
+I am not a programmer, but I was inspired to vibe-code this project after coming across [ReadMeABook](https://github.com/kikootwo/ReadMeABook) on Reddit.  Audiobooks, eBooks and comic books have been a challenge for myself when self hosting regarding handling requsts from people and then findin the files and then adding them to a library.  Having a system like [AudioBookShelf](https://github.com/advplyr/audiobookshelf) for managing the metadata and allowing users to listen to the books is fantastic, but how do you get the files to AudioBookShelf?  How do you handle the requests from your users?  Users would ask and I would then go on a search to add them manually or rely on a separate system that would autodownload Audible books into a library.
 
 I once I started using [ReadMeABook](https://github.com/kikootwo/ReadMeABook) I wanted something that would work for comics, understanding that indexers and other sites for comics can be tricky due to naming and availability (single issue or series vs a collection of every comic realted to a certain character).  I took the initial look of [ReadMeABook](https://github.com/kikootwo/ReadMeABook) and begin using AI to help create something specific for comics.  It eventaully moved beyone just a requesting tool, into a library management and metadata tool, and then into a reader as well.
 
@@ -97,6 +97,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 </p>
 
 * **"Jump Back In" Shelf:** A dynamically updated carousel that tracks your exact page in ongoing issues. Jump back into the action with a single click.
+* **Recently Added" Section:** A dynamically updated carousel that shows the 7 most recent series addtions to the library with the ability to jump directly to that series page.
 * **Popular Issues:** Uses ComicVines api to pull a list of popular issues/series that is cached to help performance and is updated using a scheduled task in the admin section, or using the "Refresh Data" button on the homepage.
 * **New Releases:** Uses ComicVines api to pull a list of new releases that is cached to help performance and is updated using a scheduled task in the admin section, or using the "Refresh Data" button on the homepage.
 * **Manual Search:** A manual search powered by ComicVines api where users can input any series they want and choose from the results which show cover images, publisher, year, and issue count to ensure they are selecting the issue or series they are looking for.
@@ -128,7 +129,7 @@ A meticulously organized, highly performant view of your physical files, built t
 
 * **Advanced Metadata Parsing:** Automatically matches metadata based on automatic imports from requests or when matching a manually added series using ComicVines api to accurately display titles, volume numbers, writers, artists, and summaries.
 * **Series vs. Issue Hierarchy:** Automatically groups individual loose issues into their proper Series or Volume folders for a clean, uncluttered browsing experience.
-* **Deep Filtering & Sorting:** * Filter your collection by Publisher (Marvel, DC, Image, etc.), Genre, Format (Comic vs. Manga vs. Magazine), and Status (Completed/Ongoing).
+* **Deep Filtering & Sorting:** * Filter your collection by Publisher (Marvel, DC, Image, etc.), Genre, Format (Comic vs. Manga), and Status (Completed/Ongoing).
   * Filter by User Reading Status (Unread, In Progress, Read).
   * Sort by Recently Added, Release Date, Alphabetical, or Last Read.
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.
@@ -150,7 +151,8 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
   <strong>A series page showing a series that currently has all available issues.</strong>
 </p>
 
-* **Hero Banner & Synopsis:** A premium, visually striking header displaying high-resolution cover art, publisher logos, release years, and a full story synopsis pulled directly from embedded metadata or ComicVine.
+* **Hero Banner & Synopsis:** A premium, visually striking header displaying high-resolution cover art, publisher logos, release years, and a full story synopsis pulled directly from ComicVine.
+* **ComicVine Button:** A button that will take users directly to the series page on ComicVine.
 * **Granular Metadata:** View detailed credits including Writers, Artists, Colorists, and Cover Artists, alongside genre tags and character appearances.
 * **"Read Next" Prompts:** A smart action button that instantly opens the web reader to your exact saved page on the next unread issue in the run.
 * **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view to easily navigate massive, 100+ issue runs.
@@ -254,7 +256,7 @@ Complete, granular control over your instance, your users, and your underlying a
 * **Queue & History Management:** View active, pending, paused, and completed downloads with real-time progress bars, speeds, and ETA.
 * **Automated Post-Processing:** Once a comic is downloaded, Omnibus automatically:
   1. Extracts the file (if necessary).
-  2. Renames the file to your customized standard format.
+  2. Renames the file to your customized standard format. *(Coming Sonn)*
   3. Moves it to the correct publisher/series directory on your NAS.
   4. Triggers a local library scan to make it instantly readable.
 * **User & Role Management:** * Create independent accounts for friends and family so everyone has their own reading progress.

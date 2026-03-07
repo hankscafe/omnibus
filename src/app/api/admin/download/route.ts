@@ -23,7 +23,7 @@ export async function POST(req: Request) {
       where: { id: requestId },
       data: {
         status: 'DOWNLOADING',
-        downloadHash: downloadHash || "PENDING_MATCH", // Fallback if no hash found yet
+        downloadLink: downloadHash || "PENDING_MATCH", // Fallback if no hash found yet
         progress: 0
       }
     });

@@ -134,10 +134,12 @@ export const Importer = {
     let sourcePath = "";
     const downloadRoot = config.download_path || './downloads';
 
-    if (req.downloadHash) {
+    const trackingHash = req.downloadLink && !req.downloadLink.startsWith('http') ? req.downloadLink : null;
+
+    if (trackingHash) {
       try {
           const allActive = await DownloadService.getAllActiveDownloads();
-          const downloadItem = allActive.find((t: any) => t.id === req.downloadHash);
+          const downloadItem = allActive.find((t: any) => t.id === trackingHash);
           if (!downloadItem) {
             Logger.log("[Importer] Download not found in active client list.", "error");
             return false;

@@ -13,10 +13,13 @@ export const ProwlarrService = {
     }
 
     // --- SANITIZATION ---
-    // Remove colons, dashes, and duplicate spaces
     const cleanQuery = query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
     
-    // Determine configured indexers and keep their full configs
+    // FIX: Define significant words to prevent "The Shapeshifter" false positives
+    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'in', 'on', 'vol', 'volume', 'issue'];
+    const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => !stopWords.includes(w) && w.length > 0);
+    const requiredWords = queryWords.slice(0, Math.min(2, queryWords.length)); // Demand at least the first 2 real keywords match
+
     let indexerConfigs: any[] = [];
     let indexerIds: number[] = [];
     
@@ -48,20 +51,18 @@ export const ProwlarrService = {
 
       return data
         .filter((item: any) => {
-            // Filter logic: Must match mostly
+            // FIX: Strict matching applied here
             const title = item.title.toLowerCase();
-            const q = cleanQuery.toLowerCase().split(' ')[0]; // Match at least the first word
-            return title.includes(q);
+            if (requiredWords.length === 0) return true;
+            return requiredWords.every(w => title.includes(w));
         })
         .map((item: any) => {
-          // Find the specific settings for this indexer
           const idxConfig = indexerConfigs.find((c: any) => c.id === item.indexerId);
           const priority = idxConfig ? idxConfig.priority : 1;
           const seedTime = idxConfig ? idxConfig.seedTime : 0;
-          const seedRatio = idxConfig ? (idxConfig.seedRatio || 0) : 0; // Added Seed Ratio
+          const seedRatio = idxConfig ? (idxConfig.seedRatio || 0) : 0; 
           const seeders = item.seeders || 0;
           
-          // Calculate score: Priority dominates, seeders break ties within the same priority
           const score = (priority * 100000) + seeders;
 
           return {
@@ -76,8 +77,8 @@ export const ProwlarrService = {
             infoHash: item.infoHash,
             priority: priority,
             seedTime: seedTime,
-            seedRatio: seedRatio, // Added Seed Ratio
-            score: score // Added score for sorting
+            seedRatio: seedRatio, 
+            score: score 
           };
         });
 

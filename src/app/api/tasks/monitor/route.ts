@@ -48,8 +48,8 @@ async function searchAndDownload(requestId: string, name: string, year: string, 
         
         await prisma.request.update({
           where: { id: requestId },
-          data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadHash: trackingHash }
-        });
+          data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash }
+      });
         return; 
       }
     }

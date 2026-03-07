@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
             
             await prisma.request.update({
               where: { id: newReq.id },
-              data: { downloadHash: searchResult.infoHash || searchResult.guid || null }
+              data: { downloadLink: searchResult.infoHash || searchResult.guid || null }
             });
         }
     } else if (source === 'getcomics') {

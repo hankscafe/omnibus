@@ -18,7 +18,7 @@ export async function POST(request: Request) {
                 status: "DOWNLOADING",
                 progress: 100,
                 activeDownloadName: torrentName,
-                downloadHash: torrentId,
+                downloadLink: torrentId,
                 imageUrl: ""
             }
         });

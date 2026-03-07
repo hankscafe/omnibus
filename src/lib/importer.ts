@@ -22,7 +22,7 @@ function extractIssueNumber(filename: string): string {
     const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) return parseFloat(matches[matches.length - 1][1]).toString();
     
-    return "0";
+    return "1"; // Default to 1 instead of 0 for one-shots
 }
 
 export const Importer = {
@@ -171,7 +171,25 @@ export const Importer = {
     }
 
     const rawFileName = path.basename(sourcePath);
-    const fileName = sanitize(rawFileName); 
+    const ext = path.extname(rawFileName);
+    const extractedNum = extractIssueNumber(rawFileName);
+    
+    let fileName = sanitize(rawFileName); 
+
+    // --- FIX: AUTO-STANDARDIZE FILENAME ON IMPORT ---
+    if (series?.name) {
+        const safeSeriesName = sanitize(series.name);
+        let formattedNum = extractedNum;
+        
+        // Replicate the 2-digit padding logic (e.g. #05 instead of #5)
+        if (!extractedNum.includes('.') && extractedNum.length === 1) {
+            formattedNum = `0${extractedNum}`;
+        }
+        
+        const prefix = isManga ? 'Vol. ' : '#';
+        fileName = `${safeSeriesName} ${prefix}${formattedNum}${ext}`;
+    }
+
     let finalPath = path.join(destFolder, fileName);
 
     try {
@@ -214,6 +232,7 @@ export const Importer = {
       }
 
       if (series?.id) {
+         // The number parses identical whether it has a leading 0 or not, meaning it binds cleanly to the database.
          const issueNum = extractIssueNumber(fileName);
          
          await prisma.issue.upsert({
@@ -256,7 +275,6 @@ export const Importer = {
         data: { status: 'COMPLETED', progress: 100 }
       });
 
-      // FIXED: Inject rich metadata on success
       await DiscordNotifier.sendAlert('comic_available', {
           title: req.activeDownloadName || series?.name || "Unknown Comic",
           imageUrl: req.imageUrl,
@@ -272,7 +290,6 @@ export const Importer = {
     } catch (e: any) {
       Logger.log(`[Importer] Import Failed: ${e.message}`, "error");
       if (req) {
-          // FIXED: Inject rich metadata on failure
           await DiscordNotifier.sendAlert('download_failed', {
               title: req.activeDownloadName || series?.name || "Unknown Comic",
               imageUrl: req.imageUrl,

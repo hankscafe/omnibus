@@ -2,7 +2,6 @@ import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { Importer } from './importer';
-import cron from 'node-cron';
 
 // FIX: Attach strictly to globalThis so Next.js internal reloads never bypass the lock
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
@@ -11,10 +10,10 @@ export function initCronJobs() {
   if (globalForCron._cronInitialized) return;
   globalForCron._cronInitialized = true;
 
-  Logger.log("[Cron] Initializing native background automation (Node-Cron)...", "info");
+  Logger.log("[Cron] Initializing native background automation...", "info");
 
-  // 1. Download Status Checker (Runs exactly at the top of every minute)
-  cron.schedule('* * * * *', async () => {
+  // 1. Download Status Checker (Runs every 60 seconds)
+  setInterval(async () => {
     try {
       const stalledRequests = await prisma.request.findMany({
         where: { status: 'STALLED', retryCount: { lt: 3 } }
@@ -64,10 +63,10 @@ export function initCronJobs() {
     } catch (error: any) {
       Logger.log(`[Cron] Download Checker Error: ${error.message}`, 'error');
     }
-  });
+  }, 60000); // 60 seconds
 
   // 2. General Scheduled Jobs (Runs every 15 minutes)
-  cron.schedule('*/15 * * * *', async () => {
+  setInterval(async () => {
     const now = Date.now();
 
     // Reusable helper function to check database schedules and trigger internal API
@@ -83,7 +82,7 @@ export function initCronJobs() {
                 if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                     Logger.log(`[Cron] Starting Automated ${logName}...`, "info");
                     
-                    // FIX: Replaced Axios with native fetch and added fallbacks & logging
+                    // FIX: Using native fetch and fallbacks
                     try {
                         const res = await fetch(`http://127.0.0.1:3000/api/admin/jobs/trigger`, {
                             method: 'POST',
@@ -115,5 +114,5 @@ export function initCronJobs() {
     await checkAndTrigger('library', 'library_sync_schedule', 'last_library_sync', 'Library Scan');
     await checkAndTrigger('monitor', 'monitor_sync_schedule', 'last_monitor_sync', 'Series Monitor Scan');
     await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
-  });
+  }, 900000); // 15 minutes (900,000 ms)
 }

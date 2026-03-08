@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input"
 import { 
   ChevronLeft, ChevronRight, X, Loader2, Maximize, Minimize, BookOpen, 
   Settings as SettingsIcon, SkipBack, SkipForward, CheckCircle2,
-  Paintbrush, LayoutTemplate, MonitorPlay, Zap, ZoomIn, ZoomOut, Search, AlignHorizontalSpaceAround
+  Paintbrush, LayoutTemplate, MonitorPlay, Zap, ZoomIn, ZoomOut, Search, AlignHorizontalSpaceAround,
+  Sun // Added for brightness/contrast icon
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -67,14 +68,16 @@ function ReaderContent() {
   const [isIdle, setIsIdle] = useState(false);
   const idleTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // Settings State
+  // Settings State (Added Brightness & Contrast)
   const [settings, setSettings] = useState({
       readingMode: 'ltr', 
       animateTransitions: 'true', 
       backgroundColor: 'black', 
       scaleType: 'fit-height', 
       pageLayout: 'single',
-      spreadGap: 'none' 
+      spreadGap: 'none',
+      brightness: 100,
+      contrast: 100
   });
 
   const [nextIssue, setNextIssue] = useState<{ path: string, name: string } | null>(null);
@@ -327,10 +330,15 @@ function ReaderContent() {
       if (settings.scaleType === 'original') imgClass += ' w-auto h-auto max-w-none max-h-none';
   }
 
-  const imgStyle = isZoomed ? {
+  // Combine scaling style with CSS Image Filters for Brightness/Contrast
+  const imgStyle: React.CSSProperties = isZoomed ? {
       height: (settings.scaleType === 'fit-height' || settings.scaleType === 'screen' || settings.scaleType === 'original') ? `${zoomLevel}vh` : 'auto',
       width: (settings.scaleType === 'fit-width' || settings.scaleType === 'fit-width-shrink') ? (isDouble ? `${zoomLevel / 2}vw` : `${zoomLevel}vw`) : 'auto',
-  } : undefined;
+  } : {};
+
+  if (settings.brightness !== 100 || settings.contrast !== 100) {
+      imgStyle.filter = `brightness(${settings.brightness}%) contrast(${settings.contrast}%)`;
+  }
 
   const gapClass = settings.spreadGap === 'small' ? 'gap-2' : settings.spreadGap === 'large' ? 'gap-8' : 'gap-0';
 
@@ -385,7 +393,14 @@ function ReaderContent() {
       {settings.readingMode === 'webtoon' ? (
           <div className={`w-full h-full overflow-y-auto flex flex-col items-center z-10 ${hideCursor ? 'cursor-none' : ''}`} onClick={() => setShowUI(!showUI)}>
               {pages.map(p => (
-                  <img key={p} src={`/api/reader/image?path=${encodeURIComponent(filePath!)}&page=${encodeURIComponent(p)}`} className="w-full max-w-4xl h-auto block m-0 p-0" loading="lazy" alt="Page" />
+                  <img 
+                      key={p} 
+                      src={`/api/reader/image?path=${encodeURIComponent(filePath!)}&page=${encodeURIComponent(p)}`} 
+                      style={settings.brightness !== 100 || settings.contrast !== 100 ? { filter: `brightness(${settings.brightness}%) contrast(${settings.contrast}%)` } : undefined}
+                      className="w-full max-w-4xl h-auto block m-0 p-0" 
+                      loading="lazy" 
+                      alt="Page" 
+                  />
               ))}
           </div>
       ) : (
@@ -594,6 +609,48 @@ function ReaderContent() {
                               </Select>
                           </div>
                       </div>
+
+                      {/* --- NEW: Image Adjustments (Brightness/Contrast) --- */}
+                      <div className="grid grid-cols-[30px_1fr] items-start gap-3 pt-2 border-t dark:border-slate-800">
+                          <Sun className="w-5 h-5 text-muted-foreground justify-self-center mt-1" />
+                          <div className="grid gap-4">
+                              <div className="space-y-3">
+                                  <div className="flex flex-col gap-1.5">
+                                      <div className="flex items-center justify-between">
+                                          <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">Brightness</Label>
+                                          <span className="text-[10px] font-mono text-muted-foreground">{settings.brightness}%</span>
+                                      </div>
+                                      <input 
+                                          type="range" min="50" max="150" step="5" 
+                                          value={settings.brightness} 
+                                          onChange={(e) => setSettings(s => ({...s, brightness: parseInt(e.target.value)}))} 
+                                          className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary"
+                                      />
+                                  </div>
+                                  <div className="flex flex-col gap-1.5">
+                                      <div className="flex items-center justify-between">
+                                          <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">Contrast</Label>
+                                          <span className="text-[10px] font-mono text-muted-foreground">{settings.contrast}%</span>
+                                      </div>
+                                      <input 
+                                          type="range" min="50" max="150" step="5" 
+                                          value={settings.contrast} 
+                                          onChange={(e) => setSettings(s => ({...s, contrast: parseInt(e.target.value)}))} 
+                                          className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary"
+                                      />
+                                  </div>
+                                  
+                                  {(settings.brightness !== 100 || settings.contrast !== 100) && (
+                                      <div className="flex justify-end pt-1">
+                                          <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] uppercase tracking-widest text-muted-foreground" onClick={() => setSettings(s => ({...s, brightness: 100, contrast: 100}))}>
+                                              Reset Adjustments
+                                          </Button>
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+
                   </div>
               </div>
           </DialogContent>

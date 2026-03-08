@@ -2,8 +2,10 @@ import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { Importer } from './importer';
+// FIX: Import the API route directly so we can bypass the network
+import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route';
 
-// FIX: Attach strictly to globalThis so Next.js internal reloads never bypass the lock
+// Attach strictly to globalThis so Next.js internal reloads never bypass the lock
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
 export function initCronJobs() {
@@ -82,25 +84,18 @@ export function initCronJobs() {
                 if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                     Logger.log(`[Cron] Starting Automated ${logName}...`, "info");
                     
-                    // FIX: Using native fetch and fallbacks
+                    // FIX: Execute the route function directly in memory!
+                    // This completely bypasses the broken Docker loopback network.
                     try {
-                        const res = await fetch(`http://127.0.0.1:3000/api/admin/jobs/trigger`, {
+                        const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ job: jobName })
                         });
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        
+                        await executeJobRoute(mockRequest);
                     } catch (err: any) {
-                        try {
-                            const res2 = await fetch(`http://localhost:3000/api/admin/jobs/trigger`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ job: jobName })
-                            });
-                            if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
-                        } catch (fallbackErr: any) {
-                            Logger.log(`[Cron] Internal Loopback Failed for ${jobName}: ${fallbackErr.message}. Ensure container port 3000 is exposed internally.`, "error");
-                        }
+                        Logger.log(`[Cron] Internal Execution Failed for ${jobName}: ${err.message}`, "error");
                     }
                 }
             }

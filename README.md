@@ -177,13 +177,13 @@ A completely custom, zero-friction reading experience built natively into the br
   <strong>Reader page settings.</strong>
 </p>
 
-* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, `.zip`, `.rar`, and `.epub` *(Coming Soon)* archives.
+* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, and `.epub` archives.
 * **Reading Directions:** One-click toggles for Left-to-Right (Standard Comics), Right-to-Left (Manga), and continuous Vertical Scrolling (Webtoons).
 * **Dynamic Page Layouts:** * Choose between Single Page or Double Page spreads (perfect for splash pages).
   * Auto-Fit toggles: Fit to Width, Fit to Height, or Original Resolution.
 * **Smart Preloading:** Silently caches the next several pages in the background so you never experience loading spinners while reading.
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
-* **Brightness & Contrast Overlay:** *(Coming Soon)* Adjust the brightness of the reader independently of your device settings for late-night reading sessions.
+* **Brightness & Contrast Overlay:** Adjust the brightness of the reader independently of your device settings for late-night reading sessions.
 
 ### Reading Lists
 Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.
@@ -370,6 +370,7 @@ services:
     ports:
       - "3000:3000"
     environment:
+      - TZ=America/New_York
       # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., https://omnibus.mydomain.com)
       # or your NAS IP (e.g., http://192.168.1.100:3000)
       - NEXTAUTH_URL=http://192.168.1.100:3000

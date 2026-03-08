@@ -35,8 +35,8 @@ export async function GET(request: Request) {
     const isZipSignature = magicBuffer[0] === 0x50 && magicBuffer[1] === 0x4B;
     const isRarSignature = magicBuffer[0] === 0x52 && magicBuffer[1] === 0x61 && magicBuffer[2] === 0x72 && magicBuffer[3] === 0x21;
 
-    const isZip = isZipSignature || (filePath.toLowerCase().endsWith('.cbz') && !isRarSignature);
-    const isRar = isRarSignature || (filePath.toLowerCase().endsWith('.cbr') && !isZipSignature);
+    const isZip = isZipSignature || (filePath.toLowerCase().match(/\.(cbz|epub|zip)$/) && !isRarSignature);
+    const isRar = isRarSignature || (filePath.toLowerCase().match(/\.(cbr|rar)$/) && !isZipSignature);
 
     if (!isZip && !isRar) return new NextResponse("Format Not Supported", { status: 400 });
 

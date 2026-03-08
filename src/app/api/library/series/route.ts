@@ -148,7 +148,7 @@ export async function GET(request: Request) {
 
         for (const file of files) {
             const lowerFile = file.toLowerCase();
-            if (lowerFile.match(/\.(cbz|cbr|cb7|zip|rar)$/)) { 
+            if (lowerFile.match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) { 
                 const fullPath = path.join(folderPath, file);
                 activeFilePaths.add(fullPath);
                 
@@ -216,13 +216,13 @@ export async function GET(request: Request) {
     } else {
         for (const file of files) {
             const lowerFile = file.toLowerCase();
-            if (lowerFile.match(/\.(cbz|cbr|cb7|zip|rar)$/)) {
+            if (lowerFile.match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) {
                 const fullPath = path.join(folderPath, file);
                 const prog = progressMap[file] || { readProgress: 0, isRead: false };
                 const issueNum = extractIssueNumber(file);
                 
                 downloadedIssues.push({
-                    id: file, name: file.replace(/\.(cbz|cbr|cb7|zip|rar)$/i, ''),
+                    id: file, name: file.replace(/\.(cbz|cbr|cb7|zip|rar|epub)$/i, ''),
                     parsedNum: parseFloat(issueNum),
                     fileName: file, fullPath: fullPath,
                     isRead: prog.isRead, readProgress: prog.readProgress,

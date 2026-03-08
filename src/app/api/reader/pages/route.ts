@@ -42,8 +42,8 @@ export async function GET(request: Request) {
     const isZipSignature = fileBuffer.length > 4 && fileBuffer[0] === 0x50 && fileBuffer[1] === 0x4B;
     const isRarSignature = fileBuffer.length > 4 && fileBuffer[0] === 0x52 && fileBuffer[1] === 0x61 && fileBuffer[2] === 0x72 && fileBuffer[3] === 0x21;
 
-    const isZip = isZipSignature || (filePath.toLowerCase().endsWith('.cbz') && !isRarSignature);
-    const isRar = isRarSignature || (filePath.toLowerCase().endsWith('.cbr') && !isZipSignature);
+    const isZip = isZipSignature || (filePath.toLowerCase().match(/\.(cbz|epub|zip)$/) && !isRarSignature);
+    const isRar = isRarSignature || (filePath.toLowerCase().match(/\.(cbr|rar)$/) && !isZipSignature);
 
     if (!isZip && !isRar) {
         return NextResponse.json({ error: "Unsupported file format." }, { status: 400 });

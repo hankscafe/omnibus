@@ -62,21 +62,21 @@ function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (stat
   const isCompleted = ['IMPORTED', 'COMPLETED'].includes(req.status);
 
   return (
-    <div className="p-4 flex flex-col sm:flex-row gap-4 hover:bg-slate-50 dark:hover:bg-slate-900/50 transition-colors">
-        <div className="w-24 h-36 sm:w-28 sm:h-40 bg-slate-100 dark:bg-slate-800 rounded shadow-sm border dark:border-slate-700 overflow-hidden shrink-0">
+    <div className="p-4 flex flex-col sm:flex-row gap-4 hover:bg-muted/50 transition-colors">
+        <div className="w-24 h-36 sm:w-28 sm:h-40 bg-muted rounded shadow-sm border overflow-hidden shrink-0">
             {req.imageUrl ? <img src={req.imageUrl} className="w-full h-full object-cover" alt="" /> : null}
         </div>
         <div className="min-w-0 flex-1 flex flex-col justify-between">
             <div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                    <p className="font-bold text-base truncate dark:text-slate-200" title={displayName}>{displayName}</p>
+                    <p className="font-bold text-base truncate" title={displayName}>{displayName}</p>
                     <div className="shrink-0">{getStatusBadge(req.status)}</div>
                 </div>
                 <Button variant="ghost" size="sm" onClick={handleShowDesc} className="h-7 px-2 text-[11px] font-bold text-primary hover:text-primary/80 hover:bg-primary/10 -ml-2 mb-1">
                     <Info className="w-3 h-3 mr-1" /> {showDesc ? "Hide Synopsis" : "Read Synopsis"}
                 </Button>
                 {showDesc && (
-                    <div className="text-xs text-muted-foreground leading-relaxed bg-slate-100 dark:bg-slate-900/80 p-3 rounded border dark:border-slate-800 mt-1 animate-in fade-in slide-in-from-top-1">
+                    <div className="text-xs text-muted-foreground leading-relaxed bg-muted/80 p-3 rounded border mt-1 animate-in fade-in slide-in-from-top-1">
                         {loadingDesc ? <Loader2 className="w-3 h-3 animate-spin" /> : desc}
                     </div>
                 )}
@@ -280,8 +280,7 @@ export default function ProfilePage() {
           const data = await res.json();
           if (res.ok) {
               toast({ title: "Sessions Revoked", description: data.message });
-              setRevokeModalOpen(false); // FIX: Close modal immediately
-              // FIX: Fire and forget. Awaiting this in Next.js causes infinite UI hangs.
+              setRevokeModalOpen(false);
               update({ sessionVersion: data.newSessionVersion }).catch(()=>{});
           } else throw new Error(data.error);
       } catch (e: any) {
@@ -344,10 +343,10 @@ export default function ProfilePage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'IMPORTED': case 'COMPLETED': return <Badge variant="outline" className="bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 text-[10px] uppercase font-bold">In Library</Badge>;
-      case 'DOWNLOADING': return <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] uppercase font-bold">Downloading</Badge>;
+      case 'DOWNLOADING': return <Badge variant="outline" className="bg-primary/20 text-primary border-primary/30 text-[10px] uppercase font-bold">Downloading</Badge>;
       case 'PENDING_APPROVAL': return <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] uppercase font-bold text-center leading-tight">Needs Approval</Badge>;
       case 'FAILED': case 'STALLED': case 'ERROR': return <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 text-[10px] uppercase font-bold">Failed</Badge>;
-      default: return <Badge variant="outline" className="bg-slate-100 text-slate-800 border-slate-200 dark:bg-slate-800 dark:text-slate-300 text-[10px] uppercase font-bold">Pending</Badge>;
+      default: return <Badge variant="outline" className="bg-muted text-foreground border-border text-[10px] uppercase font-bold">Pending</Badge>;
     }
   }
 
@@ -363,7 +362,7 @@ export default function ProfilePage() {
   if (loading) return <div className="flex justify-center p-20"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 transition-colors duration-300">
+    <div className="min-h-screen pb-20 transition-colors duration-300">
       <title>Omnibus - Profile</title>
       
       <div className="relative h-48 sm:h-64 w-full group overflow-hidden bg-slate-900">
@@ -398,8 +397,8 @@ export default function ProfilePage() {
       <div className="container mx-auto px-6 max-w-5xl relative -mt-20 sm:-mt-24 space-y-8">
         <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6">
             <div className="relative group cursor-pointer" onClick={() => fileAvatarRef.current?.click()}>
-                <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-full border-4 border-white dark:border-slate-950 bg-slate-200 dark:bg-slate-800 overflow-hidden flex items-center justify-center shadow-xl relative z-10 transition-transform group-hover:scale-105">
-                    {uploadingAvatar ? <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /> : profile?.user?.avatar ? <img src={profile.user.avatar.startsWith('/') ? profile.user.avatar : `/${profile.user.avatar}`} alt="Avatar" className="w-full h-full object-cover" /> : <UserIcon className="w-16 h-16 text-slate-400 dark:text-slate-600" />}
+                <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-full border-4 border-background bg-muted overflow-hidden flex items-center justify-center shadow-xl relative z-10 transition-transform group-hover:scale-105">
+                    {uploadingAvatar ? <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /> : profile?.user?.avatar ? <img src={profile.user.avatar.startsWith('/') ? profile.user.avatar : `/${profile.user.avatar}`} alt="Avatar" className="w-full h-full object-cover" /> : <UserIcon className="w-16 h-16 text-muted-foreground" />}
                 </div>
                 <div className="absolute inset-0 z-20 rounded-full bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white border-4 border-transparent">
                     <Upload className="w-6 h-6 mb-1" />
@@ -409,9 +408,9 @@ export default function ProfilePage() {
             </div>
 
             <div className="text-center sm:text-left mb-2 sm:mb-4 space-y-1 drop-shadow-md sm:drop-shadow-none">
-                <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 dark:text-slate-100 sm:text-white drop-shadow-lg">{profile?.user?.username}</h1>
-                <div className="flex items-center justify-center sm:justify-start gap-2 bg-white/80 dark:bg-slate-950/80 sm:bg-transparent backdrop-blur-sm sm:backdrop-blur-none py-1 sm:py-0 px-3 sm:px-0 rounded-full w-fit mx-auto sm:mx-0">
-                    <Badge className="bg-primary hover:bg-primary text-primary-foreground font-bold uppercase tracking-wider text-[10px]">{profile?.user?.role}</Badge>
+                <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-foreground sm:text-white drop-shadow-lg">{profile?.user?.username}</h1>
+                <div className="flex items-center justify-center sm:justify-start gap-2 bg-background/80 sm:bg-transparent backdrop-blur-sm sm:backdrop-blur-none py-1 sm:py-0 px-3 sm:px-0 rounded-full w-fit mx-auto sm:mx-0">
+                    <Badge className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold uppercase tracking-wider text-[10px]">{profile?.user?.role}</Badge>
                     <span className="text-xs text-muted-foreground sm:text-slate-200 font-medium sm:drop-shadow-md">Member since {new Date(profile?.user?.createdAt).getFullYear()}</span>
                 </div>
             </div>
@@ -425,11 +424,11 @@ export default function ProfilePage() {
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* CARD 1: 2FA */}
-                <Card className={`shadow-sm border-2 flex flex-col ${is2FAEnabled ? 'border-green-200 bg-green-50/20 dark:border-green-900/40 dark:bg-green-900/10' : 'dark:border-slate-800'}`}>
+                <Card className={`shadow-sm border-2 flex flex-col ${is2FAEnabled ? 'border-green-200 bg-green-50/20 dark:border-green-900/40 dark:bg-green-900/10' : ''}`}>
                     <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
                         <div className="space-y-1 flex-1">
                             <div className="flex items-center gap-2 mb-2">
-                                <h4 className={`font-bold text-lg leading-none ${is2FAEnabled ? 'text-green-800 dark:text-green-400' : 'dark:text-slate-200'}`}>Two-Factor Auth</h4>
+                                <h4 className={`font-bold text-lg leading-none ${is2FAEnabled ? 'text-green-800 dark:text-green-400' : ''}`}>Two-Factor Auth</h4>
                                 {is2FAEnabled && <Badge className="bg-green-500 hover:bg-green-600 border-0 h-5 px-1.5 text-[10px]"><Check className="w-3 h-3 mr-1"/> ON</Badge>}
                             </div>
                             <p className={`text-xs ${is2FAEnabled ? 'text-green-700/80 dark:text-green-500/80' : 'text-muted-foreground'}`}>
@@ -439,7 +438,7 @@ export default function ProfilePage() {
                         {is2FAEnabled ? (
                             <Button variant="outline" className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-900/30" onClick={() => setDisable2faModalOpen(true)}>Disable 2FA</Button>
                         ) : (
-                            <Button className="w-full font-bold bg-blue-600 hover:bg-blue-700 text-white" onClick={handleBegin2FASetup} disabled={isProcessing2fa}>
+                            <Button className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground" onClick={handleBegin2FASetup} disabled={isProcessing2fa}>
                                 {isProcessing2fa ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />} Enable 2FA
                             </Button>
                         )}
@@ -447,25 +446,25 @@ export default function ProfilePage() {
                 </Card>
 
                 {/* CARD 2: PASSWORD RESET */}
-                <Card className="shadow-sm dark:border-slate-800 flex flex-col">
+                <Card className="shadow-sm flex flex-col">
                     <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
                         <div className="space-y-1 flex-1">
-                            <h4 className="font-bold text-lg dark:text-slate-200 flex items-center gap-2 mb-2">
+                            <h4 className="font-bold text-lg flex items-center gap-2 mb-2">
                                 <Key className="w-4 h-4 text-primary" /> Password
                             </h4>
                             <p className="text-xs text-muted-foreground">Update your local account password. SSO users must change passwords at their provider.</p>
                         </div>
-                        <Button variant="outline" className="w-full dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => setPasswordModalOpen(true)}>
+                        <Button variant="outline" className="w-full" onClick={() => setPasswordModalOpen(true)}>
                             Change Password
                         </Button>
                     </CardContent>
                 </Card>
 
                 {/* CARD 3: REVOKE SESSIONS */}
-                <Card className="shadow-sm dark:border-slate-800 flex flex-col">
+                <Card className="shadow-sm flex flex-col">
                     <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
                         <div className="space-y-1 flex-1">
-                            <h4 className="font-bold text-lg dark:text-slate-200 flex items-center gap-2 mb-2">
+                            <h4 className="font-bold text-lg flex items-center gap-2 mb-2">
                                 <LogOut className="w-4 h-4 text-orange-500" /> Active Sessions
                             </h4>
                             <p className="text-xs text-muted-foreground">Logged in on a public computer? Sign out of all other devices immediately.</p>
@@ -483,19 +482,19 @@ export default function ProfilePage() {
             <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
                 <Palette className="w-4 h-4" /> App Appearance
             </h3>
-            <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50">
+            <Card className="shadow-sm bg-muted/30">
                 <CardContent className="p-4 sm:p-6">
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
                         {themes.map(t => (
                             <button 
                                 key={t.id} 
                                 onClick={() => setColorTheme(t.id)}
-                                className={`flex flex-col items-center gap-3 p-3 rounded-xl border-2 transition-all ${colorTheme === t.id ? 'border-primary bg-primary/5' : 'border-transparent hover:border-slate-200 dark:hover:border-slate-700'}`}
+                                className={`flex flex-col items-center gap-3 p-3 rounded-xl border-2 transition-all ${colorTheme === t.id ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'}`}
                             >
                                 <div className={`w-10 h-10 rounded-full shadow-sm flex items-center justify-center ${t.color}`}>
                                     {colorTheme === t.id && <Check className={`w-5 h-5 ${t.id === 'symbiote' ? 'text-white dark:text-black' : 'text-white'}`} />}
                                 </div>
-                                <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{t.name}</span>
+                                <span className="text-xs font-bold text-foreground">{t.name}</span>
                             </button>
                         ))}
                     </div>
@@ -517,13 +516,13 @@ export default function ProfilePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {readingLists.slice(0, 3).map(list => (
                     <Link key={list.id} href={`/reading-lists?id=${list.id}`}>
-                        <Card className="shadow-sm dark:border-slate-800 hover:border-primary dark:hover:border-primary transition-all h-full bg-white dark:bg-slate-900/50 hover:shadow-md">
+                        <Card className="shadow-sm hover:border-primary transition-all h-full bg-muted/50 hover:shadow-md">
                             <CardContent className="p-4 flex gap-4">
-                                <div className="w-14 h-20 bg-slate-100 dark:bg-slate-800 rounded border dark:border-slate-700 overflow-hidden shrink-0 flex items-center justify-center">
-                                    {list.coverUrl ? <img src={list.coverUrl} className="w-full h-full object-cover" alt="" /> : <ListOrdered className="w-6 h-6 text-slate-300" />}
+                                <div className="w-14 h-20 bg-background rounded border overflow-hidden shrink-0 flex items-center justify-center">
+                                    {list.coverUrl ? <img src={list.coverUrl} className="w-full h-full object-cover" alt="" /> : <ListOrdered className="w-6 h-6 text-muted-foreground/50" />}
                                 </div>
                                 <div className="flex flex-col justify-center">
-                                    <h4 className="font-bold text-sm line-clamp-2 leading-tight dark:text-slate-200">{list.name}</h4>
+                                    <h4 className="font-bold text-sm line-clamp-2 leading-tight">{list.name}</h4>
                                     <p className="text-xs font-bold text-primary mt-1">{list.items?.length || 0} Issues</p>
                                 </div>
                             </CardContent>
@@ -531,9 +530,9 @@ export default function ProfilePage() {
                     </Link>
                 ))}
                 {readingLists.length === 0 && (
-                    <div className="col-span-full p-8 text-center border-2 border-dashed rounded-xl border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
-                        <ListOrdered className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
-                        <p className="text-sm font-bold text-slate-700 dark:text-slate-300">No reading lists yet.</p>
+                    <div className="col-span-full p-8 text-center border-2 border-dashed rounded-xl border-border bg-muted/50">
+                        <ListOrdered className="w-8 h-8 mx-auto text-muted-foreground/50 mb-2" />
+                        <p className="text-sm font-bold text-foreground">No reading lists yet.</p>
                         <p className="text-xs text-muted-foreground mt-1 mb-4">Create curated events to read your comics in the perfect order!</p>
                         <Button variant="outline" size="sm" asChild>
                             <Link href="/reading-lists">Create an Event</Link>
@@ -543,7 +542,7 @@ export default function ProfilePage() {
             </div>
             {readingLists.length > 0 && (
                 <div className="sm:hidden pt-2">
-                    <Button variant="outline" className="w-full dark:border-slate-700" asChild>
+                    <Button variant="outline" className="w-full" asChild>
                         <Link href="/reading-lists">Manage Reading Lists</Link>
                     </Button>
                 </div>
@@ -562,12 +561,12 @@ export default function ProfilePage() {
                         <Button variant="ghost" size="sm" className="h-8 text-xs font-bold text-muted-foreground hover:text-foreground hidden sm:flex" asChild>
                             <Link href="/history">View Full History <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
                         </Button>
-                        <div className="flex items-center gap-2 bg-white dark:bg-slate-900 p-1 rounded-md shadow-sm border dark:border-slate-800">
+                        <div className="flex items-center gap-2 bg-background p-1 rounded-md shadow-sm border">
                             {/* @ts-ignore */}
-                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0 dark:hover:bg-slate-800" onClick={() => setHistoryPage(p => Math.max(0, p - 1))} disabled={historyPage === 0}><ChevronLeft className="h-4 w-4" /></Button>
+                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0" onClick={() => setHistoryPage(p => Math.max(0, p - 1))} disabled={historyPage === 0}><ChevronLeft className="h-4 w-4" /></Button>
                             <span className="text-xs font-mono w-4 text-center">{historyPage + 1}</span>
                             {/* @ts-ignore */}
-                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0 dark:hover:bg-slate-800" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages - 1, p + 1))} disabled={historyPage >= totalHistoryPages - 1}><ChevronRight className="h-4 w-4" /></Button>
+                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages - 1, p + 1))} disabled={historyPage >= totalHistoryPages - 1}><ChevronRight className="h-4 w-4" /></Button>
                         </div>
                     </div>
                 </div>
@@ -577,17 +576,17 @@ export default function ProfilePage() {
                         const coverSource = item.coverUrl || (item.localCoverPath ? `/api/library/cover?path=${encodeURIComponent(item.localCoverPath)}` : null);
                         return (
                             <Link key={item.id} href={`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.folderPath)}`} className="block group">
-                                <Card className="shadow-sm dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-hidden group-hover:border-primary/50 transition-colors h-full">
+                                <Card className="shadow-sm bg-muted/50 overflow-hidden group-hover:border-primary/50 transition-colors h-full">
                                     <CardContent className="p-4 flex items-center gap-4">
-                                        <div className="w-14 h-20 bg-slate-100 dark:bg-slate-800 rounded shrink-0 border dark:border-slate-700 flex items-center justify-center overflow-hidden relative">
+                                        <div className="w-14 h-20 bg-background rounded shrink-0 border flex items-center justify-center overflow-hidden relative">
                                             {coverSource ? <img src={coverSource} className="w-full h-full object-cover absolute inset-0 z-10" alt="" onError={(e) => { e.currentTarget.style.opacity = '0'; }} /> : null}
-                                            <BookOpen className="w-5 h-5 text-slate-400 dark:text-slate-500 absolute z-0" />
+                                            <BookOpen className="w-5 h-5 text-muted-foreground absolute z-0" />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-sm truncate dark:text-slate-200 group-hover:text-primary transition-colors" title={item.seriesName}>{item.seriesName}</p>
+                                            <p className="font-bold text-sm truncate group-hover:text-primary transition-colors" title={item.seriesName}>{item.seriesName}</p>
                                             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mt-0.5">Issue #{item.issueNumber}</p>
                                             <div className="mt-2.5 flex items-center gap-2">
-                                                <div className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden"><div className={`h-full ${item.isCompleted ? 'bg-green-500' : 'bg-primary'}`} style={{ width: `${item.progress}%` }} /></div>
+                                                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden"><div className={`h-full ${item.isCompleted ? 'bg-green-500' : 'bg-primary'}`} style={{ width: `${item.progress}%` }} /></div>
                                                 <span className="text-[9px] font-black text-muted-foreground w-8 text-right">{item.isCompleted ? 'DONE' : `${item.progress}%`}</span>
                                             </div>
                                         </div>
@@ -606,7 +605,7 @@ export default function ProfilePage() {
                 <BookOpen className="w-4 h-4" /> Overall Progress
             </h3>
             
-            <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900/50 overflow-hidden">
+            <Card className="shadow-sm bg-muted/50 overflow-hidden">
                 <CardContent className="p-6">
                     <div className="flex items-center justify-between mb-4">
                         <div className="space-y-1">
@@ -617,15 +616,15 @@ export default function ProfilePage() {
                             {profile?.stats?.historyCompleted || 0} / {profile?.stats?.historyStarted || 0} Finished
                         </Badge>
                     </div>
-                    <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div className="w-full h-3 bg-background rounded-full overflow-hidden">
                         <div className="h-full bg-primary transition-all duration-1000 ease-out" style={{ width: `${profile?.stats?.completionRate || 0}%` }} />
                     </div>
                 </CardContent>
             </Card>
 
             <div className="grid grid-cols-2 gap-4">
-                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><History className="w-5 h-5 text-primary mb-1" /><span className="text-2xl font-black">{profile?.stats?.historyStarted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Started</span></CardContent></Card>
-                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Trophy className="w-5 h-5 text-emerald-500 mb-1" /><span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{profile?.stats?.historyCompleted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Finished</span></CardContent></Card>
+                <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><History className="w-5 h-5 text-primary mb-1" /><span className="text-2xl font-black">{profile?.stats?.historyStarted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Started</span></CardContent></Card>
+                <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Trophy className="w-5 h-5 text-emerald-500 mb-1" /><span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{profile?.stats?.historyCompleted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Finished</span></CardContent></Card>
             </div>
         </div>
 
@@ -634,7 +633,7 @@ export default function ProfilePage() {
                 <Upload className="w-4 h-4" /> Request Statistics
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><ListOrdered className="w-5 h-5 text-slate-400 mb-1" /><span className="text-2xl font-black">{profile?.stats?.total}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total</span></CardContent></Card>
+                <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><ListOrdered className="w-5 h-5 text-muted-foreground mb-1" /><span className="text-2xl font-black">{profile?.stats?.total}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total</span></CardContent></Card>
                 <Card className="shadow-sm border-blue-200 bg-blue-50/30 dark:border-blue-900/30 dark:bg-blue-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Activity className="w-5 h-5 text-blue-500 mb-1" /><span className="text-2xl font-black text-blue-600 dark:text-blue-400">{profile?.stats?.active}</span><span className="text-[10px] font-bold text-blue-800/70 dark:text-blue-400/70 uppercase tracking-wider">Active</span></CardContent></Card>
                 <Card className="shadow-sm border-orange-200 bg-orange-50/30 dark:border-orange-900/30 dark:bg-orange-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Clock className="w-5 h-5 text-orange-500 mb-1" /><span className="text-2xl font-black text-orange-600 dark:text-orange-400">{profile?.stats?.pendingApproval}</span><span className="text-[10px] font-bold text-orange-800/70 dark:text-orange-400/70 uppercase tracking-wider">Pending</span></CardContent></Card>
                 <Card className="shadow-sm border-green-200 bg-green-50/30 dark:border-green-900/30 dark:bg-green-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><CheckCircle2 className="w-5 h-5 text-green-500 mb-1" /><span className="text-2xl font-black text-green-600 dark:text-green-400">{profile?.stats?.completed}</span><span className="text-[10px] font-bold text-green-800/70 dark:text-green-400/70 uppercase tracking-wider">Ready</span></CardContent></Card>
@@ -650,13 +649,13 @@ export default function ProfilePage() {
             {profile?.trophies && profile.trophies.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                     {profile.trophies.map((trophy: any) => (
-                        <Card key={trophy.id} className={`shadow-sm border-2 transition-all ${trophy.earned ? 'border-yellow-400 dark:border-yellow-500/50 bg-yellow-50/10 dark:bg-yellow-900/10 scale-105 z-10' : 'border-slate-200 dark:border-slate-800 opacity-60 grayscale hover:grayscale-0 hover:opacity-100'}`}>
+                        <Card key={trophy.id} className={`shadow-sm border-2 transition-all ${trophy.earned ? 'border-yellow-400 dark:border-yellow-500/50 bg-yellow-50/10 dark:bg-yellow-900/10 scale-105 z-10' : 'border-border opacity-60 grayscale hover:grayscale-0 hover:opacity-100'}`}>
                             <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-2">
-                                <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-inner border ${trophy.earned ? 'bg-yellow-100 border-yellow-200 dark:bg-yellow-900/30 dark:border-yellow-700' : 'bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700'}`}>
-                                    {trophy.iconUrl ? <img src={trophy.iconUrl} alt={trophy.name} className="w-8 h-8 object-contain" /> : <Trophy className={`w-6 h-6 ${trophy.earned ? 'text-yellow-600 dark:text-yellow-500' : 'text-slate-400'}`} />}
+                                <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-inner border ${trophy.earned ? 'bg-yellow-100 border-yellow-200 dark:bg-yellow-900/30 dark:border-yellow-700' : 'bg-muted border-border'}`}>
+                                    {trophy.iconUrl ? <img src={trophy.iconUrl} alt={trophy.name} className="w-8 h-8 object-contain" /> : <Trophy className={`w-6 h-6 ${trophy.earned ? 'text-yellow-600 dark:text-yellow-500' : 'text-muted-foreground'}`} />}
                                 </div>
                                 <div>
-                                    <h4 className="font-bold text-[11px] leading-tight dark:text-slate-200">{trophy.name}</h4>
+                                    <h4 className="font-bold text-[11px] leading-tight text-foreground">{trophy.name}</h4>
                                     <p className="text-[9px] text-muted-foreground mt-0.5">{trophy.description}</p>
                                 </div>
                                 {trophy.earned && trophy.earnedAt && (
@@ -669,7 +668,7 @@ export default function ProfilePage() {
                     ))}
                 </div>
             ) : (
-                <Card className="shadow-sm dark:border-slate-800 dark:bg-slate-900/50 border-dashed">
+                <Card className="shadow-sm bg-muted/30 border-dashed">
                     <CardContent className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center">
                         <Trophy className="w-8 h-8 mb-2 opacity-20" />
                         <p className="text-sm font-bold">No Trophies Available</p>
@@ -679,18 +678,18 @@ export default function ProfilePage() {
             )}
         </div>
 
-        <Card className="shadow-sm dark:border-slate-800">
-            <div className="p-6 border-b dark:border-slate-800 flex items-center justify-between">
+        <Card className="shadow-sm">
+            <div className="p-6 border-b flex items-center justify-between">
                 <div>
-                    <h3 className="text-xl font-bold dark:text-slate-100">Recent Request Activity</h3>
+                    <h3 className="text-xl font-bold">Recent Request Activity</h3>
                     <p className="text-xs text-muted-foreground mt-1">Your latest requests and automated downloads.</p>
                 </div>
-                <Button variant="outline" size="sm" className="hidden sm:flex dark:border-slate-700 dark:hover:bg-slate-900" asChild>
+                <Button variant="outline" size="sm" className="hidden sm:flex" asChild>
                     <Link href="/requests">View All Requests <ArrowRight className="w-4 h-4 ml-2"/></Link>
                 </Button>
             </div>
             <CardContent className="p-0">
-                <div className="divide-y dark:divide-slate-800">
+                <div className="divide-y">
                     {recentReqs.length === 0 ? (
                         <div className="p-10 text-center text-muted-foreground italic">No requests made yet.</div>
                     ) : (
@@ -705,29 +704,29 @@ export default function ProfilePage() {
 
       {/* 2FA SETUP MODAL */}
       <Dialog open={setup2faModalOpen} onOpenChange={setSetup2faModalOpen}>
-          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
+          <DialogContent className="sm:max-w-[425px] rounded-xl">
               <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-blue-500" /> Setup Two-Factor Auth</DialogTitle>
+                  <DialogTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-primary" /> Setup Two-Factor Auth</DialogTitle>
                   <DialogDescription>Use Google Authenticator, Authy, or Bitwarden to scan the code below.</DialogDescription>
               </DialogHeader>
               <div className="py-4 flex flex-col items-center space-y-6">
                   {qrCodeDataUrl ? (
-                      <div className="bg-white p-4 rounded-xl shadow-inner border border-slate-200">
+                      <div className="bg-white p-4 rounded-xl shadow-inner border">
                           <img src={qrCodeDataUrl} alt="QR Code" className="w-48 h-48" />
                       </div>
                   ) : (
-                      <div className="w-48 h-48 bg-slate-100 dark:bg-slate-900 rounded-xl flex items-center justify-center animate-pulse"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>
+                      <div className="w-48 h-48 bg-muted rounded-xl flex items-center justify-center animate-pulse"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
                   )}
 
                   <div className="text-center space-y-1 w-full">
                       <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">Manual Setup Key</p>
-                      <code className="bg-slate-100 dark:bg-slate-900 px-3 py-1.5 rounded-md font-mono text-xs block w-full text-center border dark:border-slate-800 select-all">
+                      <code className="bg-muted px-3 py-1.5 rounded-md font-mono text-xs block w-full text-center border select-all">
                           {totpSecret || 'Loading...'}
                       </code>
                   </div>
 
                   <div className="w-full space-y-2">
-                      <Label htmlFor="verifyCode" className="text-xs font-bold text-slate-500 uppercase tracking-widest">Verify Code</Label>
+                      <Label htmlFor="verifyCode" className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Verify Code</Label>
                       <Input 
                           id="verifyCode" 
                           type="text" 
@@ -737,13 +736,13 @@ export default function ProfilePage() {
                           placeholder="Enter 6-digit code" 
                           value={verifyCode} 
                           onChange={(e) => setVerifyCode(e.target.value)} 
-                          className="h-12 text-center text-2xl font-mono tracking-widest dark:bg-slate-900 dark:border-slate-800" 
+                          className="h-12 text-center text-2xl font-mono tracking-widest bg-muted" 
                       />
                   </div>
               </div>
               <DialogFooter>
                   <Button variant="outline" onClick={() => setSetup2faModalOpen(false)} disabled={isProcessing2fa}>Cancel</Button>
-                  <Button onClick={handleVerifyAndEnable2FA} disabled={isProcessing2fa || verifyCode.length !== 6} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                  <Button onClick={handleVerifyAndEnable2FA} disabled={isProcessing2fa || verifyCode.length !== 6} className="bg-primary text-primary-foreground font-bold hover:bg-primary/90">
                       {isProcessing2fa ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Verify & Enable
                   </Button>
               </DialogFooter>
@@ -752,7 +751,7 @@ export default function ProfilePage() {
 
       {/* 2FA DISABLE MODAL */}
       <Dialog open={disable2faModalOpen} onOpenChange={setDisable2faModalOpen}>
-          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl border-red-200 dark:border-red-900/50">
+          <DialogContent className="sm:max-w-[425px] rounded-xl border-red-200 dark:border-red-900/50">
               <DialogHeader>
                   <DialogTitle className="flex items-center gap-2 text-red-600"><ShieldAlert className="w-5 h-5" /> Disable Two-Factor Auth?</DialogTitle>
                   <DialogDescription>Disabling 2FA will make your account less secure. Are you sure?</DialogDescription>
@@ -768,23 +767,23 @@ export default function ProfilePage() {
 
       {/* PASSWORD RESET MODAL */}
       <Dialog open={passwordModalOpen} onOpenChange={setPasswordModalOpen}>
-          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
+          <DialogContent className="sm:max-w-[425px] rounded-xl">
               <DialogHeader>
                   <DialogTitle className="flex items-center gap-2"><Key className="w-5 h-5 text-primary" /> Change Password</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-4">
                   <div className="space-y-2">
                       <Label>Current Password</Label>
-                      <Input type="password" value={passwords.current} onChange={e => setPasswords({...passwords, current: e.target.value})} className="dark:bg-slate-900" />
+                      <Input type="password" value={passwords.current} onChange={e => setPasswords({...passwords, current: e.target.value})} className="bg-muted" />
                   </div>
                   <div className="space-y-2">
                       <Label>New Password</Label>
-                      <Input type="password" value={passwords.new} onChange={e => setPasswords({...passwords, new: e.target.value})} className="dark:bg-slate-900" />
+                      <Input type="password" value={passwords.new} onChange={e => setPasswords({...passwords, new: e.target.value})} className="bg-muted" />
                       <p className="text-[10px] text-muted-foreground">Must be at least 12 characters.</p>
                   </div>
                   <div className="space-y-2">
                       <Label>Confirm New Password</Label>
-                      <Input type="password" value={passwords.confirm} onChange={e => setPasswords({...passwords, confirm: e.target.value})} className="dark:bg-slate-900" />
+                      <Input type="password" value={passwords.confirm} onChange={e => setPasswords({...passwords, confirm: e.target.value})} className="bg-muted" />
                   </div>
               </div>
               <DialogFooter>
@@ -798,7 +797,7 @@ export default function ProfilePage() {
 
       {/* REVOKE SESSIONS MODAL */}
       <Dialog open={revokeModalOpen} onOpenChange={setRevokeModalOpen}>
-          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800 rounded-xl border-orange-200 dark:border-orange-900/50">
+          <DialogContent className="sm:max-w-[425px] rounded-xl border-orange-200 dark:border-orange-900/50">
               <DialogHeader>
                   <DialogTitle className="flex items-center gap-2 text-orange-600"><ShieldAlert className="w-5 h-5" /> Revoke All Sessions?</DialogTitle>
                   <DialogDescription>

@@ -118,37 +118,49 @@
 
 /* --- CUSTOM COMIC THEMES --- */
 
-/* Vigilante Red */
+/* Vigilante Red (Dark blood red backgrounds) */
 :root[data-theme="vigilante"] {
   --primary: oklch(0.577 0.245 27.325); 
   --primary-foreground: oklch(0.984 0.003 247.858);
   --ring: oklch(0.577 0.245 27.325);
 }
 .dark[data-theme="vigilante"] {
+  --background: oklch(0.14 0.02 20); 
+  --card: oklch(0.18 0.03 20);
+  --border: oklch(0.25 0.04 20);
+  --muted: oklch(0.18 0.03 20);
   --primary: oklch(0.627 0.265 25.4);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.627 0.265 25.4);
 }
 
-/* Krypton Green */
+/* Krypton Green (Deep emerald tinted backgrounds) */
 :root[data-theme="krypton"] {
   --primary: oklch(0.65 0.2 140);
   --primary-foreground: oklch(0.984 0.003 247.858);
   --ring: oklch(0.65 0.2 140);
 }
 .dark[data-theme="krypton"] {
+  --background: oklch(0.14 0.02 150); 
+  --card: oklch(0.18 0.03 150);
+  --border: oklch(0.25 0.04 150);
+  --muted: oklch(0.18 0.03 150);
   --primary: oklch(0.7 0.2 140);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.7 0.2 140);
 }
 
-/* Mutant Yellow */
+/* Mutant Yellow (Warm, amber-tinted backgrounds) */
 :root[data-theme="mutant"] {
   --primary: oklch(0.75 0.18 85);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.75 0.18 85);
 }
 .dark[data-theme="mutant"] {
+  --background: oklch(0.15 0.02 85); 
+  --card: oklch(0.19 0.03 85);
+  --border: oklch(0.26 0.04 85);
+  --muted: oklch(0.19 0.03 85);
   --primary: oklch(0.85 0.18 85);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.85 0.18 85);
@@ -164,21 +176,25 @@
   --primary: oklch(0.984 0.003 247.858);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.984 0.003 247.858);
-  --background: oklch(0 0 0); /* Pure Pitch Black */
-  --card: oklch(0.15 0 0);
-  --border: oklch(0.2 0 0);
-  --muted: oklch(0.15 0 0);
+  --background: oklch(0 0 0); 
+  --card: oklch(0.12 0 0);
+  --border: oklch(0.18 0 0);
+  --muted: oklch(0.12 0 0);
 }
 
-/* Speedster (Red/Gold) */
+/* Speedster (Red backgrounds with Gold accents) */
 :root[data-theme="speedster"] {
   --primary: oklch(0.577 0.245 27.325);
-  --primary-foreground: oklch(0.85 0.18 85); /* Yellow Text */
+  --primary-foreground: oklch(0.85 0.18 85); 
   --ring: oklch(0.85 0.18 85); 
 }
 .dark[data-theme="speedster"] {
-  --primary: oklch(0.577 0.245 27.325);
-  --primary-foreground: oklch(0.85 0.18 85);
+  --background: oklch(0.16 0.04 25); 
+  --card: oklch(0.22 0.06 25);
+  --border: oklch(0.3 0.08 25);
+  --muted: oklch(0.22 0.06 25);
+  --primary: oklch(0.85 0.18 85); /* Gold primary elements */
+  --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.85 0.18 85);
 }
 
@@ -191,29 +207,15 @@
   }
 
   /* --- GLOBAL CURSOR FIX FOR INTERACTIVE ELEMENTS --- */
-  button,
-  a,
-  input[type="button"],
-  input[type="submit"],
-  input[type="reset"],
-  input[type="checkbox"],
-  input[type="radio"],
-  input[type="file"],
-  select,
-  [role="button"],
-  [role="tab"],
-  [role="switch"],
-  [role="menuitem"],
-  [role="option"] {
+  button, a, input[type="button"], input[type="submit"], input[type="reset"],
+  input[type="checkbox"], input[type="radio"], input[type="file"], select,
+  [role="button"], [role="tab"], [role="switch"], [role="menuitem"], [role="option"] {
     @apply cursor-pointer;
   }
 
   /* Override cursor for disabled interactive elements */
-  button:disabled,
-  input:disabled,
-  select:disabled,
-  [aria-disabled="true"],
-  [data-disabled] {
+  button:disabled, input:disabled, select:disabled,
+  [aria-disabled="true"], [data-disabled] {
     @apply cursor-not-allowed opacity-50;
   }
 }

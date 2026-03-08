@@ -198,6 +198,12 @@ export default function SetupWizard() {
                   }).catch(() => {});
               }
 
+              // NEW: Trigger background library scan to index existing files!
+              fetch('/api/admin/jobs/trigger', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ job: 'library' })
+              }).catch(() => {});
+
               toast({ title: "Setup Complete!", description: "Welcome to Omnibus." });
               router.push('/login'); 
           } else {
@@ -487,4 +493,5 @@ export default function SetupWizard() {
       </div>
     </div>
   )
+}
 }

@@ -11,7 +11,7 @@ import {
   Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
-  LayoutGrid, List 
+  LayoutGrid, List, CheckSquare, Square, EyeOff
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -92,6 +92,11 @@ function SeriesContent() {
   const [issueToDelete, setIssueToDelete] = useState<any>(null);
   const [deleteIssueFile, setDeleteIssueFile] = useState(false);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
+
+  // New Selection States for Multi-Select marking
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
+  const [isBulkProcessing, setIsBulkProcessing] = useState(false);
 
   const { toast } = useToast();
 
@@ -499,6 +504,72 @@ function SeriesContent() {
       }
   }
 
+  // --- NEW: Toggle Single Read Status ---
+  const handleToggleRead = async (issue: any, markAsRead: boolean) => {
+    try {
+        await fetch('/api/progress', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filePath: issue.fullPath,
+                currentPage: markAsRead ? 100 : 0,
+                totalPages: 100
+            })
+        });
+
+        setDownloadedIssues(prev => prev.map(i => {
+            if (i.id === issue.id) {
+                return { ...i, isRead: markAsRead, readProgress: markAsRead ? 100 : 0 };
+            }
+            return i;
+        }));
+        
+        if (activeIssue?.id === issue.id) {
+            setActiveIssue((prev: any) => ({ ...prev, isRead: markAsRead, readProgress: markAsRead ? 100 : 0 }));
+        }
+
+        toast({ title: "Success", description: `Issue marked as ${markAsRead ? 'read' : 'unread'}.` });
+    } catch (e) {
+        toast({ title: "Error", description: "Failed to update status.", variant: "destructive" });
+    }
+  }
+
+  // --- NEW: Bulk Progress Update ---
+  const handleBulkProgress = async (markAsRead: boolean) => {
+    setIsBulkProcessing(true);
+    try {
+        const issuesToUpdate = downloadedIssues.filter(i => selectedIssues.has(i.id));
+        const promises = issuesToUpdate.map(issue =>
+            fetch('/api/progress', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filePath: issue.fullPath,
+                    currentPage: markAsRead ? 100 : 0,
+                    totalPages: 100
+                })
+            })
+        );
+
+        await Promise.all(promises);
+
+        setDownloadedIssues(prev => prev.map(i => {
+            if (selectedIssues.has(i.id)) {
+                return { ...i, isRead: markAsRead, readProgress: markAsRead ? 100 : 0 };
+            }
+            return i;
+        }));
+
+        toast({ title: "Bulk Update Success", description: `Marked ${selectedIssues.size} issues as ${markAsRead ? 'read' : 'unread'}.` });
+        setSelectedIssues(new Set());
+        setIsSelectionMode(false);
+    } catch (e) {
+        toast({ title: "Error", description: "Failed to bulk update.", variant: "destructive" });
+    } finally {
+        setIsBulkProcessing(false);
+    }
+  }
+
   const getImageUrl = (imageObj: any) => {
       if (!imageObj) return null;
       if (typeof imageObj === 'string') return imageObj;
@@ -702,6 +773,11 @@ function SeriesContent() {
                   <div className="flex items-center justify-between border-b-2 dark:border-slate-800 pb-4">
                       <h4 className="font-black flex items-center gap-2 text-xl dark:text-slate-200 tracking-tight"><Layers className="w-6 h-6 text-blue-500"/> Downloaded Issues ({downloadedIssues.length})</h4>
                       <div className="flex items-center gap-1 border dark:border-slate-800 rounded-md p-1 bg-white dark:bg-slate-950 shadow-sm shrink-0">
+                          <Button variant={isSelectionMode ? "secondary" : "ghost"} size="sm" className="h-8 px-2 text-xs font-bold" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedIssues(new Set()); }}>
+                              {isSelectionMode ? <Square className="w-4 h-4 sm:mr-1" /> : <CheckSquare className="w-4 h-4 sm:mr-1" />}
+                              <span className="hidden sm:inline">{isSelectionMode ? "Cancel" : "Select"}</span>
+                          </Button>
+                          <div className="w-px h-4 bg-slate-200 dark:bg-slate-700 mx-1" />
                           <Button variant={viewMode === 'grid' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('grid')}><LayoutGrid className="w-4 h-4" /></Button>
                           <Button variant={viewMode === 'list' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('list')}><List className="w-4 h-4" /></Button>
                       </div>
@@ -710,14 +786,28 @@ function SeriesContent() {
                   {viewMode === 'grid' ? (
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-4">
                           {downloadedIssues.map((issue) => {
-                              const isSelected = activeIssue?.id === issue.id;
+                              const isSelected = activeIssue?.id === issue.id || selectedIssues.has(issue.id);
                               const isRead = issue.isRead || (issue.readProgress || 0) >= 100;
                               return (
                                   <div 
                                     key={issue.id} 
-                                    onClick={() => setActiveIssue(issue)}
-                                    className={`flex gap-4 p-4 bg-white dark:bg-slate-900 border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer ${isSelected ? 'border-primary ring-4 ring-primary/10' : 'border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-900'}`}
+                                    onClick={() => {
+                                        if (isSelectionMode) {
+                                            const next = new Set(selectedIssues);
+                                            if (next.has(issue.id)) next.delete(issue.id);
+                                            else next.add(issue.id);
+                                            setSelectedIssues(next);
+                                        } else {
+                                            setActiveIssue(issue);
+                                        }
+                                    }}
+                                    className={`flex gap-4 p-4 bg-white dark:bg-slate-900 border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer ${isSelected ? (isSelectionMode ? 'border-blue-500 ring-2 ring-blue-500/20 scale-[0.98]' : 'border-primary ring-4 ring-primary/10') : 'border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-900'}`}
                                   >
+                                    {isSelectionMode && (
+                                       <div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">
+                                           {selectedIssues.has(issue.id) ? <CheckSquare className="w-5 h-5 text-blue-400" /> : <Square className="w-5 h-5 text-white/80" />}
+                                       </div>
+                                    )}
                                     <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-slate-100 dark:bg-slate-800 border dark:border-slate-700 relative">
                                       {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-slate-300" />}
                                       <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-blue-600 border-0 text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
@@ -726,13 +816,20 @@ function SeriesContent() {
                                     <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
                                       <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'dark:text-slate-200'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
                                       <div className="flex items-center gap-2 mt-3">
-                                        <Button size="sm" variant={isSelected ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => e.stopPropagation()}>
+                                        <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                             <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
                                                 {getReadButtonLabel(issue)}
                                             </Link>
                                         </Button>
-                                        {canDownload && <Button size="sm" variant="secondary" className="h-9 px-3 dark:bg-slate-800" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
-                                        {isAdmin && (
+                                        
+                                        {!isSelectionMode && (
+                                            <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
+                                                {isRead ? <EyeOff className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                                            </Button>
+                                        )}
+
+                                        {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-9 px-3 dark:bg-slate-800" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                        {isAdmin && !isSelectionMode && (
                                             <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200 dark:hover:border-red-900/50" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
                                                 <Trash2 className="w-4 h-4" />
                                             </Button>
@@ -749,6 +846,7 @@ function SeriesContent() {
                               <table className="w-full text-sm text-left">
                                   <thead className="text-xs text-muted-foreground uppercase bg-slate-50 dark:bg-slate-900/50 border-b dark:border-slate-800">
                                       <tr>
+                                          {isSelectionMode && <th className="w-12 px-4 py-3 text-center">Select</th>}
                                           <th className="w-16 px-4 py-3 text-center">Cover</th>
                                           <th className="px-4 py-3">Issue</th>
                                           <th className="px-4 py-3 text-center">Progress</th>
@@ -757,10 +855,28 @@ function SeriesContent() {
                                   </thead>
                                   <tbody className="divide-y dark:divide-slate-800">
                                       {downloadedIssues.map((issue) => {
-                                          const isSelected = activeIssue?.id === issue.id;
+                                          const isSelected = activeIssue?.id === issue.id || selectedIssues.has(issue.id);
                                           const isRead = issue.isRead || (issue.readProgress || 0) >= 100;
                                           return (
-                                              <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={`cursor-pointer transition-colors ${isSelected ? 'bg-blue-50/50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}>
+                                              <tr 
+                                                key={issue.id} 
+                                                onClick={() => {
+                                                    if (isSelectionMode) {
+                                                        const next = new Set(selectedIssues);
+                                                        if (next.has(issue.id)) next.delete(issue.id);
+                                                        else next.add(issue.id);
+                                                        setSelectedIssues(next);
+                                                    } else {
+                                                        setActiveIssue(issue);
+                                                    }
+                                                }} 
+                                                className={`cursor-pointer transition-colors ${isSelected ? (isSelectionMode ? 'bg-blue-50/50 dark:bg-blue-900/20' : 'bg-slate-50 dark:bg-slate-900/50') : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}
+                                              >
+                                                  {isSelectionMode && (
+                                                      <td className="px-4 py-3 text-center">
+                                                          {selectedIssues.has(issue.id) ? <CheckSquare className="w-5 h-5 text-blue-500 mx-auto" /> : <Square className="w-5 h-5 text-slate-300 dark:text-slate-600 mx-auto" />}
+                                                      </td>
+                                                  )}
                                                   <td className="px-4 py-2">
                                                       <div className="w-10 h-14 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden flex items-center justify-center shrink-0 border dark:border-slate-700 relative">
                                                           {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-4 h-4 text-slate-300 dark:text-slate-600" />}
@@ -776,13 +892,18 @@ function SeriesContent() {
                                                   </td>
                                                   <td className="px-4 py-3 text-right">
                                                       <div className="flex items-center justify-end gap-2">
-                                                          <Button size="sm" variant={isSelected ? "default" : "outline"} className="h-8 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => e.stopPropagation()}>
+                                                          {!isSelectionMode && (
+                                                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
+                                                                  {isRead ? <EyeOff className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                                                              </Button>
+                                                          )}
+                                                          <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="h-8 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                                               <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
                                                                   {getReadButtonLabel(issue)}
                                                               </Link>
                                                           </Button>
-                                                          {canDownload && <Button size="sm" variant="secondary" className="h-8 px-3 dark:bg-slate-800 hidden sm:flex" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
-                                                          {isAdmin && (
+                                                          {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-8 px-3 dark:bg-slate-800 hidden sm:flex" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                                          {isAdmin && !isSelectionMode && (
                                                               <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 hidden sm:flex" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
                                                                   <Trash2 className="w-4 h-4" />
                                                               </Button>
@@ -794,6 +915,29 @@ function SeriesContent() {
                                       })}
                                   </tbody>
                               </table>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* BULK SELECTION FLOATING BAR */}
+                  {isSelectionMode && (
+                      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 px-4 sm:px-6 py-3 rounded-full shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] dark:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.7)] flex items-center gap-3 sm:gap-4 z-50 animate-in slide-in-from-bottom-8 border border-slate-200 dark:border-slate-800 w-[95%] sm:w-auto overflow-x-auto">
+                          <Button variant="ghost" size="sm" className="h-10 sm:h-8 shrink-0 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium" onClick={() => {
+                              if (selectedIssues.size === downloadedIssues.length) setSelectedIssues(new Set());
+                              else setSelectedIssues(new Set(downloadedIssues.map(i => i.id)));
+                          }}>
+                              {selectedIssues.size === downloadedIssues.length && downloadedIssues.length > 0 ? "Deselect All" : "Select All"}
+                          </Button>
+                          <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 shrink-0" />
+                          <span className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedIssues.size} Selected</span>
+                          
+                          <div className="flex gap-2 shrink-0">
+                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-slate-600 hover:bg-slate-100' : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(true)}>
+                                  {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Mark Read</span>
+                              </Button>
+                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-slate-600 hover:bg-slate-100' : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(false)}>
+                                  {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <EyeOff className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Mark Unread</span>
+                              </Button>
                           </div>
                       </div>
                   )}

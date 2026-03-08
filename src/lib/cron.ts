@@ -1,7 +1,6 @@
 import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
-import axios from 'axios';
 import { Importer } from './importer';
 import cron from 'node-cron';
 
@@ -83,8 +82,27 @@ export function initCronJobs() {
 
                 if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                     Logger.log(`[Cron] Starting Automated ${logName}...`, "info");
-                    // Force internal loopback routing (127.0.0.1) to bypass QNAP firewall
-                    await axios.post(`http://127.0.0.1:3000/api/admin/jobs/trigger`, { job: jobName }).catch(() => {});
+                    
+                    // FIX: Replaced Axios with native fetch and added fallbacks & logging
+                    try {
+                        const res = await fetch(`http://127.0.0.1:3000/api/admin/jobs/trigger`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ job: jobName })
+                        });
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    } catch (err: any) {
+                        try {
+                            const res2 = await fetch(`http://localhost:3000/api/admin/jobs/trigger`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ job: jobName })
+                            });
+                            if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
+                        } catch (fallbackErr: any) {
+                            Logger.log(`[Cron] Internal Loopback Failed for ${jobName}: ${fallbackErr.message}. Ensure container port 3000 is exposed internally.`, "error");
+                        }
+                    }
                 }
             }
         } catch (error: any) {

@@ -3,7 +3,7 @@ import { Github } from "lucide-react"
 
 export function SiteFooter() {
   return (
-    <footer className="border-t bg-white dark:bg-slate-900 py-6 md:py-0">
+    <footer className="border-t border-border bg-background transition-colors duration-300 py-6 md:py-0">
       <div className="container mx-auto flex flex-col items-center justify-between gap-4 md:h-16 md:flex-row px-6">
         <p className="text-center text-sm leading-loose text-muted-foreground md:text-left">
           Developed by <span className="font-bold text-primary">hanks_cafe</span>.
@@ -20,7 +20,7 @@ export function SiteFooter() {
                 GitHub
             </Link>
             
-            <div className="text-xs text-muted-foreground bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
+            <div className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded-md">
                 v1.0.0-beta.2
             </div>
         </div>

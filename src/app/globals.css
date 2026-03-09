@@ -118,49 +118,67 @@
 
 /* --- CUSTOM COMIC THEMES --- */
 
-/* Vigilante Red (Dark blood red backgrounds) */
+/* Vigilante Red */
 :root[data-theme="vigilante"] {
   --primary: oklch(0.577 0.245 27.325); 
   --primary-foreground: oklch(0.984 0.003 247.858);
   --ring: oklch(0.577 0.245 27.325);
+  --accent: oklch(0.95 0.02 20);
+  --accent-foreground: oklch(0.577 0.245 27.325);
 }
 .dark[data-theme="vigilante"] {
   --background: oklch(0.14 0.02 20); 
   --card: oklch(0.18 0.03 20);
+  --popover: oklch(0.18 0.03 20);
   --border: oklch(0.25 0.04 20);
+  --input: oklch(0.25 0.04 20);
   --muted: oklch(0.18 0.03 20);
+  --accent: oklch(0.22 0.04 20);
+  --accent-foreground: oklch(0.627 0.265 25.4);
   --primary: oklch(0.627 0.265 25.4);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.627 0.265 25.4);
 }
 
-/* Krypton Green (Deep emerald tinted backgrounds) */
+/* Krypton Green */
 :root[data-theme="krypton"] {
   --primary: oklch(0.65 0.2 140);
   --primary-foreground: oklch(0.984 0.003 247.858);
   --ring: oklch(0.65 0.2 140);
+  --accent: oklch(0.95 0.03 140);
+  --accent-foreground: oklch(0.65 0.2 140);
 }
 .dark[data-theme="krypton"] {
   --background: oklch(0.14 0.02 150); 
   --card: oklch(0.18 0.03 150);
+  --popover: oklch(0.18 0.03 150);
   --border: oklch(0.25 0.04 150);
+  --input: oklch(0.25 0.04 150);
   --muted: oklch(0.18 0.03 150);
+  --accent: oklch(0.22 0.04 150);
+  --accent-foreground: oklch(0.7 0.2 140);
   --primary: oklch(0.7 0.2 140);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.7 0.2 140);
 }
 
-/* Mutant Yellow (Warm, amber-tinted backgrounds) */
+/* Mutant Yellow */
 :root[data-theme="mutant"] {
   --primary: oklch(0.75 0.18 85);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.75 0.18 85);
+  --accent: oklch(0.95 0.04 85);
+  --accent-foreground: oklch(0.6 0.15 85);
 }
 .dark[data-theme="mutant"] {
   --background: oklch(0.15 0.02 85); 
   --card: oklch(0.19 0.03 85);
+  --popover: oklch(0.19 0.03 85);
   --border: oklch(0.26 0.04 85);
+  --input: oklch(0.26 0.04 85);
   --muted: oklch(0.19 0.03 85);
+  --accent: oklch(0.23 0.05 85);
+  --accent-foreground: oklch(0.85 0.18 85);
   --primary: oklch(0.85 0.18 85);
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.85 0.18 85);
@@ -171,6 +189,8 @@
   --primary: oklch(0.1 0 0); 
   --primary-foreground: oklch(0.984 0.003 247.858);
   --ring: oklch(0.1 0 0);
+  --accent: oklch(0.95 0 0);
+  --accent-foreground: oklch(0.1 0 0);
 }
 .dark[data-theme="symbiote"] {
   --primary: oklch(0.984 0.003 247.858);
@@ -178,8 +198,12 @@
   --ring: oklch(0.984 0.003 247.858);
   --background: oklch(0 0 0); 
   --card: oklch(0.12 0 0);
+  --popover: oklch(0.12 0 0);
   --border: oklch(0.18 0 0);
+  --input: oklch(0.18 0 0);
   --muted: oklch(0.12 0 0);
+  --accent: oklch(0.18 0 0);
+  --accent-foreground: oklch(0.984 0.003 247.858);
 }
 
 /* Speedster (Red backgrounds with Gold accents) */
@@ -187,13 +211,19 @@
   --primary: oklch(0.577 0.245 27.325);
   --primary-foreground: oklch(0.85 0.18 85); 
   --ring: oklch(0.85 0.18 85); 
+  --accent: oklch(0.95 0.03 25);
+  --accent-foreground: oklch(0.577 0.245 27.325);
 }
 .dark[data-theme="speedster"] {
   --background: oklch(0.16 0.04 25); 
   --card: oklch(0.22 0.06 25);
+  --popover: oklch(0.22 0.06 25);
   --border: oklch(0.3 0.08 25);
+  --input: oklch(0.3 0.08 25);
   --muted: oklch(0.22 0.06 25);
-  --primary: oklch(0.85 0.18 85); /* Gold primary elements */
+  --accent: oklch(0.28 0.08 25);
+  --accent-foreground: oklch(0.85 0.18 85);
+  --primary: oklch(0.85 0.18 85); 
   --primary-foreground: oklch(0.129 0.042 264.695);
   --ring: oklch(0.85 0.18 85);
 }

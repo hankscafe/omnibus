@@ -79,27 +79,31 @@ export default function AdminReportsPage() {
   }
 
   if (loading) {
-    return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
+    return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
   }
 
   const openReports = reports.filter(r => r.status === 'OPEN')
   const closedReports = reports.filter(r => r.status === 'CLOSED')
 
   return (
-    <div className="container mx-auto py-10 px-6 max-w-5xl space-y-8">
+    <div className="container mx-auto py-10 px-6 max-w-5xl space-y-8 transition-colors duration-300">
       
       <div className="flex items-center gap-4">
-        <Link href="/admin"><Button variant="ghost" size="icon"><ArrowLeft className="w-5 h-5" /></Button></Link>
-        <h1 className="text-3xl font-bold tracking-tight">Issue Reports</h1>
+        <Link href="/admin">
+          <Button variant="ghost" size="icon" className="hover:bg-muted text-foreground">
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+        </Link>
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">Issue Reports</h1>
       </div>
 
       <div className="space-y-6">
-        <h2 className="text-xl font-bold flex items-center gap-2 border-b dark:border-slate-800 pb-2">
+        <h2 className="text-xl font-bold flex items-center gap-2 border-b border-border pb-2 text-foreground">
             <AlertTriangle className="w-5 h-5 text-red-500" /> Active Reports ({openReports.length})
         </h2>
         
         {openReports.length === 0 ? (
-            <div className="p-10 text-center text-muted-foreground border-2 border-dashed rounded-xl dark:border-slate-800">
+            <div className="p-10 text-center text-muted-foreground border-2 border-dashed rounded-xl border-border bg-muted/30">
                 No active issue reports. You're all caught up!
             </div>
         ) : (
@@ -109,18 +113,24 @@ export default function AdminReportsPage() {
                         <CardContent className="p-4 sm:p-6 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
                             <div className="space-y-2 flex-1">
                                 <div className="flex items-center gap-2">
-                                    <h3 className="font-bold text-lg leading-tight dark:text-slate-100">{report.series?.name || "Unknown Series"}</h3>
-                                    <Badge variant="destructive" className="text-[10px] uppercase">Needs Review</Badge>
+                                    <h3 className="font-bold text-lg leading-tight text-foreground">{report.series?.name || "Unknown Series"}</h3>
+                                    <Badge variant="destructive" className="text-[10px] uppercase font-bold border-none">Needs Review</Badge>
                                 </div>
-                                <p className="text-sm dark:text-slate-300 bg-white dark:bg-slate-900 p-3 rounded border dark:border-slate-800">"{report.description}"</p>
+                                <p className="text-sm text-foreground/80 bg-background p-3 rounded border border-border">"{report.description}"</p>
                                 <div className="flex flex-wrap gap-x-4 gap-y-2 text-[10px] text-muted-foreground pt-1">
-                                    <span className="flex items-center gap-1"><User className="w-3 h-3" /> Reported by: {report.user?.username || "Unknown"}</span>
-                                    <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {new Date(report.createdAt).toLocaleString()}</span>
+                                    <span className="flex items-center gap-1 font-medium"><User className="w-3 h-3 text-primary" /> Reported by: {report.user?.username || "Unknown"}</span>
+                                    <span className="flex items-center gap-1 font-medium"><Calendar className="w-3 h-3" /> {new Date(report.createdAt).toLocaleString()}</span>
                                 </div>
                             </div>
                             <div className="flex flex-col gap-2 w-full sm:w-auto shrink-0">
-                                <Button asChild variant="outline" className="w-full sm:w-32"><Link href={`/library/series?path=${encodeURIComponent(report.series?.folderPath)}`}><BookOpen className="w-4 h-4 mr-2" /> View Series</Link></Button>
-                                <Button onClick={() => openResolveModal(report)} className="w-full sm:w-32 bg-green-600 hover:bg-green-700 text-white"><CheckCircle2 className="w-4 h-4 mr-2" /> Resolve</Button>
+                                <Button asChild variant="outline" className="w-full sm:w-32 border-border hover:bg-muted font-bold transition-colors">
+                                  <Link href={`/library/series?path=${encodeURIComponent(report.series?.folderPath)}`}>
+                                    <BookOpen className="w-4 h-4 mr-2" /> View Series
+                                  </Link>
+                                </Button>
+                                <Button onClick={() => openResolveModal(report)} className="w-full sm:w-32 bg-green-600 hover:bg-green-700 text-white font-bold shadow-md">
+                                  <CheckCircle2 className="w-4 h-4 mr-2" /> Resolve
+                                </Button>
                             </div>
                         </CardContent>
                     </Card>
@@ -130,22 +140,22 @@ export default function AdminReportsPage() {
       </div>
 
       <div className="space-y-6 pt-10">
-        <h2 className="text-xl font-bold flex items-center gap-2 border-b dark:border-slate-800 pb-2 text-muted-foreground">
+        <h2 className="text-xl font-bold flex items-center gap-2 border-b border-border pb-2 text-muted-foreground">
             <CheckCircle2 className="w-5 h-5" /> Resolved Reports
         </h2>
         <div className="grid gap-4 opacity-70">
             {closedReports.map(report => (
-                <Card key={report.id} className="shadow-none border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
+                <Card key={report.id} className="shadow-none border-border bg-muted/20">
                     <CardContent className="p-4 flex flex-col gap-2">
                         <div className="flex items-center justify-between">
-                            <h3 className="font-bold text-sm dark:text-slate-300">{report.series?.name}</h3>
-                            <span className="text-[10px] text-muted-foreground">{new Date(report.updatedAt).toLocaleDateString()}</span>
+                            <h3 className="font-bold text-sm text-foreground/70">{report.series?.name}</h3>
+                            <span className="text-[10px] text-muted-foreground font-mono">{new Date(report.updatedAt).toLocaleDateString()}</span>
                         </div>
                         <p className="text-xs text-muted-foreground italic">"{report.description}"</p>
                         {report.adminComment && (
-                            <div className="mt-2 bg-slate-100 dark:bg-slate-800 p-2 rounded text-xs flex gap-2 border dark:border-slate-700">
-                                <MessageSquare className="w-3.5 h-3.5 shrink-0 mt-0.5 text-blue-500" />
-                                <span className="dark:text-slate-300"><strong>Admin Reply:</strong> {report.adminComment}</span>
+                            <div className="mt-2 bg-muted p-2 rounded text-xs flex gap-2 border border-border">
+                                <MessageSquare className="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" />
+                                <span className="text-foreground/80"><strong>Admin Reply:</strong> {report.adminComment}</span>
                             </div>
                         )}
                     </CardContent>
@@ -155,28 +165,28 @@ export default function AdminReportsPage() {
       </div>
 
       <Dialog open={resolveModalOpen} onOpenChange={setResolveModalOpen}>
-        <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800">
+        <DialogContent className="sm:max-w-[425px] bg-background border-border rounded-xl">
             <DialogHeader>
-                <DialogTitle>Resolve Issue Report</DialogTitle>
-                <DialogDescription>
+                <DialogTitle className="text-foreground">Resolve Issue Report</DialogTitle>
+                <DialogDescription className="text-muted-foreground">
                     Mark this report for <strong className="text-primary">{selectedReport?.series?.name}</strong> as fixed.
                 </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
                 <div className="space-y-2">
-                    <Label>Message to User (Optional)</Label>
+                    <Label className="text-foreground">Message to User (Optional)</Label>
                     <Textarea 
                         placeholder="e.g. Thanks for letting us know! The files have been re-downloaded." 
                         value={adminComment} 
                         onChange={e => setAdminComment(e.target.value)}
-                        className="h-24 dark:bg-slate-900 dark:border-slate-800"
+                        className="h-24 bg-background border-border text-foreground focus-visible:ring-primary"
                     />
                     <p className="text-[10px] text-muted-foreground">This message will appear in their notification bell.</p>
                 </div>
             </div>
             <DialogFooter>
-                <Button variant="outline" onClick={() => setResolveModalOpen(false)} disabled={resolving}>Cancel</Button>
-                <Button onClick={handleResolveSubmit} disabled={resolving} className="bg-green-600 hover:bg-green-700 text-white">
+                <Button variant="outline" className="border-border hover:bg-muted" onClick={() => setResolveModalOpen(false)} disabled={resolving}>Cancel</Button>
+                <Button onClick={handleResolveSubmit} disabled={resolving} className="bg-green-600 hover:bg-green-700 text-white font-bold">
                     {resolving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                     Close Issue
                 </Button>

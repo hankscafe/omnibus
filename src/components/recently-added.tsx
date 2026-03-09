@@ -26,28 +26,26 @@ export function RecentlyAdded() {
   return (
     <div className="space-y-4 pt-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold tracking-tight">Recently Added</h2>
-        <Link 
-            href="/library" 
-            className="group flex items-center gap-1 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
-        >
-            View Library
-            <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
-        </Link>
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">Recently Added</h2>
+        <Button asChild variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 group font-bold hidden sm:flex">
+            <Link href="/library">
+                View Library <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+            </Link>
+        </Button>
       </div>
       
       <div className="flex overflow-x-auto gap-4 pb-6 pt-4 px-2 snap-x no-scrollbar -mx-2">
         {items.map((item) => (
             <div 
               key={item.id} 
-              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-all cursor-pointer dark:border dark:border-slate-800 snap-start"
+              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-all cursor-pointer border border-border snap-start"
               onClick={() => router.push(`/library/series?path=${encodeURIComponent(item.path)}`)}
             >
               {item.coverUrl ? (
                   <img src={item.coverUrl} alt={item.name} className="object-cover w-full h-full" />
               ) : (
                   <div className="w-full h-full flex items-center justify-center">
-                      <ImageIcon className="w-8 h-8 text-slate-300 dark:text-slate-600" />
+                      <ImageIcon className="w-8 h-8 text-muted-foreground/50" />
                   </div>
               )}
 
@@ -66,7 +64,7 @@ export function RecentlyAdded() {
                   
                   <Button 
                       size="sm" 
-                      className="w-full font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-md border-0" 
+                      className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
                       onClick={(e) => {
                           e.stopPropagation();
                           router.push(`/library/series?path=${encodeURIComponent(item.path)}`);
@@ -77,6 +75,14 @@ export function RecentlyAdded() {
               </div>
             </div>
         ))}
+      </div>
+
+      <div className="sm:hidden pt-2">
+        <Button asChild variant="outline" className="w-full border-primary/50 text-primary hover:bg-primary/10 group font-bold">
+            <Link href="/library">
+                View Library <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+            </Link>
+        </Button>
       </div>
     </div>
   );

@@ -105,11 +105,11 @@ export default function LogsPage() {
   const getJobIcon = (type: string) => {
       switch(type) {
           case 'DIAGNOSTICS': return <ShieldAlert className="w-4 h-4 text-red-500" />;
-          case 'LIBRARY_SCAN': return <Database className="w-4 h-4 text-indigo-500" />;
+          case 'LIBRARY_SCAN': return <Database className="w-4 h-4 text-primary" />;
           case 'METADATA_SYNC': return <RefreshCw className="w-4 h-4 text-green-500" />;
           case 'SERIES_MONITOR': return <Activity className="w-4 h-4 text-orange-500" />;
-          case 'DOWNLOAD_RETRY': return <Clock className="w-4 h-4 text-blue-500" />;
-          default: return <History className="w-4 h-4 text-slate-400" />;
+          case 'DOWNLOAD_RETRY': return <Clock className="w-4 h-4 text-primary" />;
+          default: return <History className="w-4 h-4 text-muted-foreground" />;
       }
   }
 
@@ -137,41 +137,47 @@ export default function LogsPage() {
   const uniqueJobTypes = useMemo(() => Array.from(new Set(jobLogs.map(l => l.jobType))), [jobLogs]);
 
   return (
-    <div className="container mx-auto py-10 px-6 max-w-6xl space-y-6">
+    <div className="container mx-auto py-10 px-6 max-w-6xl space-y-6 transition-colors duration-300">
       
       <div className="flex items-center gap-4">
-        <Link href="/admin"><Button variant="ghost" size="icon" className="dark:hover:bg-slate-800"><ArrowLeft /></Button></Link>
-        <h1 className="text-3xl font-bold">System Logs</h1>
+        <Link href="/admin"><Button variant="ghost" size="icon" className="hover:bg-muted text-foreground"><ArrowLeft /></Button></Link>
+        <h1 className="text-3xl font-bold text-foreground">System Logs</h1>
       </div>
 
       <Tabs defaultValue="live" className="w-full">
-        <TabsList className="grid w-full max-w-md grid-cols-2">
-            <TabsTrigger value="live" className="flex gap-2"><Terminal className="w-4 h-4"/> Live Terminal</TabsTrigger>
-            <TabsTrigger value="history" className="flex gap-2" onClick={fetchJobLogs}><History className="w-4 h-4"/> Job History</TabsTrigger>
+        <TabsList className="grid w-full max-w-md grid-cols-2 bg-muted border border-border p-1">
+            <TabsTrigger value="live" className="flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary"><Terminal className="w-4 h-4"/> Live Terminal</TabsTrigger>
+            <TabsTrigger value="history" className="flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary" onClick={fetchJobLogs}><History className="w-4 h-4"/> Job History</TabsTrigger>
         </TabsList>
 
         {/* --- LIVE TERMINAL TAB --- */}
-        <TabsContent value="live" className="space-y-4 mt-6">
+        <TabsContent value="live" className="space-y-4 mt-6 animate-in fade-in slide-in-from-bottom-2">
             <div className="flex justify-between items-end">
                 <p className="text-sm text-muted-foreground">Real-time output from the backend server.</p>
-                <Button variant="outline" size="sm" onClick={() => setClearLiveConfirmOpen(true)} className="dark:border-slate-800 dark:hover:bg-slate-900">
+                <Button variant="outline" size="sm" onClick={() => setClearLiveConfirmOpen(true)} className="border-border hover:bg-muted font-bold">
                     <Trash2 className="w-4 h-4 mr-2" /> Clear Terminal
                 </Button>
             </div>
-            <Card className="bg-slate-950 border-slate-800 shadow-2xl">
-                <CardHeader className="border-b border-slate-800 pb-4">
-                    <CardTitle className="text-slate-400 text-sm flex items-center gap-2">
+            {/* UPDATED TERMINAL CONTAINER: Using dynamic bg-muted and border-primary/20 */}
+            <Card className="bg-muted border-primary/20 shadow-2xl overflow-hidden transition-colors duration-300">
+                <CardHeader className="border-b border-primary/10 pb-4 bg-background/50">
+                    <CardTitle className="text-primary text-sm flex items-center gap-2">
                         <Terminal className="w-4 h-4" /> Live Terminal Output
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="p-0">
-                    <div className="h-[600px] overflow-y-auto p-4 font-mono text-xs space-y-1">
-                        {liveLogs.length === 0 && <p className="text-slate-600 italic">Waiting for system activity...</p>}
+                    <div className="h-[600px] overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-primary/20">
+                        {liveLogs.length === 0 && <p className="text-muted-foreground italic">Waiting for system activity...</p>}
                         {liveLogs.map((log, i) => (
-                        <div key={i} className="flex gap-3 border-b border-slate-900/50 py-1">
-                            <span className="text-slate-600 shrink-0">[{log.timestamp}]</span>
-                            <span className={log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'warn' ? 'text-orange-400' : 'text-slate-300'}>
-                            {log.message}
+                        <div key={i} className="flex gap-3 border-b border-primary/5 py-1 transition-colors hover:bg-primary/5">
+                            <span className="text-muted-foreground shrink-0">[{log.timestamp}]</span>
+                            <span className={
+                                log.type === 'error' ? 'text-red-500 font-bold' : 
+                                log.type === 'success' ? 'text-green-600 dark:text-green-400 font-bold' : 
+                                log.type === 'warn' ? 'text-orange-500' : 
+                                'text-foreground'
+                            }>
+                                {log.message}
                             </span>
                         </div>
                         ))}
@@ -181,49 +187,49 @@ export default function LogsPage() {
         </TabsContent>
 
         {/* --- STORED JOB HISTORY TAB --- */}
-        <TabsContent value="history" className="space-y-4 mt-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-50 dark:bg-slate-900/50 p-4 rounded-lg border dark:border-slate-800">
+        <TabsContent value="history" className="space-y-4 mt-6 animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-muted/50 p-4 rounded-lg border border-border">
                 <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
                     <Select value={typeFilter} onValueChange={setTypeFilter}>
-                        <SelectTrigger className="w-full sm:w-[200px] bg-white dark:bg-slate-950 dark:border-slate-800">
+                        <SelectTrigger className="w-full sm:w-[200px] bg-background border-border text-foreground h-10">
                             <SelectValue placeholder="All Job Types" />
                         </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="ALL">All Job Types</SelectItem>
-                            {uniqueJobTypes.map(t => <SelectItem key={t} value={t}>{formatJobType(t)}</SelectItem>)}
+                        <SelectContent className="bg-popover border-border">
+                            <SelectItem value="ALL" className="focus:bg-primary/10 focus:text-primary">All Job Types</SelectItem>
+                            {uniqueJobTypes.map(t => <SelectItem key={t} value={t} className="focus:bg-primary/10 focus:text-primary">{formatJobType(t)}</SelectItem>)}
                         </SelectContent>
                     </Select>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="w-full sm:w-[180px] bg-white dark:bg-slate-950 dark:border-slate-800">
+                        <SelectTrigger className="w-full sm:w-[180px] bg-background border-border text-foreground h-10">
                             <SelectValue placeholder="All Statuses" />
                         </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="ALL">All Statuses</SelectItem>
-                            <SelectItem value="COMPLETED">Completed</SelectItem>
-                            <SelectItem value="COMPLETED_WITH_ERRORS">Completed (Errors)</SelectItem>
-                            <SelectItem value="FAILED">Failed</SelectItem>
-                            <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
+                        <SelectContent className="bg-popover border-border">
+                            <SelectItem value="ALL" className="focus:bg-primary/10 focus:text-primary">All Statuses</SelectItem>
+                            <SelectItem value="COMPLETED" className="focus:bg-primary/10 focus:text-primary">Completed</SelectItem>
+                            <SelectItem value="COMPLETED_WITH_ERRORS" className="focus:bg-primary/10 focus:text-primary">Completed (Errors)</SelectItem>
+                            <SelectItem value="FAILED" className="focus:bg-primary/10 focus:text-primary">Failed</SelectItem>
+                            <SelectItem value="IN_PROGRESS" className="focus:bg-primary/10 focus:text-primary">In Progress</SelectItem>
                         </SelectContent>
                     </Select>
-                    <Button variant="ghost" size="sm" onClick={fetchJobLogs} className="text-blue-500">
+                    <Button variant="ghost" size="sm" onClick={fetchJobLogs} className="text-primary hover:bg-primary/10 font-bold">
                         <RefreshCw className={`w-4 h-4 mr-1 ${loadingJobs ? 'animate-spin' : ''}`} /> Refresh
                     </Button>
                 </div>
                 
                 <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setPurgeOldConfirmOpen(true)} className="dark:border-slate-800 dark:hover:bg-slate-900 text-orange-500 hover:text-orange-600 shrink-0">
+                    <Button variant="outline" size="sm" onClick={() => setPurgeOldConfirmOpen(true)} className="border-border hover:bg-muted text-orange-500 hover:text-orange-600 shrink-0 font-bold h-10">
                         <CalendarMinus className="w-4 h-4 mr-2" /> Purge &gt; 7 Days
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setClearHistoryConfirmOpen(true)} className="dark:border-slate-800 dark:hover:bg-slate-900 text-red-500 hover:text-red-600 shrink-0">
+                    <Button variant="outline" size="sm" onClick={() => setClearHistoryConfirmOpen(true)} className="border-border hover:bg-muted text-red-500 hover:text-red-600 shrink-0 font-bold h-10">
                         <Trash2 className="w-4 h-4 mr-2" /> Delete All
                     </Button>
                 </div>
             </div>
 
-            <div className="border dark:border-slate-800 rounded-lg overflow-hidden bg-white dark:bg-slate-950 shadow-sm">
+            <div className="border border-border rounded-lg overflow-hidden bg-background shadow-sm">
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-muted-foreground uppercase bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800">
+                        <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border">
                             <tr>
                                 <th className="px-4 py-3">Date & Time</th>
                                 <th className="px-4 py-3">Job Type</th>
@@ -233,19 +239,19 @@ export default function LogsPage() {
                                 <th className="px-4 py-3 text-right">Actions</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y dark:divide-slate-800">
+                        <tbody className="divide-y divide-border">
                             {loadingJobs ? (
-                                <tr><td colSpan={6} className="text-center py-10"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
+                                <tr><td colSpan={6} className="text-center py-10"><Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" /></td></tr>
                             ) : filteredJobs.length === 0 ? (
                                 <tr><td colSpan={6} className="text-center py-10 text-muted-foreground italic">No historical job logs found.</td></tr>
                             ) : (
                                 filteredJobs.map((log) => (
-                                    <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50 transition-colors">
-                                        <td className="px-4 py-3 font-medium whitespace-nowrap text-xs text-slate-500">
+                                    <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                                        <td className="px-4 py-3 font-medium whitespace-nowrap text-xs text-muted-foreground">
                                             {new Date(log.createdAt).toLocaleString()}
                                         </td>
                                         <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2 font-semibold dark:text-slate-200">
+                                            <div className="flex items-center gap-2 font-semibold text-foreground">
                                                 {getJobIcon(log.jobType)}
                                                 {formatJobType(log.jobType)}
                                             </div>
@@ -254,20 +260,20 @@ export default function LogsPage() {
                                             {log.status === 'COMPLETED' && <Badge variant="outline" className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-none px-2 py-0.5"><CheckCircle2 className="w-3 h-3 mr-1"/> Success</Badge>}
                                             {log.status === 'FAILED' && <Badge variant="outline" className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-none px-2 py-0.5"><AlertTriangle className="w-3 h-3 mr-1"/> Failed</Badge>}
                                             {log.status === 'COMPLETED_WITH_ERRORS' && <Badge variant="outline" className="bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-none px-2 py-0.5"><AlertTriangle className="w-3 h-3 mr-1"/> Warnings</Badge>}
-                                            {log.status === 'IN_PROGRESS' && <Badge variant="outline" className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-none px-2 py-0.5"><Loader2 className="w-3 h-3 mr-1 animate-spin"/> Active</Badge>}
+                                            {log.status === 'IN_PROGRESS' && <Badge variant="outline" className="bg-primary/10 text-primary border-none px-2 py-0.5"><Loader2 className="w-3 h-3 mr-1 animate-spin"/> Active</Badge>}
                                         </td>
                                         <td className="px-4 py-3 text-muted-foreground truncate max-w-[200px]" title={log.relatedItem || ''}>
                                             {log.relatedItem || '-'}
                                         </td>
-                                        <td className="px-4 py-3 text-center font-mono text-xs text-slate-500">
+                                        <td className="px-4 py-3 text-center font-mono text-xs text-muted-foreground">
                                             {formatDuration(log.durationMs)}
                                         </td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center justify-end gap-1">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800" onClick={() => setSelectedLogDetails(log)} title="View Details">
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-primary hover:bg-primary/10" onClick={() => setSelectedLogDetails(log)} title="View Details">
                                                     <Eye className="w-4 h-4" />
                                                 </Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => downloadLog(log)} title="Download Output">
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-foreground hover:bg-muted" onClick={() => downloadLog(log)} title="Download Output">
                                                     <Download className="w-4 h-4" />
                                                 </Button>
                                             </div>
@@ -284,29 +290,29 @@ export default function LogsPage() {
 
       {/* Details Modal */}
       <Dialog open={!!selectedLogDetails} onOpenChange={() => setSelectedLogDetails(null)}>
-        <DialogContent className="sm:max-w-3xl dark:bg-slate-950 dark:border-slate-800">
+        <DialogContent className="sm:max-w-3xl bg-background border-border rounded-xl">
             <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
+                <DialogTitle className="flex items-center gap-2 text-foreground">
                     {selectedLogDetails && getJobIcon(selectedLogDetails.jobType)}
                     {selectedLogDetails ? formatJobType(selectedLogDetails.jobType) : 'Log Details'}
                 </DialogTitle>
-                <DialogDescription>
+                <DialogDescription className="text-muted-foreground">
                     Executed on {selectedLogDetails ? new Date(selectedLogDetails.createdAt).toLocaleString() : ''}
                 </DialogDescription>
             </DialogHeader>
             
             {selectedLogDetails && (
                 <div className="space-y-4">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-slate-50 dark:bg-slate-900 p-4 rounded-md border dark:border-slate-800">
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Status</span><span className="font-semibold">{selectedLogDetails.status.replace(/_/g, ' ')}</span></div>
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Target</span><span className="font-semibold truncate">{selectedLogDetails.relatedItem || 'Global'}</span></div>
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Duration</span><span className="font-mono">{formatDuration(selectedLogDetails.durationMs)}</span></div>
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Trigger</span><span className="font-semibold">{selectedLogDetails.durationMs > 0 ? 'Automatic/UI' : 'Heartbeat'}</span></div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-muted/50 p-4 rounded-md border border-border">
+                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Status</span><span className="font-semibold text-foreground">{selectedLogDetails.status.replace(/_/g, ' ')}</span></div>
+                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Target</span><span className="font-semibold truncate text-foreground">{selectedLogDetails.relatedItem || 'Global'}</span></div>
+                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Duration</span><span className="font-mono text-foreground">{formatDuration(selectedLogDetails.durationMs)}</span></div>
+                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Trigger</span><span className="font-semibold text-foreground">{selectedLogDetails.durationMs > 0 ? 'Automatic/UI' : 'Heartbeat'}</span></div>
                     </div>
                     
                     <div className="space-y-2">
                         <Label className="uppercase text-[10px] font-black text-muted-foreground">Detailed Output Trace</Label>
-                        <div className="bg-slate-950 rounded-md p-4 max-h-[400px] overflow-y-auto border border-slate-800 shadow-inner">
+                        <div className="bg-slate-950 rounded-md p-4 max-h-[400px] overflow-y-auto border border-white/10 shadow-inner">
                             <pre className="text-xs text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">
                                 {selectedLogDetails.message || "No detailed output provided for this job."}
                             </pre>
@@ -315,10 +321,10 @@ export default function LogsPage() {
                 </div>
             )}
             <DialogFooter className="gap-2">
-                <Button variant="outline" onClick={() => downloadLog(selectedLogDetails)}>
+                <Button variant="outline" className="border-border hover:bg-muted font-bold" onClick={() => downloadLog(selectedLogDetails)}>
                     <Download className="w-4 h-4 mr-2" /> Download TXT
                 </Button>
-                <Button onClick={() => setSelectedLogDetails(null)}>Close Details</Button>
+                <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => setSelectedLogDetails(null)}>Close Details</Button>
             </DialogFooter>
         </DialogContent>
       </Dialog>

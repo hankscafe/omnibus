@@ -25,17 +25,17 @@ function SeriesDetailSkeleton() {
   return (
     <div className="animate-pulse space-y-8">
       <div className="space-y-3">
-        <div className="h-9 w-64 bg-slate-200 dark:bg-slate-800 rounded" />
+        <div className="h-9 w-64 bg-muted rounded" />
         <div className="flex gap-3">
-          <div className="h-5 w-20 bg-slate-200 dark:bg-slate-800 rounded-full" />
-          <div className="h-5 w-32 bg-slate-200 dark:bg-slate-800 rounded-full" />
+          <div className="h-5 w-20 bg-muted rounded-full" />
+          <div className="h-5 w-32 bg-muted rounded-full" />
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-10">
-        <div className="aspect-[2/3] w-full bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+        <div className="aspect-[2/3] w-full bg-muted rounded-2xl" />
         <div className="space-y-6">
-          <div className="h-40 w-full bg-slate-200 dark:bg-slate-800 rounded-2xl" />
-          <div className="h-60 w-full bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+          <div className="h-40 w-full bg-muted rounded-2xl" />
+          <div className="h-60 w-full bg-muted rounded-2xl" />
         </div>
       </div>
     </div>
@@ -583,10 +583,10 @@ function SeriesContent() {
     return "Read";
   };
 
-  if (!folderPath) return <div className="p-10 text-center dark:text-slate-400">No series selected.</div>;
+  if (!folderPath) return <div className="p-10 text-center text-muted-foreground">No series selected.</div>;
 
   return (
-    <div className="container mx-auto py-10 px-6 max-w-[1400px]">
+    <div className="container mx-auto py-10 px-6 max-w-[1400px] transition-colors duration-300">
       <Button variant="ghost" asChild className="mb-6 -ml-4 text-muted-foreground hover:text-foreground">
           <Link href="/library"><ChevronLeft className="w-4 h-4 mr-1" /> Back to Library</Link>
       </Button>
@@ -601,31 +601,31 @@ function SeriesContent() {
                   
                   {(seriesInfo.publisher || seriesInfo.year) && (
                       <div className="flex items-center justify-between text-[11px] font-black text-muted-foreground uppercase tracking-widest px-1 mb-1">
-                          <span className="truncate pr-2 text-slate-500 dark:text-slate-400">{seriesInfo.publisher || "Unknown Publisher"}</span>
+                          <span className="truncate pr-2 text-muted-foreground">{seriesInfo.publisher || "Unknown Publisher"}</span>
                           
                           <div className="flex items-center gap-1.5 shrink-0 mx-2">
                               {seriesInfo.status && (
-                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'dark:bg-slate-800'}`}>
+                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
                                       {seriesInfo.status}
                                   </Badge>
                               )}
                               {seriesInfo.id && (
-                                  <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.monitored ? 'bg-blue-600 hover:bg-blue-700 text-white border-0' : 'text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800'}`}>
+                                  <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
                                       {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
                                   </Badge>
                               )}
                           </div>
 
-                          <span className="shrink-0 text-slate-400 dark:text-slate-500">{seriesInfo.year}</span>
+                          <span className="shrink-0 text-muted-foreground">{seriesInfo.year}</span>
                       </div>
                   )}
 
-                  <div className="aspect-[2/3] w-full bg-slate-100 dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-xl flex items-center justify-center overflow-hidden relative">
+                  <div className="aspect-[2/3] w-full bg-muted rounded-2xl border border-border shadow-xl flex items-center justify-center overflow-hidden relative">
                       <img src={displayCover || seriesInfo.cover} alt="Cover" className="object-cover w-full h-full transition-opacity duration-300" />
                   </div>
                   
                   <div className="text-center md:text-left space-y-1">
-                      <h1 className="text-2xl font-black tracking-tight dark:text-slate-100">{seriesInfo.name}</h1>
+                      <h1 className="text-2xl font-black tracking-tight text-foreground">{seriesInfo.name}</h1>
                   </div>
               </div>
 
@@ -633,7 +633,7 @@ function SeriesContent() {
                   {/* DYNAMIC ACTION BUTTON */}
                   {activeIssue && !activeIssue.fullPath ? (
                       <Button 
-                          className="w-full font-black shadow-md bg-blue-600 hover:bg-blue-700 text-white border-0" 
+                          className="w-full font-black shadow-md bg-primary hover:bg-primary/90 text-primary-foreground border-0" 
                           size="lg" 
                           disabled={requestingIds.has(activeIssue.id) || requestedIds.has(activeIssue.id)}
                           onClick={() => handleRequestMissing(activeIssue)}
@@ -649,7 +649,7 @@ function SeriesContent() {
                       </Button>
                   ) : (
                       <Button 
-                        className={`w-full font-black shadow-md ${activeIssue?.readProgress > 0 && !(activeIssue?.isRead || activeIssue?.readProgress >= 100) ? 'bg-blue-600 hover:bg-blue-700 text-white border-0' : ''}`} 
+                        className={`w-full font-black shadow-md ${activeIssue?.readProgress > 0 && !(activeIssue?.isRead || activeIssue?.readProgress >= 100) ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : ''}`} 
                         size="lg" 
                         disabled={!activeIssue || !activeIssue.fullPath} 
                         onClick={() => router.push(`/reader?path=${encodeURIComponent(activeIssue?.fullPath || '')}&series=${encodeURIComponent(folderPath || '')}`)}>
@@ -658,30 +658,30 @@ function SeriesContent() {
                       </Button>
                   )}
                   
-                  <Button variant={seriesInfo.isFavorite ? "default" : "outline"} className={`w-full font-bold transition-all ${seriesInfo.isFavorite ? 'bg-pink-600 hover:bg-pink-700 text-white border-0' : 'dark:border-slate-800'}`} onClick={toggleFavorite} disabled={!seriesInfo.id}>
+                  <Button variant={seriesInfo.isFavorite ? "default" : "outline"} className={`w-full font-bold transition-all ${seriesInfo.isFavorite ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'border-border hover:bg-muted'}`} onClick={toggleFavorite} disabled={!seriesInfo.id}>
                       <Heart className={`w-4 h-4 mr-2 ${seriesInfo.isFavorite ? 'fill-current' : ''}`} /> Favorite
                   </Button>
                   
                   {isAdmin && (
-                      <Button variant="outline" className="w-full dark:border-slate-800 font-bold" onClick={() => setEditModalOpen(true)}>
+                      <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" onClick={() => setEditModalOpen(true)}>
                           <Edit className="w-4 h-4 mr-2" /> Edit Info
                       </Button>
                   )}
 
                   {isAdmin && (
-                      <Button variant={seriesInfo.cvId ? "outline" : "default"} className="w-full dark:border-slate-800 font-bold" onClick={() => { setSearchQuery(seriesInfo.name); setMatchModalOpen(true); }}>
+                      <Button variant={seriesInfo.cvId ? "outline" : "default"} className={`w-full font-bold ${seriesInfo.cvId ? 'border-border hover:bg-muted text-foreground' : ''}`} onClick={() => { setSearchQuery(seriesInfo.name); setMatchModalOpen(true); }}>
                           <Search className="w-4 h-4 mr-2" /> {seriesInfo.cvId ? "Fix Match" : "Match Series"}
                       </Button>
                   )}
                   
                   {seriesInfo.cvId && (
                       <>
-                        <Button variant="outline" className="w-full dark:border-slate-800 font-bold" asChild><Link href={`https://comicvine.gamespot.com/volume/4050-${seriesInfo.cvId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> ComicVine</Link></Button>
+                        <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" asChild><Link href={`https://comicvine.gamespot.com/volume/4050-${seriesInfo.cvId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> ComicVine</Link></Button>
                         
                         {isAdmin && (
                             <Button 
                                 variant="secondary" 
-                                className="w-full transition-all shadow-sm active:scale-95 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 font-bold" 
+                                className="w-full transition-all shadow-sm active:scale-95 border-border hover:bg-muted text-foreground font-bold" 
                                 disabled={isRefreshingMetadata} 
                                 onClick={handleRefreshMetadata}
                             >
@@ -693,7 +693,7 @@ function SeriesContent() {
                         {isAdmin && (
                             <Button 
                                 variant="outline" 
-                                className={`w-full transition-all shadow-sm active:scale-95 ${missingIssues.length > 0 ? 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800' : 'opacity-50 grayscale cursor-not-allowed font-bold'}`}
+                                className={`w-full transition-all shadow-sm active:scale-95 ${missingIssues.length > 0 ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'opacity-50 grayscale cursor-not-allowed font-bold'}`}
                                 disabled={missingIssues.length === 0 || isBulkDownloading}
                                 onClick={handleDownloadAllMissing}
                             >
@@ -704,7 +704,7 @@ function SeriesContent() {
                       </>
                   )}
 
-                  <Button variant="outline" className="w-full dark:border-slate-800 font-bold text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 mt-4" onClick={() => setReportModalOpen(true)} disabled={!seriesInfo.id}>
+                  <Button variant="outline" className="w-full border-border font-bold text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 mt-4" onClick={() => setReportModalOpen(true)} disabled={!seriesInfo.id}>
                       <AlertTriangle className="w-4 h-4 mr-2" /> Report Issue
                   </Button>
                   
@@ -718,21 +718,21 @@ function SeriesContent() {
 
           <div className="space-y-10 min-w-0">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div className="flex flex-col h-full bg-white dark:bg-slate-900 p-6 rounded-2xl border dark:border-slate-800 shadow-sm">
+                  <div className="flex flex-col h-full bg-background p-6 rounded-2xl border border-border shadow-sm">
                       <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">
                           <PenTool className="w-3.5 h-3.5 text-primary"/> Issue Credits
                       </h4>
                       <div className="space-y-4">
                           {writers.length > 0 && (
                               <div>
-                                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Writers</span>
-                                  <p className="text-sm font-bold dark:text-slate-200 leading-tight">{writers.join(", ")}</p>
+                                  <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest block mb-1">Writers</span>
+                                  <p className="text-sm font-bold text-foreground leading-tight">{writers.join(", ")}</p>
                               </div>
                           )}
                           {artists.length > 0 && (
                               <div>
-                                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Artists</span>
-                                  <p className="text-sm font-bold dark:text-slate-200 leading-tight">{artists.join(", ")}</p>
+                                  <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest block mb-1">Artists</span>
+                                  <p className="text-sm font-bold text-foreground leading-tight">{artists.join(", ")}</p>
                               </div>
                           )}
                           {!hasCreators && (
@@ -741,15 +741,15 @@ function SeriesContent() {
                       </div>
                   </div>
 
-                  <div className="flex flex-col h-full bg-white dark:bg-slate-900 p-6 rounded-2xl border dark:border-slate-800 shadow-sm">
+                  <div className="flex flex-col h-full bg-background p-6 rounded-2xl border border-border shadow-sm">
                       <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">
                           <Users className="w-3.5 h-3.5 text-primary"/> Key Appearances
                       </h4>
                       <div className="flex flex-wrap gap-2">
                           {characters.length > 0 ? (
                               characters.slice(0,10).map((char: any, i: number) => (
-                                  <Badge key={i} variant="secondary" className="bg-slate-100 dark:bg-slate-800 dark:text-slate-300 font-bold px-3 py-1 border dark:border-slate-700">
-                                      <Sparkles className="w-3 h-3 mr-1.5 text-blue-500" /> {char}
+                                  <Badge key={i} variant="secondary" className="bg-muted text-foreground font-bold px-3 py-1 border border-border hover:bg-muted/80">
+                                      <Sparkles className="w-3 h-3 mr-1.5 text-primary" /> {char}
                                   </Badge>
                               ))
                           ) : (
@@ -763,21 +763,21 @@ function SeriesContent() {
                   <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground px-1">
                     {activeIssue ? `${activeIssue.name} Synopsis` : 'Synopsis'}
                   </h4>
-                  <div className="text-sm leading-relaxed bg-white dark:bg-slate-900 p-6 rounded-2xl border dark:border-slate-800 min-h-[120px] dark:text-slate-300 shadow-sm break-words">
+                  <div className="text-sm leading-relaxed bg-muted/30 p-6 rounded-2xl border border-border min-h-[120px] text-foreground shadow-sm break-words">
                       <div dangerouslySetInnerHTML={{__html: displayDescription}} />
                   </div>
               </div>
 
               {/* --- DOWNLOADED ISSUES SECTION --- */}
               <div className="space-y-6">
-                  <div className="flex items-center justify-between border-b-2 dark:border-slate-800 pb-4">
-                      <h4 className="font-black flex items-center gap-2 text-xl dark:text-slate-200 tracking-tight"><Layers className="w-6 h-6 text-blue-500"/> Downloaded Issues ({downloadedIssues.length})</h4>
-                      <div className="flex items-center gap-1 border dark:border-slate-800 rounded-md p-1 bg-white dark:bg-slate-950 shadow-sm shrink-0">
+                  <div className="flex items-center justify-between border-b-2 border-border pb-4">
+                      <h4 className="font-black flex items-center gap-2 text-xl text-foreground tracking-tight"><Layers className="w-6 h-6 text-primary"/> Downloaded Issues ({downloadedIssues.length})</h4>
+                      <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
                           <Button variant={isSelectionMode ? "secondary" : "ghost"} size="sm" className="h-8 px-2 text-xs font-bold" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedIssues(new Set()); }}>
                               {isSelectionMode ? <Square className="w-4 h-4 sm:mr-1" /> : <CheckSquare className="w-4 h-4 sm:mr-1" />}
                               <span className="hidden sm:inline">{isSelectionMode ? "Cancel" : "Select"}</span>
                           </Button>
-                          <div className="w-px h-4 bg-slate-200 dark:bg-slate-700 mx-1" />
+                          <div className="w-px h-4 bg-border mx-1" />
                           <Button variant={viewMode === 'grid' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('grid')}><LayoutGrid className="w-4 h-4" /></Button>
                           <Button variant={viewMode === 'list' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('list')}><List className="w-4 h-4" /></Button>
                       </div>
@@ -801,20 +801,20 @@ function SeriesContent() {
                                             setActiveIssue(issue);
                                         }
                                     }}
-                                    className={`flex gap-4 p-4 bg-white dark:bg-slate-900 border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer ${isSelected ? (isSelectionMode ? 'border-blue-500 ring-2 ring-blue-500/20 scale-[0.98]' : 'border-primary ring-4 ring-primary/10') : 'border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-900'}`}
+                                    className={`flex gap-4 p-4 bg-background border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer ${isSelected ? (isSelectionMode ? 'border-primary ring-2 ring-primary/20 scale-[0.98]' : 'border-primary ring-4 ring-primary/10') : 'border-border hover:border-primary/50'}`}
                                   >
                                     {isSelectionMode && (
                                        <div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">
-                                           {selectedIssues.has(issue.id) ? <CheckSquare className="w-5 h-5 text-blue-400" /> : <Square className="w-5 h-5 text-white/80" />}
+                                           {selectedIssues.has(issue.id) ? <CheckSquare className="w-5 h-5 text-primary" /> : <Square className="w-5 h-5 text-white/80" />}
                                        </div>
                                     )}
-                                    <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-slate-100 dark:bg-slate-800 border dark:border-slate-700 relative">
-                                      {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-slate-300" />}
-                                      <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-blue-600 border-0 text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
-                                      {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-blue-500" style={{ width: `${issue.readProgress}%` }} /></div>}
+                                    <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border relative">
+                                      {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}
+                                      <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-primary border-0 text-primary-foreground text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
+                                      {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-primary" style={{ width: `${issue.readProgress}%` }} /></div>}
                                     </div>
                                     <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
-                                      <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'dark:text-slate-200'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
+                                      <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
                                       <div className="flex items-center gap-2 mt-3">
                                         <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                             <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
@@ -823,12 +823,12 @@ function SeriesContent() {
                                         </Button>
                                         
                                         {!isSelectionMode && (
-                                            <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
+                                            <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-muted-foreground hover:text-foreground hover:bg-muted shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
                                                 {isRead ? <EyeOff className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
                                             </Button>
                                         )}
 
-                                        {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-9 px-3 dark:bg-slate-800" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                        {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-9 px-3 bg-muted hover:bg-muted/80 text-foreground border-border" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
                                         {isAdmin && !isSelectionMode && (
                                             <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200 dark:hover:border-red-900/50" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
                                                 <Trash2 className="w-4 h-4" />
@@ -841,10 +841,10 @@ function SeriesContent() {
                           })}
                       </div>
                   ) : (
-                      <div className="border dark:border-slate-800 rounded-lg overflow-hidden bg-white dark:bg-slate-950 shadow-sm mt-4">
+                      <div className="border border-border rounded-lg overflow-hidden bg-background shadow-sm mt-4">
                           <div className="overflow-x-auto">
                               <table className="w-full text-sm text-left">
-                                  <thead className="text-xs text-muted-foreground uppercase bg-slate-50 dark:bg-slate-900/50 border-b dark:border-slate-800">
+                                  <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border">
                                       <tr>
                                           {isSelectionMode && <th className="w-12 px-4 py-3 text-center">Select</th>}
                                           <th className="w-16 px-4 py-3 text-center">Cover</th>
@@ -853,7 +853,7 @@ function SeriesContent() {
                                           <th className="px-4 py-3 text-right">Actions</th>
                                       </tr>
                                   </thead>
-                                  <tbody className="divide-y dark:divide-slate-800">
+                                  <tbody className="divide-y divide-border">
                                       {downloadedIssues.map((issue) => {
                                           const isSelected = activeIssue?.id === issue.id || selectedIssues.has(issue.id);
                                           const isRead = issue.isRead || (issue.readProgress || 0) >= 100;
@@ -870,30 +870,30 @@ function SeriesContent() {
                                                         setActiveIssue(issue);
                                                     }
                                                 }} 
-                                                className={`cursor-pointer transition-colors ${isSelected ? (isSelectionMode ? 'bg-blue-50/50 dark:bg-blue-900/20' : 'bg-slate-50 dark:bg-slate-900/50') : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}
+                                                className={`cursor-pointer transition-colors ${isSelected ? (isSelectionMode ? 'bg-primary/10' : 'bg-muted/50') : 'hover:bg-muted/50'}`}
                                               >
                                                   {isSelectionMode && (
                                                       <td className="px-4 py-3 text-center">
-                                                          {selectedIssues.has(issue.id) ? <CheckSquare className="w-5 h-5 text-blue-500 mx-auto" /> : <Square className="w-5 h-5 text-slate-300 dark:text-slate-600 mx-auto" />}
+                                                          {selectedIssues.has(issue.id) ? <CheckSquare className="w-5 h-5 text-primary mx-auto" /> : <Square className="w-5 h-5 text-muted-foreground mx-auto" />}
                                                       </td>
                                                   )}
                                                   <td className="px-4 py-2">
-                                                      <div className="w-10 h-14 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden flex items-center justify-center shrink-0 border dark:border-slate-700 relative">
-                                                          {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-4 h-4 text-slate-300 dark:text-slate-600" />}
+                                                      <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative">
+                                                          {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
                                                           {isRead && <div className="absolute inset-0 flex items-center justify-center bg-green-500/20 z-20"><Check className="w-4 h-4 text-green-500 font-bold"/></div>}
                                                       </div>
                                                   </td>
                                                   <td className="px-4 py-3 font-bold">
-                                                      <div className={`line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-slate-900 dark:text-slate-100'}`}>{issue.name}</div>
+                                                      <div className={`line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{issue.name}</div>
                                                       {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</div>}
                                                   </td>
                                                   <td className="px-4 py-3 text-center">
-                                                      {isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3 mr-1"/> Read</Badge> : issue.readProgress > 0 ? <Badge className="bg-blue-600 border-0 text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : <span className="text-muted-foreground text-xs">-</span>}
+                                                      {isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3 mr-1"/> Read</Badge> : issue.readProgress > 0 ? <Badge className="bg-primary border-0 text-primary-foreground text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : <span className="text-muted-foreground text-xs">-</span>}
                                                   </td>
                                                   <td className="px-4 py-3 text-right">
                                                       <div className="flex items-center justify-end gap-2">
                                                           {!isSelectionMode && (
-                                                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
+                                                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-muted shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
                                                                   {isRead ? <EyeOff className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
                                                               </Button>
                                                           )}
@@ -902,7 +902,7 @@ function SeriesContent() {
                                                                   {getReadButtonLabel(issue)}
                                                               </Link>
                                                           </Button>
-                                                          {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-8 px-3 dark:bg-slate-800 hidden sm:flex" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                                          {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-8 px-3 bg-muted hover:bg-muted/80 text-foreground border-border hidden sm:flex" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
                                                           {isAdmin && !isSelectionMode && (
                                                               <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 hidden sm:flex" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
                                                                   <Trash2 className="w-4 h-4" />
@@ -921,21 +921,21 @@ function SeriesContent() {
 
                   {/* BULK SELECTION FLOATING BAR */}
                   {isSelectionMode && (
-                      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 px-4 sm:px-6 py-3 rounded-full shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] dark:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.7)] flex items-center gap-3 sm:gap-4 z-50 animate-in slide-in-from-bottom-8 border border-slate-200 dark:border-slate-800 w-[95%] sm:w-auto overflow-x-auto">
-                          <Button variant="ghost" size="sm" className="h-10 sm:h-8 shrink-0 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium" onClick={() => {
+                      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background text-foreground px-4 sm:px-6 py-3 rounded-full shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] flex items-center gap-3 sm:gap-4 z-50 animate-in slide-in-from-bottom-8 border border-border w-[95%] sm:w-auto overflow-x-auto">
+                          <Button variant="ghost" size="sm" className="h-10 sm:h-8 shrink-0 hover:bg-muted text-foreground font-medium" onClick={() => {
                               if (selectedIssues.size === downloadedIssues.length) setSelectedIssues(new Set());
                               else setSelectedIssues(new Set(downloadedIssues.map(i => i.id)));
                           }}>
                               {selectedIssues.size === downloadedIssues.length && downloadedIssues.length > 0 ? "Deselect All" : "Select All"}
                           </Button>
-                          <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 shrink-0" />
+                          <div className="h-5 w-px bg-border shrink-0" />
                           <span className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedIssues.size} Selected</span>
                           
                           <div className="flex gap-2 shrink-0">
-                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-slate-600 hover:bg-slate-100' : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(true)}>
+                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(true)}>
                                   {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Mark Read</span>
                               </Button>
-                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-slate-600 hover:bg-slate-100' : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(false)}>
+                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(false)}>
                                   {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <EyeOff className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Mark Unread</span>
                               </Button>
                           </div>
@@ -945,8 +945,8 @@ function SeriesContent() {
 
               {/* --- MISSING ISSUES SECTION --- */}
               {seriesInfo.cvId && (
-                  <div className="space-y-6 pt-4 border-t-2 dark:border-slate-800">
-                      <h4 className="font-black flex items-center gap-2 text-xl dark:text-slate-400 opacity-80 tracking-tight"><CloudOff className="w-6 h-6"/> Missing Issues ({missingIssues.length})</h4>
+                  <div className="space-y-6 pt-4 border-t-2 border-border">
+                      <h4 className="font-black flex items-center gap-2 text-xl text-muted-foreground opacity-80 tracking-tight"><CloudOff className="w-6 h-6"/> Missing Issues ({missingIssues.length})</h4>
                       
                       {missingIssues.length === 0 ? (
                           <div className="p-10 text-center border border-dashed border-green-200 bg-green-50/20 dark:border-green-900/30 dark:bg-green-900/10 rounded-2xl flex flex-col items-center justify-center transition-all hover:bg-green-50/30">
@@ -960,40 +960,40 @@ function SeriesContent() {
                                   const isRequesting = requestingIds.has(issue.id);
                                   const isAlreadyRequested = requestedIds.has(issue.id);
                                   return (
-                                      <div key={issue.id} onClick={() => setActiveIssue(issue)} className="flex gap-4 p-4 bg-slate-50 dark:bg-slate-900/50 border dark:border-slate-800/50 rounded-xl shadow-sm opacity-80 hover:opacity-100 transition-all cursor-pointer">
-                                        <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-slate-200 dark:bg-slate-800 border dark:border-slate-700 grayscale">{issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-slate-400" />}</div>
+                                      <div key={issue.id} onClick={() => setActiveIssue(issue)} className="flex gap-4 p-4 bg-muted/30 border border-border/50 rounded-xl shadow-sm opacity-80 hover:opacity-100 transition-all cursor-pointer">
+                                        <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border grayscale">{issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}</div>
                                         <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
-                                            <div><h5 className="font-bold text-base line-clamp-2 dark:text-slate-300 leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span></div>
-                                            <div className="flex items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
+                                            <div><h5 className="font-bold text-base line-clamp-2 text-foreground leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span></div>
+                                            <div className="flex items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] border-border hover:bg-muted uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
                                         </div>
                                       </div>
                                   );
                               })}
                           </div>
                       ) : (
-                          <div className="border dark:border-slate-800 rounded-lg overflow-hidden bg-white dark:bg-slate-950 shadow-sm mt-4 pb-10">
+                          <div className="border border-border rounded-lg overflow-hidden bg-background shadow-sm mt-4 pb-10">
                               <div className="overflow-x-auto">
                                   <table className="w-full text-sm text-left">
-                                      <thead className="text-xs text-muted-foreground uppercase bg-slate-50 dark:bg-slate-900/50 border-b dark:border-slate-800">
+                                      <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border">
                                           <tr>
                                               <th className="w-16 px-4 py-3 text-center">Cover</th>
                                               <th className="px-4 py-3">Issue</th>
                                               <th className="px-4 py-3 text-right">Actions</th>
                                           </tr>
                                       </thead>
-                                      <tbody className="divide-y dark:divide-slate-800">
+                                      <tbody className="divide-y divide-border">
                                           {missingIssues.map((issue) => {
                                               const isRequesting = requestingIds.has(issue.id);
                                               const isAlreadyRequested = requestedIds.has(issue.id);
                                               return (
-                                                  <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={`cursor-pointer transition-colors ${requestingIds.has(issue.id) ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}>
+                                                  <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={`cursor-pointer transition-colors ${requestingIds.has(issue.id) ? 'opacity-50' : 'hover:bg-muted/50'}`}>
                                                       <td className="px-4 py-2">
-                                                          <div className="w-10 h-14 bg-slate-200 dark:bg-slate-800 rounded overflow-hidden flex items-center justify-center shrink-0 border dark:border-slate-700 grayscale relative">
-                                                              {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-slate-400" />}
+                                                          <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border grayscale relative">
+                                                              {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
                                                           </div>
                                                       </td>
                                                       <td className="px-4 py-3 font-bold">
-                                                          <div className="line-clamp-2 leading-tight dark:text-slate-300">{issue.name}</div>
+                                                          <div className="line-clamp-2 leading-tight text-foreground">{issue.name}</div>
                                                           {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</div>}
                                                       </td>
                                                       <td className="px-4 py-3 text-right">
@@ -1002,7 +1002,7 @@ function SeriesContent() {
                                                                   <Check className="w-3.5 h-3.5 mr-1"/> Requested
                                                               </Button>
                                                           ) : (
-                                                              <Button size="sm" variant="outline" className="h-8 font-bold text-[10px] uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>
+                                                              <Button size="sm" variant="outline" className="h-8 font-bold border-border hover:bg-muted text-[10px] uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>
                                                                   {isRequesting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1"/> : <CloudDownload className="w-3.5 h-3.5 mr-1"/>} Request
                                                               </Button>
                                                           )}
@@ -1023,10 +1023,10 @@ function SeriesContent() {
 
       {/* --- DIALOGS --- */}
       <Dialog open={matchModalOpen} onOpenChange={setMatchModalOpen}>
-          <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col dark:bg-slate-950 dark:border-slate-800">
+          <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col bg-background border-border">
               <DialogHeader><DialogTitle>Match Series</DialogTitle></DialogHeader>
               <form onSubmit={(e) => performSearch(e, false)} className="flex gap-2">
-                  <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                  <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-background border-border" />
                   <Button type="submit" disabled={isSearching}><Search className="w-4 h-4" /></Button>
               </form>
               
@@ -1034,7 +1034,7 @@ function SeriesContent() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
                       {searchResults.map((item) => (
                           <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleMatch(item)}>
-                              <div className="aspect-[2/3] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden border dark:border-slate-800 relative shadow-sm">
+                              <div className="aspect-[2/3] bg-muted rounded-lg overflow-hidden border border-border relative shadow-sm">
                                   {item.image && <img src={getImageUrl(item.image) || ""} className="object-cover w-full h-full" alt="" />}
                                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                       <Button size="sm" className="font-bold shadow-lg" disabled={isMatching}>
@@ -1043,9 +1043,9 @@ function SeriesContent() {
                                   </div>
                               </div>
                               <div className="flex flex-col items-center text-center px-1">
-                                  <h4 className="text-xs font-black line-clamp-1 dark:text-slate-200" title={item.name}>{item.name}</h4>
-                                  <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 line-clamp-1" title={item.publisher}>{item.publisher || "Unknown"}</span>
-                                  <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mt-0.5">
+                                  <h4 className="text-xs font-black line-clamp-1 text-foreground" title={item.name}>{item.name}</h4>
+                                  <span className="text-[10px] font-bold text-muted-foreground line-clamp-1" title={item.publisher}>{item.publisher || "Unknown"}</span>
+                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider mt-0.5">
                                       {item.year || "????"} • {item.count || 0} Issues
                                   </span>
                               </div>
@@ -1072,32 +1072,32 @@ function SeriesContent() {
       </Dialog>
 
       <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
-          <DialogContent className="sm:max-w-[450px] dark:bg-slate-950 dark:border-slate-800">
+          <DialogContent className="sm:max-w-[450px] bg-background border-border">
               <DialogHeader><DialogTitle>Edit Series Info</DialogTitle></DialogHeader>
               <div className="grid gap-4 py-4">
-                  <div className="grid gap-2"><Label>Source Folder Path</Label><div className="flex gap-2"><Input readOnly value={seriesInfo.path || folderPath!} className="bg-muted text-xs truncate" /><Button variant="secondary" size="icon" onClick={copyToClipboard}>{copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}</Button></div></div>
-                  <div className="grid gap-2"><Label>ComicVine ID</Label><Input type="number" value={editForm.cvId} onChange={(e) => setEditForm({...editForm, cvId: e.target.value})} /></div>
-                  <div className="grid gap-2"><Label>Publisher</Label><Input value={editForm.publisher} onChange={(e) => setEditForm({...editForm, publisher: e.target.value})} /></div>
-                  <div className="grid gap-2"><Label>Series Name</Label><Input value={editForm.name} onChange={(e) => setEditForm({...editForm, name: e.target.value})} /></div>
-                  <div className="grid gap-2"><Label>Year</Label><Input value={editForm.year} onChange={(e) => setEditForm({...editForm, year: e.target.value})} /></div>
+                  <div className="grid gap-2"><Label>Source Folder Path</Label><div className="flex gap-2"><Input readOnly value={seriesInfo.path || folderPath!} className="bg-muted border-border text-xs truncate text-muted-foreground" /><Button variant="secondary" size="icon" onClick={copyToClipboard} className="border border-border hover:bg-muted">{copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}</Button></div></div>
+                  <div className="grid gap-2"><Label>ComicVine ID</Label><Input type="number" value={editForm.cvId} onChange={(e) => setEditForm({...editForm, cvId: e.target.value})} className="bg-background border-border" /></div>
+                  <div className="grid gap-2"><Label>Publisher</Label><Input value={editForm.publisher} onChange={(e) => setEditForm({...editForm, publisher: e.target.value})} className="bg-background border-border" /></div>
+                  <div className="grid gap-2"><Label>Series Name</Label><Input value={editForm.name} onChange={(e) => setEditForm({...editForm, name: e.target.value})} className="bg-background border-border" /></div>
+                  <div className="grid gap-2"><Label>Year</Label><Input value={editForm.year} onChange={(e) => setEditForm({...editForm, year: e.target.value})} className="bg-background border-border" /></div>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
-                      <div className="flex items-center gap-2">
-                          <Switch checked={editForm.monitored} onCheckedChange={v => setEditForm({...editForm, monitored: v})} />
-                          <Label>Monitor for New Issues</Label>
+                      <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border">
+                          <Switch id="monitored" checked={editForm.monitored} onCheckedChange={v => setEditForm({...editForm, monitored: v})} />
+                          <Label htmlFor="monitored" className="cursor-pointer">Monitor Series</Label>
                       </div>
-                      <div className="flex items-center gap-2">
-                          <Switch checked={editForm.isManga} onCheckedChange={v => setEditForm({...editForm, isManga: v})} />
-                          <Label>Flag as Manga (Right-to-Left)</Label>
+                      <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border">
+                          <Switch id="isManga" checked={editForm.isManga} onCheckedChange={v => setEditForm({...editForm, isManga: v})} />
+                          <Label htmlFor="isManga" className="cursor-pointer">Flag as Manga</Label>
                       </div>
                   </div>
               </div>
-              <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)}>Cancel</Button><Button className="bg-blue-600 font-bold hover:bg-blue-700 text-white" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
+              <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)} className="border-border hover:bg-muted">Cancel</Button><Button className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
           </DialogContent>
       </Dialog>
 
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
-          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800">
+          <DialogContent className="sm:max-w-[425px] bg-background border-border">
               <DialogHeader>
                   <DialogTitle className="text-red-600 flex items-center gap-2"><Trash2 className="w-5 h-5"/> Delete Series</DialogTitle>
                   <DialogDescription className="pt-2">
@@ -1113,7 +1113,7 @@ function SeriesContent() {
                   </div>
               </div>
               <DialogFooter className="flex gap-2 sm:gap-0">
-                  <Button variant="outline" onClick={() => setDeleteModalOpen(false)} disabled={isDeleting}>Cancel</Button>
+                  <Button variant="outline" onClick={() => setDeleteModalOpen(false)} disabled={isDeleting} className="border-border hover:bg-muted">Cancel</Button>
                   <Button variant="destructive" onClick={handleDeleteSeries} disabled={isDeleting}>
                       {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />} Delete
                   </Button>
@@ -1122,7 +1122,7 @@ function SeriesContent() {
       </Dialog>
 
       <Dialog open={deleteIssueModalOpen} onOpenChange={setDeleteIssueModalOpen}>
-          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800">
+          <DialogContent className="sm:max-w-[425px] bg-background border-border">
               <DialogHeader>
                   <DialogTitle className="text-red-600 flex items-center gap-2"><Trash2 className="w-5 h-5"/> Delete Issue</DialogTitle>
                   <DialogDescription className="pt-2">
@@ -1138,7 +1138,7 @@ function SeriesContent() {
                   </div>
               </div>
               <DialogFooter className="flex gap-2 sm:gap-0">
-                  <Button variant="outline" onClick={() => setDeleteIssueModalOpen(false)} disabled={isDeletingIssue}>Cancel</Button>
+                  <Button variant="outline" onClick={() => setDeleteIssueModalOpen(false)} disabled={isDeletingIssue} className="border-border hover:bg-muted">Cancel</Button>
                   <Button variant="destructive" onClick={handleDeleteIssue} disabled={isDeletingIssue}>
                       {isDeletingIssue ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />} Delete
                   </Button>
@@ -1147,7 +1147,7 @@ function SeriesContent() {
       </Dialog>
 
       <Dialog open={reportModalOpen} onOpenChange={setReportModalOpen}>
-          <DialogContent className="sm:max-w-[425px] dark:bg-slate-950 dark:border-slate-800">
+          <DialogContent className="sm:max-w-[425px] bg-background border-border">
               <DialogHeader>
                   <DialogTitle className="flex items-center gap-2 text-red-600">
                       <AlertTriangle className="w-5 h-5" /> Report an Issue
@@ -1161,11 +1161,11 @@ function SeriesContent() {
                       placeholder="Describe the issue here..." 
                       value={reportDescription} 
                       onChange={(e) => setReportDescription(e.target.value)}
-                      className="h-32 dark:bg-slate-900 dark:border-slate-800"
+                      className="h-32 bg-background border-border"
                   />
               </div>
               <DialogFooter>
-                  <Button variant="outline" onClick={() => setReportModalOpen(false)} disabled={isSubmittingReport}>Cancel</Button>
+                  <Button variant="outline" onClick={() => setReportModalOpen(false)} disabled={isSubmittingReport} className="border-border hover:bg-muted">Cancel</Button>
                   <Button onClick={handleSubmitReport} disabled={isSubmittingReport} className="bg-red-600 hover:bg-red-700 text-white font-bold">
                       {isSubmittingReport ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : "Submit Report"}
                   </Button>
@@ -1178,7 +1178,7 @@ function SeriesContent() {
 
 export default function SeriesPage() {
   return (
-    <Suspense fallback={<div className="p-10 text-center">Loading series data...</div>}>
+    <Suspense fallback={<div className="p-10 text-center text-muted-foreground">Loading series data...</div>}>
       <SeriesContent />
     </Suspense>
   )

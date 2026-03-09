@@ -472,12 +472,12 @@ function ReaderContent() {
                                 className="h-8 w-16 text-center text-sm bg-white text-black font-bold" 
                             />
                             <span className="text-white text-[10px] sm:text-xs font-bold opacity-80 uppercase">of {pages.length}</span>
-                            <Button type="submit" size="sm" className="h-8 px-3 bg-blue-600 hover:bg-blue-500 font-bold">Go</Button>
+                            <Button type="submit" size="sm" className="h-8 px-3 bg-primary hover:bg-primary/90 text-primary-foreground font-bold">Go</Button>
                             <Button type="button" size="sm" variant="ghost" className="h-8 w-8 p-0 text-white" onClick={() => setIsJumping(false)}><X className="w-4 h-4"/></Button>
                         </form>
                     ) : (
                         <span 
-                            className="text-white text-[11px] sm:text-xs font-bold opacity-80 uppercase tracking-widest cursor-pointer hover:text-blue-400 hover:bg-white/10 px-3 py-1 rounded transition-colors"
+                            className="text-white text-[11px] sm:text-xs font-bold opacity-80 uppercase tracking-widest cursor-pointer hover:text-primary hover:bg-white/10 px-3 py-1 rounded transition-colors"
                             onClick={() => { setIsJumping(true); setJumpInput((currentIndex + 1).toString()); }}
                             title="Click to jump to page"
                         >
@@ -492,13 +492,13 @@ function ReaderContent() {
                         max={pages.length - 1} 
                         value={currentIndex} 
                         onChange={(e) => setCurrentIndex(parseInt(e.target.value))} 
-                        className="w-full h-2 md:h-1.5 bg-slate-700/50 rounded-lg appearance-none cursor-pointer accent-white hover:accent-blue-400 transition-colors"
+                        className="w-full h-2 md:h-1.5 bg-slate-700/50 rounded-lg appearance-none cursor-pointer accent-white hover:accent-primary transition-colors"
                         style={{ direction: settings.readingMode === 'rtl' ? 'rtl' : 'ltr' }}
                     />
                 </div>
 
                 {currentIndex >= pages.length - 1 && nextIssue ? (
-                    <Button variant="default" className="bg-blue-600 hover:bg-blue-700 font-bold text-white shadow-lg shrink-0 gap-2 text-xs sm:text-sm" onClick={nextPage}>Next Issue <BookOpen className="w-4 h-4 hidden sm:block" /></Button>
+                    <Button variant="default" className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-lg shrink-0 gap-2 text-xs sm:text-sm border-0" onClick={nextPage}>Next Issue <BookOpen className="w-4 h-4 hidden sm:block" /></Button>
                 ) : (
                     <>
                         <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 shrink-0" onClick={nextPage} disabled={currentIndex >= pages.length - 1}>
@@ -513,11 +513,11 @@ function ReaderContent() {
 
       {/* SETTINGS MODAL */}
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-          <DialogContent className="sm:max-w-[425px] w-[95%] bg-white dark:bg-slate-950 dark:border-slate-800 rounded-xl">
-              <DialogHeader><DialogTitle className="text-xl font-black tracking-tight">Reader Settings</DialogTitle></DialogHeader>
+          <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
+              <DialogHeader><DialogTitle className="text-xl font-black tracking-tight text-foreground">Reader Settings</DialogTitle></DialogHeader>
               
               <div className="grid gap-6 py-4 max-h-[70vh] overflow-y-auto pr-2">
-                  <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg border dark:border-slate-800">
+                  <div className="flex items-center justify-between bg-muted/50 p-3 rounded-lg border border-border">
                       <Label className="font-bold cursor-pointer text-sm" htmlFor="mark-read">Mark Issue as Completed</Label>
                       <Switch id="mark-read" checked={isMarkedRead} onCheckedChange={toggleReadStatus} />
                   </div>
@@ -529,19 +529,19 @@ function ReaderContent() {
                               <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">Reading Mode & Layout</Label>
                               <div className="grid grid-cols-2 gap-2">
                                   <Select value={settings.readingMode} onValueChange={(v) => setSettings(s => ({...s, readingMode: v}))}>
-                                      <SelectTrigger className="h-10 text-xs sm:text-sm dark:border-slate-800"><SelectValue /></SelectTrigger>
-                                      <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
-                                          <SelectItem value="ltr">Left to Right</SelectItem>
-                                          <SelectItem value="rtl">Right to Left</SelectItem>
-                                          <SelectItem value="webtoon">Webtoon</SelectItem>
+                                      <SelectTrigger className="h-10 text-xs sm:text-sm border-border bg-background"><SelectValue /></SelectTrigger>
+                                      <SelectContent className="bg-popover border-border">
+                                          <SelectItem value="ltr" className="focus:bg-primary/10 focus:text-primary">Left to Right</SelectItem>
+                                          <SelectItem value="rtl" className="focus:bg-primary/10 focus:text-primary">Right to Left</SelectItem>
+                                          <SelectItem value="webtoon" className="focus:bg-primary/10 focus:text-primary">Webtoon</SelectItem>
                                       </SelectContent>
                                   </Select>
                                   <Select value={settings.pageLayout} onValueChange={(v) => setSettings(s => ({...s, pageLayout: v}))} disabled={settings.readingMode === 'webtoon'}>
-                                      <SelectTrigger className="h-10 text-xs sm:text-sm dark:border-slate-800"><SelectValue /></SelectTrigger>
-                                      <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
-                                          <SelectItem value="single">Single Page</SelectItem>
-                                          <SelectItem value="double">Double Page</SelectItem>
-                                          <SelectItem value="double-no-cover">Double (No Cover)</SelectItem>
+                                      <SelectTrigger className="h-10 text-xs sm:text-sm border-border bg-background"><SelectValue /></SelectTrigger>
+                                      <SelectContent className="bg-popover border-border">
+                                          <SelectItem value="single" className="focus:bg-primary/10 focus:text-primary">Single Page</SelectItem>
+                                          <SelectItem value="double" className="focus:bg-primary/10 focus:text-primary">Double Page</SelectItem>
+                                          <SelectItem value="double-no-cover" className="focus:bg-primary/10 focus:text-primary">Double (No Cover)</SelectItem>
                                       </SelectContent>
                                   </Select>
                               </div>
@@ -554,11 +554,11 @@ function ReaderContent() {
                           <div className="grid gap-1.5">
                               <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">2-Page Spread Gutter</Label>
                               <Select value={settings.spreadGap} onValueChange={(v) => setSettings(s => ({...s, spreadGap: v}))} disabled={settings.pageLayout === 'single' || settings.readingMode === 'webtoon'}>
-                                  <SelectTrigger className="h-10 text-xs sm:text-sm dark:border-slate-800"><SelectValue /></SelectTrigger>
-                                  <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
-                                      <SelectItem value="none">Seamless (No Gap)</SelectItem>
-                                      <SelectItem value="small">Book Binding (Small)</SelectItem>
-                                      <SelectItem value="large">Book Binding (Large)</SelectItem>
+                                  <SelectTrigger className="h-10 text-xs sm:text-sm border-border bg-background"><SelectValue /></SelectTrigger>
+                                  <SelectContent className="bg-popover border-border">
+                                      <SelectItem value="none" className="focus:bg-primary/10 focus:text-primary">Seamless (No Gap)</SelectItem>
+                                      <SelectItem value="small" className="focus:bg-primary/10 focus:text-primary">Book Binding (Small)</SelectItem>
+                                      <SelectItem value="large" className="focus:bg-primary/10 focus:text-primary">Book Binding (Large)</SelectItem>
                                   </SelectContent>
                               </Select>
                           </div>
@@ -569,13 +569,13 @@ function ReaderContent() {
                           <div className="grid gap-1.5">
                               <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">Scale Type</Label>
                               <Select value={settings.scaleType} onValueChange={(v) => setSettings(s => ({...s, scaleType: v}))} disabled={settings.readingMode === 'webtoon'}>
-                                  <SelectTrigger className="h-10 text-xs sm:text-sm dark:border-slate-800"><SelectValue /></SelectTrigger>
-                                  <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
-                                      <SelectItem value="screen">Screen (Fit Best)</SelectItem>
-                                      <SelectItem value="fit-height">Fit Height</SelectItem>
-                                      <SelectItem value="fit-width">Fit Width</SelectItem>
-                                      <SelectItem value="fit-width-shrink">Fit Width (Shrink Only)</SelectItem>
-                                      <SelectItem value="original">Original Size</SelectItem>
+                                  <SelectTrigger className="h-10 text-xs sm:text-sm border-border bg-background"><SelectValue /></SelectTrigger>
+                                  <SelectContent className="bg-popover border-border">
+                                      <SelectItem value="screen" className="focus:bg-primary/10 focus:text-primary">Screen (Fit Best)</SelectItem>
+                                      <SelectItem value="fit-height" className="focus:bg-primary/10 focus:text-primary">Fit Height</SelectItem>
+                                      <SelectItem value="fit-width" className="focus:bg-primary/10 focus:text-primary">Fit Width</SelectItem>
+                                      <SelectItem value="fit-width-shrink" className="focus:bg-primary/10 focus:text-primary">Fit Width (Shrink Only)</SelectItem>
+                                      <SelectItem value="original" className="focus:bg-primary/10 focus:text-primary">Original Size</SelectItem>
                                   </SelectContent>
                               </Select>
                           </div>
@@ -586,11 +586,11 @@ function ReaderContent() {
                           <div className="grid gap-1.5">
                               <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">Background Color</Label>
                               <Select value={settings.backgroundColor} onValueChange={(v) => setSettings(s => ({...s, backgroundColor: v}))}>
-                                  <SelectTrigger className="h-10 text-xs sm:text-sm dark:border-slate-800"><SelectValue /></SelectTrigger>
-                                  <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
-                                      <SelectItem value="black">Pitch Black</SelectItem>
-                                      <SelectItem value="grey">Dark Gray</SelectItem>
-                                      <SelectItem value="white">Bright White</SelectItem>
+                                  <SelectTrigger className="h-10 text-xs sm:text-sm border-border bg-background"><SelectValue /></SelectTrigger>
+                                  <SelectContent className="bg-popover border-border">
+                                      <SelectItem value="black" className="focus:bg-primary/10 focus:text-primary">Pitch Black</SelectItem>
+                                      <SelectItem value="grey" className="focus:bg-primary/10 focus:text-primary">Dark Gray</SelectItem>
+                                      <SelectItem value="white" className="focus:bg-primary/10 focus:text-primary">Bright White</SelectItem>
                                   </SelectContent>
                               </Select>
                           </div>
@@ -601,17 +601,17 @@ function ReaderContent() {
                           <div className="grid gap-1.5">
                               <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">Page Transitions</Label>
                               <Select value={settings.animateTransitions} onValueChange={(v) => setSettings(s => ({...s, animateTransitions: v}))}>
-                                  <SelectTrigger className="h-10 text-xs sm:text-sm dark:border-slate-800"><SelectValue /></SelectTrigger>
-                                  <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
-                                      <SelectItem value="true">Smooth Fade</SelectItem>
-                                      <SelectItem value="false">Instant</SelectItem>
+                                  <SelectTrigger className="h-10 text-xs sm:text-sm border-border bg-background"><SelectValue /></SelectTrigger>
+                                  <SelectContent className="bg-popover border-border">
+                                      <SelectItem value="true" className="focus:bg-primary/10 focus:text-primary">Smooth Fade</SelectItem>
+                                      <SelectItem value="false" className="focus:bg-primary/10 focus:text-primary">Instant</SelectItem>
                                   </SelectContent>
                               </Select>
                           </div>
                       </div>
 
                       {/* --- NEW: Image Adjustments (Brightness/Contrast) --- */}
-                      <div className="grid grid-cols-[30px_1fr] items-start gap-3 pt-2 border-t dark:border-slate-800">
+                      <div className="grid grid-cols-[30px_1fr] items-start gap-3 pt-2 border-t border-border">
                           <Sun className="w-5 h-5 text-muted-foreground justify-self-center mt-1" />
                           <div className="grid gap-4">
                               <div className="space-y-3">
@@ -624,7 +624,7 @@ function ReaderContent() {
                                           type="range" min="50" max="150" step="5" 
                                           value={settings.brightness} 
                                           onChange={(e) => setSettings(s => ({...s, brightness: parseInt(e.target.value)}))} 
-                                          className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary"
+                                          className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
                                       />
                                   </div>
                                   <div className="flex flex-col gap-1.5">
@@ -636,13 +636,13 @@ function ReaderContent() {
                                           type="range" min="50" max="150" step="5" 
                                           value={settings.contrast} 
                                           onChange={(e) => setSettings(s => ({...s, contrast: parseInt(e.target.value)}))} 
-                                          className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary"
+                                          className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
                                       />
                                   </div>
                                   
                                   {(settings.brightness !== 100 || settings.contrast !== 100) && (
                                       <div className="flex justify-end pt-1">
-                                          <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] uppercase tracking-widest text-muted-foreground" onClick={() => setSettings(s => ({...s, brightness: 100, contrast: 100}))}>
+                                          <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] uppercase tracking-widest text-muted-foreground hover:bg-muted" onClick={() => setSettings(s => ({...s, brightness: 100, contrast: 100}))}>
                                               Reset Adjustments
                                           </Button>
                                       </div>

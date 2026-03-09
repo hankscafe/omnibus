@@ -18,12 +18,10 @@ export default function SmartMatchPage() {
     useEffect(() => {
         document.title = "Omnibus - Smart Matcher";
         
-        // Added cache: 'no-store' and a timestamp to completely defeat Next.js caching
         fetch(`/api/admin/unmatched?_t=${Date.now()}`, { cache: 'no-store' })
             .then(async (res) => {
                 const data = await res.json();
                 
-                // LOG THE RAW DATA TO THE CONSOLE SO WE CAN DEBUG!
                 console.log("SMART MATCHER RESPONSE:", data);
 
                 if (!res.ok) {
@@ -49,10 +47,9 @@ export default function SmartMatchPage() {
         let matchCount = 0;
 
         for (const series of unmatched) {
-            if (suggestions[series.id]) continue; // Skip if already searched
+            if (suggestions[series.id]) continue; 
 
             try {
-                // Combine Name and Year for a highly accurate ComicVine query
                 const query = `${series.name} ${series.year > 0 ? series.year : ''}`.trim();
                 const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
                 const data = await res.json();
@@ -67,7 +64,6 @@ export default function SmartMatchPage() {
                 setSuggestions(prev => ({ ...prev, [series.id]: 'ERROR' }));
             }
 
-            // Polite delay to defeat the ComicVine Rate Limiter
             await new Promise(r => setTimeout(r, 1500));
         }
 
@@ -108,36 +104,36 @@ export default function SmartMatchPage() {
         setUnmatched(prev => prev.filter(s => s.id !== id));
     };
 
-    if (loading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>;
+    if (loading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
 
     return (
-        <div className="container mx-auto max-w-5xl py-10 px-6">
+        <div className="container mx-auto max-w-5xl py-10 px-6 transition-colors duration-300">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
                 <div className="flex items-start gap-4">
-                    <Button variant="ghost" size="icon" className="shrink-0 mt-1 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100" asChild>
+                    <Button variant="ghost" size="icon" className="shrink-0 mt-1 text-muted-foreground hover:bg-muted hover:text-foreground" asChild>
                         <Link href="/admin"><ArrowLeft className="w-5 h-5" /></Link>
                     </Button>
                     <div>
-                        <h1 className="text-3xl font-extrabold flex items-center gap-3 text-slate-900 dark:text-slate-100">
-                            <Sparkles className="w-8 h-8 text-blue-500" />
+                        <h1 className="text-3xl font-extrabold flex items-center gap-3 text-foreground">
+                            <Sparkles className="w-8 h-8 text-primary" />
                             Smart Matcher
                         </h1>
-                        <p className="text-slate-500 dark:text-slate-400 mt-1">
+                        <p className="text-muted-foreground mt-1">
                             You have {unmatched.length} unmatched folders. Let AI find the metadata for you.
                         </p>
                     </div>
                 </div>
                 
-                <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="bg-blue-600 hover:bg-blue-700 text-white font-bold h-12 px-6 shadow-lg">
-                    {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Scanning ComicVine...</> : <><FolderSearch className="w-5 h-5 mr-2" /> Start Auto-Scan</>}
+                <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 px-6 shadow-lg border-0">
+                    {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Scanning...</> : <><FolderSearch className="w-5 h-5 mr-2" /> Start Auto-Scan</>}
                 </Button>
             </div>
 
             {unmatched.length === 0 ? (
-                <div className="text-center py-20 border-2 border-dashed rounded-xl border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+                <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
                     <Check className="w-12 h-12 mx-auto text-green-500 mb-3" />
-                    <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">All Caught Up!</h3>
-                    <p className="text-slate-500 mt-1">Every folder in your library has a valid ComicVine ID.</p>
+                    <h3 className="text-lg font-bold text-foreground">All Caught Up!</h3>
+                    <p className="text-muted-foreground mt-1">Every folder in your library has a valid ComicVine ID.</p>
                 </div>
             ) : (
                 <div className="flex flex-col gap-4">
@@ -146,35 +142,35 @@ export default function SmartMatchPage() {
                         const isProcessing = processingId === series.id;
 
                         return (
-                            <Card key={series.id} className={`p-4 flex flex-col md:flex-row items-center gap-6 transition-all ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
+                            <Card key={series.id} className={`p-4 flex flex-col md:flex-row items-center gap-6 transition-all border-border bg-background ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
                                 
                                 {/* LOCAL FOLDER DATA */}
                                 <div className="flex-1 min-w-[200px] w-full md:w-auto">
-                                    <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Local Folder</div>
+                                    <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Local Folder</div>
                                     <div className="flex items-start gap-3">
-                                        <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-lg shrink-0">
-                                            <FolderSearch className="w-6 h-6 text-slate-500" />
+                                        <div className="p-3 bg-muted rounded-lg shrink-0">
+                                            <FolderSearch className="w-6 h-6 text-muted-foreground" />
                                         </div>
                                         <div className="overflow-hidden">
-                                            <h3 className="font-bold text-slate-900 dark:text-slate-100 truncate" title={series.name}>{series.name}</h3>
-                                            <p className="text-sm text-slate-500 truncate mt-0.5" title={series.folderPath}>{series.folderPath}</p>
+                                            <h3 className="font-bold text-foreground truncate" title={series.name}>{series.name}</h3>
+                                            <p className="text-sm text-muted-foreground truncate mt-0.5" title={series.folderPath}>{series.folderPath}</p>
                                         </div>
                                     </div>
                                 </div>
 
-                                <ArrowRight className="hidden md:block w-6 h-6 text-slate-300 dark:text-slate-700 shrink-0" />
+                                <ArrowRight className="hidden md:block w-6 h-6 text-muted-foreground/30 shrink-0" />
 
                                 {/* COMICVINE SUGGESTION */}
-                                <div className="flex-1 min-w-[250px] w-full md:w-auto bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border dark:border-slate-800">
-                                    <div className="text-xs font-bold text-blue-500 uppercase tracking-wider mb-2">ComicVine Suggestion</div>
+                                <div className="flex-1 min-w-[250px] w-full md:w-auto bg-muted/50 p-3 rounded-xl border border-border">
+                                    <div className="text-xs font-bold text-primary uppercase tracking-wider mb-2">ComicVine Suggestion</div>
                                     
                                     {!suggestion && isScanning && (
-                                        <div className="flex items-center gap-3 text-slate-500 animate-pulse py-2">
+                                        <div className="flex items-center gap-3 text-muted-foreground animate-pulse py-2">
                                             <Loader2 className="w-5 h-5 animate-spin" /> Searching...
                                         </div>
                                     )}
                                     {!suggestion && !isScanning && (
-                                        <div className="text-sm text-slate-500 italic py-2">Click 'Start Auto-Scan' above to search.</div>
+                                        <div className="text-sm text-muted-foreground italic py-2">Click 'Start Auto-Scan' above to search.</div>
                                     )}
                                     {suggestion === 'NOT_FOUND' && (
                                         <div className="text-sm text-orange-500 font-medium py-2">No confident match found.</div>
@@ -184,13 +180,13 @@ export default function SmartMatchPage() {
                                     )}
                                     {suggestion && suggestion !== 'NOT_FOUND' && suggestion !== 'ERROR' && (
                                         <div className="flex gap-3 items-center">
-                                            <div className="w-12 h-16 shrink-0 rounded bg-slate-200 dark:bg-slate-800 overflow-hidden border dark:border-slate-700">
-                                                {suggestion.image ? <img src={suggestion.image} className="w-full h-full object-cover" /> : <ImageIcon className="w-4 h-4 m-auto mt-6 text-slate-400" />}
+                                            <div className="w-12 h-16 shrink-0 rounded bg-muted border border-border overflow-hidden">
+                                                {suggestion.image ? <img src={suggestion.image} className="w-full h-full object-cover" alt="Suggestion" /> : <ImageIcon className="w-4 h-4 m-auto mt-6 text-muted-foreground/50" />}
                                             </div>
                                             <div className="overflow-hidden">
-                                                <h4 className="font-bold text-slate-900 dark:text-slate-100 truncate text-sm" title={suggestion.name}>{suggestion.name}</h4>
-                                                <p className="text-xs text-slate-500 truncate mt-0.5">{suggestion.publisher || 'Unknown'} • {suggestion.year || '????'}</p>
-                                                <p className="text-[10px] text-slate-400 mt-1">{suggestion.count} Issues</p>
+                                                <h4 className="font-bold text-foreground truncate text-sm" title={suggestion.name}>{suggestion.name}</h4>
+                                                <p className="text-xs text-muted-foreground truncate mt-0.5">{suggestion.publisher || 'Unknown'} • {suggestion.year || '????'}</p>
+                                                <p className="text-[10px] text-muted-foreground/80 mt-1">{suggestion.count} Issues</p>
                                             </div>
                                         </div>
                                     )}
@@ -200,14 +196,14 @@ export default function SmartMatchPage() {
                                 <div className="flex md:flex-col gap-2 shrink-0 w-full md:w-auto justify-end">
                                     <Button 
                                         size="lg" 
-                                        className="flex-1 md:flex-none bg-green-600 hover:bg-green-700 text-white font-bold disabled:opacity-50"
+                                        className="flex-1 md:flex-none bg-green-600 hover:bg-green-700 text-white font-bold disabled:opacity-50 border-0"
                                         disabled={!suggestion || suggestion === 'NOT_FOUND' || suggestion === 'ERROR'}
                                         onClick={() => handleAcceptMatch(series, suggestion)}
                                     >
                                         <Check className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Accept</span>
                                     </Button>
-                                    <Button size="icon" variant="outline" className="shrink-0 md:w-full" onClick={() => handleDismiss(series.id)} title="Hide from Matcher">
-                                        <X className="w-5 h-5 text-slate-400" />
+                                    <Button size="icon" variant="outline" className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={() => handleDismiss(series.id)} title="Hide from Matcher">
+                                        <X className="w-5 h-5" />
                                     </Button>
                                 </div>
 

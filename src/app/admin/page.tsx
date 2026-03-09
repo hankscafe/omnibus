@@ -20,14 +20,14 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 // Skeleton for individual Stat Cards
 function StatSkeleton() {
   return (
-    <Card className="shadow-sm border-slate-200 dark:border-slate-800">
+    <Card className="shadow-sm border-border bg-background">
       <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <div className="h-4 w-24 bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
-        <div className="h-4 w-4 bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
+        <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+        <div className="h-4 w-4 bg-muted animate-pulse rounded" />
       </CardHeader>
       <CardContent>
-        <div className="h-8 w-16 bg-slate-200 dark:bg-slate-800 animate-pulse rounded mb-2" />
-        <div className="h-3 w-32 bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
+        <div className="h-8 w-16 bg-muted animate-pulse rounded mb-2" />
+        <div className="h-3 w-32 bg-muted animate-pulse rounded" />
       </CardContent>
     </Card>
   );
@@ -38,15 +38,15 @@ function QueueSkeleton() {
   return (
     <div className="space-y-4">
       {[...Array(3)].map((_, i) => (
-        <div key={i} className="flex flex-col md:flex-row items-start md:items-center justify-between p-4 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-lg shadow-sm gap-4">
-          <div className="w-10 h-14 bg-slate-200 dark:bg-slate-800 animate-pulse rounded shrink-0 border dark:border-slate-700" />
+        <div key={i} className="flex flex-col md:flex-row items-start md:items-center justify-between p-4 bg-background border border-border rounded-lg shadow-sm gap-4">
+          <div className="w-10 h-14 bg-muted animate-pulse rounded shrink-0 border border-border" />
           <div className="flex-1 space-y-2 w-full">
-            <div className="h-4 w-3/4 bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
-            <div className="h-3 w-1/2 bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
+            <div className="h-4 w-3/4 bg-muted animate-pulse rounded" />
+            <div className="h-3 w-1/2 bg-muted animate-pulse rounded" />
           </div>
           <div className="w-full md:w-48 space-y-2">
-            <div className="h-2 w-full bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
-            <div className="h-3 w-8 ml-auto bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
+            <div className="h-2 w-full bg-muted animate-pulse rounded" />
+            <div className="h-3 w-8 ml-auto bg-muted animate-pulse rounded" />
           </div>
         </div>
       ))}
@@ -299,11 +299,11 @@ export default function AdminPage() {
   const pendingApprovals = mappedRequests.filter(r => r.status === 'PENDING_APPROVAL')
 
   return (
-    <div className="container mx-auto py-6 sm:py-10 px-4 sm:px-6 space-y-8 sm:space-y-10">
+    <div className="container mx-auto py-6 sm:py-10 px-4 sm:px-6 space-y-8 sm:space-y-10 transition-colors duration-300">
       
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Admin Dashboard</h1>
-        <Button variant="outline" size="sm" onClick={fetchAll} disabled={statsLoading || reqsLoading || downloadsLoading} className="h-10 sm:h-9 w-full sm:w-auto hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">Admin Dashboard</h1>
+        <Button variant="outline" size="sm" onClick={fetchAll} disabled={statsLoading || reqsLoading || downloadsLoading} className="h-10 sm:h-9 w-full sm:w-auto border-border hover:bg-muted text-foreground transition-colors">
             {(statsLoading || reqsLoading || downloadsLoading) ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />}
             Refresh Status
         </Button>
@@ -322,24 +322,24 @@ export default function AdminPage() {
             <><StatSkeleton /><StatSkeleton /><StatSkeleton /><StatSkeleton /><StatSkeleton /><StatSkeleton /></>
           ) : (
             <>
-              <Card className="shadow-sm">
+              <Card className="shadow-sm border-border bg-background">
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-xs sm:text-sm font-medium">Total Requests</CardTitle>
+                  <CardTitle className="text-xs sm:text-sm font-medium text-foreground">Total Requests</CardTitle>
                   <TrendingUp className="h-4 w-4 text-muted-foreground hidden sm:block" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-xl sm:text-2xl font-bold">{stats.totalRequests}</div>
+                  <div className="text-xl sm:text-2xl font-bold text-foreground">{stats.totalRequests}</div>
                   <p className="text-[10px] sm:text-xs text-muted-foreground pt-1">All time requests</p>
                 </CardContent>
               </Card>
 
-              <Card className="shadow-sm">
+              <Card className="shadow-sm border-border bg-background">
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-xs sm:text-sm font-medium">Active Downloads</CardTitle>
+                  <CardTitle className="text-xs sm:text-sm font-medium text-foreground">Active Downloads</CardTitle>
                   <Download className="h-4 w-4 text-muted-foreground hidden sm:block" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">{activeList.length + pendingRequests.length}</div>
+                  <div className="text-xl sm:text-2xl font-bold text-primary">{activeList.length + pendingRequests.length}</div>
                   <p className="text-[10px] sm:text-xs text-muted-foreground pt-1">Queue & searches</p>
                 </CardContent>
               </Card>
@@ -366,13 +366,13 @@ export default function AdminPage() {
                 </CardContent>
               </Card>
 
-              <Card className="shadow-sm">
+              <Card className="shadow-sm border-border bg-background">
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-xs sm:text-sm font-medium">Total Users</CardTitle>
+                  <CardTitle className="text-xs sm:text-sm font-medium text-foreground">Total Users</CardTitle>
                   <Users className="h-4 w-4 text-muted-foreground hidden sm:block" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-xl sm:text-2xl font-bold">{stats.totalUsers}</div>
+                  <div className="text-xl sm:text-2xl font-bold text-foreground">{stats.totalUsers}</div>
                   <p className="text-[10px] sm:text-xs text-muted-foreground pt-1">Registered accounts</p>
                 </CardContent>
               </Card>
@@ -411,34 +411,34 @@ export default function AdminPage() {
       {/* COMPACT ADMIN CONTROL PANEL */}
       <div className="space-y-4">
         <div className="flex items-center gap-2 px-1">
-          <Settings className="w-5 h-5 text-slate-700 dark:text-slate-300" />
-          <h2 className="text-xl sm:text-2xl font-bold tracking-tight dark:text-slate-100">Control Panel</h2>
+          <Settings className="w-5 h-5 text-foreground" />
+          <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Control Panel</h2>
         </div>
-        <Card className="shadow-sm border-slate-200 dark:border-slate-800 overflow-hidden">
+        <Card className="shadow-sm border-border overflow-hidden bg-background">
           <CardContent className="p-0">
-            <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x dark:divide-slate-800">
+            <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-border">
               
               {/* Column 1: Library Management */}
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
                 <h4 className="text-[10px] sm:text-xs font-black text-muted-foreground uppercase tracking-wider mb-1 sm:mb-2 px-2 pt-2">Library Management</h4>
-                <Link href="/admin/smart-match" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-md group-hover:bg-blue-100 dark:group-hover:bg-blue-900/40 transition-colors"><Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" /></div>
+                <Link href="/admin/smart-match" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><Sparkles className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Smart Matcher</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Smart Matcher</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Auto-scan and bulk match metadata.</p>
                   </div>
                 </Link>
-                <Link href="/admin/diagnostics" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-md group-hover:bg-blue-100 dark:group-hover:bg-blue-900/40 transition-colors"><ShieldAlert className="w-5 h-5 text-blue-600 dark:text-blue-400" /></div>
+                <Link href="/admin/diagnostics" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><ShieldAlert className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Diagnostics</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Diagnostics</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Detect orphaned files & ghost records.</p>
                   </div>
                 </Link>
-                <Link href="/admin/reports" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-md group-hover:bg-blue-100 dark:group-hover:bg-blue-900/40 transition-colors"><AlertTriangle className="w-5 h-5 text-blue-600 dark:text-blue-400" /></div>
+                <Link href="/admin/reports" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><AlertTriangle className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Reported Issues</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Reported Issues</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Review user reports for broken files.</p>
                   </div>
                 </Link>
@@ -447,24 +447,24 @@ export default function AdminPage() {
               {/* Column 2: System & Monitoring */}
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
                 <h4 className="text-[10px] sm:text-xs font-black text-muted-foreground uppercase tracking-wider mb-1 sm:mb-2 px-2 pt-2">System & Monitoring</h4>
-                <Link href="/admin/analytics" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded-md group-hover:bg-indigo-100 dark:group-hover:bg-indigo-900/40 transition-colors"><BarChart3 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" /></div>
+                <Link href="/admin/analytics" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><BarChart3 className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">Analytics & Insights</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Analytics & Insights</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Storage, usage, and system health.</p>
                   </div>
                 </Link>
-                <Link href="/admin/jobs" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded-md group-hover:bg-indigo-100 dark:group-hover:bg-indigo-900/40 transition-colors"><Calendar className="w-5 h-5 text-indigo-600 dark:text-indigo-400" /></div>
+                <Link href="/admin/jobs" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><Calendar className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">Scheduled Jobs</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Scheduled Jobs</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Manage background automation.</p>
                   </div>
                 </Link>
-                <Link href="/admin/logs" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded-md group-hover:bg-indigo-100 dark:group-hover:bg-indigo-900/40 transition-colors"><FileText className="w-5 h-5 text-indigo-600 dark:text-indigo-400" /></div>
+                <Link href="/admin/logs" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><FileText className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">System Logs</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">System Logs</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">View activity and debug issues.</p>
                   </div>
                 </Link>
@@ -473,24 +473,24 @@ export default function AdminPage() {
               {/* Column 3: Configuration */}
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
                 <h4 className="text-[10px] sm:text-xs font-black text-muted-foreground uppercase tracking-wider mb-1 sm:mb-2 px-2 pt-2">Configuration & Access</h4>
-                <Link href="/admin/settings" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-slate-100 dark:bg-slate-800 p-2 rounded-md group-hover:bg-slate-200 dark:group-hover:bg-slate-700 transition-colors"><Settings className="w-5 h-5 text-slate-700 dark:text-slate-300" /></div>
+                <Link href="/admin/settings" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-muted p-2 rounded-md group-hover:bg-muted/80 transition-colors"><Settings className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors">Settings</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Settings</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Configure clients, API keys, paths.</p>
                   </div>
                 </Link>
-                <Link href="/admin/users" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-slate-100 dark:bg-slate-800 p-2 rounded-md group-hover:bg-slate-200 dark:group-hover:bg-slate-700 transition-colors"><Users className="w-5 h-5 text-slate-700 dark:text-slate-300" /></div>
+                <Link href="/admin/users" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-muted p-2 rounded-md group-hover:bg-muted/80 transition-colors"><Users className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors">Users</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Users</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Manage accounts and roles.</p>
                   </div>
                 </Link>
-                <Link href="/admin/trophies" className="flex items-start gap-3 group hover:bg-slate-50 dark:hover:bg-slate-900/50 p-3 rounded-md transition-colors">
-                  <div className="bg-slate-100 dark:bg-slate-800 p-2 rounded-md group-hover:bg-slate-200 dark:group-hover:bg-slate-700 transition-colors"><Trophy className="w-5 h-5 text-slate-700 dark:text-slate-300" /></div>
+                <Link href="/admin/trophies" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-muted p-2 rounded-md group-hover:bg-muted/80 transition-colors"><Trophy className="w-5 h-5 text-primary" /></div>
                   <div className="pt-0.5">
-                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors">Trophies</h5>
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Trophies</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Manage platform achievements.</p>
                   </div>
                 </Link>
@@ -506,7 +506,7 @@ export default function AdminPage() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 px-1">
             <div className="flex items-center gap-2">
               <Clock className="w-5 h-5 text-orange-500" />
-              <h2 className="text-xl sm:text-2xl font-bold tracking-tight dark:text-slate-100">Requests Awaiting Approval</h2>
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Requests Awaiting Approval</h2>
               <Badge className="bg-orange-500 text-white ml-2">{pendingApprovals.length}</Badge>
             </div>
 
@@ -515,7 +515,7 @@ export default function AdminPage() {
               <Button 
                 variant="outline" 
                 size="sm" 
-                className="h-10 sm:h-9 flex-1 sm:flex-none"
+                className="h-10 sm:h-9 flex-1 sm:flex-none border-border hover:bg-muted text-foreground"
                 onClick={() => {
                   if (selectedRequests.size === pendingApprovals.length) setSelectedRequests(new Set());
                   else setSelectedRequests(new Set(pendingApprovals.map(r => r.id)));
@@ -545,29 +545,29 @@ export default function AdminPage() {
                 key={req.id} 
                 className={`relative overflow-hidden shadow-md transition-all hover:shadow-lg cursor-pointer ${
                   selectedRequests.has(req.id) 
-                  ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/10 dark:bg-blue-900/10' 
+                  ? 'ring-2 ring-primary border-primary bg-primary/10' 
                   : 'border-orange-200 bg-orange-50/20 dark:border-orange-900/40 dark:bg-orange-900/10'
                 }`}
                 onClick={() => toggleSelection(req.id)}
               >
                 {/* --- NEW: Selection Indicator --- */}
                 <div className="absolute top-2 right-2 z-10">
-                  <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${selectedRequests.has(req.id) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white/80 dark:bg-slate-800/80 border-slate-300 dark:border-slate-600 text-transparent'}`}>
+                  <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${selectedRequests.has(req.id) ? 'bg-primary border-primary text-primary-foreground' : 'bg-background/80 border-border text-transparent'}`}>
                     <Check className="w-3.5 h-3.5" />
                   </div>
                 </div>
 
                 <CardContent className="p-3 sm:p-4 flex h-36 sm:h-44 gap-3 sm:gap-4">
-                  <div className="w-20 sm:w-24 h-full bg-slate-200 dark:bg-slate-800 shrink-0 rounded-lg overflow-hidden border dark:border-slate-700 flex items-center justify-center">
-                    {req.imageUrl ? <img src={req.imageUrl} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 text-slate-400" />}
+                  <div className="w-20 sm:w-24 h-full bg-muted shrink-0 rounded-lg overflow-hidden border border-border flex items-center justify-center">
+                    {req.imageUrl ? <img src={req.imageUrl} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 text-muted-foreground/50" />}
                   </div>
 
                   <div className="flex-1 flex flex-col justify-between min-w-0">
                     <div className="space-y-1.5 pr-6">
-                      <h3 className="font-bold text-sm truncate dark:text-slate-100" title={req.seriesName}>{req.seriesName}</h3>
+                      <h3 className="font-bold text-sm truncate text-foreground" title={req.seriesName}>{req.seriesName}</h3>
                       <div className="space-y-1">
-                        <p className="text-[10px] text-muted-foreground flex items-center gap-1.5"><Users className="w-3 h-3 text-blue-500 shrink-0" /> <span className="truncate">Requested by: <span className="font-bold text-slate-700 dark:text-slate-300">{req.userName}</span></span></p>
-                        <p className="text-[10px] text-muted-foreground flex items-center gap-1.5"><Calendar className="w-3 h-3 text-slate-500 shrink-0" /> <span className="truncate">{new Date(req.createdAt).toLocaleString()}</span></p>
+                        <p className="text-[10px] text-muted-foreground flex items-center gap-1.5"><Users className="w-3 h-3 text-primary shrink-0" /> <span className="truncate">Requested by: <span className="font-bold text-foreground">{req.userName}</span></span></p>
+                        <p className="text-[10px] text-muted-foreground flex items-center gap-1.5"><Calendar className="w-3 h-3 text-muted-foreground shrink-0" /> <span className="truncate">{new Date(req.createdAt).toLocaleString()}</span></p>
                       </div>
                     </div>
 
@@ -598,14 +598,14 @@ export default function AdminPage() {
 
       <div className="space-y-4">
         <div className="flex items-center gap-2 px-1">
-            <Activity className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight dark:text-slate-100">Active Download Queue</h2>
+            <Activity className="w-5 h-5 text-primary" />
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Active Download Queue</h2>
         </div>
 
-        <Card className={`shadow-sm bg-blue-50/20 dark:bg-blue-900/5 transition-all ${pendingRequests.length === 0 && activeList.length === 0 ? 'border border-dashed border-blue-300 dark:border-blue-800' : 'border border-blue-200 dark:border-blue-900/40'}`}>
+        <Card className={`shadow-sm bg-primary/5 transition-all ${pendingRequests.length === 0 && activeList.length === 0 ? 'border border-dashed border-primary/30' : 'border border-primary/20'}`}>
           <CardContent className="p-2 sm:p-4 space-y-4">
               <div className="flex justify-between items-center hidden sm:flex">
-                  <p className="text-sm text-blue-700 dark:text-blue-300 px-1">Monitor live transfers from your download clients and pending requests.</p>
+                  <p className="text-sm text-primary/80 px-1">Monitor live transfers from your download clients and pending requests.</p>
               </div>
 
               {downloadsLoading || reqsLoading ? (
@@ -614,8 +614,8 @@ export default function AdminPage() {
                   <div className="space-y-3 sm:space-y-4">
                       {pendingRequests.length === 0 && activeList.length === 0 && (
                           <div className="flex flex-col items-center justify-center py-12 text-center space-y-3">
-                              <div className="bg-slate-100 dark:bg-slate-800 p-4 rounded-full"><Download className="h-10 w-10 text-slate-400 dark:text-slate-600" /></div>
-                              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">No active downloads or pending searches.</p>
+                              <div className="bg-muted p-4 rounded-full"><Download className="h-10 w-10 text-muted-foreground/50" /></div>
+                              <p className="text-sm font-bold text-foreground">No active downloads or pending searches.</p>
                           </div>
                       )}
 
@@ -623,20 +623,20 @@ export default function AdminPage() {
                           const isExhausted = ['STALLED', 'FAILED', 'ERROR'].includes(req.status) && (req.retryCount >= 3);
 
                           return (
-                          <div key={req.id} className={`flex flex-col md:flex-row items-start md:items-center justify-between p-3 sm:p-4 bg-white dark:bg-slate-900 border rounded-lg shadow-sm gap-3 sm:gap-4 transition-all hover:border-blue-300 dark:hover:border-blue-900 ${isExhausted ? 'border-red-300 dark:border-red-900 bg-red-50/30 dark:bg-red-900/10' : 'dark:border-slate-800'}`}>
+                          <div key={req.id} className={`flex flex-col md:flex-row items-start md:items-center justify-between p-3 sm:p-4 bg-background border rounded-lg shadow-sm gap-3 sm:gap-4 transition-all hover:border-primary/50 ${isExhausted ? 'border-red-300 dark:border-red-900 bg-red-50/30 dark:bg-red-900/10' : 'border-border'}`}>
                               
                               <div className="flex gap-3 w-full md:w-auto md:flex-1 min-w-0">
-                                <div className="w-10 h-14 sm:w-12 sm:h-16 bg-slate-100 dark:bg-slate-800 shrink-0 rounded overflow-hidden border dark:border-slate-700 flex items-center justify-center">
+                                <div className="w-10 h-14 sm:w-12 sm:h-16 bg-muted shrink-0 rounded overflow-hidden border border-border flex items-center justify-center">
                                   {req.imageUrl ? (
                                       <img src={req.imageUrl} className="w-full h-full object-cover" alt="" />
                                   ) : (
-                                      <ImageIcon className="w-4 h-4 text-slate-300 dark:text-slate-600" />
+                                      <ImageIcon className="w-4 h-4 text-muted-foreground/50" />
                                   )}
                                 </div>
 
                                 <div className="flex-1 min-w-0 flex flex-col justify-center">
                                     <div className="flex items-center gap-2 mb-1">
-                                        <span className="font-bold text-sm sm:text-base truncate text-slate-800 dark:text-slate-100">{req.seriesName}</span>
+                                        <span className="font-bold text-sm sm:text-base truncate text-foreground">{req.seriesName}</span>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] sm:text-xs text-muted-foreground">
                                         <Badge variant={req.status === 'MANUAL_DDL' ? 'destructive' : 'outline'} className={`text-[9px] uppercase font-black px-1.5 py-0 ${req.status === 'STALLED' ? 'border-orange-500 text-orange-600' : ''} ${isExhausted ? 'border-red-500 text-red-600' : ''}`}>
@@ -644,7 +644,7 @@ export default function AdminPage() {
                                         </Badge>
                                         <span className="flex items-center gap-1 font-medium truncate"><Users className="w-3 h-3" /> {req.userName}</span>
                                         {req.status === 'DOWNLOADING' && (
-                                            <span className="font-mono text-blue-600 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 px-1.5 rounded">{req.progress}%</span>
+                                            <span className="font-mono text-primary font-bold bg-primary/10 px-1.5 rounded">{req.progress}%</span>
                                         )}
                                         {(req.retryCount > 0 && req.status !== 'DOWNLOADING') && (
                                             <span className={`font-mono font-bold px-1.5 rounded ${isExhausted ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400' : 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400'}`}>
@@ -655,19 +655,19 @@ export default function AdminPage() {
                                 </div>
                               </div>
                               
-                              <div className="flex items-center gap-2 w-full md:w-auto shrink-0 justify-end pt-1 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800 md:border-transparent mt-1 md:mt-0">
+                              <div className="flex items-center gap-2 w-full md:w-auto shrink-0 justify-end pt-1 md:pt-0 border-t md:border-t-0 border-border md:border-transparent mt-1 md:mt-0">
                                   {isExhausted && (
                                       <div className="text-[10px] text-red-600 bg-red-50 dark:bg-red-900/20 px-2 py-1.5 rounded border border-red-200 dark:border-red-900 flex items-center gap-1 font-bold animate-pulse">
                                           <AlertTriangle className="w-3 h-3 hidden sm:block" /> Needs Admin
                                       </div>
                                   )}
                                   {req.status === 'MANUAL_DDL' && (
-                                      <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold flex-1 md:flex-none">
+                                      <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold flex-1 md:flex-none border-border hover:bg-muted text-foreground">
                                           <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Link</a>
                                       </Button>
                                   )}
                                   {['STALLED', 'FAILED', 'ERROR'].includes(req.status) && (
-                                      <Button size="sm" variant="outline" onClick={() => handleRetryRequest(req.id)} className="h-10 sm:h-8 text-xs font-bold text-blue-600 border-blue-200 bg-blue-50/50 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400 flex-1 md:flex-none">
+                                      <Button size="sm" variant="outline" onClick={() => handleRetryRequest(req.id)} className="h-10 sm:h-8 text-xs font-bold text-primary border-primary/30 bg-primary/10 hover:bg-primary/20 flex-1 md:flex-none">
                                           <RefreshCw className="w-3 h-3 mr-1" /> Retry
                                       </Button>
                                   )}
@@ -683,24 +683,24 @@ export default function AdminPage() {
                           const imageUrl = match?.imageUrl;
 
                           return (
-                          <div key={t.id} className="flex flex-col md:flex-row items-start md:items-center justify-between p-3 sm:p-4 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-lg shadow-sm gap-3 sm:gap-4 transition-all hover:border-blue-300 dark:hover:border-blue-900">
+                          <div key={t.id} className="flex flex-col md:flex-row items-start md:items-center justify-between p-3 sm:p-4 bg-background border border-border rounded-lg shadow-sm gap-3 sm:gap-4 transition-all hover:border-primary/50">
                               
                               <div className="flex gap-3 w-full md:w-auto md:flex-1 min-w-0">
-                                <div className="w-10 h-14 sm:w-12 sm:h-16 bg-slate-100 dark:bg-slate-800 shrink-0 rounded overflow-hidden border dark:border-slate-700 flex items-center justify-center">
+                                <div className="w-10 h-14 sm:w-12 sm:h-16 bg-muted shrink-0 rounded overflow-hidden border border-border flex items-center justify-center">
                                   {imageUrl ? (
                                       <img src={imageUrl} className="w-full h-full object-cover" alt="" />
                                   ) : (
-                                      <ImageIcon className="w-4 h-4 text-slate-300 dark:text-slate-600" />
+                                      <ImageIcon className="w-4 h-4 text-muted-foreground/50" />
                                   )}
                                 </div>
 
                                 <div className="flex-1 min-w-0 flex flex-col justify-center">
-                                    <p className="font-bold text-sm sm:text-base truncate text-slate-800 dark:text-slate-100 mb-1" title={t.name}>{t.name}</p>
+                                    <p className="font-bold text-sm sm:text-base truncate text-foreground mb-1" title={t.name}>{t.name}</p>
                                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                                         <div className="flex items-center gap-2">
-                                          <Badge variant="secondary" className="text-[9px] h-4 uppercase tracking-tighter font-black">{t.clientName}</Badge>
+                                          <Badge variant="secondary" className="text-[9px] h-4 uppercase tracking-tighter font-black bg-muted border-border">{t.clientName}</Badge>
                                           <span className="text-[10px] text-muted-foreground font-mono font-medium">{t.size}</span>
-                                          <Badge variant="outline" className="text-[9px] uppercase tracking-tighter text-blue-600 border-blue-200 dark:text-blue-400 dark:border-blue-900/50">{t.status}</Badge>
+                                          <Badge variant="outline" className="text-[9px] uppercase tracking-tighter text-primary border-primary/30">{t.status}</Badge>
                                         </div>
                                     </div>
                                 </div>
@@ -709,10 +709,10 @@ export default function AdminPage() {
                               <div className="w-full md:w-48 flex flex-col items-end gap-1.5 shrink-0 pt-1 md:pt-0">
                                   <div className="w-full flex justify-between md:justify-end items-center">
                                       <span className="text-[10px] text-muted-foreground font-medium md:hidden"><Calendar className="w-3 h-3 inline mr-1" /> Active</span>
-                                      <span className="font-mono font-black text-blue-600 dark:text-blue-400 text-xs sm:text-sm">{t.progress}%</span>
+                                      <span className="font-mono font-black text-primary text-xs sm:text-sm">{t.progress}%</span>
                                   </div>
-                                  <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 sm:h-2 rounded-full overflow-hidden shadow-inner">
-                                      <div className="bg-gradient-to-r from-blue-600 to-indigo-500 h-full transition-all duration-500 ease-out" style={{ width: `${t.progress}%` }} />
+                                  <div className="w-full bg-muted h-1.5 sm:h-2 rounded-full overflow-hidden shadow-inner border border-border/50">
+                                      <div className="bg-primary shadow-sm shadow-primary/50 h-full transition-all duration-500 ease-out" style={{ width: `${t.progress}%` }} />
                                   </div>
                               </div>
                           </div>
@@ -727,23 +727,23 @@ export default function AdminPage() {
           <div className="space-y-4">
             <div className="flex items-center gap-2 px-1">
                 <HardDrive className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-                <h2 className="text-xl sm:text-2xl font-bold tracking-tight dark:text-slate-100">Unmatched Finished Downloads</h2>
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Unmatched Finished Downloads</h2>
             </div>
             
             <Card className="shadow-sm border-orange-200 bg-orange-50/20 dark:border-orange-900/40 dark:bg-orange-900/5">
                 <CardContent className="p-3 sm:p-4 space-y-4">
                     <p className="text-xs sm:text-sm text-orange-700 dark:text-orange-300 px-1">These files are finished but not linked to a request. You can manually link them, auto-import them as new series, or ignore them.</p>
                     {completedUnmatched.map((torrent) => (
-                        <div key={torrent.id} className="flex flex-col xl:flex-row items-start xl:items-center justify-between p-3 sm:p-4 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-lg shadow-sm gap-3 sm:gap-4">
+                        <div key={torrent.id} className="flex flex-col xl:flex-row items-start xl:items-center justify-between p-3 sm:p-4 bg-background border border-border rounded-lg shadow-sm gap-3 sm:gap-4">
                             <div className="flex-1 min-w-0 w-full">
-                                <p className="font-mono text-xs sm:text-sm truncate font-bold text-slate-700 dark:text-slate-300 break-all whitespace-normal" title={torrent.name}>{torrent.name}</p>
-                                <Badge variant="outline" className="text-[9px] mt-1.5 uppercase tracking-tighter dark:border-slate-700 dark:text-slate-400">{torrent.clientName}</Badge>
+                                <p className="font-mono text-xs sm:text-sm truncate font-bold text-foreground break-all whitespace-normal" title={torrent.name}>{torrent.name}</p>
+                                <Badge variant="outline" className="text-[9px] mt-1.5 uppercase tracking-tighter border-border text-muted-foreground">{torrent.clientName}</Badge>
                             </div>
                             
                             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full xl:w-auto mt-2 xl:mt-0">
                                 <div className="flex items-center gap-2 w-full sm:w-auto">
                                     <select 
-                                        className="flex-1 sm:w-56 h-12 sm:h-9 rounded-md border border-input bg-background dark:bg-slate-950 dark:border-slate-800 px-3 py-1 text-sm sm:text-xs shadow-sm dark:text-slate-200"
+                                        className="flex-1 sm:w-56 h-12 sm:h-9 rounded-md border border-input bg-background px-3 py-1 text-sm sm:text-xs shadow-sm text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
                                         id={`select-${torrent.id}`}
                                     >
                                         <option value="">Link to request...</option>
@@ -755,7 +755,7 @@ export default function AdminPage() {
                                     </select>
                                     <Button 
                                         size="sm" 
-                                        className="h-12 sm:h-9 px-4 shrink-0 font-bold"
+                                        className="h-12 sm:h-9 px-4 shrink-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground"
                                         disabled={importing === torrent.name}
                                         onClick={() => {
                                             const select = document.getElementById(`select-${torrent.id}`) as HTMLSelectElement;
@@ -767,13 +767,13 @@ export default function AdminPage() {
                                     </Button>
                                 </div>
                                 
-                                <div className="hidden sm:block h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+                                <div className="hidden sm:block h-6 w-px bg-border mx-1" />
 
                                 <div className="flex justify-end gap-2 w-full sm:w-auto">
                                     <Button 
                                         size="sm" 
                                         variant="secondary" 
-                                        className="h-12 sm:h-9 text-xs font-bold shadow-sm flex-1 sm:flex-none" 
+                                        className="h-12 sm:h-9 text-xs font-bold shadow-sm flex-1 sm:flex-none hover:bg-muted text-foreground" 
                                         disabled={importing === torrent.name} 
                                         onClick={() => handleAutoImport(torrent.name, torrent.id)}
                                         title="Create a new folder and import automatically"
@@ -783,7 +783,7 @@ export default function AdminPage() {
                                     <Button 
                                         size="sm" 
                                         variant="outline" 
-                                        className="h-12 sm:h-9 w-12 sm:w-auto px-0 sm:px-3 text-xs font-bold border-slate-200 text-slate-600 hover:bg-slate-50 shrink-0" 
+                                        className="h-12 sm:h-9 w-12 sm:w-auto px-0 sm:px-3 text-xs font-bold border-border text-muted-foreground hover:bg-muted hover:text-foreground shrink-0" 
                                         disabled={ignoringId === torrent.id} 
                                         onClick={() => handleIgnoreDownload(torrent.id)}
                                         title="Hide this file from Omnibus"

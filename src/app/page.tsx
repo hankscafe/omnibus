@@ -17,7 +17,7 @@ import {
   Loader2, 
   AlertTriangle, 
   DownloadCloud,
-  UserPlus // Added for the pending users banner
+  UserPlus 
 } from "lucide-react" 
 import Link from "next/link"
 
@@ -26,7 +26,7 @@ export default function Home() {
   const [pendingCount, setPendingCount] = useState(0)
   const [openReportsCount, setOpenReportsCount] = useState(0)
   const [manualDownloadsCount, setManualDownloadsCount] = useState(0)
-  const [pendingUsersCount, setPendingUsersCount] = useState(0) // NEW: State for pending accounts
+  const [pendingUsersCount, setPendingUsersCount] = useState(0) 
   const isAdmin = session?.user?.role === 'ADMIN'
 
   // State to manage hard cache resets
@@ -44,21 +44,15 @@ export default function Home() {
 
     const checkAdminAlerts = async () => {
       try {
-        // Fetch All Requests
         const resReq = await fetch('/api/admin/requests')
         if (resReq.ok) {
           const data = await resReq.json()
-          
-          // Count Pending Approvals
           const pending = data.filter((r: any) => r.status === 'PENDING_APPROVAL')
           setPendingCount(pending.length)
-
-          // Count Manual Intervention Required (MANUAL_DDL)
           const manual = data.filter((r: any) => r.status === 'MANUAL_DDL')
           setManualDownloadsCount(manual.length)
         }
 
-        // Fetch Open Reports
         const resRep = await fetch('/api/admin/reports')
         if (resRep.ok) {
           const data = await resRep.json()
@@ -66,7 +60,6 @@ export default function Home() {
           setOpenReportsCount(openReports.length)
         }
 
-        // NEW: Fetch Users to check for unapproved accounts
         const resUsers = await fetch('/api/admin/users')
         if (resUsers.ok) {
           const data = await resUsers.json()
@@ -87,14 +80,11 @@ export default function Home() {
   const handleRefreshData = async () => {
     setIsRefreshing(true);
     try {
-        // 1. Tell the backend to rebuild the cache instantly
         await fetch('/api/admin/jobs/trigger', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ job: 'popular' }) 
         });
-        
-        // 2. Trigger the child ComicGrids to pull the fresh cache
         setRefreshSignal(Date.now()); 
     } catch (e) {
         console.error("Failed to refresh data", e);
@@ -104,13 +94,13 @@ export default function Home() {
   }
 
   return (
-    <div className="bg-slate-50 dark:bg-slate-950 min-h-full pb-20">
+    <div className="bg-background min-h-full pb-20 transition-colors duration-300">
       <div className="container mx-auto px-6 py-12 space-y-10">
         
         {/* Admin Notification Banners */}
         <div className="space-y-4">
           
-          {/* NEW: Pending User Accounts (Teal) */}
+          {/* Pending User Accounts (Semantic Teal) */}
           {isAdmin && pendingUsersCount > 0 && (
             <Alert className="bg-teal-50 border-teal-200 dark:bg-teal-950/20 dark:border-teal-900/50 animate-in fade-in slide-in-from-top-4">
               <UserPlus className="h-4 w-4 text-teal-600 dark:text-teal-400" />
@@ -131,7 +121,7 @@ export default function Home() {
             </Alert>
           )}
 
-          {/* Pending Approvals (Orange) */}
+          {/* Pending Approvals (Semantic Orange) */}
           {isAdmin && pendingCount > 0 && (
             <Alert className="bg-orange-50 border-orange-200 dark:bg-orange-950/20 dark:border-orange-900/50 animate-in fade-in slide-in-from-top-4">
               <Bell className="h-4 w-4 text-orange-600 dark:text-orange-400" />
@@ -152,19 +142,19 @@ export default function Home() {
             </Alert>
           )}
 
-          {/* Manual Downloads Needed (Indigo) */}
+          {/* Manual Downloads Needed (Dynamic Primary Theme) */}
           {isAdmin && manualDownloadsCount > 0 && (
-            <Alert className="bg-indigo-50 border-indigo-200 dark:bg-indigo-950/20 dark:border-indigo-900/50 animate-in fade-in slide-in-from-top-4">
-              <DownloadCloud className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-              <AlertTitle className="text-indigo-800 dark:text-indigo-300 font-bold flex items-center gap-2">
+            <Alert className="bg-primary/5 border-primary/20 animate-in fade-in slide-in-from-top-4">
+              <DownloadCloud className="h-4 w-4 text-primary" />
+              <AlertTitle className="text-primary font-bold flex items-center gap-2">
                 Manual Downloads Required
-                <Badge className="bg-indigo-500 hover:bg-indigo-600 text-white border-none text-[10px] h-5">
+                <Badge className="bg-primary hover:bg-primary/90 text-primary-foreground border-none text-[10px] h-5">
                   {manualDownloadsCount}
                 </Badge>
               </AlertTitle>
-              <AlertDescription className="text-indigo-700/80 dark:text-indigo-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <AlertDescription className="text-primary/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 Some issues weren&apos;t found automatically and require manual download from GetComics.
-                <Button asChild variant="outline" size="sm" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:text-indigo-400 dark:hover:bg-indigo-900/40 h-8 font-bold">
+                <Button asChild variant="outline" size="sm" className="border-primary/30 text-primary hover:bg-primary/10 h-8 font-bold">
                   <Link href="/admin">
                     Open Queue <ArrowRight className="ml-2 h-3 w-3" />
                   </Link>
@@ -173,7 +163,7 @@ export default function Home() {
             </Alert>
           )}
 
-          {/* Open Issues/Reports (Red) */}
+          {/* Open Issues/Reports (Semantic Red) */}
           {isAdmin && openReportsCount > 0 && (
             <Alert className="bg-red-50 border-red-200 dark:bg-red-950/20 dark:border-red-900/50 animate-in fade-in slide-in-from-top-4">
               <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
@@ -199,16 +189,16 @@ export default function Home() {
         <div className="text-center space-y-6 relative">
           
           <div className="absolute right-0 top-0 hidden md:block z-10">
-             <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="bg-white/50 backdrop-blur-sm dark:bg-slate-900/50 dark:border-slate-800 text-slate-600 dark:text-slate-400">
+             <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="bg-muted/50 backdrop-blur-sm border-border text-muted-foreground hover:text-foreground">
                {isRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                Refresh Data
              </Button>
           </div>
 
-          <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl text-slate-900 dark:text-slate-100">
+          <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl text-foreground">
             What are we reading today?
           </h1>
-          <p className="text-lg text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
+          <p className="text-lg text-muted-foreground max-w-xl mx-auto">
             Search for a specific series or discover something new below.
           </p>
           
@@ -217,7 +207,7 @@ export default function Home() {
           </div>
 
           <div className="md:hidden pt-4 flex justify-center">
-             <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="w-full max-w-xs dark:border-slate-800 text-slate-600 dark:text-slate-400">
+             <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="w-full max-w-xs border-border text-muted-foreground hover:text-foreground">
                {isRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                Force Refresh Data
              </Button>

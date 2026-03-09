@@ -40,7 +40,7 @@ function ComicGridSkeleton({ count = 14 }: { count?: number }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
       {[...Array(count)].map((_, i) => (
-        <div key={i} className="aspect-[2/3] bg-slate-200 dark:bg-slate-800 animate-pulse rounded-lg shadow-sm" />
+        <div key={i} className="aspect-[2/3] bg-muted animate-pulse rounded-lg shadow-sm" />
       ))}
     </div>
   );
@@ -215,13 +215,13 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold tracking-tight">{title}</h2>
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">{title}</h2>
         <div className="flex items-center gap-3">
             <Select value={limit.toString()} onValueChange={handleLimitChange}>
-                <SelectTrigger className="h-10 sm:h-8 w-[100px] text-sm sm:text-xs font-medium bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm">
+                <SelectTrigger className="h-10 sm:h-8 w-[100px] text-sm sm:text-xs font-medium bg-background border-border shadow-sm">
                     <SelectValue placeholder="Show 14" />
                 </SelectTrigger>
-                <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
+                <SelectContent className="bg-popover border-border">
                     <SelectItem value="7">Show 7</SelectItem>
                     <SelectItem value="14">Show 14</SelectItem>
                     <SelectItem value="21">Show 21</SelectItem>
@@ -230,10 +230,10 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                 </SelectContent>
             </Select>
 
-            <div className="flex items-center gap-2 bg-white dark:bg-slate-900 p-1 rounded-md shadow-sm border dark:border-slate-800">
-                <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-6 sm:w-6 dark:hover:bg-slate-800" onClick={handlePrev} disabled={currentIndex === 0 || loading}><ChevronLeft className="h-5 w-5 sm:h-4 sm:w-4" /></Button>
+            <div className="flex items-center gap-2 bg-background p-1 rounded-md shadow-sm border border-border">
+                <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-6 sm:w-6 hover:bg-muted" onClick={handlePrev} disabled={currentIndex === 0 || loading}><ChevronLeft className="h-5 w-5 sm:h-4 sm:w-4" /></Button>
                 <span className="text-sm sm:text-xs font-mono w-4 text-center">{currentIndex + 1}</span>
-                <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-6 sm:w-6 dark:hover:bg-slate-800" onClick={handleNext} disabled={loading || (currentIndex === offsets.length - 1 && nextOffset === null)}><ChevronRight className="h-5 w-5 sm:h-4 sm:w-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-6 sm:w-6 hover:bg-muted" onClick={handleNext} disabled={loading || (currentIndex === offsets.length - 1 && nextOffset === null)}><ChevronRight className="h-5 w-5 sm:h-4 sm:w-4" /></Button>
             </div>
         </div>
       </div>
@@ -245,7 +245,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
           {comics.map((comic) => {
             const status = comic.issueNumber ? getIssueStatus(comic.id, comic.volumeId, comic.name) : getVolumeStatus(comic.volumeId, comic.name.split(' #')[0]);
             return (
-            <div key={comic.id} className="group relative aspect-[2/3] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden shadow-sm hover:scale-105 transition-all cursor-pointer dark:border dark:border-slate-800" onClick={() => setSelectedComic(comic)}>
+            <div key={comic.id} className="group relative aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-105 transition-all cursor-pointer border border-border" onClick={() => setSelectedComic(comic)}>
                 <img src={comic.image} alt={comic.name} loading="lazy" className="object-cover w-full h-full" />
                 {status === 'LIBRARY' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 shadow-lg z-30"><CheckCircle2 className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
                 {status === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 shadow-lg z-30"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
@@ -261,20 +261,20 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       )}
 
       <Dialog open={!!selectedComic} onOpenChange={(open) => !open && setSelectedComic(null)}>
-        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0 dark:bg-slate-950 dark:border-slate-800 rounded-xl w-[95%]">
+        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0 bg-background border-border rounded-xl w-[95%]">
             {selectedComic && (
                 <>
                 <div className="flex-1 overflow-y-auto p-4 sm:p-6">
                     <div className="mb-4 sm:mb-6">
-                         <DialogTitle className="text-2xl sm:text-3xl font-bold leading-tight mb-2 dark:text-slate-100 pr-8">{selectedComic.name}</DialogTitle>
+                         <DialogTitle className="text-2xl sm:text-3xl font-bold leading-tight mb-2 text-foreground pr-8">{selectedComic.name}</DialogTitle>
                          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                           <Badge variant="outline" className="gap-1 font-normal dark:border-slate-800 dark:text-slate-400"><Calendar className="w-3 h-3"/> {selectedComic.year}</Badge>
-                           {selectedComic.publisher && selectedComic.publisher !== 'Unknown' && (<span className="text-sm font-bold text-slate-500 dark:text-slate-400">{selectedComic.publisher}</span>)}
+                           <Badge variant="outline" className="gap-1 font-normal border-border text-muted-foreground"><Calendar className="w-3 h-3"/> {selectedComic.year}</Badge>
+                           {selectedComic.publisher && selectedComic.publisher !== 'Unknown' && (<span className="text-sm font-bold text-muted-foreground">{selectedComic.publisher}</span>)}
                          </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-6 sm:gap-8 mb-8">
                         <div className="space-y-4">
-                            <div className="relative aspect-[2/3] w-[180px] sm:w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-md">
+                            <div className="relative aspect-[2/3] w-[180px] sm:w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border border-border bg-muted shadow-md">
                                 <img src={selectedComic.image} alt={selectedComic.name} className="absolute inset-0 w-full h-full object-contain" />
                             </div>
                             
@@ -291,8 +291,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                           {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedComic.id ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Download className="w-4 h-4" /> Request Issue</>)}
                                       </Button>
                                       
-                                      <Button variant="outline" className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold" onClick={() => setInteractiveQuery({ query: selectedComic.issueNumber ? selectedComic.name : selectedComic.name.split(' #')[0], type: selectedComic.issueNumber ? 'issue' : 'volume' })}>
-                                          <SearchIcon className="w-4 h-4 text-blue-500" /> Interactive Search
+                                      <Button variant="outline" className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted" onClick={() => setInteractiveQuery({ query: selectedComic.issueNumber ? selectedComic.name : selectedComic.name.split(' #')[0], type: selectedComic.issueNumber ? 'issue' : 'volume' })}>
+                                          <SearchIcon className="w-4 h-4 text-primary" /> Interactive Search
                                       </Button>
                                   </div>
                                 );
@@ -301,35 +301,35 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                         </div>
                         <div className="space-y-6">
                              {hasCreators && (
-                                <div className="grid grid-cols-2 gap-4 bg-slate-50 dark:bg-slate-900 p-4 rounded-lg border dark:border-slate-800">
-                                    {selectedComic.writers && selectedComic.writers.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium dark:text-slate-200">{selectedComic.writers.join(", ")}</p></div>)}
-                                    {selectedComic.artists && selectedComic.artists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium dark:text-slate-200">{selectedComic.artists.join(", ")}</p></div>)}
+                                <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border">
+                                    {selectedComic.writers && selectedComic.writers.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedComic.writers.join(", ")}</p></div>)}
+                                    {selectedComic.artists && selectedComic.artists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedComic.artists.join(", ")}</p></div>)}
                                 </div>
                              )}
 
                              {selectedComic.characters && selectedComic.characters.length > 0 && (
                                 <div className="space-y-2">
-                                    <h4 className="font-semibold flex items-center gap-2 text-sm dark:text-slate-300"><Users className="w-4 h-4"/> Key Appearances</h4>
+                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Users className="w-4 h-4"/> Key Appearances</h4>
                                     <div className="flex flex-wrap gap-1.5">
                                         {selectedComic.characters.map((char: string) => (
-                                            <Badge key={char} variant="secondary" className="font-medium text-[10px] bg-slate-100 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">{char}</Badge>
+                                            <Badge key={char} variant="secondary" className="font-medium text-[10px] bg-muted text-foreground hover:bg-muted/80">{char}</Badge>
                                         ))}
                                     </div>
                                 </div>
                              )}
 
                              <div className="space-y-2">
-                                <h4 className="font-semibold flex items-center gap-2 text-sm dark:text-slate-300"><Info className="w-4 h-4"/> Synopsis</h4>
-                                <div className="text-sm text-muted-foreground leading-relaxed p-4 bg-slate-50 dark:bg-slate-900/50 rounded-md border dark:border-slate-800 min-h-[100px] break-words">
+                                <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Info className="w-4 h-4"/> Synopsis</h4>
+                                <div className="text-sm text-muted-foreground leading-relaxed p-4 bg-muted/50 rounded-md border border-border min-h-[100px] break-words">
                                     {displayDescription || <span className="italic opacity-70">No synopsis available.</span>}
                                 </div>
                              </div>
                         </div>
                     </div>
-                    <div className="space-y-4 pt-4 border-t dark:border-slate-800">
-                        <h4 className="font-semibold flex items-center gap-2 text-base sm:text-lg dark:text-slate-200"><Layers className="w-4 h-4 sm:w-5 sm:h-5"/> More in this Series</h4>
+                    <div className="space-y-4 pt-4 border-t border-border">
+                        <h4 className="font-semibold flex items-center gap-2 text-base sm:text-lg text-foreground"><Layers className="w-4 h-4 sm:w-5 sm:h-5"/> More in this Series</h4>
                         <div className="w-full">
-                            {loadingRelated ? (<div className="flex gap-3 sm:gap-4 overflow-hidden">{[1,2,3,4,5].map(i => (<div key={i} className="w-[120px] aspect-[2/3] bg-slate-100 dark:bg-slate-900 animate-pulse rounded-md dark:border dark:border-slate-800" />))}</div>) : relatedIssues.length > 0 ? (
+                            {loadingRelated ? (<div className="flex gap-3 sm:gap-4 overflow-hidden">{[1,2,3,4,5].map(i => (<div key={i} className="w-[120px] aspect-[2/3] bg-muted animate-pulse rounded-md border border-border" />))}</div>) : relatedIssues.length > 0 ? (
                                 <ScrollArea className="w-full whitespace-nowrap pb-4">
                                     <div className="flex w-max gap-3 sm:gap-4 px-1">
                                         {relatedIssues.map(issue => {
@@ -351,7 +351,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                   } as Comic);
                                               }}
                                             >
-                                                <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-slate-100 dark:bg-slate-900 border dark:border-slate-800 shadow-sm hover:ring-2 hover:ring-blue-500 transition-all">
+                                                <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
                                                     <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
                                                     
                                                     {/* Gradient overlay to ensure text is readable */}
@@ -365,7 +365,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                         <div className="absolute bottom-1 right-1 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity">
                                                             <Button 
                                                                 size="icon" 
-                                                                className="h-8 w-8 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg" 
+                                                                className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg" 
                                                                 disabled={requestingId === issue.id} 
                                                                 onClick={(e) => { 
                                                                     e.preventDefault(); 
@@ -390,9 +390,9 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                         </div>
                     </div>
                 </div>
-                <div className="p-3 sm:p-4 bg-slate-50 dark:bg-slate-900 border-t dark:border-slate-800 flex flex-col sm:flex-row gap-2 sm:justify-between z-10 shrink-0">
-                        {selectedComic.siteUrl && (<Button variant="secondary" asChild className="h-12 sm:h-10 sm:mr-auto bg-white shadow-sm font-bold dark:bg-slate-950 dark:hover:bg-slate-800 dark:text-slate-300 dark:border-slate-700"><Link href={selectedComic.siteUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> View on ComicVine</Link></Button>)}
-                        <Button variant="outline" onClick={() => setSelectedComic(null)} className="h-12 sm:h-10 font-bold dark:border-slate-700 dark:hover:bg-slate-800">Close</Button>
+                <div className="p-3 sm:p-4 bg-background border-t border-border flex flex-col sm:flex-row gap-2 sm:justify-between z-10 shrink-0">
+                        {selectedComic.siteUrl && (<Button variant="secondary" asChild className="h-12 sm:h-10 sm:mr-auto bg-background shadow-sm font-bold hover:bg-muted text-foreground border-border"><Link href={selectedComic.siteUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> View on ComicVine</Link></Button>)}
+                        <Button variant="outline" onClick={() => setSelectedComic(null)} className="h-12 sm:h-10 font-bold border-border hover:bg-muted">Close</Button>
                 </div>
                 </>
             )}
@@ -413,13 +413,13 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
         />
       )}
       <Dialog open={!!monitorPrompt} onOpenChange={(open) => !open && setMonitorPrompt(null)}>
-        <DialogContent className="sm:max-w-md w-[95%] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
-          <DialogTitle className="text-xl font-bold">Monitor Series?</DialogTitle>
+        <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
+          <DialogTitle className="text-xl font-bold text-foreground">Monitor Series?</DialogTitle>
           <DialogDescription className="text-sm sm:text-base text-muted-foreground mt-2">
             You are requesting the series <strong>{monitorPrompt?.name}</strong>. Would you like Omnibus to automatically monitor this series and download new issues as they are released in the future?
           </DialogDescription>
           <div className="flex flex-col gap-3 mt-4 sm:mt-6">
-            <Button className="w-full h-12 sm:h-10 bg-blue-600 hover:bg-blue-700 text-white font-bold" onClick={() => {
+            <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
                 if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true);
                 setMonitorPrompt(null);
             }}>
@@ -431,7 +431,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
             }}>
                 No, Just Request Current Issues
             </Button>
-            <Button variant="ghost" className="w-full h-12 sm:h-10 font-bold text-slate-500" onClick={() => setMonitorPrompt(null)}>Cancel</Button>
+            <Button variant="ghost" className="w-full h-12 sm:h-10 font-bold text-muted-foreground" onClick={() => setMonitorPrompt(null)}>Cancel</Button>
           </div>
         </DialogContent>
       </Dialog>

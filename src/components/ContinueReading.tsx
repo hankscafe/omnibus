@@ -45,7 +45,7 @@ function DynamicCover({ seriesCvId, issueNumber, fallbackUrl, altName }: { serie
         <img src={cover} alt={altName} className="object-cover w-full h-full" onError={(e) => (e.currentTarget.src = fallbackUrl)} />
     ) : (
         <div className="w-full h-full flex items-center justify-center">
-            <ImageIcon className="w-8 h-8 text-slate-300 dark:text-slate-600" />
+            <ImageIcon className="w-8 h-8 text-muted-foreground/50" />
         </div>
     );
 }
@@ -84,21 +84,19 @@ export function ContinueReading() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold tracking-tight">Jump Back In</h2>
-        <Link 
-            href="/library/history" 
-            className="group flex items-center gap-1 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
-        >
-            View History
-            <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
-        </Link>
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">Jump Back In</h2>
+        <Button asChild variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 group font-bold hidden sm:flex">
+            <Link href="/library/history">
+                View History <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+            </Link>
+        </Button>
       </div>
       
       <div className="flex overflow-x-auto gap-4 pb-6 pt-4 px-2 snap-x no-scrollbar -mx-2">
         {items.map((item) => (
             <div 
               key={item.id} 
-              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-all cursor-pointer dark:border dark:border-slate-800 snap-start"
+              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-all cursor-pointer border border-border snap-start"
               onClick={() => router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`)}
             >
               <DynamicCover 
@@ -115,7 +113,7 @@ export function ContinueReading() {
                   </div>
                   <div className="w-full bg-white/30 h-1.5 rounded-full overflow-hidden backdrop-blur-sm">
                       <div 
-                          className="bg-blue-500 h-full rounded-full transition-all duration-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" 
+                          className="bg-primary h-full rounded-full transition-all duration-500 shadow-sm shadow-primary/50" 
                           style={{ width: `${item.percentage}%` }}
                       />
                   </div>
@@ -127,7 +125,7 @@ export function ContinueReading() {
                   
                   <Button 
                       size="sm" 
-                      className="w-full font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-md border-0" 
+                      className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
                       onClick={(e) => {
                           e.stopPropagation();
                           router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
@@ -147,6 +145,14 @@ export function ContinueReading() {
               </div>
             </div>
         ))}
+      </div>
+      
+      <div className="sm:hidden pt-2">
+        <Button asChild variant="outline" className="w-full border-primary/50 text-primary hover:bg-primary/10 group font-bold">
+            <Link href="/library/history">
+                View History <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+            </Link>
+        </Button>
       </div>
     </div>
   );

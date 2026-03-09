@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
@@ -161,79 +161,79 @@ export default function AdminUsersPage() {
       } finally { setIsCreating(false); }
   }
 
-  if (loading) return <div className="flex justify-center p-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
+  if (loading) return <div className="flex justify-center p-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
 
   return (
-    <div className="container mx-auto py-10 px-4 sm:px-6 max-w-6xl space-y-6 sm:space-y-8">
+    <div className="container mx-auto py-10 px-4 sm:px-6 max-w-6xl space-y-6 sm:space-y-8 transition-colors duration-300">
       
       {/* HEADER */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
             <Link href="/admin">
-              <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 hover:bg-slate-100 dark:hover:bg-slate-800">
+              <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 hover:bg-muted text-foreground">
                 <ArrowLeft className="w-5 h-5" />
               </Button>
             </Link>
-            <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 tracking-tight">
-              <UserIcon className="w-6 h-6 sm:w-7 sm:h-7 text-blue-600 dark:text-blue-400" /> Users
+            <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 tracking-tight text-foreground">
+              <UserIcon className="w-6 h-6 sm:w-7 sm:h-7 text-primary" /> Users
             </h1>
         </div>
-        <Button onClick={() => setCreateModalOpen(true)} className="h-12 sm:h-10 w-full sm:w-auto font-bold shadow-md sm:shadow-sm">
+        <Button onClick={() => setCreateModalOpen(true)} className="h-12 sm:h-10 w-full sm:w-auto font-bold shadow-md sm:shadow-sm bg-primary hover:bg-primary/90 text-primary-foreground">
           <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2" /> Create User
         </Button>
       </div>
 
-      {/* --- DESKTOP VIEW (Hidden on Mobile) --- */}
-      <div className="hidden md:block bg-white dark:bg-slate-950 border dark:border-slate-800 rounded-xl shadow-sm overflow-hidden">
+      {/* --- DESKTOP VIEW --- */}
+      <div className="hidden md:block bg-background border border-border rounded-xl shadow-sm overflow-hidden transition-colors duration-300">
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
-            <thead className="bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 text-slate-600 dark:text-slate-300 font-medium">
+            <thead className="bg-muted/50 border-b border-border text-muted-foreground font-medium uppercase text-xs">
               <tr>
                 <th className="px-6 py-4">User</th>
                 <th className="px-6 py-4">Role</th>
                 <th className="px-6 py-4 text-center">Login Approved</th>
                 <th className="px-6 py-4 text-center">Auto-Approve</th>
                 <th className="px-6 py-4 text-center">Downloads</th>
-                {/* FIX: Right-aligned header */}
                 <th className="px-6 py-4 text-center">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody className="divide-y divide-border">
               {users.map((user) => (
-                <tr key={user.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/50 transition-colors">
+                <tr key={user.id} className="hover:bg-muted/30 transition-colors">
                   <td className="px-6 py-4">
-                    <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <div className="font-bold text-foreground flex items-center gap-2">
                       {user.username}
-                      {user.id === session?.user?.id && <Badge variant="secondary" className="text-[10px] dark:bg-slate-800">You</Badge>}
+                      {user.id === session?.user?.id && <Badge variant="secondary" className="text-[10px] bg-primary/10 text-primary border-primary/20">You</Badge>}
                     </div>
                     <div className="text-xs text-muted-foreground">{user.email}</div>
                   </td>
                   <td className="px-6 py-4">
                     <Select disabled={updating === user.id} value={user.role} onValueChange={(val) => handleUpdateUser(user.id, 'role', val)}>
-                        <SelectTrigger className="w-[110px] h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent><SelectItem value="USER">User</SelectItem><SelectItem value="ADMIN">Admin</SelectItem></SelectContent>
+                        <SelectTrigger className="w-[110px] h-8 text-xs bg-background border-border"><SelectValue /></SelectTrigger>
+                        <SelectContent className="bg-popover border-border">
+                            <SelectItem value="USER" className="focus:bg-primary/10 focus:text-primary">User</SelectItem>
+                            <SelectItem value="ADMIN" className="focus:bg-primary/10 focus:text-primary">Admin</SelectItem>
+                        </SelectContent>
                     </Select>
                   </td>
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id || (user.id === session?.user?.id)} checked={user.isApproved} onCheckedChange={(val) => handleUpdateUser(user.id, 'isApproved', val)} /></td>
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} /></td>
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.canDownload} onCheckedChange={(val) => handleUpdateUser(user.id, 'canDownload', val)} /></td>
                   <td className="px-6 py-4">
-                    {/* FIX: justify-end applied here */}
                     <div className="flex items-center justify-end gap-2">
-                        <Button variant="outline" size="sm" disabled={user.id === session?.user?.id} onClick={() => handleImpersonate(user.id, user.username)} className="h-8 text-xs font-bold shrink-0" title="Login as this user">
+                        <Button variant="outline" size="sm" disabled={user.id === session?.user?.id} onClick={() => handleImpersonate(user.id, user.username)} className="h-8 text-xs font-bold shrink-0 border-border hover:bg-muted text-foreground" title="Login as this user">
                             <Eye className="w-3.5 h-3.5 mr-1.5" /> Login As
                         </Button>
                         
-                        {/* FIX: 2FA Reset button wrapped in a fixed-size invisible container */}
                         <div className="w-8 h-8 flex shrink-0">
                             {user.twoFactorEnabled && (
-                                <Button variant="outline" size="icon" onClick={() => initiateReset2FA(user.id, user.username)} className="text-orange-500 hover:text-orange-700 hover:bg-orange-50 dark:hover:bg-orange-900/20 h-8 w-8" title="Reset 2FA">
+                                <Button variant="outline" size="icon" onClick={() => initiateReset2FA(user.id, user.username)} className="text-orange-500 hover:text-orange-600 border-border hover:bg-muted h-8 w-8" title="Reset 2FA">
                                     <ShieldOff className="w-4 h-4" />
                                 </Button>
                             )}
                         </div>
                         
-                        <Button variant="ghost" size="icon" disabled={isDeleting || user.id === session?.user?.id} onClick={() => initiateDelete(user.id, user.username)} className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 h-8 w-8 shrink-0" title="Delete User">
+                        <Button variant="ghost" size="icon" disabled={isDeleting || user.id === session?.user?.id} onClick={() => initiateDelete(user.id, user.username)} className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 h-8 w-8 shrink-0" title="Delete User">
                             <Trash2 className="w-4 h-4" />
                         </Button>
                     </div>
@@ -245,22 +245,25 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      {/* --- MOBILE VIEW (Stacked Cards, Hidden on Desktop) --- */}
+      {/* --- MOBILE VIEW --- */}
       <div className="md:hidden space-y-4">
         {users.map((user) => (
-          <Card key={user.id} className="shadow-sm border-slate-200 dark:border-slate-800 overflow-hidden">
+          <Card key={user.id} className="shadow-sm border-border overflow-hidden bg-background">
             <CardContent className="p-0">
-              <div className="p-4 border-b dark:border-slate-800 bg-slate-50 dark:bg-slate-900/30 flex justify-between items-start">
+              <div className="p-4 border-b border-border bg-muted/50 flex justify-between items-start">
                 <div>
-                  <div className="font-bold text-lg text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  <div className="font-bold text-lg text-foreground flex items-center gap-2">
                     {user.username}
-                    {user.id === session?.user?.id && <Badge variant="secondary" className="text-[10px] uppercase tracking-wider dark:bg-slate-800">You</Badge>}
+                    {user.id === session?.user?.id && <Badge variant="secondary" className="text-[10px] uppercase tracking-wider bg-primary/10 text-primary border-primary/20">You</Badge>}
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5">{user.email}</div>
                 </div>
                 <Select disabled={updating === user.id || (user.id === session?.user?.id)} value={user.role} onValueChange={(val) => handleUpdateUser(user.id, 'role', val)}>
-                    <SelectTrigger className="w-[100px] h-9 text-xs font-bold bg-white dark:bg-slate-950 shadow-sm"><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="USER">User</SelectItem><SelectItem value="ADMIN">Admin</SelectItem></SelectContent>
+                    <SelectTrigger className="w-[100px] h-9 text-xs font-bold bg-background border-border shadow-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                        <SelectItem value="USER" className="focus:bg-primary/10 focus:text-primary">User</SelectItem>
+                        <SelectItem value="ADMIN" className="focus:bg-primary/10 focus:text-primary">Admin</SelectItem>
+                    </SelectContent>
                 </Select>
               </div>
               
@@ -268,7 +271,7 @@ export default function AdminUsersPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Shield className="w-4 h-4 text-muted-foreground" />
-                    <Label className="font-semibold text-sm">Login Approved</Label>
+                    <Label className="font-semibold text-sm text-foreground">Login Approved</Label>
                   </div>
                   <Switch disabled={updating === user.id || (user.id === session?.user?.id)} checked={user.isApproved} onCheckedChange={(val) => handleUpdateUser(user.id, 'isApproved', val)} className="scale-110" />
                 </div>
@@ -276,7 +279,7 @@ export default function AdminUsersPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Activity className="w-4 h-4 text-muted-foreground" />
-                    <Label className="font-semibold text-sm">Auto-Approve Requests</Label>
+                    <Label className="font-semibold text-sm text-foreground">Auto-Approve Requests</Label>
                   </div>
                   <Switch disabled={updating === user.id} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} className="scale-110" />
                 </div>
@@ -284,18 +287,18 @@ export default function AdminUsersPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <DownloadCloud className="w-4 h-4 text-muted-foreground" />
-                    <Label className="font-semibold text-sm">Can Download CBZ</Label>
+                    <Label className="font-semibold text-sm text-foreground">Can Download CBZ</Label>
                   </div>
                   <Switch disabled={updating === user.id} checked={user.canDownload} onCheckedChange={(val) => handleUpdateUser(user.id, 'canDownload', val)} className="scale-110" />
                 </div>
               </div>
 
-              <div className="p-3 bg-slate-50 dark:bg-slate-900/30 border-t dark:border-slate-800 flex gap-2">
+              <div className="p-3 bg-muted/50 border-t border-border flex gap-2">
                 <Button 
                     variant="outline" 
                     disabled={user.id === session?.user?.id} 
                     onClick={() => handleImpersonate(user.id, user.username)} 
-                    className="flex-1 h-12 font-bold shadow-sm bg-white dark:bg-slate-950"
+                    className="flex-1 h-12 font-bold shadow-sm bg-background border-border hover:bg-muted text-foreground"
                 >
                     <Eye className="w-4 h-4 mr-2" /> Login As
                 </Button>
@@ -304,7 +307,7 @@ export default function AdminUsersPage() {
                     <Button 
                         variant="outline" 
                         onClick={() => initiateReset2FA(user.id, user.username)} 
-                        className="h-12 w-12 shrink-0 text-orange-500 hover:text-orange-700 hover:bg-orange-50 border-orange-200 dark:border-orange-900/50 dark:hover:bg-orange-900/30 bg-white dark:bg-slate-950"
+                        className="h-12 w-12 shrink-0 text-orange-500 hover:text-orange-600 border-border hover:bg-muted bg-background"
                         title="Reset 2FA"
                     >
                         <ShieldOff className="w-5 h-5" />
@@ -315,7 +318,7 @@ export default function AdminUsersPage() {
                     variant="outline" 
                     disabled={isDeleting || user.id === session?.user?.id} 
                     onClick={() => initiateDelete(user.id, user.username)} 
-                    className="h-12 w-12 shrink-0 text-red-500 hover:text-red-700 hover:bg-red-50 border-red-200 dark:border-red-900/50 dark:hover:bg-red-900/30 bg-white dark:bg-slate-950"
+                    className="h-12 w-12 shrink-0 text-red-500 hover:text-red-600 border-border hover:bg-muted bg-background"
                 >
                     <Trash2 className="w-5 h-5" />
                 </Button>
@@ -327,25 +330,28 @@ export default function AdminUsersPage() {
 
       {/* CREATE MODAL */}
       <Dialog open={createModalOpen} onOpenChange={setCreateModalOpen}>
-        <DialogContent className="sm:max-w-md w-[95%] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
-            <DialogHeader><DialogTitle className="text-xl">Create New User</DialogTitle></DialogHeader>
+        <DialogContent className="sm:max-w-md w-[95%] bg-background border-border rounded-xl shadow-2xl transition-colors duration-300">
+            <DialogHeader><DialogTitle className="text-xl text-foreground">Create New User</DialogTitle></DialogHeader>
             <div className="grid gap-4 py-4">
-                <div className="grid gap-2"><Label>Username</Label><Input className="h-12 sm:h-10 dark:bg-slate-900" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} /></div>
-                <div className="grid gap-2"><Label>Email</Label><Input type="email" className="h-12 sm:h-10 dark:bg-slate-900" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} /></div>
+                <div className="grid gap-2"><Label className="text-foreground">Username</Label><Input className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} /></div>
+                <div className="grid gap-2"><Label className="text-foreground">Email</Label><Input type="email" className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} /></div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="grid gap-2"><Label>Password</Label><Input type="password" className="h-12 sm:h-10 dark:bg-slate-900" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} /></div>
+                    <div className="grid gap-2"><Label className="text-foreground">Password</Label><Input type="password" className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} /></div>
                     <div className="grid gap-2">
-                        <Label>Role</Label>
+                        <Label className="text-foreground">Role</Label>
                         <Select value={newUser.role} onValueChange={(val) => setNewUser({...newUser, role: val})}>
-                            <SelectTrigger className="h-12 sm:h-10 dark:bg-slate-900"><SelectValue /></SelectTrigger>
-                            <SelectContent className="dark:bg-slate-950"><SelectItem value="USER">User</SelectItem><SelectItem value="ADMIN">Admin</SelectItem></SelectContent>
+                            <SelectTrigger className="h-12 sm:h-10 bg-muted/50 border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                <SelectItem value="USER" className="focus:bg-primary/10 focus:text-primary">User</SelectItem>
+                                <SelectItem value="ADMIN" className="focus:bg-primary/10 focus:text-primary">Admin</SelectItem>
+                            </SelectContent>
                         </Select>
                     </div>
                 </div>
             </div>
             <DialogFooter className="gap-2 sm:gap-0">
-                <Button variant="outline" className="h-12 sm:h-10 w-full sm:w-auto" onClick={() => setCreateModalOpen(false)}>Cancel</Button>
-                <Button onClick={handleCreateUser} disabled={isCreating} className="h-12 sm:h-10 w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                <Button variant="outline" className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted text-foreground" onClick={() => setCreateModalOpen(false)}>Cancel</Button>
+                <Button onClick={handleCreateUser} disabled={isCreating} className="h-12 sm:h-10 w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
                     {isCreating ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 animate-spin" /> : <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />} Create User
                 </Button>
             </DialogFooter>
@@ -362,7 +368,6 @@ export default function AdminUsersPage() {
         confirmText="Delete Account" 
       />
 
-      {/* 2FA RESET CONFIRMATION */}
       <ConfirmationDialog 
         isOpen={reset2faConfirmOpen} 
         onClose={() => setReset2faConfirmOpen(false)} 

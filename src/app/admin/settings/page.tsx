@@ -359,7 +359,7 @@ export default function SettingsPage() {
     const isFailure = !result.success || result.text.includes('❌') || result.text.includes('Error') || result.text.includes('Not Found') || result.text.toLowerCase().includes('failed');
 
     return (
-        <div className={`mt-4 p-4 rounded-md border flex items-center gap-3 ${!isFailure ? "border-green-200 bg-green-50/30 text-green-800 dark:border-green-900/50 dark:bg-green-900/10 dark:text-green-400" : "border-red-200 bg-red-50/30 text-red-800 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-400"}`}>
+        <div className={`mt-4 p-4 rounded-md border flex items-center gap-3 transition-colors duration-300 ${!isFailure ? "border-green-200 bg-green-50/30 text-green-800 dark:border-green-900/50 dark:bg-green-900/10 dark:text-green-400" : "border-red-200 bg-red-50/30 text-red-800 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-400"}`}>
             {!isFailure ? <CheckCircle className="h-5 w-5 shrink-0" /> : <XCircle className="h-5 w-5 shrink-0" />}
             <span className="text-sm font-medium">{result.text}</span>
         </div>
@@ -367,44 +367,46 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="container mx-auto py-6 sm:py-10 px-4 sm:px-6 max-w-5xl space-y-6 sm:space-y-8">
+    <div className="container mx-auto py-6 sm:py-10 px-4 sm:px-6 max-w-5xl space-y-6 sm:space-y-8 transition-colors duration-300">
         <title>Omnibus - Settings</title>
       <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
-            <Link href="/admin"><Button variant="ghost" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 hover:bg-slate-100 dark:hover:bg-slate-800"><ArrowLeft className="w-5 h-5" /></Button></Link>
-            <h1 className="text-2xl sm:text-3xl font-bold">System Settings</h1>
+            <Link href="/admin"><Button variant="ghost" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 hover:bg-muted text-foreground"><ArrowLeft className="w-5 h-5" /></Button></Link>
+            <h1 className="text-2xl sm:text-3xl font-bold text-foreground">System Settings</h1>
         </div>
-        <Button onClick={handleSave} disabled={loading} size="lg" className="w-full sm:w-auto h-12 sm:h-10 font-bold"><Save className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />Save All Changes</Button>
+        <Button onClick={handleSave} disabled={loading} size="lg" className="w-full sm:w-auto h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground"><Save className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />Save All Changes</Button>
       </div>
 
       <Tabs defaultValue="comicvine" className="w-full space-y-6">
         
-        <TabsList className="flex w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] h-auto dark:bg-slate-900 gap-1 p-1 justify-start lg:justify-center">
-          <TabsTrigger value="comicvine" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">ComicVine</TabsTrigger>
-          <TabsTrigger value="indexers" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">Indexers</TabsTrigger>
-          <TabsTrigger value="clients" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">Clients</TabsTrigger>
-          <TabsTrigger value="paths" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">Paths</TabsTrigger>
-          <TabsTrigger value="network" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">Network</TabsTrigger>
-          <TabsTrigger value="filters" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">Filters</TabsTrigger>
-          <TabsTrigger value="alerts" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">Alerts</TabsTrigger>
-          <TabsTrigger value="api" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">API</TabsTrigger>
-          <TabsTrigger value="sso" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs">SSO</TabsTrigger>
+        <TabsList className="flex w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] h-auto bg-muted border border-border gap-1 p-1 justify-start lg:justify-center">
+          <TabsTrigger value="comicvine" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">ComicVine</TabsTrigger>
+          <TabsTrigger value="indexers" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Indexers</TabsTrigger>
+          <TabsTrigger value="clients" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Clients</TabsTrigger>
+          <TabsTrigger value="paths" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Paths</TabsTrigger>
+          <TabsTrigger value="network" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Network</TabsTrigger>
+          <TabsTrigger value="filters" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Filters</TabsTrigger>
+          <TabsTrigger value="alerts" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Alerts</TabsTrigger>
+          <TabsTrigger value="api" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">API</TabsTrigger>
+          <TabsTrigger value="sso" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">SSO</TabsTrigger>
         </TabsList>
 
         {/* 1. COMICVINE */}
         <TabsContent value="comicvine">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Key className="w-5 h-5 text-primary" /> ComicVine Integration</CardTitle>
-                    <CardDescription>ComicVine is the primary source of metadata for Omnibus. It provides high-resolution covers, series descriptions, and release dates.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Key className="w-5 h-5 text-primary" /> ComicVine Integration</CardTitle>
+                    <CardDescription className="text-muted-foreground">ComicVine is the primary source of metadata for Omnibus. It provides high-resolution covers, series descriptions, and release dates.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <Label>ComicVine API Key</Label>
-                    <Input type="password" value={config.cv_api_key || ""} onChange={(e) => setConfig({...config, cv_api_key: e.target.value})} className="h-12 sm:h-10 dark:bg-slate-950 dark:border-slate-800" />
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">ComicVine API Key</Label>
+                        <Input type="password" value={config.cv_api_key || ""} onChange={(e) => setConfig({...config, cv_api_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
+                    </div>
                     <p className="text-[0.8rem] text-muted-foreground">Get your free API Key from <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80 transition-colors">ComicVine.com/api</a>.</p>
-                    <div className="border-t dark:border-slate-800 my-4" />
-                    <Button className="w-full h-12 sm:h-10 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 dark:border-slate-700 transition-colors" variant="outline" onClick={() => handleTest('comicvine')} disabled={!!testing}>
-                        {testing === 'comicvine' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/>} Test Connection
+                    <div className="border-t border-border my-4" />
+                    <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('comicvine')} disabled={!!testing}>
+                        {testing === 'comicvine' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
                     </Button>
                     <StatusBox result={testResults.comicvine} />
                 </CardContent>
@@ -413,67 +415,67 @@ export default function SettingsPage() {
 
         {/* 2. INDEXERS */}
         <TabsContent value="indexers">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Cloud className="w-5 h-5 text-primary" /> Indexer Configuration</CardTitle>
-                    <CardDescription>Configure your Prowlarr connection and manage which indexers to use with priority and seeding time.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Cloud className="w-5 h-5 text-primary" /> Indexer Configuration</CardTitle>
+                    <CardDescription className="text-muted-foreground">Configure your Prowlarr connection and manage which indexers to use with priority and seeding time.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="grid gap-2"><Label>Prowlarr URL</Label><Input value={config.prowlarr_url} onChange={(e) => setConfig({...config, prowlarr_url: e.target.value})} className="h-12 sm:h-10 dark:bg-slate-950 dark:border-slate-800" /></div>
+                    <div className="grid gap-2"><Label className="text-foreground font-semibold">Prowlarr URL</Label><Input value={config.prowlarr_url} onChange={(e) => setConfig({...config, prowlarr_url: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" /></div>
                     <div className="grid gap-2">
-                        <Label>API Key</Label>
-                        <Input type="password" value={config.prowlarr_key} onChange={(e) => setConfig({...config, prowlarr_key: e.target.value})} className="h-12 sm:h-10 dark:bg-slate-950 dark:border-slate-800" />
+                        <Label className="text-foreground font-semibold">API Key</Label>
+                        <Input type="password" value={config.prowlarr_key} onChange={(e) => setConfig({...config, prowlarr_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
                         <p className="text-[0.8rem] text-muted-foreground">Found in Prowlarr Settings → General → Security → API Key</p>
                     </div>
-                    <div className="border-t dark:border-slate-800 my-4" />
-                    <Button className="w-full h-12 sm:h-10 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 dark:border-slate-700 transition-colors" variant="outline" onClick={() => handleTest('prowlarr')} disabled={!!testing}>Test Connection</Button>
+                    <div className="border-t border-border my-4" />
+                    <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('prowlarr')} disabled={!!testing}>Test Connection</Button>
                     <StatusBox result={testResults.prowlarr} />
-                    <div className="border-t dark:border-slate-800 my-4" />
+                    <div className="border-t border-border my-4" />
                     
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                        <h3 className="text-lg font-semibold">Available Indexers</h3>
-                        <Button variant="secondary" size="sm" onClick={refreshIndexers} disabled={refreshing} className="w-full sm:w-auto h-12 sm:h-9 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 dark:bg-slate-800 transition-colors">
-                            {refreshing ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2"/> : <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/>} Refresh List
+                        <h3 className="text-lg font-bold text-foreground">Available Indexers</h3>
+                        <Button variant="secondary" size="sm" onClick={refreshIndexers} disabled={refreshing} className="w-full sm:w-auto h-12 sm:h-9 font-bold bg-muted hover:bg-muted/80 text-foreground transition-colors">
+                            {refreshing ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Refresh List
                         </Button>
                     </div>
 
                     {!hasRefreshed && availableIndexers.length === 0 ? (
-                        <div className="border-2 border-dashed dark:border-slate-800 rounded-lg p-10 text-center text-muted-foreground">Click "Refresh List" to load available indexers from Prowlarr.</div>
+                        <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">Click "Refresh List" to load available indexers from Prowlarr.</div>
                     ) : (
-                        <div className="grid gap-3 max-h-[300px] overflow-y-auto pr-2 border dark:border-slate-800 rounded-lg p-3 sm:p-4 bg-slate-50/50 dark:bg-slate-900/50">
+                        <div className="grid gap-3 max-h-[300px] overflow-y-auto pr-2 border border-border rounded-lg p-3 sm:p-4 bg-muted/30">
                             {availableIndexers.map(idx => (
-                                <div key={idx.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 shadow-sm gap-3">
+                                <div key={idx.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border border-border rounded-lg bg-background shadow-sm gap-3">
                                     <div className="flex items-center gap-2 min-w-0">
-                                        <span className="font-medium dark:text-slate-200 truncate">{idx.name}</span>
-                                        <Badge variant="outline" className="text-[10px] capitalize dark:border-slate-700 shrink-0">{idx.protocol}</Badge>
+                                        <span className="font-bold text-foreground truncate">{idx.name}</span>
+                                        <Badge variant="outline" className="text-[10px] capitalize border-primary/30 text-primary shrink-0">{idx.protocol}</Badge>
                                     </div>
                                     {configuredIndexers.some(c => c.id === idx.id) ? (
                                         <Badge variant="secondary" className="bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800/50 h-10 sm:h-auto flex items-center justify-center">Already Added</Badge>
                                     ) : (
-                                        <Button size="sm" onClick={() => openIndexerModal(idx)} className="h-10 sm:h-8 hover:scale-105 transition-transform"><Plus className="w-4 h-4 sm:w-3 sm:h-3 mr-1"/> Add</Button>
+                                        <Button size="sm" onClick={() => openIndexerModal(idx)} className="h-10 sm:h-8 hover:scale-105 transition-transform bg-primary hover:bg-primary/90 text-primary-foreground"><Plus className="w-4 h-4 sm:w-3 sm:h-3 mr-1"/> Add</Button>
                                     )}
                                 </div>
                             ))}
                         </div>
                     )}
 
-                    <h3 className="text-lg font-bold pt-6 text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                    <h3 className="text-lg font-bold pt-6 text-primary flex items-center gap-2">
                         <Zap className="w-5 h-5"/> Configured Indexers
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                         {configuredIndexers.map(idx => (
-                            <Card key={idx.id} className="p-4 border-blue-100 dark:border-blue-900/50 dark:bg-slate-900 shadow-sm">
+                            <Card key={idx.id} className="p-4 border-primary/20 bg-primary/5 shadow-sm">
                                 <div className="flex justify-between items-start mb-2">
                                     <div className="min-w-0 flex-1 pr-2">
-                                        <p className="font-bold text-sm truncate dark:text-slate-200">{idx.name}</p>
-                                        <Badge variant="secondary" className="text-[9px] uppercase tracking-wider dark:bg-slate-800 mt-1">{idx.protocol || "torrent"}</Badge>
+                                        <p className="font-bold text-sm truncate text-foreground">{idx.name}</p>
+                                        <Badge variant="secondary" className="text-[9px] uppercase tracking-wider bg-primary/10 text-primary mt-1">{idx.protocol || "torrent"}</Badge>
                                     </div>
                                     <div className="flex gap-1 shrink-0">
-                                        <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => openIndexerModal(idx, true)}><Settings className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
+                                        <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-primary/10 text-primary" onClick={() => openIndexerModal(idx, true)}><Settings className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
                                         <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteIndexer(idx.id)}><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
                                     </div>
                                 </div>
-                                <div className="text-[10px] text-muted-foreground border-t dark:border-slate-800 pt-2 uppercase tracking-tight">Priority: {idx.priority} • RSS: {idx.rss ? "Enabled" : "Disabled"}</div>
+                                <div className="text-[10px] text-muted-foreground border-t border-border pt-2 uppercase tracking-tight">Priority: {idx.priority} • RSS: {idx.rss ? "Enabled" : "Disabled"}</div>
                             </Card>
                         ))}
                     </div>
@@ -483,14 +485,14 @@ export default function SettingsPage() {
 
         {/* 3. DOWNLOAD CLIENTS */}
         <TabsContent value="clients">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Download className="w-5 h-5 text-primary" /> Download Clients</CardTitle>
-                    <CardDescription>Configure your clients. For Docker setups, use the "Settings" button on each client to configure specific Remote Path Mappings.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Download className="w-5 h-5 text-primary" /> Download Clients</CardTitle>
+                    <CardDescription className="text-muted-foreground">Configure your clients. For Docker setups, use the "Settings" button on each client to configure specific Remote Path Mappings.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-10">
                     <div className="space-y-4">
-                        <h3 className="text-lg font-bold border-b dark:border-slate-800 pb-2">Add Download Client(s)</h3>
+                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Add Download Client(s)</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {[
                                 { id: 'qbit', name: 'qBittorrent', protocol: 'Torrent' },
@@ -500,13 +502,13 @@ export default function SettingsPage() {
                             ].map((client) => {
                                 const isAdded = configuredClients.some(c => c.type === client.id);
                                 return (
-                                    <div key={client.id} className={`p-4 sm:p-5 border dark:border-slate-800 rounded-xl flex flex-col items-center justify-center space-y-3 transition-all ${isAdded ? 'bg-slate-100 dark:bg-slate-800 opacity-80 cursor-default shadow-none' : 'bg-slate-50 dark:bg-slate-900 cursor-pointer hover:border-primary dark:hover:border-primary hover:shadow-md'}`} onClick={() => !isAdded && openClientSetup(client.id as any)}>
-                                        <span className="font-bold text-lg sm:text-base dark:text-slate-200">{client.name}</span>
-                                        <Badge variant="secondary" className={client.protocol === 'Torrent' ? "bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/40" : "bg-green-100 text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/40"}>{client.protocol}</Badge>
+                                    <div key={client.id} className={`p-4 sm:p-5 border border-border rounded-xl flex flex-col items-center justify-center space-y-3 transition-all ${isAdded ? 'bg-muted opacity-80 cursor-default shadow-none' : 'bg-muted/30 cursor-pointer hover:border-primary hover:shadow-md'}`} onClick={() => !isAdded && openClientSetup(client.id as any)}>
+                                        <span className="font-bold text-lg sm:text-base text-foreground">{client.name}</span>
+                                        <Badge variant="secondary" className={client.protocol === 'Torrent' ? "bg-primary/10 text-primary hover:bg-primary/20" : "bg-green-100 text-green-700 hover:bg-green-200"}>{client.protocol}</Badge>
                                         {isAdded ? (
-                                            <Badge className="bg-green-500 dark:bg-green-600 text-white border-0 py-1.5 w-full flex justify-center"><CheckCircle className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5"/> Configured</Badge>
+                                            <Badge className="bg-green-600 text-white border-0 py-1.5 w-full flex justify-center"><CheckCircle className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5"/> Configured</Badge>
                                         ) : (
-                                            <Button variant="outline" size="sm" className="w-full h-10 sm:h-8 font-bold dark:border-slate-700 dark:bg-slate-950 dark:hover:bg-slate-800"><Plus className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5"/> Add</Button>
+                                            <Button variant="outline" size="sm" className="w-full h-10 sm:h-8 font-bold border-border bg-background hover:bg-muted text-foreground"><Plus className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5"/> Add</Button>
                                         )}
                                     </div>
                                 )
@@ -514,29 +516,29 @@ export default function SettingsPage() {
                         </div>
                     </div>
                     <div className="space-y-4">
-                        <h3 className="text-lg font-bold border-b dark:border-slate-800 pb-2">Configure Client(s)</h3>
+                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Configure Client(s)</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {configuredClients.length === 0 ? (
-                                <div className="col-span-1 sm:col-span-2 text-center py-10 border-2 border-dashed dark:border-slate-800 rounded-xl text-muted-foreground">No clients configured yet.</div>
+                                <div className="col-span-1 sm:col-span-2 text-center py-10 border-2 border-dashed border-border rounded-xl text-muted-foreground">No clients configured yet.</div>
                             ) : (
                                 configuredClients.map((client) => (
-                                    <Card key={client.id} className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                                    <Card key={client.id} className="shadow-sm border-border bg-background">
                                         <CardContent className="p-4 space-y-3">
                                             <div className="flex justify-between items-start">
                                                 <div className="space-y-1 min-w-0 pr-2">
-                                                    <p className="font-bold text-lg sm:text-base truncate dark:text-slate-200">{client.name}</p>
-                                                    <Badge variant="secondary" className={client.protocol === 'Torrent' ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"}>{client.protocol}</Badge>
+                                                    <p className="font-bold text-lg sm:text-base truncate text-foreground">{client.name}</p>
+                                                    <Badge variant="secondary" className={client.protocol === 'Torrent' ? "bg-primary/10 text-primary" : "bg-green-100 text-green-700"}>{client.protocol}</Badge>
                                                     <p className="text-xs text-muted-foreground truncate pt-1">{client.url}</p>
                                                     {client.remotePath && (
-                                                        <div className="flex items-center gap-1 text-[10px] text-orange-600 bg-orange-50 dark:text-orange-400 dark:bg-orange-900/20 px-2 py-1 rounded w-fit">
+                                                        <div className="flex items-center gap-1 text-[10px] text-primary bg-primary/10 px-2 py-1 rounded w-fit mt-1">
                                                             <FolderOpen className="w-3 h-3" />
                                                             Mapped: {client.remotePath} → {client.localPath}
                                                         </div>
                                                     )}
                                                 </div>
                                                 <div className="flex gap-1 shrink-0">
-                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => {setEditingClient(client); setClientModalOpen(true)}}><Settings className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
-                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteClient(client.id)}><Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
+                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => {setEditingClient(client); setClientModalOpen(true)}}><Settings className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
+                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteClient(client.id)}><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
                                                 </div>
                                             </div>
                                         </CardContent>
@@ -551,89 +553,89 @@ export default function SettingsPage() {
 
         {/* 4. PATHS & AUTO-ROUTING */}
         <TabsContent value="paths" className="space-y-6">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
+                    <CardTitle className="flex items-center gap-2 text-foreground">
                         <HardDrive className="w-5 h-5 text-primary" /> Library Directories & Routing
                     </CardTitle>
-                    <CardDescription>Configure where Omnibus reads and writes files across your system.</CardDescription>
+                    <CardDescription className="text-muted-foreground">Configure where Omnibus reads and writes files across your system.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-8">
                     
                     {/* STANDARD AND MANGA LIBRARIES */}
-                    <div className="grid gap-6 md:grid-cols-2 bg-slate-50 dark:bg-slate-900 p-4 rounded-lg border dark:border-slate-800">
+                    <div className="grid gap-6 md:grid-cols-2 bg-muted/30 p-4 rounded-lg border border-border">
                         <div className="space-y-2">
-                            <Label className="text-base sm:text-lg font-bold">Standard Library Destination</Label>
+                            <Label className="text-base sm:text-lg font-bold text-foreground">Standard Library Destination</Label>
                             <Input 
                                 value={config.library_path} 
                                 onChange={e => setConfig({...config, library_path: e.target.value})} 
                                 placeholder={typeof window !== 'undefined' && navigator.platform.indexOf('Win') > -1 ? "C:\\Comics\\Library" : "/library"} 
-                                className="h-12 sm:h-10 font-mono bg-white dark:bg-slate-950 dark:border-slate-800"
+                                className="h-12 sm:h-10 font-mono bg-background border-border text-foreground"
                             />
                             <p className="text-[11px] text-muted-foreground">The primary home for your standard Western comics.</p>
                         </div>
                         <div className="space-y-2">
-                            <Label className="text-base sm:text-lg font-bold text-blue-600 dark:text-blue-400">Manga Library Destination <span className="text-xs font-normal text-muted-foreground ml-1">(Optional)</span></Label>
+                            <Label className="text-base sm:text-lg font-bold text-primary">Manga Library Destination <span className="text-xs font-normal text-muted-foreground ml-1">(Optional)</span></Label>
                             <Input 
                                 value={config.manga_library_path || ""} 
                                 onChange={e => setConfig({...config, manga_library_path: e.target.value})} 
                                 placeholder={typeof window !== 'undefined' && navigator.platform.indexOf('Win') > -1 ? "C:\\Comics\\Manga" : "/manga"} 
-                                className="h-12 sm:h-10 font-mono bg-white dark:bg-slate-950 dark:border-slate-800"
+                                className="h-12 sm:h-10 font-mono bg-background border-border text-foreground"
                             />
                             <p className="text-[11px] text-muted-foreground">Manga series automatically detected by the engine will be routed here instead of the Standard Library.</p>
                         </div>
                     </div>
 
                     <div className="grid gap-2">
-                        <Label>Download Scan Root</Label>
+                        <Label className="text-foreground font-semibold">Download Scan Root</Label>
                         <Input 
                             value={config.download_path} 
                             onChange={e => setConfig({...config, download_path: e.target.value})} 
                             placeholder={typeof window !== 'undefined' && navigator.platform.indexOf('Win') > -1 ? "C:\\Downloads\\Comics" : "/downloads"} 
-                            className="h-12 sm:h-10 font-mono dark:bg-slate-950 dark:border-slate-800"
+                            className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                         />
                         <p className="text-[11px] text-muted-foreground">The folder Omnibus scans for finished downloads before importing them.</p>
                     </div>
 
-                    <div className="border-t dark:border-slate-800 my-4" />
-                    <Button className="w-full h-12 sm:h-10 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 dark:border-slate-700 transition-colors" variant="outline" onClick={() => handleTest('paths')} disabled={!!testing}>
-                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/>} Test File Permissions
+                    <div className="border-t border-border my-4" />
+                    <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('paths')} disabled={!!testing}>
+                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
                     </Button>
                     <StatusBox result={testResults.paths} />
                 </CardContent>
             </Card>
 
-            <Card className="shadow-sm border-orange-100 bg-orange-50/10 dark:border-orange-900/30 dark:bg-orange-900/10">
+            <Card className="shadow-sm border-primary/20 bg-primary/5">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-orange-700 dark:text-orange-500">
+                    <CardTitle className="flex items-center gap-2 text-primary">
                         <FolderOpen className="w-5 h-5" /> Docker Path Mappings (Test Area)
                     </CardTitle>
-                    <CardDescription>Test your translation logic here. If qBittorrent sends a path, does it resolve correctly?</CardDescription>
+                    <CardDescription className="text-primary/70">Test your translation logic here. If qBittorrent sends a path, does it resolve correctly?</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="grid gap-2">
-                            <Label className="text-xs font-bold uppercase text-muted-foreground">Test Remote Path</Label>
+                            <Label className="text-xs font-bold uppercase text-primary/80">Test Remote Path</Label>
                             <Input 
                                 value={config.remote_path_mapping || ""} 
                                 onChange={e => setConfig({...config, remote_path_mapping: e.target.value})} 
                                 placeholder="/downloads" 
-                                className="h-12 sm:h-10 font-mono bg-white dark:bg-slate-950 dark:border-slate-800"
+                                className="h-12 sm:h-10 font-mono bg-background border-primary/30 text-foreground"
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label className="text-xs font-bold uppercase text-muted-foreground">Test Local Path</Label>
+                            <Label className="text-xs font-bold uppercase text-primary/80">Test Local Path</Label>
                             <Input 
                                 value={config.local_path_mapping || ""} 
                                 onChange={e => setConfig({...config, local_path_mapping: e.target.value})} 
                                 placeholder="/data/downloads" 
-                                className="h-12 sm:h-10 font-mono bg-white dark:bg-slate-950 dark:border-slate-800"
+                                className="h-12 sm:h-10 font-mono bg-background border-primary/30 text-foreground"
                             />
                         </div>
                     </div>
-                    <div className="border-t dark:border-orange-900/30 my-2" />
+                    <div className="border-t border-primary/20 my-2" />
                     <Button 
-                        className="w-full h-12 sm:h-10 font-bold bg-orange-100 text-orange-900 hover:bg-orange-200 border-orange-200 dark:bg-orange-900/20 dark:text-orange-400 dark:border-orange-900/50 dark:hover:bg-orange-900/40" 
+                        className="w-full h-12 sm:h-10 font-bold border-primary text-primary hover:bg-primary/10 transition-colors" 
                         variant="outline" 
                         onClick={() => handleTest('mapping', { remote: config.remote_path_mapping, local: config.local_path_mapping })} 
                         disabled={!!testing}
@@ -648,21 +650,21 @@ export default function SettingsPage() {
 
         {/* 5. NETWORK */}
         <TabsContent value="network">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Shield className="w-5 h-5 text-primary" /> Network & Security</CardTitle>
-                    <CardDescription>Configure custom HTTP headers for all outgoing requests and manage connection timeouts/retries.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Shield className="w-5 h-5 text-primary" /> Network & Security</CardTitle>
+                    <CardDescription className="text-muted-foreground">Configure custom HTTP headers for all outgoing requests and manage connection timeouts/retries.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="grid gap-2 bg-slate-50 dark:bg-slate-900 p-4 rounded-lg border dark:border-slate-800">
-                        <Label className="text-base font-bold">Automated Download Retry Delay (Minutes)</Label>
+                    <div className="grid gap-2 bg-muted/30 p-4 rounded-lg border border-border">
+                        <Label className="text-base font-bold text-foreground">Automated Download Retry Delay (Minutes)</Label>
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
                             <Input 
                                 type="number" 
                                 min="1" 
                                 value={config.download_retry_delay || "5"} 
                                 onChange={e => setConfig({...config, download_retry_delay: e.target.value})} 
-                                className="h-12 sm:h-10 w-full sm:w-32 bg-white dark:bg-slate-950 dark:border-slate-800"
+                                className="h-12 sm:h-10 w-full sm:w-32 bg-background border-border text-foreground"
                             />
                             <span className="text-sm text-muted-foreground">
                                 Wait time before automatically retrying a stalled/failed download (Max 3 retries).
@@ -670,27 +672,27 @@ export default function SettingsPage() {
                         </div>
                     </div>
 
-                    <div className="border-t dark:border-slate-800" />
+                    <div className="border-t border-border" />
                     
                     <div className="space-y-4">
-                        <Label className="text-base font-bold">Custom Request Headers</Label>
+                        <Label className="text-base font-bold text-foreground">Custom Request Headers</Label>
                         <div className="flex flex-col sm:flex-row gap-2 mb-2">
                             <Select onValueChange={addHeader}>
-                                <SelectTrigger className="h-12 sm:h-10 w-full sm:w-[250px] dark:bg-slate-950 dark:border-slate-800"><SelectValue placeholder="Add Common Header..." /></SelectTrigger>
-                                <SelectContent className="dark:bg-slate-950 dark:border-slate-800">
-                                    <SelectItem value="CF-Access-Client-Id">Cloudflare Client ID</SelectItem>
-                                    <SelectItem value="CF-Access-Client-Secret">Cloudflare Secret</SelectItem>
-                                    <SelectItem value="Authorization">Authorization Token</SelectItem>
+                                <SelectTrigger className="h-12 sm:h-10 w-full sm:w-[250px] bg-background border-border text-foreground"><SelectValue placeholder="Add Common Header..." /></SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    <SelectItem value="CF-Access-Client-Id" className="focus:bg-primary/10 focus:text-primary">Cloudflare Client ID</SelectItem>
+                                    <SelectItem value="CF-Access-Client-Secret" className="focus:bg-primary/10 focus:text-primary">Cloudflare Secret</SelectItem>
+                                    <SelectItem value="Authorization" className="focus:bg-primary/10 focus:text-primary">Authorization Token</SelectItem>
                                 </SelectContent>
                             </Select>
-                            <Button variant="outline" onClick={() => addHeader("")} className="h-12 sm:h-10 font-bold dark:border-slate-700 dark:hover:bg-slate-800"><Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-1"/> Add Custom</Button>
+                            <Button variant="outline" onClick={() => addHeader("")} className="h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground"><Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-1 text-primary"/> Add Custom</Button>
                         </div>
                         <div className="space-y-3">
                             {customHeaders.map((h, i) => (
-                                <div key={i} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border dark:border-slate-800">
-                                    <Input placeholder="Header Name" value={h.key} onChange={e => updateHeader(i, 'key', e.target.value)} className="h-12 sm:h-10 bg-white dark:bg-slate-950 dark:border-slate-800" />
+                                <div key={i} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/50 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border border-border">
+                                    <Input placeholder="Header Name" value={h.key} onChange={e => updateHeader(i, 'key', e.target.value)} className="h-12 sm:h-10 bg-background border-border text-foreground" />
                                     <div className="flex gap-2 w-full">
-                                      <Input type="password" placeholder="Header Value" value={h.value} onChange={e => updateHeader(i, 'value', e.target.value)} className="h-12 sm:h-10 flex-1 bg-white dark:bg-slate-950 dark:border-slate-800" />
+                                      <Input type="password" placeholder="Header Value" value={h.value} onChange={e => updateHeader(i, 'value', e.target.value)} className="h-12 sm:h-10 flex-1 bg-background border-border text-foreground" />
                                       <Button variant="ghost" size="icon" onClick={() => removeHeader(i)} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200"><Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
                                     </div>
                                 </div>
@@ -703,83 +705,83 @@ export default function SettingsPage() {
 
         {/* 6. DISCOVER & FILTERING */}
         <TabsContent value="filters">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Filter className="w-5 h-5 text-primary" /> Discover & Filtering</CardTitle>
-                    <CardDescription>Filter out unwanted series or publishers from the Discover grids (New Releases, Popular).</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Filter className="w-5 h-5 text-primary" /> Discover & Filtering</CardTitle>
+                    <CardDescription className="text-muted-foreground">Filter out unwanted series or publishers from the Discover grids (New Releases, Popular).</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-900 p-4 rounded-lg border dark:border-slate-800">
+                    <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
                         <Switch 
                             id="filter-toggle"
                             checked={config.filter_enabled === "true"} 
                             onCheckedChange={(c) => setConfig({...config, filter_enabled: c ? "true" : "false"})} 
                             className="scale-110 sm:scale-100"
                         />
-                        <Label htmlFor="filter-toggle" className="cursor-pointer font-bold text-base">Enable Content Filtering</Label>
+                        <Label htmlFor="filter-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable Content Filtering</Label>
                     </div>
                     
                     <div className="space-y-4">
                         <div className="grid gap-2">
-                            <Label>Blocked Publishers (Comma Separated)</Label>
+                            <Label className="text-foreground font-semibold">Blocked Publishers (Comma Separated)</Label>
                             <textarea 
                                 rows={3}
                                 value={config.filter_publishers || ""} 
                                 onChange={e => setConfig({...config, filter_publishers: e.target.value})} 
                                 placeholder="e.g. fakku, yen press, kodansha" 
-                                className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-950 dark:border-slate-800"
+                                className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label>Blocked Keywords in Titles (Comma Separated)</Label>
+                            <Label className="text-foreground font-semibold">Blocked Keywords in Titles (Comma Separated)</Label>
                             <textarea 
                                 rows={3}
                                 value={config.filter_keywords || ""} 
                                 onChange={e => setConfig({...config, filter_keywords: e.target.value})} 
                                 placeholder="e.g. manga, hentai, weekly shonen" 
-                                className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-950 dark:border-slate-800"
+                                className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
                             />
                         </div>
                     </div>
 
-                    <div className="border-t dark:border-slate-800 my-4" />
-                    <div className="bg-blue-50 dark:bg-blue-900/10 p-4 rounded-lg border border-blue-100 dark:border-blue-900/50 flex flex-col sm:flex-row justify-between items-center gap-4">
-                        <div className="text-sm text-blue-900 dark:text-blue-300">
-                            <strong>Quick Setup:</strong> Load a pre-configured blocklist of common adult publishers and keywords.
+                    <div className="border-t border-border my-4" />
+                    <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex flex-col sm:flex-row justify-between items-center gap-4">
+                        <div className="text-sm text-foreground/80">
+                            <strong className="text-primary">Quick Setup:</strong> Load a pre-configured blocklist of common adult publishers and keywords.
                         </div>
-                        <Button variant="secondary" onClick={applyRecommendedFilters} className="h-12 sm:h-10 w-full sm:w-auto font-bold shrink-0 bg-white dark:bg-slate-800 border shadow-sm">
+                        <Button variant="secondary" onClick={applyRecommendedFilters} className="h-12 sm:h-10 w-full sm:w-auto font-bold shrink-0 bg-background border-border shadow-sm text-foreground hover:bg-muted">
                             Load NSFW Defaults
                         </Button>
                     </div>
 
-                    {/* NEW: Acronym Customization */}
-                    <div className="space-y-4 pt-6 border-t dark:border-slate-800">
+                    {/* Acronym Customization */}
+                    <div className="space-y-4 pt-6 border-t border-border">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                             <div>
-                                <Label className="text-base font-bold">Search Acronym Expansion</Label>
+                                <Label className="text-base font-bold text-foreground">Search Acronym Expansion</Label>
                                 <p className="text-[11px] text-muted-foreground mt-1">Automatically expand acronyms during automated fuzzy searches (e.g., "TMNT" &rarr; "Teenage Mutant Ninja Turtles").</p>
                             </div>
-                            <Button variant="outline" size="sm" onClick={() => setCustomAcronyms([...customAcronyms, { key: "", value: "" }])} className="h-12 sm:h-9 font-bold w-full sm:w-auto dark:border-slate-700 dark:hover:bg-slate-800">
-                                <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-1"/> Add Acronym
+                            <Button variant="outline" size="sm" onClick={() => setCustomAcronyms([...customAcronyms, { key: "", value: "" }])} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground">
+                                <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-1 text-primary"/> Add Acronym
                             </Button>
                         </div>
                         
                         <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-                            {customAcronyms.length === 0 && <p className="text-sm text-muted-foreground italic bg-slate-50 dark:bg-slate-900 p-4 rounded-md border dark:border-slate-800">No custom acronyms defined. System defaults will be used.</p>}
+                            {customAcronyms.length === 0 && <p className="text-sm text-muted-foreground italic bg-muted/20 p-4 rounded-md border border-border">No custom acronyms defined. System defaults will be used.</p>}
                             {customAcronyms.map((ac, i) => (
-                                <div key={i} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border dark:border-slate-800">
+                                <div key={i} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/30 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border border-border">
                                     <Input 
                                         placeholder="Acronym (e.g. tmnt)" 
                                         value={ac.key} 
                                         onChange={e => { const a = [...customAcronyms]; a[i].key = e.target.value; setCustomAcronyms(a); }} 
-                                        className="h-12 sm:h-10 w-full sm:w-1/3 bg-white dark:bg-slate-950 dark:border-slate-800 font-mono text-sm" 
+                                        className="h-12 sm:h-10 w-full sm:w-1/3 bg-background border-border font-mono text-sm text-foreground" 
                                     />
                                     <div className="flex gap-2 w-full">
                                       <Input 
                                           placeholder="Full Expansion (e.g. teenage mutant ninja turtles)" 
                                           value={ac.value} 
                                           onChange={e => { const a = [...customAcronyms]; a[i].value = e.target.value; setCustomAcronyms(a); }} 
-                                          className="h-12 sm:h-10 flex-1 bg-white dark:bg-slate-950 dark:border-slate-800 font-mono text-sm" 
+                                          className="h-12 sm:h-10 flex-1 bg-background border-border font-mono text-sm text-foreground" 
                                       />
                                       <Button variant="ghost" size="icon" onClick={() => setCustomAcronyms(customAcronyms.filter((_, idx) => idx !== i))} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200">
                                           <Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/>
@@ -795,37 +797,37 @@ export default function SettingsPage() {
 
         {/* 7. ALERTS (DISCORD WEBHOOKS) */}
         <TabsContent value="alerts">
-          <Card className="shadow-sm dark:border-slate-800">
+          <Card className="shadow-sm border-border bg-background">
             <CardHeader>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2">
+                  <CardTitle className="flex items-center gap-2 text-foreground">
                     <Bell className="w-5 h-5 text-primary" /> Discord Notifications
                   </CardTitle>
-                  <CardDescription>
+                  <CardDescription className="text-muted-foreground">
                     Configure automated server alerts to keep your team updated on requests and system events.
                   </CardDescription>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => openWebhookModal()} className="h-12 sm:h-9 font-bold w-full sm:w-auto dark:border-slate-700 dark:hover:bg-slate-800 transition-colors">
-                  <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2" /> Add Webhook
+                <Button variant="outline" size="sm" onClick={() => openWebhookModal()} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground transition-colors">
+                  <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Add Webhook
                 </Button>
               </div>
             </CardHeader>
             
             <CardContent className="space-y-6">
               {configuredWebhooks.length === 0 ? (
-                <div className="border-2 border-dashed dark:border-slate-800 rounded-lg p-10 text-center text-muted-foreground">
+                <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">
                   No webhooks configured yet. Add one to start receiving Discord alerts.
                 </div>
               ) : (
                 <div className="grid gap-4">
                   {configuredWebhooks.map(hook => (
-                    <div key={hook.id} className="flex flex-col border dark:border-slate-800 rounded-lg bg-slate-50/30 dark:bg-slate-900/50 shadow-sm p-4 gap-3">
+                    <div key={hook.id} className="flex flex-col border border-border rounded-lg bg-muted/20 shadow-sm p-4 gap-3">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="flex flex-col gap-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="font-bold text-lg sm:text-base dark:text-slate-200">{hook.name}</span>
-                            <Badge variant={hook.isActive ? "secondary" : "outline"} className={hook.isActive ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : ""}>
+                            <span className="font-bold text-lg sm:text-base text-foreground">{hook.name}</span>
+                            <Badge variant={hook.isActive ? "secondary" : "outline"} className={hook.isActive ? "bg-primary/10 text-primary border-primary/20" : "text-muted-foreground border-border"}>
                               {hook.isActive ? "Active" : "Disabled"}
                             </Badge>
                           </div>
@@ -834,18 +836,18 @@ export default function SettingsPage() {
                           </p>
                         </div>
                         
-                        <div className="flex items-center gap-2 shrink-0 border-t sm:border-0 dark:border-slate-800 pt-3 sm:pt-0">
+                        <div className="flex items-center gap-2 shrink-0 border-t sm:border-0 border-border pt-3 sm:pt-0">
                           <Button 
                             variant="outline" 
                             size="icon" 
-                            className="h-10 w-10 sm:h-8 sm:w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20" 
+                            className="h-10 w-10 sm:h-8 sm:w-8 text-primary hover:bg-primary/10 border-primary/20 transition-colors" 
                             disabled={testingWebhookId === hook.id}
                             onClick={() => handleTestWebhook(hook)}
                           >
                             {testingWebhookId === hook.id ? <Loader2 className="h-5 w-5 sm:h-4 sm:w-4 animate-spin" /> : <Send className="h-5 w-5 sm:h-4 sm:w-4" />}
                           </Button>
                           <Switch checked={hook.isActive} onCheckedChange={() => toggleWebhookActive(hook.id)} className="mx-2 scale-110 sm:scale-100" />
-                          <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => openWebhookModal(hook)}>
+                          <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => openWebhookModal(hook)}>
                             <Settings className="h-5 w-5 sm:h-4 sm:w-4" />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteWebhook(hook.id)}>
@@ -854,9 +856,9 @@ export default function SettingsPage() {
                         </div>
                       </div>
                       
-                      <div className="flex flex-wrap gap-1.5 bg-white dark:bg-slate-950 p-2 rounded-md border dark:border-slate-800">
+                      <div className="flex flex-wrap gap-1.5 bg-background p-2 rounded-md border border-border shadow-inner">
                         {hook.events.map(ev => (
-                          <Badge key={ev} variant="outline" className="text-[10px] uppercase tracking-tighter dark:border-slate-700">
+                          <Badge key={ev} variant="outline" className="text-[10px] uppercase tracking-tighter border-border text-muted-foreground">
                             {ev.replace('_', ' ')}
                           </Badge>
                         ))}
@@ -870,11 +872,11 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              <div className="border-t dark:border-slate-800 my-4" />
-              <div className="bg-blue-50/50 dark:bg-blue-900/10 p-4 rounded-lg border border-blue-100 dark:border-blue-900/30 flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-blue-900 dark:text-blue-300">
-                  <strong>Pro-Tip:</strong> Separate webhooks allow for channel-specific logging. For example, send "Download Failed" to your #dev-logs and "Comic Available" to #general.
+              <div className="border-t border-border my-4" />
+              <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                <p className="text-xs text-foreground/80">
+                  <strong className="text-primary">Pro-Tip:</strong> Separate webhooks allow for channel-specific logging. For example, send "Download Failed" to your #dev-logs and "Comic Available" to #general.
                 </p>
               </div>
             </CardContent>
@@ -883,63 +885,63 @@ export default function SettingsPage() {
 
         {/* SSO / AUTH */}
         <TabsContent value="sso">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Fingerprint className="w-5 h-5 text-primary" /> Single Sign-On (SSO)</CardTitle>
-                    <CardDescription>Integrate Omnibus with an OpenID Connect (OIDC) identity provider like Authelia, Authentik, or Keycloak.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Fingerprint className="w-5 h-5 text-primary" /> Single Sign-On (SSO)</CardTitle>
+                    <CardDescription className="text-muted-foreground">Integrate Omnibus with an OpenID Connect (OIDC) identity provider like Authelia, Authentik, or Keycloak.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-900 p-4 rounded-lg border dark:border-slate-800">
+                    <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
                         <Switch 
                             id="oidc-toggle"
                             checked={config.oidc_enabled === "true"} 
                             onCheckedChange={(c) => setConfig({...config, oidc_enabled: c ? "true" : "false"})} 
                             className="scale-110 sm:scale-100"
                         />
-                        <Label htmlFor="oidc-toggle" className="cursor-pointer font-bold text-base">Enable OIDC Authentication</Label>
+                        <Label htmlFor="oidc-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable OIDC Authentication</Label>
                     </div>
 
                     <div className="grid gap-4">
                         <div className="grid gap-2">
-                            <Label>Issuer URL</Label>
+                            <Label className="text-foreground font-semibold">Issuer URL</Label>
                             <Input 
                                 placeholder="https://auth.yourdomain.com" 
                                 value={config.oidc_issuer || ""} 
                                 onChange={e => setConfig({...config, oidc_issuer: e.target.value})} 
-                                className="h-12 sm:h-10 dark:bg-slate-950 dark:border-slate-800"
+                                className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                             />
                             <p className="text-[11px] text-muted-foreground">The base URL of your identity provider.</p>
                         </div>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="grid gap-2">
-                                <Label>Client ID</Label>
+                                <Label className="text-foreground font-semibold">Client ID</Label>
                                 <Input 
                                     value={config.oidc_client_id || ""} 
                                     onChange={e => setConfig({...config, oidc_client_id: e.target.value})} 
-                                    className="h-12 sm:h-10 dark:bg-slate-950 dark:border-slate-800"
+                                    className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                                 />
                             </div>
                             <div className="grid gap-2">
-                                <Label>Client Secret</Label>
+                                <Label className="text-foreground font-semibold">Client Secret</Label>
                                 <Input 
                                     type="password"
                                     value={config.oidc_client_secret || ""} 
                                     onChange={e => setConfig({...config, oidc_client_secret: e.target.value})} 
-                                    className="h-12 sm:h-10 dark:bg-slate-950 dark:border-slate-800"
+                                    className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                                 />
                             </div>
                         </div>
                     </div>
 
-                    <div className="border-t dark:border-slate-800 pt-4">
+                    <div className="border-t border-border pt-4">
                         <Label className="text-sm font-bold text-primary mb-2 block">Redirect URI Setup</Label>
                         <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider's client configuration:</p>
                         <div className="flex items-center gap-2">
                             <Input 
                                 readOnly
                                 value={typeof window !== 'undefined' ? `${window.location.origin}/api/auth/callback/oidc` : ''} 
-                                className="h-12 sm:h-10 font-mono text-xs text-muted-foreground bg-slate-50 dark:bg-slate-900 border-dashed dark:border-slate-700"
+                                className="h-12 sm:h-10 font-mono text-xs text-muted-foreground bg-muted/30 border-dashed border-border"
                             />
                         </div>
                     </div>
@@ -949,35 +951,35 @@ export default function SettingsPage() {
 
         {/* 8. API KEYS */}
         <TabsContent value="api">
-            <Card className="shadow-sm dark:border-slate-800">
+            <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Webhook className="w-5 h-5 text-primary" /> External API Integrations</CardTitle>
-                    <CardDescription>Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Webhook className="w-5 h-5 text-primary" /> External API Integrations</CardTitle>
+                    <CardDescription className="text-muted-foreground">Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
                     <div className="grid gap-2">
-                        <Label>Omnibus API Key</Label>
+                        <Label className="text-foreground font-semibold">Omnibus API Key</Label>
                         <div className="flex gap-2">
                             <Input 
                                 type="text" 
                                 readOnly
                                 value={config.omnibus_api_key || ""} 
                                 placeholder="No key generated. Click 'Generate New Key' below." 
-                                className="h-12 sm:h-10 font-mono dark:bg-slate-950 dark:border-slate-800 text-muted-foreground" 
+                                className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-muted-foreground" 
                             />
-                            <Button variant="outline" size="icon" className="h-12 w-12 sm:h-10 sm:w-10 shrink-0 dark:border-slate-700 dark:hover:bg-slate-800" onClick={copyApiKey} disabled={!config.omnibus_api_key}>
-                                <Copy className="w-5 h-5 sm:w-4 sm:h-4" />
+                            <Button variant="outline" size="icon" className="h-12 w-12 sm:h-10 sm:w-10 shrink-0 border-border hover:bg-muted text-foreground transition-colors" onClick={copyApiKey} disabled={!config.omnibus_api_key}>
+                                <Copy className="w-5 h-5 sm:w-4 sm:h-4 text-primary" />
                             </Button>
                         </div>
                         <p className="text-[11px] text-muted-foreground">
-                            Pass this key in the header of your external requests as <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded">X-Api-Key</code>.
+                            Pass this key in the header of your external requests as <code className="bg-muted px-1 rounded border border-border">X-Api-Key</code>.
                         </p>
                     </div>
                     
-                    <div className="border-t dark:border-slate-800 my-4" />
+                    <div className="border-t border-border my-4" />
                     
-                    <Button variant="secondary" onClick={generateApiKey} className="h-12 sm:h-10 font-bold w-full sm:w-auto bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700">
-                        <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2" /> Generate New Key
+                    <Button variant="secondary" onClick={generateApiKey} className="h-12 sm:h-10 font-bold w-full sm:w-auto bg-muted hover:bg-muted/80 text-foreground transition-all">
+                        <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Generate New Key
                     </Button>
                 </CardContent>
             </Card>
@@ -989,10 +991,10 @@ export default function SettingsPage() {
       
       {/* WEBHOOK MODAL */}
       <Dialog open={webhookModalOpen} onOpenChange={setWebhookModalOpen}>
-        <DialogContent className="sm:max-w-md w-[95%] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
+        <DialogContent className="sm:max-w-md w-[95%] bg-background border-border rounded-xl shadow-2xl transition-colors duration-300">
           <DialogHeader>
-            <DialogTitle>{editingWebhook?.name ? "Edit Webhook" : "New Webhook"}</DialogTitle>
-            <DialogDescription>Configure your Discord integration details and events.</DialogDescription>
+            <DialogTitle className="text-foreground">{editingWebhook?.name ? "Edit Webhook" : "New Webhook"}</DialogTitle>
+            <DialogDescription className="text-muted-foreground">Configure your Discord integration details and events.</DialogDescription>
           </DialogHeader>
           
           {editingWebhook && (
@@ -1003,7 +1005,7 @@ export default function SettingsPage() {
                   placeholder="e.g. Admin Alerts" 
                   value={editingWebhook.name} 
                   onChange={e => setEditingWebhook({ ...editingWebhook, name: e.target.value })}
-                  className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" 
+                  className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" 
                 />
               </div>
               
@@ -1014,35 +1016,35 @@ export default function SettingsPage() {
                     placeholder="https://discord.com/api/webhooks/..." 
                     value={editingWebhook.url} 
                     onChange={e => setEditingWebhook({ ...editingWebhook, url: e.target.value })}
-                    className="h-12 sm:h-10 font-mono text-xs dark:bg-slate-900 dark:border-slate-800 flex-1" 
+                    className="h-12 sm:h-10 font-mono text-xs bg-muted/20 border-border flex-1 text-foreground" 
                   />
                   <Button 
                     variant="secondary" 
-                    className="h-12 sm:h-10 font-bold"
+                    className="h-12 sm:h-10 font-bold bg-muted hover:bg-muted/80 text-foreground"
                     disabled={!editingWebhook.url || testingWebhookId === editingWebhook.id}
                     onClick={() => handleTestWebhook(editingWebhook)}
                   >
-                    {testingWebhookId === editingWebhook.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Test"}
+                    {testingWebhookId === editingWebhook.id ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : "Test"}
                   </Button>
                 </div>
               </div>
 
-              <div className="space-y-3 pt-4 border-t dark:border-slate-800">
+              <div className="space-y-3 pt-4 border-t border-border">
                 <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
                 <div className="grid gap-2 max-h-[250px] overflow-y-auto pr-2">
                   {DISCORD_EVENTS.map(event => (
-                    <div key={event.id} className="flex items-start space-x-3 p-2 sm:p-1 rounded hover:bg-slate-50 dark:hover:bg-slate-900 border border-transparent hover:border-slate-200 dark:hover:border-slate-800">
+                    <div key={event.id} className="flex items-start space-x-3 p-2 sm:p-2 rounded hover:bg-muted/50 border border-transparent hover:border-border transition-colors group">
                       <Checkbox 
                         id={event.id} 
                         checked={editingWebhook.events.includes(event.id)}
                         onCheckedChange={() => toggleWebhookEvent(event.id)}
-                        className="mt-1 sm:mt-0"
+                        className="mt-1 sm:mt-0 border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                       />
                       <div className="grid gap-1.5 leading-none">
-                        <label htmlFor={event.id} className="text-sm font-semibold leading-none cursor-pointer">
+                        <label htmlFor={event.id} className="text-sm font-bold leading-none cursor-pointer text-foreground group-hover:text-primary transition-colors">
                           {event.label}
                         </label>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-[11px] text-muted-foreground leading-snug">
                           {event.desc}
                         </p>
                       </div>
@@ -1056,8 +1058,8 @@ export default function SettingsPage() {
           )}
 
           <DialogFooter className="gap-2 sm:gap-0">
-             <Button variant="ghost" className="h-12 sm:h-10" onClick={() => setWebhookModalOpen(false)}>Cancel</Button>
-             <Button onClick={saveWebhook} className="h-12 sm:h-10 bg-blue-600 hover:bg-blue-700 text-white font-bold">
+             <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setWebhookModalOpen(false)}>Cancel</Button>
+             <Button onClick={saveWebhook} className="h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-md">
                 Save Integration
              </Button>
           </DialogFooter>
@@ -1066,34 +1068,34 @@ export default function SettingsPage() {
 
       {/* CLIENT MODAL */}
       <Dialog open={clientModalOpen} onOpenChange={setClientModalOpen}>
-        <DialogContent className="sm:max-w-[500px] w-[95%] dark:bg-slate-950 dark:border-slate-800 rounded-xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader><DialogTitle>Configure {editingClient?.name}</DialogTitle></DialogHeader>
+        <DialogContent className="sm:max-w-[500px] w-[95%] bg-background border-border rounded-xl max-h-[90vh] overflow-y-auto shadow-2xl transition-colors duration-300">
+            <DialogHeader><DialogTitle className="text-foreground">Configure {editingClient?.name}</DialogTitle></DialogHeader>
             {editingClient && (
                 <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
-                        <Label>Server URL</Label>
-                        <Input value={editingClient.url} onChange={e => setEditingClient({...editingClient, url: e.target.value})} placeholder="http://192.168.1.100:8080" className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" />
+                        <Label className="text-foreground font-semibold">Server URL</Label>
+                        <Input value={editingClient.url} onChange={e => setEditingClient({...editingClient, url: e.target.value})} placeholder="http://192.168.1.100:8080" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
                     </div>
 
                     <div className="grid gap-2">
-                        <Label>Download Category / Label</Label>
-                        <Input value={editingClient.category || ""} onChange={e => setEditingClient({...editingClient, category: e.target.value})} placeholder="e.g. comics" className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" />
+                        <Label className="text-foreground font-semibold">Download Category / Label</Label>
+                        <Input value={editingClient.category || ""} onChange={e => setEditingClient({...editingClient, category: e.target.value})} placeholder="e.g. comics" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
                         <p className="text-[11px] text-muted-foreground">Sets the category in the client for automatic folder sorting.</p>
                     </div>
 
-                    <div className="border-t dark:border-slate-800 pt-4 mt-2">
+                    <div className="border-t border-border pt-4 mt-2">
                         <div className="flex items-center gap-2 mb-3">
-                            <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                            <FolderOpen className="w-4 h-4 text-primary" />
                             <Label className="font-bold text-xs uppercase text-muted-foreground">Docker Path Mapping</Label>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div className="grid gap-2">
-                                <Label className="text-[11px]">Remote Path (Client)</Label>
-                                <Input className="h-12 sm:h-10 text-xs font-mono dark:bg-slate-900 dark:border-slate-800" value={editingClient.remotePath || ""} onChange={e => setEditingClient({...editingClient, remotePath: e.target.value})} placeholder="/downloads/comics" />
+                                <Label className="text-[11px] text-muted-foreground">Remote Path (Client)</Label>
+                                <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.remotePath || ""} onChange={e => setEditingClient({...editingClient, remotePath: e.target.value})} placeholder="/downloads/comics" />
                             </div>
                             <div className="grid gap-2">
-                                <Label className="text-[11px]">Local Path (Omnibus)</Label>
-                                <Input className="h-12 sm:h-10 text-xs font-mono dark:bg-slate-900 dark:border-slate-800" value={editingClient.localPath || ""} onChange={e => setEditingClient({...editingClient, localPath: e.target.value})} placeholder="/data/downloads" />
+                                <Label className="text-[11px] text-muted-foreground">Local Path (Omnibus)</Label>
+                                <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.localPath || ""} onChange={e => setEditingClient({...editingClient, localPath: e.target.value})} placeholder="/data/downloads" />
                             </div>
                         </div>
                         <p className="text-[10px] text-muted-foreground mt-2">
@@ -1102,52 +1104,55 @@ export default function SettingsPage() {
                     </div>
 
                     {['qbit', 'deluge', 'nzbget'].includes(editingClient.type) && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 border-t dark:border-slate-800 pt-4">
-                            <div className="grid gap-2"><Label>User</Label><Input value={editingClient.user} onChange={e => setEditingClient({...editingClient, user: e.target.value})} className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" /></div>
-                            <div className="grid gap-2"><Label>Pass</Label><Input type="password" value={editingClient.pass} onChange={e => setEditingClient({...editingClient, pass: e.target.value})} className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" /></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 border-t border-border pt-4">
+                            <div className="grid gap-2"><Label className="text-foreground font-semibold">User</Label><Input value={editingClient.user} onChange={e => setEditingClient({...editingClient, user: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                            <div className="grid gap-2"><Label className="text-foreground font-semibold">Pass</Label><Input type="password" value={editingClient.pass} onChange={e => setEditingClient({...editingClient, pass: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                         </div>
                     )}
                     {['sab'].includes(editingClient.type) && (
-                        <div className="grid gap-2 mt-2 border-t dark:border-slate-800 pt-4"><Label>API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => setEditingClient({...editingClient, apiKey: e.target.value})} className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" /></div>
+                        <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => setEditingClient({...editingClient, apiKey: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                     )}
-                    <div className="border-t dark:border-slate-800 pt-4">
-                        <Button variant="outline" className="w-full h-12 sm:h-10 font-bold dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => handleTest('clients', { clientType: editingClient.type, ...editingClient })} disabled={!!testing}>
-                            {testing ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/>} Test Connection
+                    <div className="border-t border-border pt-4">
+                        <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" onClick={() => handleTest('clients', { clientType: editingClient.type, ...editingClient })} disabled={!!testing}>
+                            {testing ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
                         </Button>
                         <StatusBox result={testResults.clients} />
                     </div>
                 </div>
             )}
-            <DialogFooter className="gap-2 sm:gap-0"><Button variant="ghost" className="h-12 sm:h-10" onClick={() => setClientModalOpen(false)}>Cancel</Button><Button className="h-12 sm:h-10 font-bold bg-blue-600 hover:bg-blue-700 text-white" onClick={saveClientInState}>Save Settings</Button></DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0"><Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setClientModalOpen(false)}>Cancel</Button><Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveClientInState}>Save Settings</Button></DialogFooter>
         </DialogContent>
       </Dialog>
       
       {/* INDEXER MODAL */}
       <Dialog open={indexerModalOpen} onOpenChange={setIndexerModalOpen}>
-        <DialogContent className="sm:max-w-md w-[95%] dark:bg-slate-950 dark:border-slate-800 rounded-xl">
-            <DialogHeader><DialogTitle>Configure {editingIndexer.name}</DialogTitle></DialogHeader>
+        <DialogContent className="sm:max-w-md w-[95%] bg-background border-border rounded-xl shadow-2xl transition-colors duration-300">
+            <DialogHeader><DialogTitle className="text-foreground">Configure {editingIndexer.name}</DialogTitle></DialogHeader>
             <div className="grid gap-4 py-4">
-                <div className="grid gap-2"><Label>Priority (1-25)</Label><Input type="number" value={editingIndexer.priority} onChange={e => setEditingIndexer({...editingIndexer, priority: parseInt(e.target.value)})} className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" /></div>
+                <div className="grid gap-2">
+                    <Label className="text-foreground font-semibold">Priority (1-25)</Label>
+                    <Input type="number" value={editingIndexer.priority} onChange={e => setEditingIndexer({...editingIndexer, priority: parseInt(e.target.value)})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                </div>
                 
                 <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
-                        <Label>Seed Time (minutes)</Label>
-                        <Input type="number" value={editingIndexer.seedTime} onChange={e => setEditingIndexer({...editingIndexer, seedTime: parseInt(e.target.value)})} className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" />
+                        <Label className="text-foreground font-semibold">Seed Time (minutes)</Label>
+                        <Input type="number" value={editingIndexer.seedTime} onChange={e => setEditingIndexer({...editingIndexer, seedTime: parseInt(e.target.value)})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
                         <p className="text-[10px] text-muted-foreground italic">0 = Client default.</p>
                     </div>
                     <div className="grid gap-2">
-                        <Label>Seed Ratio</Label>
-                        <Input type="number" step="0.1" value={editingIndexer.seedRatio} onChange={e => setEditingIndexer({...editingIndexer, seedRatio: parseFloat(e.target.value)})} className="h-12 sm:h-10 dark:bg-slate-900 dark:border-slate-800" />
+                        <Label className="text-foreground font-semibold">Seed Ratio</Label>
+                        <Input type="number" step="0.1" value={editingIndexer.seedRatio} onChange={e => setEditingIndexer({...editingIndexer, seedRatio: parseFloat(e.target.value)})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
                         <p className="text-[10px] text-muted-foreground italic">e.g. 1.5. (0 = Client default).</p>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-2 pt-2 bg-slate-50 dark:bg-slate-900/50 p-4 rounded-lg border dark:border-slate-800">
-                    <Checkbox id="rss" checked={editingIndexer.rss} onCheckedChange={c => setEditingIndexer({...editingIndexer, rss: !!c})} className="dark:border-slate-600 scale-110 sm:scale-100" />
-                    <Label htmlFor="rss" className="cursor-pointer font-bold ml-2">Enable RSS Monitoring</Label>
+                <div className="flex items-center gap-2 pt-2 bg-muted/30 p-4 rounded-lg border border-border group cursor-pointer" onClick={() => setEditingIndexer({...editingIndexer, rss: !editingIndexer.rss})}>
+                    <Checkbox id="rss" checked={editingIndexer.rss} onCheckedChange={c => setEditingIndexer({...editingIndexer, rss: !!c})} className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary scale-110 sm:scale-100" />
+                    <Label htmlFor="rss" className="cursor-pointer font-bold ml-2 text-foreground group-hover:text-primary transition-colors">Enable RSS Monitoring</Label>
                 </div>
             </div>
-            <DialogFooter className="gap-2 sm:gap-0"><Button variant="ghost" className="h-12 sm:h-10" onClick={() => setIndexerModalOpen(false)}>Cancel</Button><Button className="h-12 sm:h-10 font-bold bg-blue-600 hover:bg-blue-700 text-white" onClick={saveIndexerConfig}>Save Settings</Button></DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0"><Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setIndexerModalOpen(false)}>Cancel</Button><Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveIndexerConfig}>Save Settings</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

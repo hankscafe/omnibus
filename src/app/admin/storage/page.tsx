@@ -75,25 +75,25 @@ export default function StorageDeepDivePage() {
       }
   }
 
-  if (!isAdmin) return <div className="p-10 text-center">Unauthorized</div>;
+  if (!isAdmin) return <div className="p-10 text-center text-foreground">Unauthorized</div>;
 
   return (
-    <div className="container mx-auto py-10 px-6 max-w-5xl">
-      <div className="flex items-center justify-between mb-8">
+    <div className="container mx-auto py-10 px-6 max-w-5xl transition-colors duration-300">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
           <div className="flex items-center gap-4">
-              <Button variant="ghost" size="icon" asChild className="shrink-0">
+              <Button variant="ghost" size="icon" asChild className="shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground">
                   <Link href="/admin/analytics"><ChevronLeft className="w-5 h-5" /></Link>
               </Button>
               <div>
-                  <h1 className="text-3xl font-black tracking-tight flex items-center gap-3">
-                      <HardDrive className="w-8 h-8 text-indigo-500" /> Storage Deep Dive
+                  <h1 className="text-3xl font-black tracking-tight flex items-center gap-3 text-foreground">
+                      <HardDrive className="w-8 h-8 text-primary" /> Storage Deep Dive
                   </h1>
                   <p className="text-muted-foreground mt-1 font-medium">Find out which series are consuming the most space on your drive.</p>
               </div>
           </div>
           
-          <div className="flex flex-col items-end gap-2">
-              <Button variant="outline" size="sm" onClick={handleTriggerScan} disabled={isScanning || loading} className="shadow-sm">
+          <div className="flex flex-col items-end gap-2 w-full sm:w-auto">
+              <Button variant="outline" size="sm" onClick={handleTriggerScan} disabled={isScanning || loading} className="w-full sm:w-auto shadow-sm border-border hover:bg-muted text-foreground font-bold">
                   <RefreshCw className={`w-4 h-4 mr-2 ${isScanning ? 'animate-spin' : ''}`} /> 
                   {isScanning ? 'Scanning Disk...' : 'Force Scan Now'}
               </Button>
@@ -104,22 +104,22 @@ export default function StorageDeepDivePage() {
       </div>
 
       {loading ? (
-          <div className="py-20 flex justify-center"><Loader2 className="w-10 h-10 animate-spin text-indigo-500" /></div>
+          <div className="py-20 flex justify-center"><Loader2 className="w-10 h-10 animate-spin text-primary" /></div>
       ) : (
           <div className="space-y-6 animate-in fade-in duration-500">
-              {/* TOTAL STORAGE SUMMARY CARD */}
-              <Card className="p-6 bg-indigo-600 text-white shadow-lg border-0 overflow-hidden relative">
+              {/* TOTAL STORAGE SUMMARY CARD - THEMED BACKGROUND */}
+              <Card className="p-6 bg-primary text-primary-foreground shadow-lg border-0 overflow-hidden relative transition-colors duration-300">
                   <Database className="absolute -bottom-6 -right-6 w-32 h-32 opacity-10 rotate-12" />
                   <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
                       <div>
-                          <p className="text-indigo-200 font-black tracking-widest uppercase text-xs mb-1">Total Library Size</p>
+                          <p className="text-primary-foreground/70 font-black tracking-widest uppercase text-xs mb-1">Total Library Size</p>
                           <h2 className="text-5xl font-black tracking-tighter">{formatBytes(totalBytes)}</h2>
                       </div>
                       <div className="flex gap-2">
-                          <Badge variant="secondary" className="bg-white/20 hover:bg-white/30 text-white border-0">
+                          <Badge variant="secondary" className="bg-primary-foreground/10 hover:bg-primary-foreground/20 text-primary-foreground border-0">
                               {storageData.length} Series
                           </Badge>
-                          <Badge variant="secondary" className="bg-white/20 hover:bg-white/30 text-white border-0">
+                          <Badge variant="secondary" className="bg-primary-foreground/10 hover:bg-primary-foreground/20 text-primary-foreground border-0">
                               {storageData.reduce((acc, curr) => acc + curr.issueCount, 0)} Issues
                           </Badge>
                       </div>
@@ -127,10 +127,10 @@ export default function StorageDeepDivePage() {
               </Card>
 
               {/* THE DEEP DIVE TABLE */}
-              <div className="border dark:border-slate-800 rounded-xl bg-white dark:bg-slate-950 overflow-hidden shadow-sm">
+              <div className="border border-border rounded-xl bg-background overflow-hidden shadow-sm">
                   <div className="overflow-x-auto">
                       <table className="w-full text-sm text-left">
-                          <thead className="text-xs text-muted-foreground uppercase bg-slate-50 dark:bg-slate-900/80 border-b dark:border-slate-800 font-black tracking-wider">
+                          <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border font-black tracking-wider">
                               <tr>
                                   <th className="px-6 py-4">Series Name</th>
                                   <th className="px-6 py-4 text-center hidden sm:table-cell">Issues</th>
@@ -138,17 +138,17 @@ export default function StorageDeepDivePage() {
                                   <th className="px-6 py-4 text-right">Size</th>
                               </tr>
                           </thead>
-                          <tbody className="divide-y dark:divide-slate-800">
+                          <tbody className="divide-y divide-border">
                               {storageData.map((item, index) => {
                                   const percentage = totalBytes > 0 ? (item.sizeBytes / totalBytes) * 100 : 0;
                                   // Highlight the top 3 biggest offenders
                                   const isMassive = index < 3 && item.sizeBytes > 0; 
                                   
                                   return (
-                                      <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50 transition-colors group">
+                                      <tr key={item.id} className="hover:bg-muted/50 transition-colors group">
                                           <td className="px-6 py-4">
                                               <div className="flex flex-col">
-                                                  <Link href={`/library/series?path=${encodeURIComponent(item.path)}`} className="font-bold text-base text-slate-900 dark:text-slate-100 hover:text-indigo-600 dark:hover:text-indigo-400 truncate max-w-[250px] sm:max-w-[300px]">
+                                                  <Link href={`/library/series?path=${encodeURIComponent(item.path)}`} className="font-bold text-base text-foreground hover:text-primary transition-colors truncate max-w-[250px] sm:max-w-[300px]">
                                                       {item.name}
                                                   </Link>
                                                   <span className="text-[10px] uppercase tracking-widest text-muted-foreground mt-0.5 flex items-center gap-1">
@@ -158,26 +158,26 @@ export default function StorageDeepDivePage() {
                                               </div>
                                           </td>
                                           <td className="px-6 py-4 text-center hidden sm:table-cell">
-                                              <Badge variant="outline" className="font-mono bg-slate-50 dark:bg-slate-900">
+                                              <Badge variant="outline" className="font-mono bg-muted border-border text-foreground">
                                                   {item.issueCount}
                                               </Badge>
                                           </td>
                                           <td className="px-6 py-4">
                                               <div className="w-full flex items-center gap-3">
-                                                  <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden border dark:border-slate-700">
+                                                  <div className="h-2 w-full bg-muted rounded-full overflow-hidden border border-border">
                                                       <div 
-                                                        className={`h-full rounded-full transition-all ${isMassive ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' : 'bg-indigo-500'}`} 
+                                                        className={`h-full rounded-full transition-all ${isMassive ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' : 'bg-primary'}`} 
                                                         style={{ width: `${Math.max(percentage, 1)}%` }} 
                                                       />
                                                   </div>
-                                                  <span className="text-[10px] font-bold text-slate-400 min-w-[35px] text-right">
+                                                  <span className="text-[10px] font-bold text-muted-foreground min-w-[35px] text-right">
                                                       {percentage.toFixed(1)}%
                                                   </span>
                                               </div>
                                           </td>
                                           <td className="px-6 py-4 text-right">
                                               <div className="flex flex-col items-end">
-                                                  <span className={`font-black text-sm ${isMassive ? 'text-red-600 dark:text-red-400' : 'text-slate-700 dark:text-slate-300'}`}>
+                                                  <span className={`font-black text-sm ${isMassive ? 'text-red-600 dark:text-red-400' : 'text-foreground'}`}>
                                                       {formatBytes(item.sizeBytes)}
                                                   </span>
                                                   {isMassive && (

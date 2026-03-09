@@ -17,7 +17,8 @@ import {
   Loader2, 
   AlertTriangle, 
   DownloadCloud,
-  UserPlus 
+  UserPlus,
+  Flag
 } from "lucide-react" 
 import Link from "next/link"
 
@@ -49,6 +50,7 @@ export default function Home() {
           const data = await resReq.json()
           const pending = data.filter((r: any) => r.status === 'PENDING_APPROVAL')
           setPendingCount(pending.length)
+          // Includes both System-Failed GetComics searches AND User-Flagged requests
           const manual = data.filter((r: any) => r.status === 'MANUAL_DDL')
           setManualDownloadsCount(manual.length)
         }
@@ -142,18 +144,18 @@ export default function Home() {
             </Alert>
           )}
 
-          {/* Manual Downloads Needed (Dynamic Primary Theme) */}
+          {/* Manual Downloads / Flagged Items (Dynamic Primary Theme) */}
           {isAdmin && manualDownloadsCount > 0 && (
             <Alert className="bg-primary/5 border-primary/20 animate-in fade-in slide-in-from-top-4">
-              <DownloadCloud className="h-4 w-4 text-primary" />
+              <Flag className="h-4 w-4 text-primary" />
               <AlertTitle className="text-primary font-bold flex items-center gap-2">
-                Manual Downloads Required
+                Manual Action Required
                 <Badge className="bg-primary hover:bg-primary/90 text-primary-foreground border-none text-[10px] h-5">
                   {manualDownloadsCount}
                 </Badge>
               </AlertTitle>
               <AlertDescription className="text-primary/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                Some issues weren&apos;t found automatically and require manual download from GetComics.
+                Users have flagged comics or the system couldn't find them automatically. Manual intervention is required.
                 <Button asChild variant="outline" size="sm" className="border-primary/30 text-primary hover:bg-primary/10 h-8 font-bold">
                   <Link href="/admin">
                     Open Queue <ArrowRight className="ml-2 h-3 w-3" />

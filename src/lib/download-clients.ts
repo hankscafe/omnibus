@@ -22,9 +22,6 @@ async function getNetworkHeaders() {
 }
 
 export const DownloadService = {
-  // -------------------------------------------------------------------------
-  // 1. ADD DOWNLOAD (Clients like qBit, Deluge, SAB, NZBGet)
-  // -------------------------------------------------------------------------
   async addDownload(client: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
     const cleanUrl = client.url.replace(/\/$/, '');
     const category = client.category || 'comics';
@@ -86,9 +83,6 @@ export const DownloadService = {
     }
   },
 
-  // -------------------------------------------------------------------------
-  // 2. INTERNAL DOWNLOADER (HTTP/GetComics Direct Downloads)
-  // -------------------------------------------------------------------------
   async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string) {
       const { Importer } = await import('./importer');
       
@@ -96,47 +90,64 @@ export const DownloadService = {
       const ext = (extMatch && extMatch.length <= 4) ? extMatch : 'cbz';
       const finalFilename = filename.toLowerCase().endsWith(`.${ext}`) ? filename : `${filename}.${ext}`;
       
-      // UPDATED: Route GetComics downloads into a dedicated subfolder
       const getComicsFolder = path.join(targetPath, 'GetComics');
       const filePath = path.join(getComicsFolder, finalFilename);
+      const partFilePath = `${filePath}.part`; // The new temporary file
 
       try {
           try {
-              // Ensure the new GetComics subfolder exists
               if (!fs.existsSync(getComicsFolder)) {
                   fs.mkdirSync(getComicsFolder, { recursive: true });
-                  Logger.log(`[Storage] Created dedicated GetComics download folder at: ${getComicsFolder}`, 'info');
               }
-          } catch (mkdirErr: any) {
-              Logger.log(`[Internal DL] Folder check warning: ${mkdirErr.message}`, 'warn');
-          }
+          } catch (mkdirErr: any) {}
 
-          if (fs.existsSync(filePath)) {
-              try { fs.unlinkSync(filePath); } catch (e) {}
+          // Clean up any stale .part files from previous crashed runs
+          if (fs.existsSync(partFilePath)) {
+              try { fs.unlinkSync(partFilePath); } catch (e) {}
           }
 
           await prisma.request.update({
             where: { id: requestId },
-            data: { 
-                activeDownloadName: finalFilename, 
-                status: 'DOWNLOADING', 
-                progress: 0, 
-                downloadLink: url
-            }
+            data: { activeDownloadName: finalFilename, status: 'DOWNLOADING', progress: 0, downloadLink: url }
           });
 
           Logger.log(`[Internal DL] Starting download: ${finalFilename}`, 'info');
 
-          const response = await axios({ 
-              method: 'get', url, responseType: 'stream', 
-              headers: { 
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                  'Referer': 'https://getcomics.org/' 
-              },
-              timeout: 60000 
-          });
+          let response: any;
+          let attempt = 0;
+          const maxAttempts = 3;
 
-          const writer = fs.createWriteStream(filePath);
+          while (attempt < maxAttempts) {
+              attempt++;
+              try {
+                  response = await axios({ 
+                      method: 'get', 
+                      url, 
+                      responseType: 'stream', 
+                      headers: { 
+                          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                          'Accept': 'application/zip, application/x-rar-compressed, application/octet-stream, */*',
+                          'Referer': 'https://getcomics.org/' 
+                      },
+                      timeout: 60000 
+                  });
+                  break; 
+              } catch (err: any) {
+                  if (attempt >= maxAttempts) throw err; 
+                  const status = err.response?.status;
+                  Logger.log(`[Internal DL] Attempt ${attempt} failed (Status: ${status || err.message}). Retrying in 3s...`, 'warn');
+                  await new Promise(r => setTimeout(r, 3000));
+              }
+          }
+
+          // FAILSAFE 1: Content-Type check
+          const contentType = (response.headers['content-type'] || '').toLowerCase();
+          if (contentType.includes('text/html')) {
+              throw new Error("Download URL returned an HTML webpage instead of a comic file.");
+          }
+
+          // We now stream into the safe .part file, avoiding the locked .cbz file
+          const writer = fs.createWriteStream(partFilePath);
           const totalLength = response.headers['content-length'];
           let downloadedBytes = 0;
           let lastUpdate = 0;
@@ -146,7 +157,6 @@ export const DownloadService = {
               if (totalLength) {
                   const percent = Math.round((downloadedBytes / parseInt(totalLength)) * 100);
                   const now = Date.now();
-                  // Report progress to DB every 5% or 2 seconds
                   if (percent % 5 === 0 && now - lastUpdate > 2000) {
                       lastUpdate = now;
                       prisma.request.update({ where: { id: requestId }, data: { progress: percent } }).catch(() => {});
@@ -155,10 +165,34 @@ export const DownloadService = {
           });
 
           await pipeline(response.data, writer);
+
+          // FAILSAFE 2: Verify the file is actually larger than 500kb
+          const stats = fs.statSync(partFilePath);
+          if (stats.size < 500000) {
+             throw new Error(`Downloaded file is suspiciously small (${Math.round(stats.size/1024)}kb). Aborting.`);
+          }
+
+          // Try to delete the old file if it exists
+          if (fs.existsSync(filePath)) {
+              try { fs.unlinkSync(filePath); } catch(e) {
+                   Logger.log(`[Internal DL] Warning: Could not overwrite existing file (might be locked by Windows).`, 'warn');
+              }
+          }
+
+          // Rename .part to .cbz. If Windows still has the old file locked, append a timestamp!
+          try {
+              fs.renameSync(partFilePath, filePath);
+          } catch (renameErr) {
+              const timestampedPath = filePath.replace(`.${ext}`, `_${Date.now()}.${ext}`);
+              fs.renameSync(partFilePath, timestampedPath);
+              Logger.log(`[Internal DL] File was locked. Saved safely as: ${path.basename(timestampedPath)}`, 'success');
+          }
+
           Logger.log(`[Internal DL] Download complete. Handing off to Importer...`, 'success');
           return true;
       } catch (error: any) {
-          if (fs.existsSync(filePath)) try { fs.unlinkSync(filePath); } catch (e) {}
+          // Cleanup the .part file if a mid-download crash occurs
+          if (fs.existsSync(partFilePath)) try { fs.unlinkSync(partFilePath); } catch (e) {}
           
           Logger.log(`[Internal DL] Download Failed: ${error.message}`, 'error');
           
@@ -167,7 +201,6 @@ export const DownloadService = {
             data: { status: 'STALLED', progress: 0 }
           }).catch(() => {});
 
-          // FIXED: Look up the rich data before firing the failure alert
           const failedReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
           const failedSeries = failedReq?.volumeId ? await prisma.series.findFirst({ where: { cvId: parseInt(failedReq.volumeId) } }) : null;
 
@@ -184,9 +217,6 @@ export const DownloadService = {
       }
   },
 
-  // -------------------------------------------------------------------------
-  // 3. GET STATUS (Aggregates active transfers from all clients)
-  // -------------------------------------------------------------------------
   async getAllActiveDownloads() {
     const clientSetting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
     if (!clientSetting?.value) return [];

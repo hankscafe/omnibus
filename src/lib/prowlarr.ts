@@ -1,87 +1,46 @@
+// src/lib/prowlarr.ts
 import axios from 'axios';
 import { prisma } from './db';
 import { Logger } from './logger';
 
 export const ProwlarrService = {
-  async searchComics(query: string) {
+  async searchComics(query: string, isInteractive: boolean = false) {
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
-    if (!config.prowlarr_url || !config.prowlarr_key) {
-      Logger.log('[Prowlarr] Missing configuration.', 'error');
-      return [];
-    }
+    if (!config.prowlarr_url || !config.prowlarr_key) return [];
 
-    // --- SANITIZATION ---
     const cleanQuery = query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
-    
-    // FIX: Define significant words to prevent "The Shapeshifter" false positives
-    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'in', 'on', 'vol', 'volume', 'issue'];
+    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue'];
     const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => !stopWords.includes(w) && w.length > 0);
-    const requiredWords = queryWords.slice(0, Math.min(2, queryWords.length)); // Demand at least the first 2 real keywords match
+    const requiredWords = queryWords.slice(0, Math.min(2, queryWords.length)); 
 
-    let indexerConfigs: any[] = [];
-    let indexerIds: number[] = [];
-    
-    if (config.prowlarr_indexers_config) {
-        try {
-            indexerConfigs = JSON.parse(config.prowlarr_indexers_config);
-            indexerIds = indexerConfigs.map((i: any) => i.id);
-        } catch (e) {}
-    }
-
-    const params = new URLSearchParams({
-      apikey: config.prowlarr_key,
-      t: 'search',
-      q: cleanQuery, 
-      cat: '7030,7000,8000', 
-      extended: '1'
-    });
-
-    if (indexerIds.length > 0) {
-        indexerIds.forEach((id: number) => params.append('indexer', id.toString()));
-    }
+    const params = new URLSearchParams({ apikey: config.prowlarr_key, t: 'search', q: cleanQuery, cat: '7030,7000,8000', extended: '1' });
 
     try {
       const url = `${config.prowlarr_url.replace(/\/$/, '')}/api/v1/search?${params.toString()}`;
-      
       const { data } = await axios.get(url, { timeout: 30000 });
-
       if (!Array.isArray(data)) return [];
 
       return data
         .filter((item: any) => {
-            // FIX: Strict matching applied here
+            // INTERACTIVE BYPASS: If the user is manually searching, show ALL results.
+            if (isInteractive) return true;
             const title = item.title.toLowerCase();
-            if (requiredWords.length === 0) return true;
             return requiredWords.every(w => title.includes(w));
         })
-        .map((item: any) => {
-          const idxConfig = indexerConfigs.find((c: any) => c.id === item.indexerId);
-          const priority = idxConfig ? idxConfig.priority : 1;
-          const seedTime = idxConfig ? idxConfig.seedTime : 0;
-          const seedRatio = idxConfig ? (idxConfig.seedRatio || 0) : 0; 
-          const seeders = item.seeders || 0;
-          
-          const score = (priority * 100000) + seeders;
-
-          return {
-            title: item.title,
-            downloadUrl: item.downloadUrl || item.magnetUrl, 
-            size: item.size,
-            age: item.age, 
-            indexer: item.indexer,
-            protocol: item.protocol || 'torrent',
-            seeders: seeders,
-            guid: item.guid,
-            infoHash: item.infoHash,
-            priority: priority,
-            seedTime: seedTime,
-            seedRatio: seedRatio, 
-            score: score 
-          };
-        });
-
+        .map((item: any) => ({
+          title: item.title,
+          downloadUrl: item.downloadUrl || item.magnetUrl, 
+          size: item.size,
+          indexer: item.indexer,
+          protocol: item.protocol || 'torrent',
+          seeders: item.seeders || 0,
+          leechers: item.leechers || 0,
+          guid: item.guid,
+          infoHash: item.infoHash,
+          publishDate: item.publishDate
+        }));
     } catch (error: any) {
       Logger.log(`[Prowlarr] Search Error: ${error.message}`, 'error');
       return [];

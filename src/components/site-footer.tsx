@@ -21,7 +21,7 @@ export function SiteFooter() {
             </Link>
             
             <div className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded-md">
-                v1.0.0-beta.2
+                v1.0.0-beta.4
             </div>
         </div>
       </div>

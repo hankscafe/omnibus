@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogHeader } from "@/components/ui/dialog"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import Link from "next/link"
@@ -34,7 +34,7 @@ interface Props {
   refreshSignal?: number;
 }
 
-type StatusType = 'LIBRARY' | 'REQUESTED' | null;
+type StatusType = 'LIBRARY' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
 
 function ComicGridSkeleton({ count = 14 }: { count?: number }) {
   return (
@@ -101,7 +101,9 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
-          return allCompleted ? 'LIBRARY' : 'REQUESTED';
+          if (allCompleted) return 'LIBRARY';
+          if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
+          return 'REQUESTED';
       }
       return null;
   }
@@ -109,7 +111,11 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
       if (ownedIssues.has(issueId)) return 'LIBRARY';
       const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
-      if (req) return ['IMPORTED', 'COMPLETED'].includes(req.status) ? 'LIBRARY' : 'REQUESTED';
+      if (req) {
+          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'LIBRARY';
+          if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
+          return 'REQUESTED';
+      }
       return null;
   }
 
@@ -175,7 +181,6 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       });
       if (res.ok) {
           toast({ title: "Success", description: `${name} added to queue.` })
-          // Instant UI Update
           setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
       }
     } finally { setRequestingId(null) }
@@ -248,7 +253,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
             <div key={comic.id} className="group relative aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-105 transition-all cursor-pointer border border-border" onClick={() => setSelectedComic(comic)}>
                 <img src={comic.image} alt={comic.name} loading="lazy" className="object-cover w-full h-full" />
                 {status === 'LIBRARY' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 shadow-lg z-30"><CheckCircle2 className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
-                {status === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 shadow-lg z-30"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
+                {status === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 shadow-lg z-30" title="Requested"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
+                {status === 'PENDING_APPROVAL' && (<div className="absolute top-2 right-2 bg-yellow-500 text-white rounded-full p-1 shadow-lg z-30" title="Pending Admin Approval"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
                 
                 {/* Title gradient always visible on mobile, hidden on desktop until hover */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 pb-4 text-center gap-1 z-20 pointer-events-none">
@@ -281,18 +287,33 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                             {(() => {
                                 const volStatus = getVolumeStatus(selectedComic.volumeId, selectedComic.name.split(' #')[0]);
                                 const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, selectedComic.name);
+                                const overallStatus = selectedComic.issueNumber ? issueStatus : volStatus;
+
                                 return (
                                   <div className="flex flex-col gap-2.5 sm:gap-3">
                                       <Button className="w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold" variant={volStatus ? "outline" : "default"} onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown' })} disabled={requestingId === selectedComic.volumeId || volStatus !== null}>
-                                          {volStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedComic.volumeId ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Plus className="w-4 h-4" /> Request Series</>)}
+                                          {volStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedComic.volumeId ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Plus className="w-4 h-4" /> Request Series</>)}
                                       </Button>
                                       
-                                      <Button className="w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold" variant={issueStatus ? "outline" : "secondary"} onClick={() => handleRequest(selectedComic.volumeId, selectedComic.name, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher)} disabled={requestingId === selectedComic.id || issueStatus !== null}>
-                                          {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedComic.id ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Download className="w-4 h-4" /> Request Issue</>)}
+                                      <Button className={`w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} variant="outline" onClick={() => handleRequest(selectedComic.volumeId, selectedComic.name, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher)} disabled={requestingId === selectedComic.id || issueStatus !== null}>
+                                          {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedComic.id ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Download className="w-4 h-4" /> Request Issue</>)}
                                       </Button>
                                       
-                                      <Button variant="outline" className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted" onClick={() => setInteractiveQuery({ query: selectedComic.issueNumber ? selectedComic.name : selectedComic.name.split(' #')[0], type: selectedComic.issueNumber ? 'issue' : 'volume' })}>
-                                          <SearchIcon className="w-4 h-4 text-primary" /> Interactive Search
+                                      <Button 
+                                        variant="outline" 
+                                        className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted" 
+                                        onClick={() => setInteractiveQuery({ query: selectedComic.issueNumber ? selectedComic.name : selectedComic.name.split(' #')[0], type: selectedComic.issueNumber ? 'issue' : 'volume' })}
+                                        disabled={overallStatus === 'LIBRARY'}
+                                      >
+                                          {overallStatus === 'LIBRARY' ? (
+                                              <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>
+                                          ) : overallStatus === 'PENDING_APPROVAL' ? (
+                                              <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>
+                                          ) : overallStatus === 'REQUESTED' ? (
+                                              <><Clock className="w-4 h-4 text-orange-500" /> Requested</>
+                                          ) : (
+                                              <><SearchIcon className="w-4 h-4 text-primary" /> Interactive Search</>
+                                          )}
                                       </Button>
                                   </div>
                                 );
@@ -327,7 +348,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                         </div>
                     </div>
                     <div className="space-y-4 pt-4 border-t border-border">
-                        <h4 className="font-semibold flex items-center gap-2 text-base sm:text-lg text-foreground"><Layers className="w-4 h-4 sm:w-5 sm:h-5"/> More in this Series</h4>
+                        <h4 className="font-semibold flex items-center gap-2 text-base sm:text-lg text-foreground"><Layers className="w-4 h-4 sm:w-5 h-5"/> More in this Series</h4>
                         <div className="w-full">
                             {loadingRelated ? (<div className="flex gap-3 sm:gap-4 overflow-hidden">{[1,2,3,4,5].map(i => (<div key={i} className="w-[120px] aspect-[2/3] bg-muted animate-pulse rounded-md border border-border" />))}</div>) : relatedIssues.length > 0 ? (
                                 <ScrollArea className="w-full whitespace-nowrap pb-4">
@@ -379,6 +400,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                     )}
 
                                                     {relIssueStatus === 'REQUESTED' && (<div className="absolute top-1 left-1 bg-orange-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">REQUESTED</div>)}
+                                                    {relIssueStatus === 'PENDING_APPROVAL' && (<div className="absolute top-1 left-1 bg-yellow-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20" title="Pending Admin Approval">PENDING</div>)}
                                                     {relIssueStatus === 'LIBRARY' && (<div className="absolute top-1 left-1 bg-green-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">OWNED</div>)}
                                                 </div>
                                             </div>
@@ -414,10 +436,12 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       )}
       <Dialog open={!!monitorPrompt} onOpenChange={(open) => !open && setMonitorPrompt(null)}>
         <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
-          <DialogTitle className="text-xl font-bold text-foreground">Monitor Series?</DialogTitle>
-          <DialogDescription className="text-sm sm:text-base text-muted-foreground mt-2">
-            You are requesting the series <strong>{monitorPrompt?.name}</strong>. Would you like Omnibus to automatically monitor this series and download new issues as they are released in the future?
-          </DialogDescription>
+          <DialogHeader>
+              <DialogTitle className="text-xl font-bold text-foreground">Monitor Series?</DialogTitle>
+              <DialogDescription className="text-sm sm:text-base text-muted-foreground mt-2">
+                You are requesting the series <strong>{monitorPrompt?.name}</strong>. Would you like Omnibus to automatically monitor this series and download new issues as they are released in the future?
+              </DialogDescription>
+          </DialogHeader>
           <div className="flex flex-col gap-3 mt-4 sm:mt-6">
             <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
                 if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true);
@@ -425,7 +449,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
             }}>
                 Yes, Request & Monitor
             </Button>
-            <Button variant="secondary" className="w-full h-12 sm:h-10 font-bold" onClick={() => {
+            <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
                 if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false);
                 setMonitorPrompt(null);
             }}>

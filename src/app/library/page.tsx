@@ -533,7 +533,14 @@ function LibraryContent() {
                       <SelectItem value="64">Show 64</SelectItem>
                   </SelectContent>
               </Select>
-              <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0"><Button variant={viewMode === 'grid' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('grid')}><LayoutGrid className="w-4 h-4" /></Button><Button variant={viewMode === 'list' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('list')}><List className="w-4 h-4" /></Button></div>
+              <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
+                <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'grid' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('grid')}>
+                    <LayoutGrid className="w-4 h-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'list' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('list')}>
+                    <List className="w-4 h-4" />
+                </Button>
+            </div>
           </div>
       </div>
 

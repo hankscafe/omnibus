@@ -14,13 +14,15 @@ export async function GET(req: Request) {
     try {
         Logger.log(`[Interactive Search] Fetching live results for: ${q}`, 'info');
         
-        // Fetch from both sources simultaneously
-        const [prowlarr, getComics] = await Promise.all([
-            ProwlarrService.searchComics(q).catch(() => []),
-            GetComicsService.search(q).catch(() => [])
+        // Pass 'true' for the second parameter to trigger the "Interactive Bypass" 
+        // which skips the strict regex filtering.
+        const [prowlarr, getcomics] = await Promise.all([
+            ProwlarrService.searchComics(q, true).catch(() => []),
+            GetComicsService.search(q, true).catch(() => [])
         ]);
 
-        return NextResponse.json({ prowlarr, getComics });
+        // Unified lowercase keys to match the frontend expectations
+        return NextResponse.json({ prowlarr, getcomics });
     } catch (error: any) {
         Logger.log(`[Interactive Search] Error: ${error.message}`, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });

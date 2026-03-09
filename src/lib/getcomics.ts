@@ -1,10 +1,9 @@
-// src/lib/getcomics.ts
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from './logger';
 
 export const GetComicsService = {
-  async search(query: string) {
+  async search(query: string, isInteractive: boolean = false) {
     const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
     const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
     
@@ -20,85 +19,75 @@ export const GetComicsService = {
     const uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
     
     for (const q of uniqueSearches) {
-        let retries = 3;
+        let retries = 2;
         while (retries > 0) {
             try {
-                const results = await this.performSearch(q);
+                const results = await this.performSearch(q, isInteractive);
                 if (results.length > 0) return results;
                 break; 
             } catch (e: any) { 
-                if (e.response && e.response.status >= 500) {
-                    Logger.log(`[GetComics] Server error (${e.response.status}). Retrying in 5s...`, 'info');
-                    retries--;
-                    if (retries === 0) break;
-                    await new Promise(r => setTimeout(r, 5000));
-                } else {
-                    break;
-                }
+                Logger.log(`[GetComics] Search failed for "${q}": ${e.message}`, 'warn');
+                retries--;
+                if (retries === 0) break;
+                await new Promise(r => setTimeout(r, 3000));
             }
         }
-        await new Promise(r => setTimeout(r, 1000)); 
     }
     return [];
   },
 
-  async performSearch(safeQuery: string) {
+  async performSearch(safeQuery: string, isInteractive: boolean = false) {
     const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
+    
     const { data } = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, timeout: 10000
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      timeout: 15000
     });
 
     const $ = cheerio.load(data);
     const results: any[] = [];
+    
+    const queryWords = safeQuery.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(' ').filter(w => w.trim().length > 0);
 
-    // Keep all words to allow strict matching
-    const queryWords = safeQuery.toLowerCase().split(' ').filter(w => w.trim().length > 0);
-
-    $('article.post').each((i, el) => {
-      const title = $(el).find('h1.post-title a').text().trim();
-      const link = $(el).find('h1.post-title a').attr('href');
+    $('article, .post').each((i, el) => {
+      const titleEl = $(el).find('h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a').first();
+      const title = titleEl.text().trim();
+      const link = titleEl.attr('href');
       
+      if (!title || !link) return;
+
       const titleLower = title.toLowerCase();
       let isRelevant = true;
 
-      for (let w of queryWords) {
-          // STRICT NUMERIC MATCHING (Prevents "2" from matching "2026")
-          if (/^\d+$/.test(w) || w.startsWith('#')) {
-              const num = parseInt(w.replace('#', ''));
-              const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${num}\\b`, 'i');
-              if (!numRegex.test(titleLower)) {
-                  isRelevant = false;
-                  break;
-              }
-          } else {
-              // STRICT WORD BOUNDARY MATCHING
-              const cleanW = w.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-              const wordRegex = new RegExp(`\\b${cleanW}\\b`, 'i');
-              if (!wordRegex.test(titleLower)) {
-                  isRelevant = false;
-                  break;
+      // INTERACTIVE BYPASS: If interactive, show all results. If automated, use strict filtering.
+      if (!isInteractive) {
+          for (let w of queryWords) {
+              if (/^\d+$/.test(w)) {
+                  const num = parseInt(w);
+                  const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${num}\\b`, 'i');
+                  if (!numRegex.test(titleLower)) { isRelevant = false; break; }
+              } else {
+                  const wordRegex = new RegExp(`\\b${w}\\b`, 'i');
+                  if (!wordRegex.test(titleLower)) { isRelevant = false; break; }
               }
           }
       }
 
-      if (title && link && isRelevant) {
+      if (isRelevant) {
         results.push({
           title, downloadUrl: link, size: 'Unknown', age: 'N/A', indexer: 'GetComics', protocol: 'ddl'
         });
       }
     });
 
-    // THE FIX: Sort results by title length (shortest first). 
-    // "Rogue #2" (9 chars) will easily beat "Star Wars Rogue Agents #2" (24 chars)
-    results.sort((a, b) => a.title.length - b.title.length);
-
-    return results;
+    return results.sort((a, b) => a.title.length - b.title.length);
   },
 
   async scrapeDeepLink(articleUrl: string): Promise<{ url: string, isDirect: boolean }> {
       try {
           const { data } = await axios.get(articleUrl, { 
-              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } 
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+              timeout: 10000
           });
           const $ = cheerio.load(data);
 
@@ -118,6 +107,7 @@ export const GetComicsService = {
 
           $('a').each((i, el) => {
               const text = $(el).text().toLowerCase();
+              // RESTORED: The crucial titleAttr check that prevents grabbing ad links
               const titleAttr = ($(el).attr('title') || "").toLowerCase();
               const href = $(el).attr('href') || "";
               
@@ -128,6 +118,7 @@ export const GetComicsService = {
               const decoded = decodeLink(href);
               if (!decoded) return;
 
+              // RESTORED: The 'download now' keyword check
               const isMainServer = 
                   text.includes('main server') || titleAttr.includes('main server') || 
                   text.includes('download now') || titleAttr.includes('download now') ||
@@ -150,6 +141,7 @@ export const GetComicsService = {
           return { url: articleUrl, isDirect: false };
 
       } catch (error: any) {
+          Logger.log(`[GetComics Scrape] Failed to parse deep link: ${error.message}`, 'error');
           return { url: articleUrl, isDirect: false };
       }
   }

@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, ExternalLink, PenTool, Paintbrush, Image as ImageIcon, Users } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } from "@/components/ui/dialog"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
@@ -37,7 +37,7 @@ interface Issue {
   characters?: string[];
 }
 
-type StatusType = 'LIBRARY' | 'REQUESTED' | null;
+type StatusType = 'LIBRARY' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
 
 export function RequestSearch() {
   const [open, setOpen] = useState(false)
@@ -74,7 +74,9 @@ export function RequestSearch() {
       const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
-          return allCompleted ? 'LIBRARY' : 'REQUESTED';
+          if (allCompleted) return 'LIBRARY';
+          if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
+          return 'REQUESTED';
       }
       return null;
   }
@@ -82,7 +84,11 @@ export function RequestSearch() {
   const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
       if (ownedIssues.has(issueId)) return 'LIBRARY';
       const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
-      if (req) return ['IMPORTED', 'COMPLETED'].includes(req.status) ? 'LIBRARY' : 'REQUESTED';
+      if (req) {
+          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'LIBRARY';
+          if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
+          return 'REQUESTED';
+      }
       return null;
   }
 
@@ -227,7 +233,8 @@ export function RequestSearch() {
                       <div className="relative aspect-[2/3] w-full rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
                         <img src={item.image} alt={item.name} className="absolute inset-0 w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" />
                         {volStatus === 'LIBRARY' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 z-10 shadow-md"><CheckCircle2 className="w-4 h-4" /></div>)}
-                        {volStatus === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 z-10 shadow-md"><Clock className="w-4 h-4" /></div>)}
+                        {volStatus === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 z-10 shadow-md" title="Requested"><Clock className="w-4 h-4" /></div>)}
+                        {volStatus === 'PENDING_APPROVAL' && (<div className="absolute top-2 right-2 bg-yellow-500 text-white rounded-full p-1 z-10 shadow-md" title="Pending Admin Approval"><Clock className="w-4 h-4" /></div>)}
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-20">
                           <Button size="sm" className="font-bold shadow-lg bg-primary hover:bg-primary/90 text-primary-foreground">Details</Button>
                         </div>
@@ -263,18 +270,33 @@ export function RequestSearch() {
                           {(() => {
                               const volStatus = getVolumeStatus(selectedItem.volumeId, selectedItem.name.split(' #')[0]);
                               const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, selectedItem.name);
+                              const overallStatus = selectedItem.isVolume ? volStatus : issueStatus;
+
                               return (
                                 <div className="flex flex-col gap-3">
                                     <Button className="w-full gap-2 shadow-sm" variant={volStatus ? "outline" : "default"} onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown' })} disabled={requestingId === selectedItem.volumeId || volStatus !== null}>
-                                        {volStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedItem.volumeId ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Plus className="w-4 h-4" /> Request Series</>)}
+                                        {volStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedItem.volumeId ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Plus className="w-4 h-4" /> Request Series</>)}
                                     </Button>
                                     
-                                    <Button className="w-full gap-2 shadow-sm" variant={issueStatus ? "outline" : "secondary"} onClick={() => handleRequest(selectedItem.volumeId, selectedItem.isVolume ? `${selectedItem.name.split(' #')[0]} #1` : selectedItem.name, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher)} disabled={requestingId === selectedItem.id || issueStatus !== null}>
-                                        {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedItem.id ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Download className="w-4 h-4" /> Request Issue</>)}
+                                    <Button className={`w-full gap-2 shadow-sm ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} variant="outline" onClick={() => handleRequest(selectedItem.volumeId, selectedItem.isVolume ? `${selectedItem.name.split(' #')[0]} #1` : selectedItem.name, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher)} disabled={requestingId === selectedItem.id || issueStatus !== null}>
+                                        {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedItem.id ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Download className="w-4 h-4" /> Request Issue</>)}
                                     </Button>
                                     
-                                    <Button variant="outline" className="w-full gap-2 border-dashed shadow-sm border-border text-foreground hover:bg-muted" onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? selectedItem.name.split(' #')[0] : selectedItem.name, type: selectedItem.isVolume ? 'volume' : 'issue' })}>
-                                        <Search className="w-4 h-4 text-primary" /> Interactive Search
+                                    <Button 
+                                      variant="outline" 
+                                      className="w-full gap-2 border-dashed shadow-sm border-border text-foreground hover:bg-muted" 
+                                      onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? selectedItem.name.split(' #')[0] : selectedItem.name, type: selectedItem.isVolume ? 'volume' : 'issue' })}
+                                      disabled={overallStatus === 'LIBRARY'}
+                                    >
+                                        {overallStatus === 'LIBRARY' ? (
+                                            <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>
+                                        ) : overallStatus === 'PENDING_APPROVAL' ? (
+                                            <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>
+                                        ) : overallStatus === 'REQUESTED' ? (
+                                            <><Clock className="w-4 h-4 text-orange-500" /> Requested</>
+                                        ) : (
+                                            <><Search className="w-4 h-4 text-primary" /> Interactive Search</>
+                                        )}
                                     </Button>
                                 </div>
                               );
@@ -338,8 +360,9 @@ export function RequestSearch() {
                                                       }}>Info</Button>
                                                   </div>
                                                   <div className="absolute bottom-0 inset-x-0 bg-black/80 text-white text-[10px] font-bold py-1 px-2">#{issue.issueNumber}</div>
-                                                  {relIssueStatus === 'REQUESTED' && (<div className="absolute top-1 left-1 bg-orange-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold">REQUESTED</div>)}
-                                                  {relIssueStatus === 'LIBRARY' && (<div className="absolute top-1 left-1 bg-green-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold">OWNED</div>)}
+                                                  {relIssueStatus === 'REQUESTED' && (<div className="absolute top-1 left-1 bg-orange-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">REQUESTED</div>)}
+                                                  {relIssueStatus === 'PENDING_APPROVAL' && (<div className="absolute top-1 left-1 bg-yellow-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20" title="Pending Admin Approval">PENDING</div>)}
+                                                  {relIssueStatus === 'LIBRARY' && (<div className="absolute top-1 left-1 bg-green-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">OWNED</div>)}
                                               </div>
                                           </div>
                                       )})}
@@ -376,24 +399,26 @@ export function RequestSearch() {
       )}
       <Dialog open={!!monitorPrompt} onOpenChange={(open) => !open && setMonitorPrompt(null)}>
         <DialogContent className="sm:max-w-md bg-background border-border rounded-xl">
-          <DialogTitle className="text-xl font-bold text-foreground">Monitor Series?</DialogTitle>
-          <DialogDescription className="text-base text-muted-foreground mt-2">
-            You are requesting the series <strong>{monitorPrompt?.name}</strong>. Would you like Omnibus to automatically monitor this series and download new issues as they are released in the future?
-          </DialogDescription>
-          <div className="flex flex-col gap-3 mt-6">
-            <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
+          <DialogHeader>
+              <DialogTitle className="text-xl font-bold text-foreground">Monitor Series?</DialogTitle>
+              <DialogDescription className="text-base text-muted-foreground mt-2">
+                You are requesting the series <strong>{monitorPrompt?.name}</strong>. Would you like Omnibus to automatically monitor this series and download new issues as they are released in the future?
+              </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 mt-4 sm:mt-6">
+            <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
                 if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true);
                 setMonitorPrompt(null);
             }}>
                 Yes, Request & Monitor
             </Button>
-            <Button variant="secondary" className="w-full font-bold text-foreground" onClick={() => {
+            <Button variant="outline" className="w-full font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
                 if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false);
                 setMonitorPrompt(null);
             }}>
                 No, Just Request Current Issues
             </Button>
-            <Button variant="ghost" className="w-full text-foreground" onClick={() => setMonitorPrompt(null)}>Cancel</Button>
+            <Button variant="ghost" className="w-full h-12 sm:h-10 font-bold text-muted-foreground" onClick={() => setMonitorPrompt(null)}>Cancel</Button>
           </div>
         </DialogContent>
       </Dialog>

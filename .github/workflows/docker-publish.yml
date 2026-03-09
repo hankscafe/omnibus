@@ -1,4 +1,4 @@
-name: Build and Publish Docker Image
+name: Build, Publish, and Release Docker Image
 
 # This tells GitHub to run the script whenever you push to the 'main' branch
 # or whenever you publish a new Release tag (like v1.0.0-beta.1)
@@ -16,14 +16,49 @@ jobs:
   build-and-push-image:
     runs-on: ubuntu-latest
     
-    # Grants the action permission to upload to your GitHub Packages
+    # REQUIRED PERMISSIONS: 
+    # contents: write -> Needed to create the GitHub Release & Tag
+    # packages: write -> Needed to push the Docker image to ghcr.io
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches history so commit messages are available
+
+      # --- AUTOMATED RELEASE STEPS ---
+      
+      - name: Get version from package.json
+        id: package-version
+        run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
+
+      - name: Check if Release exists
+        id: check-release
+        run: |
+          if gh release view v${{ env.VERSION }} &>/dev/null; then
+            echo "EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "EXISTS=false" >> $GITHUB_ENV
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        # Only create a release if one doesn't exist AND we are pushing to main
+        if: env.EXISTS == 'false' && github.ref == 'refs/heads/main'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ env.VERSION }}
+          name: Omnibus v${{ env.VERSION }}
+          # This grabs the message from your latest commit and makes it the release notes!
+          body: |
+            ${{ github.event.head_commit.message }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- DOCKER BUILD STEPS ---
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -41,7 +76,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            # Tags the image as 'latest' on main branch
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            # Tags the image with the package.json version on main branch
+            type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            # Falls back to standard tag/sha extraction for other events
             type=ref,event=tag
             type=sha
 

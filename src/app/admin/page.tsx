@@ -75,6 +75,9 @@ export default function AdminPage() {
   const [reqsLoading, setReqsLoading] = useState(true)
   const [downloadsLoading, setDownloadsLoading] = useState(true)
 
+  // --- NEW: Update Check State ---
+  const [updateData, setUpdateData] = useState<any>(null)
+
   const [importing, setImporting] = useState<string | null>(null)
   const [ignoringId, setIgnoringId] = useState<string | null>(null) 
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -139,6 +142,8 @@ export default function AdminPage() {
       fetchStats();
       fetchRequests();
       fetchDownloads();
+      // Silently fetch update data in the background
+      fetch('/api/admin/update-check').then(res => res.json()).then(setUpdateData).catch(() => {});
   };
 
   useEffect(() => {
@@ -147,6 +152,7 @@ export default function AdminPage() {
         fetchStats();
         fetchRequests();
         fetchDownloads();
+        fetch('/api/admin/update-check').then(res => res.json()).then(setUpdateData).catch(() => {});
     }, 15000);
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -377,33 +383,56 @@ export default function AdminPage() {
                 </CardContent>
               </Card>
 
-              <Card className={`shadow-sm transition-colors duration-500 ${
-                  stats.healthStatus === "HEALTHY" && systemHealthy ? "border-green-200 bg-green-50/30 dark:border-green-900/50 dark:bg-green-900/10" : 
-                  stats.healthStatus === "WARNING" ? "border-amber-200 bg-amber-50/30 dark:border-amber-900/50 dark:bg-amber-900/10" :
-                  "border-red-200 bg-red-50/30 dark:border-red-900/50 dark:bg-red-900/10"
-              }`}>
-                <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-xs sm:text-sm font-medium">System Health</CardTitle>
-                  <Activity className={`h-4 w-4 hidden sm:block ${
-                      stats.healthStatus === "HEALTHY" && systemHealthy ? "text-green-600" : 
-                      stats.healthStatus === "WARNING" ? "text-amber-600" : "text-red-600"
-                  }`} />
-                </CardHeader>
-                <CardContent>
-                  <div className={`text-xl sm:text-2xl font-bold ${
-                      stats.healthStatus === "HEALTHY" && systemHealthy ? "text-green-600" : 
-                      stats.healthStatus === "WARNING" ? "text-amber-600" : "text-red-600"
+              {/* --- NEW: THEMED SYSTEM HEALTH & UPDATES CARD --- */}
+              {updateData?.updateAvailable ? (
+                <Link href="/admin/updates" className="block transition-transform hover:scale-[1.02] h-full">
+                  <Card className="shadow-sm border-primary bg-primary/10 hover:bg-primary/20 transition-colors cursor-pointer h-full">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                      <CardTitle className="text-xs sm:text-sm font-medium text-foreground">System Health</CardTitle>
+                      <span className="flex h-2.5 w-2.5 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary"></span>
+                      </span>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-xl sm:text-2xl font-bold text-primary">Update Available!</div>
+                      <p className="text-[10px] sm:text-xs text-muted-foreground pt-1 font-medium">
+                        v{updateData.currentVersion} &rarr; <span className="text-foreground font-bold">v{updateData.latestVersion}</span>
+                      </p>
+                    </CardContent>
+                  </Card>
+                </Link>
+              ) : (
+                <Link href="/admin/updates" className="block transition-transform hover:scale-[1.02] h-full">
+                  <Card className={`shadow-sm transition-colors duration-500 h-full hover:border-primary/50 ${
+                      stats.healthStatus === "HEALTHY" && systemHealthy ? "border-green-200 bg-green-50/30 dark:border-green-900/50 dark:bg-green-900/10" : 
+                      stats.healthStatus === "WARNING" ? "border-amber-200 bg-amber-50/30 dark:border-amber-900/50 dark:bg-amber-900/10" :
+                      "border-red-200 bg-red-50/30 dark:border-red-900/50 dark:bg-red-900/10"
                   }`}>
-                    {stats.healthStatus === "HEALTHY" && systemHealthy ? "Healthy" : 
-                     stats.healthStatus === "WARNING" ? "Warning" : "Degraded"}
-                  </div>
-                  <p className="text-[10px] sm:text-xs text-muted-foreground pt-1">
-                    {stats.healthStatus === "HEALTHY" && systemHealthy ? "All systems operational" : 
-                     stats.healthStatus === "WARNING" ? `${stats.failureRate}% failure rate detected` : 
-                     `Critical failure rate: ${stats.failureRate}%`}
-                  </p>
-                </CardContent>
-              </Card>
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                      <CardTitle className="text-xs sm:text-sm font-medium">System Health</CardTitle>
+                      <Activity className={`h-4 w-4 hidden sm:block ${
+                          stats.healthStatus === "HEALTHY" && systemHealthy ? "text-green-600" : 
+                          stats.healthStatus === "WARNING" ? "text-amber-600" : "text-red-600"
+                      }`} />
+                    </CardHeader>
+                    <CardContent>
+                      <div className={`text-xl sm:text-2xl font-bold ${
+                          stats.healthStatus === "HEALTHY" && systemHealthy ? "text-green-600" : 
+                          stats.healthStatus === "WARNING" ? "text-amber-600" : "text-red-600"
+                      }`}>
+                        {stats.healthStatus === "HEALTHY" && systemHealthy ? "Healthy" : 
+                         stats.healthStatus === "WARNING" ? "Warning" : "Degraded"}
+                      </div>
+                      <p className="text-[10px] sm:text-xs text-muted-foreground pt-1">
+                        v{updateData?.currentVersion || "1.0.0"} • {stats.healthStatus === "HEALTHY" && systemHealthy ? "All systems operational" : 
+                         stats.healthStatus === "WARNING" ? `${stats.failureRate}% failure rate detected` : 
+                         `Critical failure rate: ${stats.failureRate}%`}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </Link>
+              )}
             </>
           )}
       </div>

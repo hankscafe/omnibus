@@ -400,21 +400,6 @@ services:
       # - /path/to/your/nas/comics:/comics
       # - /path/to/your/nas/manga:/manga
       # - /path/to/your/nas/downloads:/downloads
-
-  # ========================================================================
-  # OPTIONAL: BACKGROUND CRON SIDECAR
-  # Remove the '#' from the lines below to enable the cron sidecar.
-  # This tiny Alpine Linux container uses ~5MB of RAM and pings the Omnibus
-  # API every 15 minutes (900 seconds) to safely trigger background jobs
-  # without getting blocked by the QNAP internal hairpin firewall.
-  # ========================================================================
-  # omnibus-cron:
-  #   image: alpine:latest
-  #   container_name: omnibus-cron
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - omnibus
-  #   command: sh -c "while true; do wget -qO- http://omnibus:3000/api/cron > /dev/null; sleep 900; done"
 ```
 
 2. Run `docker-compose up -d`.

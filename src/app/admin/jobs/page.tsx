@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
-    Activity, RefreshCw, Clock, FileText, ExternalLink, Download, 
+    Activity, RefreshCw, FileText, ExternalLink, Download, 
     UploadCloud, TrendingUp 
 } from "lucide-react"
 
@@ -43,7 +43,7 @@ export default function ScheduledJobsPage() {
   const { toast } = useToast()
 
   useEffect(() => {
-    document.title = "Omnibus - Scheduled Tasks"
+    document.title = "Omnibus - Scheduled Jobs"
     fetchConfig()
   }, [])
 
@@ -57,14 +57,14 @@ export default function ScheduledJobsPage() {
         const monitorItem = data.find((c: any) => c.key === 'monitor_sync_schedule'); 
         const diagItem = data.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
         const backupItem = data.find((c: any) => c.key === 'backup_sync_schedule'); 
-        const popularItem = data.find((c: any) => c.key === 'popular_sync_schedule'); // NEW
+        const popularItem = data.find((c: any) => c.key === 'popular_sync_schedule'); 
         
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (libItem) setLibrarySyncSchedule(libItem.value);
         if (monitorItem) setMonitorSyncSchedule(monitorItem.value);
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
         if (backupItem) setBackupSyncSchedule(backupItem.value);
-        if (popularItem) setPopularSyncSchedule(popularItem.value); // NEW
+        if (popularItem) setPopularSyncSchedule(popularItem.value); 
       }
     } catch (e) {
       toast({ title: "Error", description: "Failed to load schedules.", variant: "destructive" });
@@ -107,7 +107,7 @@ export default function ScheduledJobsPage() {
                   monitor_sync_schedule: monitorSyncSchedule,
                   diagnostics_sync_schedule: diagnosticsSyncSchedule,
                   backup_sync_schedule: backupSyncSchedule,
-                  popular_sync_schedule: popularSyncSchedule // NEW
+                  popular_sync_schedule: popularSyncSchedule
               }) 
           })
           if (res.ok) {
@@ -181,18 +181,6 @@ export default function ScheduledJobsPage() {
                 Save Schedule
             </Button>
         </div>
-      </div>
-
-      <div className="bg-primary/10 border border-primary/20 rounded-xl p-6 mb-10 transition-colors">
-          <h2 className="text-lg font-bold text-primary flex items-center gap-2 mb-2">
-              <Clock className="w-5 h-5" /> Automating Your Schedules
-          </h2>
-          <p className="text-sm text-foreground/80 leading-relaxed">
-              Omnibus evaluates schedules dynamically based on your intervals below. To run them completely automatically, set up a server CRON job or an uptime monitor (like UptimeKuma) to ping the heartbeat URL every 15 minutes:
-          </p>
-          <code className="block mt-3 bg-background p-3 rounded border border-border text-primary font-mono font-bold select-all shadow-sm">
-              {typeof window !== 'undefined' ? `${window.location.origin}/api/cron` : '/api/cron'}
-          </code>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -295,7 +283,6 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
-        {/* NEW DISCOVER / POPULAR SYNC CARD */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><TrendingUp className="w-5 h-5 text-primary" /> Discover Sync</CardTitle>

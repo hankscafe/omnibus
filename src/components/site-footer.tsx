@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { Github } from "lucide-react"
+import packageJson from "../../package.json" // <-- Added import
 
 export function SiteFooter() {
   return (
@@ -21,7 +22,8 @@ export function SiteFooter() {
             </Link>
             
             <div className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded-md">
-                v1.0.0-beta.8
+                {/* Dynamically pulling version from package.json */}
+                v{packageJson.version}
             </div>
         </div>
       </div>

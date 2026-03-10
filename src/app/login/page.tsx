@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { Loader2, LogIn, ShieldCheck, Fingerprint, UserPlus, AlertTriangle, CheckCircle2 } from "lucide-react" 
 import Image from "next/image"
 import { OmnibusLogo } from "@/components/omnibus-logo"
+import packageJson from "../../../package.json" // <-- Added import
 
 export default function LoginPage() {
   const router = useRouter()
@@ -336,7 +337,10 @@ export default function LoginPage() {
         </CardContent>
         
         <CardFooter className="flex justify-between items-center pb-6 pt-2 relative z-10">
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Build: v1.0.0-Beta.8</p>
+          {/* Dynamically pulling version from package.json */}
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            Build: v{packageJson.version}
+          </p>
           <div className="flex gap-1.5">
             <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
             <div className="w-2 h-2 bg-muted rounded-full" />

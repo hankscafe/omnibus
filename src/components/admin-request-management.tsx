@@ -28,7 +28,7 @@ export function AdminRequestManagement() {
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(25)
 
   // Bulk & Single Deletion Actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())

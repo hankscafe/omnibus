@@ -3,14 +3,19 @@
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Loader2, ArrowLeft, Rocket, Github, History, AlertTriangle } from "lucide-react"
+import { Loader2, ArrowLeft, Rocket, Github, History, AlertTriangle, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
 
 export default function SystemUpdatesPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
 
   useEffect(() => {
     document.title = "Omnibus - System Updates";
@@ -19,6 +24,17 @@ export default function SystemUpdatesPage() {
       .then(setData)
       .finally(() => setLoading(false));
   }, []);
+
+  // Pagination calculations
+  const totalPages = Math.ceil((data?.releases?.length || 0) / pageSize) || 1;
+  const paginatedReleases = data?.releases?.slice((currentPage - 1) * pageSize, currentPage * pageSize) || [];
+
+  // Ensure we don't end up on an empty page if the page size changes
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
 
   if (loading) return <div className="flex justify-center p-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
 
@@ -77,41 +93,72 @@ export default function SystemUpdatesPage() {
               No release history found.
             </div>
           ) : (
-            data.releases.map((release: any, index: number) => {
-               const isLatest = index === 0;
-               // Safely strip the "v" prefix using regex to ensure accurate comparison
-               const isCurrent = release.tag_name.replace(/^v/, '') === data.currentVersion;
+            <>
+              {paginatedReleases.map((release: any, index: number) => {
+                 // Calculate the absolute index across all pages to correctly identify the very latest release
+                 const absoluteIndex = (currentPage - 1) * pageSize + index;
+                 const isLatest = absoluteIndex === 0;
+                 
+                 // Safely strip the "v" prefix using regex to ensure accurate comparison
+                 const isCurrent = release.tag_name.replace(/^v/, '') === data.currentVersion;
 
-               return (
-                <Card key={release.id} className={`shadow-sm border-border bg-background transition-all ${isLatest && data.updateAvailable ? 'border-primary/50' : ''}`}>
-                  <CardHeader className="bg-muted/30 border-b border-border pb-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <CardTitle className="text-xl text-foreground">{release.name || release.tag_name}</CardTitle>
-                        {isCurrent && <Badge variant="outline" className="border-green-500 text-green-600 bg-green-50 dark:bg-green-900/20">Current Version</Badge>}
-                        {isLatest && data.updateAvailable && <Badge className="bg-primary text-primary-foreground">Latest</Badge>}
+                 return (
+                  <Card key={release.id} className={`shadow-sm border-border bg-background transition-all ${isLatest && data.updateAvailable ? 'border-primary/50' : ''}`}>
+                    {/* Removed bg-muted/30 to fix the header coloration issue */}
+                    <CardHeader className="border-b border-border pb-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <CardTitle className="text-xl text-foreground">{release.name || release.tag_name}</CardTitle>
+                          {isCurrent && <Badge variant="outline" className="border-green-500 text-green-600 bg-green-50 dark:bg-green-900/20">Current Version</Badge>}
+                          {isLatest && data.updateAvailable && <Badge className="bg-primary text-primary-foreground">Latest</Badge>}
+                        </div>
+                        <span className="text-xs text-muted-foreground font-mono shrink-0">
+                          {new Date(release.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                        </span>
                       </div>
-                      <span className="text-xs text-muted-foreground font-mono shrink-0">
-                        {new Date(release.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
-                      </span>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-6">
-                    {/* whitespace-pre-wrap allows basic github markdown to render readably without a heavy markdown library */}
-                    <div className="text-sm text-foreground/80 whitespace-pre-wrap leading-relaxed font-sans">
-                      {release.body || "No release notes provided."}
-                    </div>
-                    <div className="mt-6 pt-4 border-t border-border">
-                      <Button variant="outline" size="sm" asChild className="border-border hover:bg-muted text-foreground">
-                        <a href={release.html_url} target="_blank" rel="noopener noreferrer">
-                          <Github className="w-4 h-4 mr-2" /> View on GitHub
-                        </a>
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-               )
-            })
+                    </CardHeader>
+                    <CardContent className="p-6">
+                      <div className="text-sm text-foreground/80 whitespace-pre-wrap leading-relaxed font-sans">
+                        {release.body || "No release notes provided."}
+                      </div>
+                      <div className="mt-6 pt-4 border-t border-border">
+                        <Button variant="outline" size="sm" asChild className="border-border hover:bg-muted text-foreground">
+                          <a href={release.html_url} target="_blank" rel="noopener noreferrer">
+                            <Github className="w-4 h-4 mr-2" /> View on GitHub
+                          </a>
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                 )
+              })}
+
+              {/* Pagination Controls */}
+              <div className="flex flex-col sm:flex-row items-center justify-between pt-4 gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Releases per page:</span>
+                  <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(Number(v)); setCurrentPage(1); }}>
+                    <SelectTrigger className="h-9 w-[70px] bg-background border-border text-foreground font-medium">
+                      <SelectValue placeholder={pageSize} />
+                    </SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                      <SelectItem value="5" className="focus:bg-primary/10 focus:text-primary">5</SelectItem>
+                      <SelectItem value="10" className="focus:bg-primary/10 focus:text-primary">10</SelectItem>
+                      <SelectItem value="25" className="focus:bg-primary/10 focus:text-primary">25</SelectItem>
+                      <SelectItem value="50" className="focus:bg-primary/10 focus:text-primary">50</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <div className="flex items-center gap-1.5">
+                  <Button variant="outline" size="icon" className="h-9 w-9 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}><ChevronsLeft className="h-4 w-4" /></Button>
+                  <Button variant="outline" size="icon" className="h-9 w-9 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}><ChevronLeft className="h-4 w-4" /></Button>
+                  <span className="text-sm font-bold px-4 text-foreground">Pg {currentPage} of {totalPages}</span>
+                  <Button variant="outline" size="icon" className="h-9 w-9 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}><ChevronRight className="h-4 w-4" /></Button>
+                  <Button variant="outline" size="icon" className="h-9 w-9 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages}><ChevronsRight className="h-4 w-4" /></Button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>

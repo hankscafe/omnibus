@@ -62,7 +62,7 @@ export async function GET() {
     const currentVersion = packageJson.version || "1.0.0";
     
     // 2. Fetch the last 10 releases from your GitHub repo
-    const res = await fetch('https://api.github.com/repos/hankscafe/omnibus/releases?per_page=10', {
+    const res = await fetch('https://api.github.com/repos/hankscafe/omnibus/releases?per_page=100', {
         headers: { 
           'User-Agent': 'Omnibus-App',
           'Accept': 'application/vnd.github.v3+json'

@@ -167,7 +167,7 @@ export default function ScheduledJobsPage() {
               </Button>
             </Link>
             <h1 className="text-3xl font-bold flex items-center gap-2 text-foreground">
-              <Calendar className="w-7 h-7 text-primary" /> Scheduled Tasks
+              <Calendar className="w-7 h-7 text-primary" /> Scheduled Jobs
             </h1>
         </div>
         <div className="flex items-center gap-3">

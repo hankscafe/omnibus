@@ -70,6 +70,30 @@ export default async function RootLayout({
 
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* EXACT ANTI-FOUC SCRIPT: Perfectly matches your ThemeProvider & globals.css */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              try {
+                // 1. Force Custom Color Theme (Symbiote, Krypton, etc.)
+                let colorTheme = window.localStorage.getItem('omnibus-color-theme');
+                if (colorTheme && colorTheme !== 'default') {
+                  document.documentElement.setAttribute('data-theme', colorTheme);
+                }
+
+                // 2. Force Dark/Light Mode Base
+                let nextTheme = window.localStorage.getItem('theme');
+                if (nextTheme === 'dark' || (nextTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                  document.documentElement.classList.add('dark');
+                } else {
+                  document.documentElement.classList.remove('dark');
+                }
+              } catch (e) {}
+            `,
+          }}
+        />
+      </head>
       <body className={`${inter.className} min-h-screen flex flex-col bg-background text-foreground antialiased`}>
         <AuthProvider>
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem>

@@ -11,7 +11,8 @@ export const DiscordNotifier = {
     email?: string, 
     date?: string,
     publisher?: string | null,
-    year?: string | null
+    year?: string | null,
+    version?: string | null
   }) {
     try {
       const setting = await prisma.systemSetting.findUnique({ where: { key: 'discord_webhooks' } });
@@ -96,10 +97,24 @@ export const DiscordNotifier = {
           );
           break;
           
+        case 'account_approved':
+          embed.title = "🎉 Account Approved";
+          embed.description = `**${payload.user || "A new user"}** has been approved and granted access to Omnibus.`;
+          embed.color = 3066993; // Green
+          if (payload.email) embed.fields.push({ name: "Email", value: payload.email, inline: true });
+          break;
+
         case 'system_alert':
           embed.title = "⚠️ System Health Alert";
           embed.description = payload.description || "A system event requires attention.";
           embed.color = 15844367; // Yellow
+          break;
+
+        case 'update_available':
+          embed.title = "🚀 System Update Available!";
+          embed.description = payload.description || `A new version of Omnibus is available on GitHub.`;
+          embed.color = 3447003; // Blue
+          if (payload.version) embed.fields.push({ name: "Latest Version", value: payload.version, inline: true });
           break;
 
         case 'library_cleanup':
@@ -116,6 +131,42 @@ export const DiscordNotifier = {
           embed.color = 15844367; // Gold
           appendMetadata();
           if (payload.user) embed.fields.push({ name: "Matched By", value: payload.user, inline: true });
+          break;
+
+        case 'job_db_backup':
+          embed.title = "💾 Database Backup Complete";
+          embed.description = payload.description || "The automated database backup completed successfully.";
+          embed.color = 3066993; // Green
+          break;
+
+        case 'job_library_scan':
+          embed.title = "📂 Library Auto-Scan Complete";
+          embed.description = payload.description || "The automated library scan has finished running.";
+          embed.color = 3447003; // Blue
+          break;
+
+        case 'job_metadata_sync':
+          embed.title = "🔍 Deep Metadata Sync Complete";
+          embed.description = payload.description || "The deep metadata sync has finished processing the library.";
+          embed.color = 10181046; // Purple
+          break;
+
+        case 'job_issue_monitor':
+          embed.title = "📅 New Issue Monitor Complete";
+          embed.description = payload.description || "Successfully checked for new releases for monitored series.";
+          embed.color = 3066993; // Green
+          break;
+
+        case 'job_discover_sync':
+          embed.title = "🌐 Discover Sync Complete";
+          embed.description = payload.description || "The discover timeline and popular comics have been refreshed.";
+          embed.color = 3447003; // Blue
+          break;
+
+        case 'job_diagnostics':
+          embed.title = "🩺 System Diagnostics Complete";
+          embed.description = payload.description || "Automated system diagnostics have been run.";
+          embed.color = 15844367; // Yellow
           break;
       }
 

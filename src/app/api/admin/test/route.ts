@@ -83,7 +83,7 @@ export async function POST(request: Request) {
             title: "🔔 Omnibus Notification Test",
             description: `This is a test notification for the **${config.name || 'Unnamed'}** webhook. Connection is verified!`,
             color: 3447003,
-            footer: { text: "Omnibus System Archive" },
+            footer: { text: "Omnibus" },
             timestamp: new Date().toISOString()
         }]
       }, { timeout: 10000 });

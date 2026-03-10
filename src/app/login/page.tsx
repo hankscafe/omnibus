@@ -71,7 +71,7 @@ export default function LoginPage() {
       const res = await signIn("credentials", { 
           username, 
           password, 
-          totpCode: showTwoFactor ? totpCode : "", // FIX: Pass empty string instead of undefined
+          totpCode: showTwoFactor ? totpCode : "",
           redirect: false 
       })
       
@@ -148,7 +148,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div suppressHydrationWarning className="fixed inset-0 w-full h-full flex flex-col items-center p-4 bg-slate-50 dark:bg-slate-950 overflow-hidden">
+    <div suppressHydrationWarning className="fixed inset-0 w-full h-full flex flex-col items-center p-4 bg-background text-foreground overflow-hidden transition-colors duration-300">
       
       <div className="absolute inset-0 opacity-[0.05] pointer-events-none grayscale dark:invert z-0">
           <Image src="/images/omnibus-branding.jpg" alt="Texture" fill className="object-cover" unoptimized />
@@ -158,14 +158,14 @@ export default function LoginPage() {
 
       {/* EXACT LOGO FORMATTING RESTORED */}
       <div className="relative z-10 w-full max-w-[800px] px-4 shrink animate-in fade-in slide-in-from-top-4 duration-1000 flex justify-center min-h-0">
-        <OmnibusLogo className="w-full max-w-[600px] h-auto max-h-[40vh] text-slate-900 dark:text-slate-100 drop-shadow-xl" />
+        <OmnibusLogo className="w-full max-w-[600px] h-auto max-h-[40vh] text-foreground drop-shadow-xl transition-colors duration-300" />
       </div>
 
       <div className="relative z-10 flex-1 min-h-[2rem]" />
 
-      <Card className="relative z-10 w-full max-w-sm shrink-0 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg overflow-hidden transition-all duration-300">
-        <CardHeader className="pb-4 relative z-10 border-b border-slate-100 dark:border-slate-800/60">
-          <CardTitle className="flex items-center justify-center gap-2 text-xl font-bold text-slate-900 dark:text-slate-100 leading-tight">
+      <Card className="relative z-10 w-full max-w-sm shrink-0 bg-card text-card-foreground border border-border rounded-xl shadow-lg overflow-hidden transition-all duration-300">
+        <CardHeader className="pb-4 relative z-10 border-b border-border">
+          <CardTitle className="flex items-center justify-center gap-2 text-xl font-bold text-foreground leading-tight">
             {isRegistering ? (
                 <><UserPlus className="w-5 h-5 text-primary" /> Create Account</>
             ) : showTwoFactor ? (
@@ -181,7 +181,7 @@ export default function LoginPage() {
             
             {showTwoFactor ? (
               <div className="space-y-2 animate-in slide-in-from-right-4">
-                <Label htmlFor="totpCode" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Authenticator Code</Label>
+                <Label htmlFor="totpCode" className="font-semibold text-xs text-foreground">Authenticator Code</Label>
                 <Input 
                   id="totpCode" 
                   type="text"
@@ -191,7 +191,7 @@ export default function LoginPage() {
                   placeholder="Enter 6-digit code..." 
                   value={totpCode} 
                   onChange={(e) => setTotpCode(e.target.value)} 
-                  className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-center tracking-widest text-2xl font-mono focus-visible:ring-primary" 
+                  className="bg-background border-input rounded-md h-12 sm:h-10 text-center tracking-widest text-2xl font-mono focus-visible:ring-primary transition-colors" 
                   autoComplete="one-time-code"
                   required
                   autoFocus
@@ -200,7 +200,7 @@ export default function LoginPage() {
             ) : (
               <>
                 <div className="space-y-2">
-                  <Label htmlFor="username" className="font-semibold text-xs text-slate-700 dark:text-slate-300">
+                  <Label htmlFor="username" className="font-semibold text-xs text-foreground">
                     {isRegistering ? "Username" : "Username / Email"}
                   </Label>
                   <Input 
@@ -209,7 +209,7 @@ export default function LoginPage() {
                     placeholder="Enter username..." 
                     value={username} 
                     onChange={(e) => setUsername(e.target.value)} 
-                    className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                    className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
                     autoCapitalize="none"
                     autoCorrect="off"
                     autoComplete={isRegistering ? "off" : "username"}
@@ -219,7 +219,7 @@ export default function LoginPage() {
                 
                 {isRegistering && (
                   <div className="space-y-2">
-                    <Label htmlFor="email" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Email Address</Label>
+                    <Label htmlFor="email" className="font-semibold text-xs text-foreground">Email Address</Label>
                     <Input 
                       id="email" 
                       suppressHydrationWarning
@@ -227,7 +227,7 @@ export default function LoginPage() {
                       placeholder="Enter email address..." 
                       value={email} 
                       onChange={(e) => setEmail(e.target.value)} 
-                      className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                      className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
                       autoCapitalize="none"
                       autoCorrect="off"
                       autoComplete="email"
@@ -237,7 +237,7 @@ export default function LoginPage() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="password" title="Required" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Password</Label>
+                  <Label htmlFor="password" title="Required" className="font-semibold text-xs text-foreground">Password</Label>
                   <Input 
                     id="password"
                     suppressHydrationWarning
@@ -245,7 +245,7 @@ export default function LoginPage() {
                     placeholder="Enter password..."  
                     value={password} 
                     onChange={(e) => setPassword(e.target.value)} 
-                    className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                    className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
                     autoComplete={isRegistering ? "new-password" : "current-password"}
                     required
                   />
@@ -254,7 +254,7 @@ export default function LoginPage() {
 
                 {isRegistering && (
                   <div className="space-y-2">
-                    <Label htmlFor="confirmPassword" title="Required" className="font-semibold text-xs text-slate-700 dark:text-slate-300">Confirm Password</Label>
+                    <Label htmlFor="confirmPassword" title="Required" className="font-semibold text-xs text-foreground">Confirm Password</Label>
                     <Input 
                       id="confirmPassword"
                       suppressHydrationWarning
@@ -262,7 +262,7 @@ export default function LoginPage() {
                       placeholder="Confirm your password..."  
                       value={confirmPassword} 
                       onChange={(e) => setConfirmPassword(e.target.value)} 
-                      className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary" 
+                      className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
                       autoComplete="new-password"
                       required
                     />
@@ -273,7 +273,7 @@ export default function LoginPage() {
 
             {/* INLINE ERROR/SUCCESS MESSAGES */}
             {errorMsg && (
-              <Alert variant="destructive" className="py-2 bg-red-50 dark:bg-red-950/50 border-red-200 dark:border-red-900/50">
+              <Alert variant="destructive" className="py-2 bg-destructive/10 border-destructive/20 text-destructive">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription className="text-xs font-semibold ml-2 leading-tight">
                   {errorMsg}
@@ -282,7 +282,7 @@ export default function LoginPage() {
             )}
 
             {successMsg && (
-              <Alert className="py-2 border-green-200 bg-green-50 text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-400">
+              <Alert className="py-2 bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400">
                 <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
                 <AlertDescription className="text-xs font-semibold ml-2 leading-tight">
                   {successMsg}
@@ -315,13 +315,13 @@ export default function LoginPage() {
           {ssoProvider && !showTwoFactor && (
               <div className="mt-6">
                   <div className="relative mb-6">
-                      <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-200 dark:border-slate-800/80" /></div>
+                      <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
                       <div className="relative flex justify-center text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                          <span className="bg-white dark:bg-slate-950 px-3">Or Continue With</span>
+                          <span className="bg-card px-3 transition-colors duration-300">Or Continue With</span>
                       </div>
                   </div>
                   
-                  <Button type="button" variant="outline" className="w-full font-bold h-12 sm:h-11 border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900 transition-all" onClick={handleSsoLogin} disabled={loading || ssoLoading}>
+                  <Button type="button" variant="outline" className="w-full font-bold h-12 sm:h-11 border-border hover:bg-muted text-foreground transition-all" onClick={handleSsoLogin} disabled={loading || ssoLoading}>
                       {ssoLoading ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Fingerprint className="w-5 h-5 mr-2 text-primary" />}
                       Single Sign-On (SSO)
                   </Button>
@@ -336,10 +336,10 @@ export default function LoginPage() {
         </CardContent>
         
         <CardFooter className="flex justify-between items-center pb-6 pt-2 relative z-10">
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Build: v1.0.0-Beta.6</p>
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Build: v1.0.0-Beta.7</p>
           <div className="flex gap-1.5">
             <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-            <div className="w-2 h-2 bg-slate-300 dark:bg-slate-700 rounded-full" />
+            <div className="w-2 h-2 bg-muted rounded-full" />
           </div>
         </CardFooter>
       </Card>

@@ -130,12 +130,11 @@ export async function POST(request: Request) {
     try {
         const { job } = await request.json();
         const startTime = Date.now();
-        const nowStr = Date.now().toString(); // Generate timestamp immediately
+        const nowStr = Date.now().toString();
 
         if (job === 'backup') {
             Logger.log("[Background Job] Starting Database Backup...", "info");
             
-            // FIX: Immediate DB Lock to prevent overlapping triggers
             await prisma.systemSetting.upsert({ where: { key: 'last_backup_sync' }, update: { value: nowStr }, create: { key: 'last_backup_sync', value: nowStr } });
 
             (async () => {
@@ -155,7 +154,9 @@ export async function POST(request: Request) {
                         data: { users, series, issues, readProgresses, settings, requests }
                     };
 
-                    const backupDir = path.join(process.cwd(), 'backups');
+                    // Use the environment variable, or default to the internal /backups mount
+                    const backupDir = process.env.BACKUP_PATH || '/backups';
+                    
                     await fs.ensureDir(backupDir);
                     const fileName = `omnibus_backup_${Date.now()}.json`;
                     const filePath = path.join(backupDir, fileName);
@@ -164,6 +165,8 @@ export async function POST(request: Request) {
 
                     const files = await fs.readdir(backupDir);
                     const backupFiles = files.filter(f => f.startsWith('omnibus_backup_')).sort();
+                    
+                    // Retain the last 5 backups
                     if (backupFiles.length > 5) {
                         const toDelete = backupFiles.slice(0, backupFiles.length - 5);
                         for (const file of toDelete) {
@@ -171,8 +174,8 @@ export async function POST(request: Request) {
                         }
                     }
 
-                    await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Backup saved successfully to /backups/${fileName}. Retaining last 5 backups.` } });
-                    Logger.log(`[Background Job] Database Backup Complete. Saved to ${fileName}`, "success");
+                    await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Backup saved successfully to ${filePath}. Retaining last 5 backups.` } });
+                    Logger.log(`[Background Job] Database Backup Complete. Saved to ${filePath}`, "success");
                 } catch (e: any) {
                     await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } });
                     Logger.log(`[Background Job] Database Backup Failed: ${e.message}`, "error");
@@ -185,7 +188,6 @@ export async function POST(request: Request) {
         if (job === 'library') {
             Logger.log("[Manual Job] Starting Local Library Auto-Scan...", "info");
             
-            // FIX: Immediate DB Lock
             await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
             
             try {
@@ -225,7 +227,6 @@ export async function POST(request: Request) {
         if (job === 'metadata') {
             Logger.log("[Manual Job] Initiating background ComicVine Metadata Sync...", "info");
             
-            // FIX: Immediate DB Lock
             await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
 
             (async () => {
@@ -273,7 +274,6 @@ export async function POST(request: Request) {
 
             Logger.log("[Manual Job] Starting scan for monitored series...", "info");
             
-            // FIX: Immediate DB Lock
             await prisma.systemSetting.upsert({ where: { key: 'last_monitor_sync' }, update: { value: nowStr }, create: { key: 'last_monitor_sync', value: nowStr } });
 
             (async () => {
@@ -399,7 +399,6 @@ export async function POST(request: Request) {
         if (job === 'diagnostics') {
             Logger.log("[Background Job] Starting Auto-Diagnostics...", "info");
             
-            // FIX: Immediate DB Lock
             await prisma.systemSetting.upsert({ where: { key: 'last_diagnostics_sync' }, update: { value: nowStr }, create: { key: 'last_diagnostics_sync', value: nowStr } });
 
             (async () => {
@@ -449,7 +448,6 @@ export async function POST(request: Request) {
         if (job === 'storage_scan' || job === 'analytics') {
             Logger.log("[Background Job] Initiating Storage Deep Dive Scan...", "info");
             
-            // FIX: Immediate DB Lock
             await prisma.systemSetting.upsert({
                 where: { key: 'storage_deep_dive_last_run' },
                 update: { value: nowStr },
@@ -496,7 +494,6 @@ export async function POST(request: Request) {
         if (job === 'popular') {
             Logger.log("[Background Job] Rebuilding 8-page Discover Cache...", "info");
             
-            // FIX: Immediate DB Lock
             await prisma.systemSetting.upsert({ where: { key: 'last_popular_sync' }, update: { value: nowStr }, create: { key: 'last_popular_sync', value: nowStr } });
 
             (async () => {

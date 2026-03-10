@@ -380,11 +380,16 @@ services:
       - DATABASE_URL=file:/config/omnibus.db
       # REQUIRED: Tells the app to store the temp extracted .cbr files to the cache mount
       - OMNIBUS_CACHE_DIR=/cache
+      # OPTIONAL: Tells the app what path to use for the database backups, if not used Omnibus will default to /backups
+      - OMNIBUS_BACKUP_DIR=/backups
+
     volumes:
       # REQUIRED: Persistent storage for your database, logs, and settings
       - /path/to/your/nas/config:/config
-      # REQUIRED: Persistent storage for .cache directory for .cbr files
+      # REQUIRED: Maps folder for .cache directory for .cbr files
       - /path/to/your/nas/cache:/cache
+      # REQUIRED: Maps backup folder for database backups (can be defined using environment variable)
+      - /path/to/your/nas/backups:/backups
       # REQUIRED: Persistent storage for user avatars and banners
       - /path/to/your/nas/avatars:/app/public/avatars
       - /path/to/your/nas/banners:/app/public/banners

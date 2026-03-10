@@ -336,7 +336,7 @@ export default function LoginPage() {
         </CardContent>
         
         <CardFooter className="flex justify-between items-center pb-6 pt-2 relative z-10">
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Build: v1.0.0-Beta.7</p>
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Build: v1.0.0-Beta.8</p>
           <div className="flex gap-1.5">
             <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
             <div className="w-2 h-2 bg-muted rounded-full" />

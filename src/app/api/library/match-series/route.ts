@@ -5,7 +5,8 @@ import { prisma } from '@/lib/db';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
-import { detectManga } from '@/lib/manga-detector'; 
+import { detectManga } from '@/lib/manga-detector';
+import { DiscordNotifier } from '@/lib/discord'; 
 
 export async function POST(request: Request) {
   try {
@@ -111,6 +112,14 @@ export async function POST(request: Request) {
     } else {
         existingRecord = await prisma.series.create({ data: updateData });
     }
+
+    DiscordNotifier.sendAlert('metadata_match', { 
+        title: safeName, 
+        publisher: realPublisher, 
+        year: realYear.toString(), 
+        imageUrl: imageUrl,
+        user: "Admin" 
+    }).catch(() => {});
 
     let activeFolderPath = oldFolderPath;
     if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {

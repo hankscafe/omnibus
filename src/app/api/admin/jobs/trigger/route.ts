@@ -11,6 +11,7 @@ import { ProwlarrService } from '@/lib/prowlarr';
 import { GetComicsService } from '@/lib/getcomics';
 import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
+import { DiscordNotifier } from '@/lib/discord';
 
 async function getFolderSize(folderPath: string): Promise<number> {
     try {
@@ -175,10 +176,13 @@ export async function POST(request: Request) {
                     }
 
                     await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Backup saved successfully to ${filePath}. Retaining last 5 backups.` } });
+                    DiscordNotifier.sendAlert('job_db_backup', { description: `Backup saved successfully to ${fileName}.` }).catch(() => {});
                     Logger.log(`[Background Job] Database Backup Complete. Saved to ${filePath}`, "success");
                 } catch (e: any) {
                     await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } });
+                    DiscordNotifier.sendAlert('job_db_backup', { description: `Database backup failed: ${e.message}` }).catch(() => {});
                     Logger.log(`[Background Job] Database Backup Failed: ${e.message}`, "error");
+                    
                 }
             })();
 
@@ -217,9 +221,11 @@ export async function POST(request: Request) {
                 });
 
                 Logger.log(`[Manual Job] Local Library Auto-Scan completed. Updated storage for ${processedCount} series.`, "success");
+                DiscordNotifier.sendAlert('job_library_scan', { description: `Scan and storage calculation completed for ${processedCount} series.` }).catch(() => {});
                 return NextResponse.json({ success: true, message: "Library scan and storage calculation completed." });
             } catch (e: any) {
                 await prisma.jobLog.create({ data: { jobType: 'LIBRARY_SCAN', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } });
+                DiscordNotifier.sendAlert('job_library_scan', { description: `Failed to scan library.` }).catch(() => {});
                 throw e;
             }
         }
@@ -259,7 +265,7 @@ export async function POST(request: Request) {
                         message: details + `\nFinal Summary: ${successCount} Success, ${failCount} Failed.`
                     }
                 });
-
+                DiscordNotifier.sendAlert('job_metadata_sync', { description: `Metadata Sync Finished. Success: ${successCount} | Failed: ${failCount}` }).catch(() => {});
                 Logger.log(`[Manual Job] Metadata Sync Finished. Success: ${successCount} | Failed: ${failCount}`, "success");
             })();
 
@@ -389,7 +395,7 @@ export async function POST(request: Request) {
                 await prisma.jobLog.create({ 
                     data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nScan Complete. Total new issues queued: ${newIssuesFound}` } 
                 });
-
+                DiscordNotifier.sendAlert('job_issue_monitor', { description: `Monitor Scan Complete. Queued ${newIssuesFound} new issues.` }).catch(() => {});
                 Logger.log(`[Manual Job] Monitor Scan Complete. Queued ${newIssuesFound} new issues.`, "success");
             })();
 
@@ -435,14 +441,62 @@ export async function POST(request: Request) {
                     if (issuesFound === 0) details += "Library is in perfect health. 100% Integrity.\n";
 
                     await prisma.jobLog.create({ data: { jobType: 'DIAGNOSTICS', status: issuesFound > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', durationMs: Date.now() - startTime, message: details } });
+                    DiscordNotifier.sendAlert('job_diagnostics', { description: `Diagnostics Complete. Issues found: ${issuesFound}` }).catch(() => {});
                     Logger.log(`[Background Job] Diagnostics Complete. Issues found: ${issuesFound}`, issuesFound > 0 ? "warn" : "success");
                 } catch (e: any) {
                     await prisma.jobLog.create({ data: { jobType: 'DIAGNOSTICS', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } });
+                    DiscordNotifier.sendAlert('job_diagnostics', { description: `Diagnostics Failed: ${e.message}` }).catch(() => {});
                     Logger.log(`[Background Job] Diagnostics Failed: ${e.message}`, "error");
                 }
             })();
 
             return NextResponse.json({ success: true, message: "Diagnostics scan started in the background." });
+        }
+
+        if (job === 'update_check') {
+            Logger.log("[Background Job] Checking GitHub for Omnibus updates...", "info");
+            
+            try {
+                // Fetch latest release from GitHub
+                const res = await axios.get('https://api.github.com/repos/hankscafe/omnibus/releases?per_page=1', {
+                    headers: { 'User-Agent': 'Omnibus-App', 'Accept': 'application/vnd.github.v3+json' },
+                    timeout: 10000
+                });
+
+                if (res.data && res.data.length > 0) {
+                    const latestVersion = res.data[0].tag_name.replace(/^v/, '');
+                    
+                    // Fetch the version we last sent a Discord notification for
+                    const notifiedSetting = await prisma.systemSetting.findUnique({ where: { key: 'last_notified_version' } });
+                    const lastNotified = notifiedSetting?.value || "";
+
+                    // If it's a new version we haven't alerted about yet
+                    if (latestVersion !== lastNotified) {
+                        
+                        // Dynamically read current version so we don't notify if they already updated
+                        const packageJson = require(process.cwd() + '/package.json');
+                        const currentVersion = packageJson.version || "1.0.0";
+
+                        if (latestVersion !== currentVersion) {
+                            // Send the Discord Alert!
+                            await DiscordNotifier.sendAlert('update_available', { version: latestVersion });
+                            
+                            // Lock it in the database so it never sends this specific version alert again
+                            await prisma.systemSetting.upsert({
+                                where: { key: 'last_notified_version' },
+                                update: { value: latestVersion },
+                                create: { key: 'last_notified_version', value: latestVersion }
+                            });
+                            
+                            Logger.log(`[Background Job] Update notification sent for v${latestVersion}`, "success");
+                        }
+                    }
+                }
+            } catch (e: any) {
+                Logger.log(`[Background Job] Update check failed: ${e.message}`, "warn");
+            }
+
+            return NextResponse.json({ success: true, message: "Update check completed." });
         }
 
         if (job === 'storage_scan' || job === 'analytics') {
@@ -589,12 +643,13 @@ export async function POST(request: Request) {
                     await prisma.jobLog.create({
                         data: { jobType: 'DISCOVER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}` }
                     });
-
+                    DiscordNotifier.sendAlert('job_discover_sync', { description: `Successfully rebuilt the Discover cache (New & Popular).` }).catch(() => {});
                     Logger.log("[Background Job] Discover Cache Rebuilt (8 Pages).", "success");
                 } catch (e: any) {
                     await prisma.jobLog.create({
                         data: { jobType: 'DISCOVER_SYNC', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message }
                     });
+                    DiscordNotifier.sendAlert('job_discover_sync', { description: `Failed to rebuild Discover cache: ${e.message}` }).catch(() => {});
                     Logger.log(`[Background Job] Discover Cache Failed: ${e.message}`, "error");
                 }
             })();

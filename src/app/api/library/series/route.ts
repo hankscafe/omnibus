@@ -6,6 +6,7 @@ import path from 'path';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { DiscordNotifier } from '@/lib/discord';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
@@ -280,6 +281,13 @@ export async function DELETE(request: Request) {
                     }
                 }
             }
+
+            DiscordNotifier.sendAlert('library_cleanup', { 
+                title: seriesToDelete.map(s => s.name).join(', '), 
+                description: `Permanently removed ${seriesIds.length} series from the library. Files deleted from disk: ${deleteFiles ? 'Yes' : 'No'}`,
+                user: session.user.name 
+            }).catch(() => {});
+            
         } 
         // 2. FALLBACK: Delete the physical folder even if it's an "Unmatched" folder with no DB record
         else if (folderPath && deleteFiles) {

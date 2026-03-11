@@ -2,6 +2,7 @@ import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
+import { DiscordNotifier } from '@/lib/discord';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -33,13 +34,15 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: "You cannot remove your own Admin privileges." }, { status: 400 });
     }
 
+    // Grab the old state to check for transition
+    const oldUser = await prisma.user.findUnique({ where: { id } });
+
     let updateData: any = {};
     if (isApproved !== undefined) updateData.isApproved = isApproved;
     if (role !== undefined) updateData.role = role;
     if (autoApproveRequests !== undefined) updateData.autoApproveRequests = autoApproveRequests;
     if (canDownload !== undefined) updateData.canDownload = canDownload;
     
-    // NEW: Handle the 2FA Reset hook
     if (reset2FA) {
         updateData.twoFactorEnabled = false;
         updateData.twoFactorSecret = null;
@@ -49,6 +52,14 @@ export async function PATCH(req: NextRequest) {
       where: { id },
       data: updateData
     });
+
+    // TRIGGER DISCORD NOTIFICATION
+    if (isApproved === true && oldUser && !oldUser.isApproved) {
+        DiscordNotifier.sendAlert('account_approved', {
+            user: updatedUser.username,
+            email: updatedUser.email
+        }).catch(() => {});
+    }
 
     return NextResponse.json({ success: true, user: updatedUser });
   } catch (error) {

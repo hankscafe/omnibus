@@ -109,5 +109,32 @@ export function initCronJobs() {
     await checkAndTrigger('library', 'library_sync_schedule', 'last_library_sync', 'Library Scan');
     await checkAndTrigger('monitor', 'monitor_sync_schedule', 'last_monitor_sync', 'Series Monitor Scan');
     await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
+  
+    try {
+        const lastUpdateCheck = await prisma.systemSetting.findUnique({ where: { key: 'last_update_check_time' } });
+        const lastUpdateCheckTime = parseInt(lastUpdateCheck?.value || "0");
+
+        // If it has been more than 24 hours (86,400,000 ms)
+        if (now - lastUpdateCheckTime > 86400000) {
+            // Reset the timer immediately
+            await prisma.systemSetting.upsert({
+                where: { key: 'last_update_check_time' },
+                update: { value: now.toString() },
+                create: { key: 'last_update_check_time', value: now.toString() }
+            });
+
+            // Trigger the internal API route
+            const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job: 'update_check' })
+            });
+            await executeJobRoute(mockRequest);
+        }
+    } catch (err: any) {
+        Logger.log(`[Cron] Update Check Error: ${err.message}`, "error");
+    }
+    // --- END ADDITION ---
+
   }, 900000); // 15 minutes (900,000 ms)
 }

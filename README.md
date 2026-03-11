@@ -264,6 +264,7 @@ Complete, granular control over your instance, your users, and your underlying a
   * Users can be assigned auto-approval permission and download permission
 * **Library Path Mapping:** Easily map multiple root directories from your NAS (e.g., separate folders for `/comics`, `/manga`, and `/magazines`).
 * **API & Service Configuration:** Securely plug in your ComicVine API keys, Indexer credentials, and Download Client details.
+* [**External API Integrations:**](./docs/API.md) Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.
 * **Scheduled Tasks (Cron):** Configure how often Omnibus should scan your disk for new files, refresh metadata, or check indexers for missing requested issues.
 * **System Logs:** A built-in log viewer to easily troubleshoot API limits, failed downloads, or matching errors.
 

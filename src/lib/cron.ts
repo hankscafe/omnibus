@@ -2,8 +2,8 @@ import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { Importer } from './importer';
-// FIX: Import the API route directly so we can bypass the network
 import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route';
+import { DiscordNotifier } from '@/lib/discord';
 
 // Attach strictly to globalThis so Next.js internal reloads never bypass the lock
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
@@ -84,8 +84,6 @@ export function initCronJobs() {
                 if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
                     Logger.log(`[Cron] Starting Automated ${logName}...`, "info");
                     
-                    // FIX: Execute the route function directly in memory!
-                    // This completely bypasses the broken Docker loopback network.
                     try {
                         const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
                             method: 'POST',
@@ -104,12 +102,17 @@ export function initCronJobs() {
         }
     };
 
-    // Process all 4 job queues sequentially
+    // Process ALL 6 job queues sequentially
     await checkAndTrigger('metadata', 'metadata_sync_schedule', 'last_metadata_sync', 'ComicVine Metadata Sync');
     await checkAndTrigger('library', 'library_sync_schedule', 'last_library_sync', 'Library Scan');
     await checkAndTrigger('monitor', 'monitor_sync_schedule', 'last_monitor_sync', 'Series Monitor Scan');
     await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
-  
+    
+    // --- ADDED MISSING TRIGGERS HERE ---
+    await checkAndTrigger('popular', 'popular_sync_schedule', 'last_popular_sync', 'Discover Sync');
+    await checkAndTrigger('backup', 'backup_sync_schedule', 'last_backup_sync', 'Database Backup');
+
+    // --- Hardcoded 24-hour Update Check ---
     try {
         const lastUpdateCheck = await prisma.systemSetting.findUnique({ where: { key: 'last_update_check_time' } });
         const lastUpdateCheckTime = parseInt(lastUpdateCheck?.value || "0");
@@ -134,7 +137,6 @@ export function initCronJobs() {
     } catch (err: any) {
         Logger.log(`[Cron] Update Check Error: ${err.message}`, "error");
     }
-    // --- END ADDITION ---
 
   }, 900000); // 15 minutes (900,000 ms)
 }

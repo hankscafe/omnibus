@@ -602,20 +602,6 @@ function SeriesContent() {
                   {(seriesInfo.publisher || seriesInfo.year) && (
                       <div className="flex items-center justify-between text-[11px] font-black text-muted-foreground uppercase tracking-widest px-1 mb-1">
                           <span className="truncate pr-2 text-muted-foreground">{seriesInfo.publisher || "Unknown Publisher"}</span>
-                          
-                          <div className="flex items-center gap-1.5 shrink-0 mx-2">
-                              {seriesInfo.status && (
-                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
-                                      {seriesInfo.status}
-                                  </Badge>
-                              )}
-                              {seriesInfo.id && (
-                                  <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`uppercase tracking-wider text-[8px] px-1.5 py-0 h-4 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
-                                      {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
-                                  </Badge>
-                              )}
-                          </div>
-
                           <span className="shrink-0 text-muted-foreground">{seriesInfo.year}</span>
                       </div>
                   )}
@@ -630,6 +616,19 @@ function SeriesContent() {
               </div>
 
               <div className="flex flex-col gap-2">
+                  <div className="flex gap-2 pb-1">
+                      {seriesInfo.status && (
+                          <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
+                              {seriesInfo.status}
+                          </Badge>
+                      )}
+                      {seriesInfo.id && (
+                          <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
+                              {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
+                          </Badge>
+                      )}
+                  </div>
+                  
                   {/* DYNAMIC ACTION BUTTON */}
                   {activeIssue && !activeIssue.fullPath ? (
                       <Button 

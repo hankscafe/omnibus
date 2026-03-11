@@ -322,6 +322,7 @@ function LibraryContent() {
       if (res.ok) {
         toast({ title: "Success!", description: "Series info updated." });
         setEditing(null);
+        setPage(1);
         fetchLibraryData(1, false, true, pageSize);
       } else {
         const err = await res.json(); toast({ title: "Update Failed", description: err.error || "Unknown error", variant: "destructive" });
@@ -339,7 +340,7 @@ function LibraryContent() {
     setLoading(true); setConfirmOpen(false);
     try {
       const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: refreshTarget.cvId, folderPath: refreshTarget.path }) });
-      if (res.ok) { toast({ title: "Success", description: "Metadata and cover art refreshed!" }); fetchLibraryData(1, false, true, pageSize); }
+      if (res.ok) { toast({ title: "Success", description: "Metadata and cover art refreshed!" }); setPage(1); fetchLibraryData(1, false, true, pageSize); }
     } finally { setLoading(false); setRefreshTarget(null); }
   }
 
@@ -381,6 +382,7 @@ function LibraryContent() {
                   fetchCollections();
               }
               
+              setPage(1);
               fetchLibraryData(1, false, true, pageSize); 
               setSelectedSeries(new Set()); 
               setIsSelectionMode(false);
@@ -407,6 +409,7 @@ function LibraryContent() {
       }
       
       toast({ title: "Refresh Complete", description: `Successfully refreshed ${successCount} series.` });
+      setPage(1);
       fetchLibraryData(1, false, true, pageSize); setIsBulkProcessing(false); setSelectedSeries(new Set()); setIsSelectionMode(false);
   }
 
@@ -421,7 +424,7 @@ function LibraryContent() {
           if (res.ok) {
               const data = await res.json();
               toast({ title: "Renaming Complete", description: `Successfully renamed ${data.filesRenamed} files across ${data.foldersRenamed > 0 ? data.foldersRenamed : 'selected'} folders.` });
-              setRenameModalOpen(false); setSelectedSeries(new Set()); setIsSelectionMode(false); fetchLibraryData(1, false, true, pageSize);
+              setRenameModalOpen(false); setSelectedSeries(new Set()); setIsSelectionMode(false); setPage(1); fetchLibraryData(1, false, true, pageSize);
           } else {
               const data = await res.json(); toast({ title: "Renaming Failed", description: data.error, variant: "destructive" });
           }

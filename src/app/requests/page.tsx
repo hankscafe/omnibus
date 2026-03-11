@@ -65,7 +65,7 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
       <CardContent className="p-4 flex flex-col sm:flex-row gap-6">
         
         {/* Cover Image - Unified with Library Style */}
-        <div className="w-full sm:w-32 shrink-0 aspect-[2/3] bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
+        <div className="w-full sm:w-32 shrink-0 sm:self-start aspect-[2/3] bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
             {req.imageUrl ? (
                 <img src={req.imageUrl} alt={displayName} className="object-cover w-full h-full" />
             ) : (

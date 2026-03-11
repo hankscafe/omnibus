@@ -1,3 +1,4 @@
+// src/app/admin/logs/page.tsx
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
@@ -12,7 +13,8 @@ import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Trash2, Terminal, History, Loader2, Download, Eye, 
     Clock, AlertTriangle, CheckCircle2, ShieldAlert, Database, 
-    RefreshCw, Activity, Search, CalendarMinus 
+    RefreshCw, Activity, Search, CalendarMinus,
+    ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from "lucide-react"
 import Link from "next/link"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
@@ -30,6 +32,10 @@ export default function LogsPage() {
   const [typeFilter, setTypeFilter] = useState("ALL")
   const [selectedLogDetails, setSelectedLogDetails] = useState<any>(null)
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState("25")
+
   // Confirmation States
   const [clearLiveConfirmOpen, setClearLiveConfirmOpen] = useState(false) 
   const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false) 
@@ -43,6 +49,11 @@ export default function LogsPage() {
     const interval = setInterval(fetchLiveLogs, 3000);
     return () => clearInterval(interval);
   }, [])
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [statusFilter, typeFilter, pageSize])
 
   const fetchLiveLogs = async () => {
     try {
@@ -136,6 +147,11 @@ export default function LogsPage() {
 
   const uniqueJobTypes = useMemo(() => Array.from(new Set(jobLogs.map(l => l.jobType))), [jobLogs]);
 
+  // Pagination Math
+  const limit = parseInt(pageSize);
+  const totalPages = Math.ceil(filteredJobs.length / limit) || 1;
+  const paginatedJobs = filteredJobs.slice((currentPage - 1) * limit, currentPage * limit);
+
   return (
     <div className="container mx-auto py-10 px-6 max-w-6xl space-y-6 transition-colors duration-300">
       
@@ -158,32 +174,31 @@ export default function LogsPage() {
                     <Trash2 className="w-4 h-4 mr-2" /> Clear Terminal
                 </Button>
             </div>
-            {/* UPDATED TERMINAL CONTAINER: Using dynamic bg-muted and border-primary/20 */}
-            <Card className="bg-muted border-primary/20 shadow-2xl overflow-hidden transition-colors duration-300">
-                <CardHeader className="border-b border-primary/10 pb-4 bg-background/50">
-                    <CardTitle className="text-primary text-sm flex items-center gap-2">
-                        <Terminal className="w-4 h-4" /> Live Terminal Output
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                    <div className="h-[600px] overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-primary/20">
-                        {liveLogs.length === 0 && <p className="text-muted-foreground italic">Waiting for system activity...</p>}
-                        {liveLogs.map((log, i) => (
-                        <div key={i} className="flex gap-3 border-b border-primary/5 py-1 transition-colors hover:bg-primary/5">
-                            <span className="text-muted-foreground shrink-0">[{log.timestamp}]</span>
-                            <span className={
-                                log.type === 'error' ? 'text-red-500 font-bold' : 
-                                log.type === 'success' ? 'text-green-600 dark:text-green-400 font-bold' : 
-                                log.type === 'warn' ? 'text-orange-500' : 
-                                'text-foreground'
-                            }>
-                                {log.message}
-                            </span>
-                        </div>
-                        ))}
+            
+            {/* Custom structure to avoid Shadcn Card top-padding stripe issue */}
+            <div className="border border-border rounded-lg overflow-hidden bg-background shadow-sm transition-colors duration-300">
+                <div className="p-4 border-b border-border bg-muted/50">
+                    <h3 className="font-bold text-foreground text-sm flex items-center gap-2">
+                        <Terminal className="w-4 h-4 text-primary" /> Live Terminal Output
+                    </h3>
+                </div>
+                <div className="h-[600px] overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-primary/20 bg-background">
+                    {liveLogs.length === 0 && <p className="text-muted-foreground italic">Waiting for system activity...</p>}
+                    {liveLogs.map((log, i) => (
+                    <div key={i} className="flex gap-3 border-b border-border/40 py-1.5 transition-colors hover:bg-muted/50">
+                        <span className="text-muted-foreground shrink-0">[{log.timestamp}]</span>
+                        <span className={
+                            log.type === 'error' ? 'text-red-500 font-bold' : 
+                            log.type === 'success' ? 'text-green-600 dark:text-green-400 font-bold' : 
+                            log.type === 'warn' ? 'text-orange-500' : 
+                            'text-foreground'
+                        }>
+                            {log.message}
+                        </span>
                     </div>
-                </CardContent>
-            </Card>
+                    ))}
+                </div>
+            </div>
         </TabsContent>
 
         {/* --- STORED JOB HISTORY TAB --- */}
@@ -242,10 +257,10 @@ export default function LogsPage() {
                         <tbody className="divide-y divide-border">
                             {loadingJobs ? (
                                 <tr><td colSpan={6} className="text-center py-10"><Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" /></td></tr>
-                            ) : filteredJobs.length === 0 ? (
+                            ) : paginatedJobs.length === 0 ? (
                                 <tr><td colSpan={6} className="text-center py-10 text-muted-foreground italic">No historical job logs found.</td></tr>
                             ) : (
-                                filteredJobs.map((log) => (
+                                paginatedJobs.map((log) => (
                                     <tr key={log.id} className="hover:bg-muted/30 transition-colors">
                                         <td className="px-4 py-3 font-medium whitespace-nowrap text-xs text-muted-foreground">
                                             {new Date(log.createdAt).toLocaleString()}
@@ -284,6 +299,42 @@ export default function LogsPage() {
                         </tbody>
                     </table>
                 </div>
+
+                {/* --- RESPONSIVE PAGINATION --- */}
+                {filteredJobs.length > 0 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between p-4 border-t border-border bg-muted/30 gap-4">
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-center sm:justify-start">
+                            <span className="text-sm text-muted-foreground">Rows per page:</span>
+                            <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(v); setCurrentPage(1); }}>
+                                <SelectTrigger className="h-10 sm:h-8 w-[80px] sm:w-[70px] bg-background border-border font-medium">
+                                    <SelectValue placeholder={pageSize} />
+                                </SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    <SelectItem value="10" className="focus:bg-primary/10 focus:text-primary">10</SelectItem>
+                                    <SelectItem value="25" className="focus:bg-primary/10 focus:text-primary">25</SelectItem>
+                                    <SelectItem value="50" className="focus:bg-primary/10 focus:text-primary">50</SelectItem>
+                                    <SelectItem value="100" className="focus:bg-primary/10 focus:text-primary">100</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        
+                        <div className="flex items-center justify-center gap-1.5 w-full sm:w-auto">
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>
+                                <ChevronsLeft className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
+                                <ChevronLeft className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                            <span className="text-sm font-bold px-3 sm:px-4 text-foreground">Pg {currentPage} of {totalPages}</span>
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>
+                                <ChevronRight className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages}>
+                                <ChevronsRight className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                        </div>
+                    </div>
+                )}
             </div>
         </TabsContent>
       </Tabs>

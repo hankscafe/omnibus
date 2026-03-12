@@ -103,6 +103,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 * **Manual Search:** A manual search powered by ComicVines api where users can input any series they want and choose from the results which show cover images, publisher, year, and issue count to ensure they are selecting the issue or series they are looking for.
 * **One-Click Requests:** Found a missing issue or an entire story arc? Click "Request" to instantly send it to your automated download queue.
 * **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
+* **Unreleased Badges:** When a request is made Omnibus will check ComicVine for the issues release date and if it is not released it will tag it as UNRELEASED.  As the Monitor Series job runs it will also check items tagged as UNRELEASED and update it as available once it is availalbe, allowing future issues to be automatically downloaded.
 * **Requests & Downloads:** Your automated librarian. Tell Omnibus what you want, and it handles the complex world of tracking, downloading, and organizing.
 * **Admin Alerts:** When an issue is reported or a request requires approval a banner will be visible on the home page with links to the appropriate pages.
 
@@ -161,6 +162,7 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 * **Missing Issue Detection:** Visually highlights gaps in your collection (e.g., if you have issues #1, #2, and #4, it will flag #3 as missing) and offers a one-click button to send the missing issue to your download queue.
 * **Sorting Options:** Sort issues sequentially (Issue #1 to #100) or reverse chronological (newest releases first) for ongoing weekly pulls.
 * **Download Option:** Admins can enable a per-user permission for users to download individual issues for viewing offline if they have a comic reader.
+* **Customize Directory & File Naming:** *(Coming Soon)* Admins can customize the directory and file naming to their liking similar to Radarr/Sonarr.
 
 ### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.

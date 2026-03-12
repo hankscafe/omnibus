@@ -185,6 +185,7 @@ export function AdminRequestManagement() {
     if (['IMPORTED', 'COMPLETED'].includes(status)) return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800";
     if (status === 'DOWNLOADING') return "bg-primary/20 text-primary border-primary/30";
     if (status === 'PENDING_APPROVAL') return "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-800";
+    if (status === 'UNRELEASED') return "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200 dark:border-purple-800";
     return "bg-muted text-foreground border-border";
   }
 
@@ -270,6 +271,7 @@ export function AdminRequestManagement() {
               <SelectItem value="ALL" className="focus:bg-primary/10 focus:text-primary">All Statuses</SelectItem>
               <SelectItem value="PENDING_APPROVAL" className="focus:bg-primary/10 focus:text-primary">Needs Approval</SelectItem>
               <SelectItem value="PENDING" className="focus:bg-primary/10 focus:text-primary">Pending Search</SelectItem>
+              <SelectItem value="UNRELEASED" className="focus:bg-primary/10 focus:text-primary">Unreleased</SelectItem>
               <SelectItem value="DOWNLOADING" className="focus:bg-primary/10 focus:text-primary">Downloading</SelectItem>
               <SelectItem value="IMPORTED" className="focus:bg-primary/10 focus:text-primary">Imported</SelectItem>
               <SelectItem value="STALLED" className="focus:bg-primary/10 focus:text-primary">Stalled / Failed</SelectItem>
@@ -487,7 +489,8 @@ export function AdminRequestManagement() {
             <div className="p-10 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
           ) : selectedComicDetails && (
             <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-6 p-2 sm:p-0">
-               <div className="aspect-[2/3] w-3/4 sm:w-full mx-auto rounded-lg overflow-hidden border border-border shadow-md bg-muted">
+               {/* FIX: ADDED sm:self-start TO STOP VERTICAL STRETCHING */}
+               <div className="aspect-[2/3] w-3/4 sm:w-full mx-auto rounded-lg overflow-hidden border border-border shadow-md bg-muted sm:self-start">
                   <img src={selectedComicDetails.image} alt="Cover" className="w-full h-full object-cover" />
                </div>
                <div className="space-y-4">

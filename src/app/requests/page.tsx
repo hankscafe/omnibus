@@ -165,6 +165,7 @@ export default function RequestsPage() {
       case 'DOWNLOADING': case 'MANUAL_DDL': return "bg-primary/20 text-primary border-primary/30"
       case 'PENDING_APPROVAL': return "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800"
       case 'FAILED': case 'STALLED': case 'ERROR': return "bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800"
+      case 'UNRELEASED': return "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800"
       default: return "bg-muted text-foreground border-border"
     }
   }
@@ -174,6 +175,7 @@ export default function RequestsPage() {
           if (activeTab === "ALL") return true;
           if (activeTab === "ACTIVE") return ['DOWNLOADING', 'PENDING', 'MANUAL_DDL'].includes(req.status);
           if (activeTab === "PENDING_APPROVAL") return req.status === 'PENDING_APPROVAL';
+          if (activeTab === "UNRELEASED") return req.status === 'UNRELEASED';
           if (activeTab === "COMPLETED") return ['IMPORTED', 'COMPLETED'].includes(req.status);
           if (activeTab === "FAILED") return ['FAILED', 'STALLED', 'ERROR'].includes(req.status);
           if (activeTab === "CANCELLED") return req.status === 'CANCELLED';
@@ -213,6 +215,7 @@ export default function RequestsPage() {
             <TabsTrigger value="ALL" className="px-4 py-2">All</TabsTrigger>
             <TabsTrigger value="ACTIVE" className="px-4 py-2">Active / DL</TabsTrigger>
             <TabsTrigger value="PENDING_APPROVAL" className="px-4 py-2">Pending</TabsTrigger>
+            <TabsTrigger value="UNRELEASED" className="px-4 py-2">Unreleased</TabsTrigger>
             <TabsTrigger value="COMPLETED" className="px-4 py-2">Completed</TabsTrigger>
             <TabsTrigger value="FAILED" className="px-4 py-2">Failed</TabsTrigger>
             <TabsTrigger value="CANCELLED" className="px-4 py-2">Cancelled</TabsTrigger>

@@ -14,6 +14,21 @@ import { Importer } from '@/lib/importer';
 
 export const dynamic = 'force-dynamic';
 
+// --- NEW: Helper to check if an issue is actually released ---
+function isReleasedYet(storeDate: string | null, coverDate: string | null) {
+  const now = new Date();
+  if (storeDate) {
+    return new Date(storeDate) <= now;
+  }
+  if (coverDate) {
+    // Comic cover dates are usually printed 1-2 months ahead of physical release.
+    const buffer = new Date();
+    buffer.setDate(buffer.getDate() + 45); 
+    return new Date(coverDate) <= buffer;
+  }
+  return true; // If CV has no date, assume it's out
+}
+
 export async function POST(request: NextRequest) {
   const token = await getToken({ req: request });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -83,7 +98,7 @@ export async function POST(request: NextRequest) {
               description: description,
               publisher: safePublisher,
               year: year
-          });
+          }).catch(() => {});
       }
 
       const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -109,6 +124,15 @@ export async function POST(request: NextRequest) {
         const searchName = `${name} #${issue.issue_number}`;
         const issueImage = issue.image?.medium_url || issue.image?.small_url || image;
 
+        // --- NEW: Check Release Date ---
+        const isReleased = isReleasedYet(issue.store_date, issue.cover_date);
+        let issueStatus = initialStatus;
+        
+        // If it's not released, force it to UNRELEASED so it bypasses search entirely
+        if (!isReleased) {
+            issueStatus = 'UNRELEASED';
+        }
+
         const existing = await prisma.request.findFirst({
           where: { volumeId: cvId.toString(), activeDownloadName: searchName }
         });
@@ -118,18 +142,20 @@ export async function POST(request: NextRequest) {
             data: {
               userId: token.id as string,
               volumeId: cvId.toString(),
-              status: initialStatus,
+              status: issueStatus,
               activeDownloadName: searchName,
               imageUrl: issueImage 
             }
           });
-          if (initialStatus === 'PENDING') {
+          
+          // Only push to the automation queue if it's PENDING and actually released
+          if (issueStatus === 'PENDING') {
             createdRequests.push({ id: newReq.id, name: searchName, year: issueYear, publisher: safePublisher, isManga });
           }
         }
       }
 
-      if (initialStatus === 'PENDING' && createdRequests.length > 0) {
+      if (createdRequests.length > 0) {
         processAutomationQueue(createdRequests);
       }
 
@@ -141,6 +167,7 @@ export async function POST(request: NextRequest) {
       });
 
     } else {
+      // Logic for single issue request (assumes it's out since the user specifically clicked it)
       const newReq = await prisma.request.create({
         data: {
           userId: token.id as string,
@@ -159,7 +186,7 @@ export async function POST(request: NextRequest) {
               description: description,
               publisher: safePublisher,
               year: year
-          });
+          }).catch(() => {});
       }
 
       if (initialStatus === 'PENDING') {
@@ -222,7 +249,7 @@ export async function PATCH(request: NextRequest) {
           description: description,
           publisher: publisher,
           year: year 
-      });
+      }).catch(() => {});
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
       searchAndDownload(id, searchName, year, publisher, isManga).catch(e => console.error(e));
@@ -287,7 +314,7 @@ async function searchAndDownload(requestId: string, name: string, year: string, 
         data: { 
           status: 'DOWNLOADING', 
           activeDownloadName: best.title, 
-          downloadHash: trackingHash 
+          downloadLink: trackingHash 
         }
       });
       return; 

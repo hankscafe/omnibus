@@ -13,6 +13,18 @@ import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
 import { DiscordNotifier } from '@/lib/discord';
 
+// --- NEW: Helper to check if an issue is actually released ---
+function isReleasedYet(storeDate: string | null, coverDate: string | null) {
+    const now = new Date();
+    if (storeDate) return new Date(storeDate) <= now;
+    if (coverDate) {
+        const buffer = new Date();
+        buffer.setDate(buffer.getDate() + 45); 
+        return new Date(coverDate) <= buffer;
+    }
+    return true; 
+}
+
 async function getFolderSize(folderPath: string): Promise<number> {
     try {
         if (!folderPath || !fs.existsSync(folderPath)) return 0;
@@ -278,38 +290,64 @@ export async function POST(request: Request) {
 
             if (!cvApiKey) return NextResponse.json({ error: "Missing ComicVine API Key" }, { status: 400 });
 
-            Logger.log("[Manual Job] Starting scan for monitored series...", "info");
+            Logger.log("[Manual Job] Starting scan for monitored series & unreleased requests...", "info");
             
             await prisma.systemSetting.upsert({ where: { key: 'last_monitor_sync' }, update: { value: nowStr }, create: { key: 'last_monitor_sync', value: nowStr } });
 
             (async () => {
+                // 1. Get explicitly monitored series
                 const monitoredSeries = await prisma.series.findMany({
                     where: { monitored: true },
                     include: { issues: true }
                 });
+                const monitoredCvIds = monitoredSeries.map(s => s.cvId);
 
-                if (monitoredSeries.length === 0) {
-                    Logger.log("[Monitor] No series are marked as 'Monitored' in your database.", "warn");
+                // 2. Get any UNRELEASED requests (even if the series isn't monitored)
+                const unreleasedRequests = await prisma.request.findMany({
+                    where: { status: 'UNRELEASED' }
+                });
+                const unreleasedVolumeIds = unreleasedRequests.map(r => parseInt(r.volumeId)).filter(id => !isNaN(id));
+
+                // 3. Combine into a unique list of ComicVine Volume IDs to check
+                const allCvIdsToCheck = [...new Set([...monitoredCvIds, ...unreleasedVolumeIds])];
+
+                if (allCvIdsToCheck.length === 0) {
+                    Logger.log("[Monitor] No monitored series or unreleased requests to check.", "info");
+                    return;
                 } else {
-                    Logger.log(`[Monitor] Found ${monitoredSeries.length} series to check.`, "info");
+                    Logger.log(`[Monitor] Checking ${allCvIdsToCheck.length} volumes for new/unreleased issues.`, "info");
                 }
 
                 let newIssuesFound = 0;
-                let details = `Scanning ${monitoredSeries.length} monitored series for new issues.\n\n`;
+                let unreleasedUpgraded = 0;
+                let details = `Scanning ${allCvIdsToCheck.length} volumes for new/unreleased issues.\n\n`;
 
-                for (const series of monitoredSeries) {
+                const admin = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
+
+                for (const cvId of allCvIdsToCheck) {
                     try {
-                        Logger.log(`[Monitor] Checking CV for: ${series.name} (CV ID: ${series.cvId})`, 'info');
+                        Logger.log(`[Monitor] Checking CV for Volume ID: ${cvId}`, 'info');
                         
+                        // Determine if this volume is actually monitored (to queue completely new issues)
+                        const seriesRecord = monitoredSeries.find(s => s.cvId === cvId);
+                        const isMonitored = !!seriesRecord;
+                        
+                        // Fallback data if we don't have a Series record yet
+                        const seriesName = seriesRecord?.name || unreleasedRequests.find(r => parseInt(r.volumeId) === cvId)?.activeDownloadName?.split(' #')[0] || `Volume ${cvId}`;
+                        const seriesPublisher = seriesRecord?.publisher || "Unknown";
+                        const seriesYear = seriesRecord?.year?.toString() || new Date().getFullYear().toString();
+                        const isManga = seriesRecord ? (seriesRecord as any).isManga : false;
+
                         let offset = 0;
                         let totalResults = 1;
                         let loopCount = 0;
                         const allCvIssues = [];
 
+                        // Fetch all issues for this volume from ComicVine
                         while (offset < totalResults && loopCount < 20) {
                             const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
                                 params: { 
-                                    api_key: cvApiKey, format: 'json', filter: `volume:${series.cvId}`, 
+                                    api_key: cvApiKey, format: 'json', filter: `volume:${cvId}`, 
                                     sort: 'store_date:desc', limit: 100, offset: offset,
                                     field_list: 'id,name,issue_number,cover_date,store_date,image' 
                                 },
@@ -325,78 +363,91 @@ export async function POST(request: Request) {
                             await new Promise(r => setTimeout(r, 1500)); 
                         }
 
-                        Logger.log(`[Monitor] ComicVine returned ${allCvIssues.length} issues for ${series.name}`, 'info');
-
-                        const admin = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
-                        const existingRequests = await prisma.request.findMany({
-                            where: { volumeId: series.cvId.toString() }
+                        const existingRequestsForVolume = await prisma.request.findMany({
+                            where: { volumeId: cvId.toString() }
                         });
-
-                        let seriesNewCount = 0;
 
                         for (const cvIssue of allCvIssues) {
                             const cvNum = parseFloat(cvIssue.issue_number);
                             if (isNaN(cvNum)) continue;
 
-                            const alreadyInLibrary = series.issues.some(i => 
-                                parseFloat(i.number) === cvNum && 
-                                i.filePath && 
-                                i.filePath.length > 0
+                            // Skip if it's already physically in the library
+                            const alreadyInLibrary = seriesRecord?.issues.some(i => 
+                                parseFloat(i.number) === cvNum && i.filePath && i.filePath.length > 0
                             );
                             if (alreadyInLibrary) continue;
 
-                            const searchName = `${series.name} #${cvIssue.issue_number}`;
+                            const searchName = `${seriesName} #${cvIssue.issue_number}`;
+                            const isReleased = isReleasedYet(cvIssue.store_date, cvIssue.cover_date);
                             
-                            const alreadyReq = existingRequests.find(r => {
+                            const alreadyReq = existingRequestsForVolume.find(r => {
                                 if (r.activeDownloadName === searchName) return true;
                                 const match = (r.activeDownloadName || "").match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
                                 if (match && parseFloat(match[1]) === cvNum) return true;
                                 return false;
                             });
 
+                            const issueImage = cvIssue.image?.medium_url || cvIssue.image?.small_url;
+                            const issueYear = (cvIssue.store_date || cvIssue.cover_date || seriesYear).split('-')[0];
+
+                            // --- THE UPGRADE LOGIC ---
                             if (alreadyReq) {
-                                Logger.log(`[Monitor] Skipping ${searchName} - Already in Request Queue (Status: ${alreadyReq.status})`, 'info');
-                                continue;
+                                if (alreadyReq.status === 'UNRELEASED' && isReleased) {
+                                    Logger.log(`[Monitor] Issue ${searchName} is now released! Upgrading to PENDING.`, 'success');
+                                    details += `[RELEASED] Upgraded to Pending: ${searchName}\n`;
+                                    
+                                    await prisma.request.update({
+                                        where: { id: alreadyReq.id },
+                                        data: { status: 'PENDING' }
+                                    });
+                                    
+                                    // Send it to Prowlarr/GetComics!
+                                    searchAndDownload(alreadyReq.id, searchName, issueYear, seriesPublisher, isManga)
+                                        .catch(e => console.error("Monitor Automation Error:", e));
+                                        
+                                    unreleasedUpgraded++;
+                                }
+                                continue; 
                             }
 
-                            Logger.log(`[Monitor] Found NEW missing issue: ${searchName}`, 'success');
-                            details += `[NEW] Found and Queued: ${searchName}\n`;
-                            
-                            const issueImage = cvIssue.image?.medium_url || cvIssue.image?.small_url;
-                            const issueYear = (cvIssue.store_date || cvIssue.cover_date || series.year.toString() || "").split('-')[0];
+                            // --- NEW ISSUE LOGIC (ONLY IF MONITORED) ---
+                            if (isMonitored) {
+                                const issueStatus = isReleased ? 'PENDING' : 'UNRELEASED';
 
-                            const newReq = await prisma.request.create({
-                                data: {
-                                    userId: admin?.id || 'system',
-                                    volumeId: series.cvId.toString(),
-                                    status: 'PENDING',
-                                    activeDownloadName: searchName,
-                                    imageUrl: issueImage
+                                Logger.log(`[Monitor] Found NEW missing issue: ${searchName} (${issueStatus})`, 'success');
+                                details += `[NEW] Found and Queued (${issueStatus}): ${searchName}\n`;
+
+                                const newReq = await prisma.request.create({
+                                    data: {
+                                        userId: admin?.id || 'system',
+                                        volumeId: cvId.toString(),
+                                        status: issueStatus,
+                                        activeDownloadName: searchName,
+                                        imageUrl: issueImage
+                                    }
+                                });
+
+                                if (isReleased) {
+                                    searchAndDownload(newReq.id, searchName, issueYear, seriesPublisher, isManga)
+                                        .catch(e => console.error("Monitor Automation Error:", e));
+                                    newIssuesFound++;
                                 }
-                            });
-
-                            searchAndDownload(newReq.id, searchName, issueYear, series.publisher || "Unknown", (series as any).isManga)
-                                .catch(e => console.error("Monitor Automation Error:", e));
-
-                            newIssuesFound++;
-                            seriesNewCount++;
-                        }
-
-                        if (seriesNewCount === 0) {
-                            Logger.log(`[Monitor] No new issues needed for ${series.name}.`, 'info');
+                            }
                         }
 
                     } catch (err: any) {
-                        Logger.log(`[Monitor] Failed to scan series ${series.name}: ${err.message}`, 'error');
-                        details += `[ERROR] Failed to scan ${series.name}: ${err.message}\n`;
+                        Logger.log(`[Monitor] Failed to scan volume ${cvId}: ${err.message}`, 'error');
+                        details += `[ERROR] Failed to scan volume ${cvId}: ${err.message}\n`;
                     }
                 }
 
                 await prisma.jobLog.create({ 
-                    data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nScan Complete. Total new issues queued: ${newIssuesFound}` } 
+                    data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nScan Complete. New issues queued: ${newIssuesFound} | Unreleased issues upgraded: ${unreleasedUpgraded}` } 
                 });
-                DiscordNotifier.sendAlert('job_issue_monitor', { description: `Monitor Scan Complete. Queued ${newIssuesFound} new issues.` }).catch(() => {});
-                Logger.log(`[Manual Job] Monitor Scan Complete. Queued ${newIssuesFound} new issues.`, "success");
+                
+                DiscordNotifier.sendAlert('job_issue_monitor', { description: `Monitor Scan Complete. Queued: ${newIssuesFound}, Upgraded: ${unreleasedUpgraded}` }).catch(() => {});
+
+                Logger.log(`[Manual Job] Monitor Scan Complete. Queued: ${newIssuesFound}, Upgraded: ${unreleasedUpgraded}`, "success");
             })();
 
             return NextResponse.json({ success: true, message: "Series monitor scan started in the background." });

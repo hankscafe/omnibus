@@ -229,7 +229,7 @@ A personalized space for each user on your server to manage their identity, trac
 </p>
 
 * **Personal Identity:** Customize your account by uploading a unique profile avatar and a custom hero banner for your user dashboard.
-* **2FA Setup:** Users have the option to configure 2FA for their local authentication from their profile page to further protect their account.
+* **2FA Setup:** From the profile page, users have the option to configure 2FA to further protect their account.
 * **Session Revocation:** Users have the ability to revoke all active sessions from their profile page if they feel their account has been compromised, as well as change their password.
 * **Reading Statistics:** Track your all-time reading habits. View your total issues read, estimated pages turned, and your most-read publishers or genres.
 * **UI Customization:** Set your own personal theme preferences (Dark mode, Light mode, or System default) and UI accent colors. These settings are tied to your account and persist across any device you log into.

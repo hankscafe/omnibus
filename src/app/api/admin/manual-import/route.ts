@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { prisma } from '@/lib/db';
 import { Importer } from '@/lib/importer';
 import { Logger } from '@/lib/logger';
 
@@ -6,10 +7,21 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
-    const { requestId } = await request.json();
+    const { requestId, torrentName, torrentId } = await request.json();
 
     if (!requestId) {
       return NextResponse.json({ error: "Request ID required" }, { status: 400 });
+    }
+
+    // --- FIX: Update the request with the actual unmatched torrent info ---
+    if (torrentName && torrentId) {
+         await prisma.request.update({
+             where: { id: requestId },
+             data: {
+                 activeDownloadName: torrentName,
+                 downloadLink: torrentId
+             }
+         });
     }
 
     Logger.log(`[Admin API] Manual import triggered for Request: ${requestId}`, 'info');

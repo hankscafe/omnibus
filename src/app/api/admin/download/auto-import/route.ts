@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Importer } from '@/lib/importer';
+import { POST as triggerJob } from '@/app/api/admin/jobs/trigger/route'; 
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
     try {
@@ -29,6 +32,16 @@ export async function POST(request: Request) {
             await prisma.request.delete({ where: { id: req.id } });
             return NextResponse.json({ error: "Import failed to move file. Ensure path mappings are correct." }, { status: 500 });
         }
+
+        // NEW: Immediately run a background library scan so the new folder is indexed into the DB!
+        try {
+            const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job: 'library' })
+            });
+            triggerJob(mockRequest).catch(() => {});
+        } catch (e) {}
 
         return NextResponse.json({ success: true });
     } catch (error: any) {

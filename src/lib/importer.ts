@@ -7,6 +7,7 @@ import { resolveRemotePath } from './utils/path-resolver';
 import axios from 'axios';
 import { DiscordNotifier } from './discord';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
+import { detectManga } from './manga-detector'; // <-- Added detectManga import
 
 function sanitize(str: string) {
   return str.replace(/[<>:"/\\|?*]/g, '').trim();
@@ -40,9 +41,60 @@ export const Importer = {
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const cvApiKey = config.cv_api_key;
 
+    // --- 1. RESOLVE SOURCE PATH & SET SAFE-SEEDING FLAG ---
+    let sourcePath = "";
+    let isFromClient = false;
+    const downloadRoot = config.download_path || './downloads';
+
+    const trackingHash = req.downloadLink && !req.downloadLink.startsWith('http') ? req.downloadLink : null;
+
+    if (trackingHash) {
+      try {
+          const allActive = await DownloadService.getAllActiveDownloads();
+          // Match by Hash OR Name for manual unmatched linkings
+          const downloadItem = allActive.find((t: any) => t.id === trackingHash || t.name === req.activeDownloadName);
+          if (downloadItem) {
+              isFromClient = true;
+              const rawPath = path.join(downloadRoot, downloadItem.name);
+              sourcePath = await resolveRemotePath(rawPath);
+          } else {
+              Logger.log("[Importer] Download not found in active client list. Falling back to folder search.", "warn");
+          }
+      } catch (e: any) {
+          Logger.log(`[Importer] Failed to fetch client info: ${e.message}`, "error");
+      }
+    } 
+    
+    // Intelligent Fallback: Check Root directory first (Torrent behavior)
+    if (!sourcePath) {
+      const rootRawPath = path.join(downloadRoot, req.activeDownloadName || "");
+      const rootSourcePath = await resolveRemotePath(rootRawPath);
+      
+      const getComicsRawPath = path.join(downloadRoot, 'GetComics', req.activeDownloadName || "");
+      const getComicsSourcePath = await resolveRemotePath(getComicsRawPath);
+
+      if (fs.existsSync(rootSourcePath)) {
+          sourcePath = rootSourcePath; 
+          isFromClient = true; // Assume root files are Torrents, so we copy instead of move!
+      } else if (fs.existsSync(getComicsSourcePath)) {
+          sourcePath = getComicsSourcePath; 
+          isFromClient = false; // Explicitly GetComics DDL
+      } else {
+          sourcePath = rootSourcePath; 
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 1000));
+
+    if (!fs.existsSync(sourcePath)) {
+      Logger.log(`[Importer] Source file not found at: ${sourcePath}. Check Path Mappings!`, "error");
+      return false;
+    }
+
+    // --- 2. FETCH OR CREATE SERIES METADATA ---
     let series = await prisma.series.findFirst({ where: { cvId: parseInt(req.volumeId) } });
     
-    if (!series && cvApiKey) {
+    if (!series && cvApiKey && req.volumeId !== "0") {
         try {
             Logger.log(`[Importer] Fetching missing metadata for Volume ID: ${req.volumeId}`, 'info');
             const cvRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${req.volumeId}/`, {
@@ -62,19 +114,28 @@ export const Importer = {
                 });
             }
         } catch (e) {
-            Logger.log("[Importer] Metadata pre-fetch failed during import", "error");
+            Logger.log("[Importer] Metadata pre-fetch failed during import", "warn");
         }
     }
 
-    const mangaPublishers = config.manga_publishers ? config.manga_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
-    const mangaKeywords = config.manga_keywords ? config.manga_keywords.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
-
+    // --- 3. DETECT MANGA STATUS (Checks Database first, then falls back to Physical File metadata) ---
     let isManga = false;
-    const pubName = (series?.publisher || "").toLowerCase();
-    const volName = (series?.name || req.activeDownloadName || "").toLowerCase();
+    let cleanSeriesName = (req.activeDownloadName || path.basename(sourcePath))
+        .replace(/\.[^/.]+$/, "") // strip extension
+        .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(\d+(?:\.\d+)?)/i, '') // strip issue numbers
+        .replace(/\[.*?\]/g, '') // strip brackets
+        .replace(/\(.*?\)/g, '') // strip parens
+        .trim();
 
-    if (mangaPublishers.some((p: string) => pubName.includes(p))) isManga = true;
-    if (mangaKeywords.some((k: string) => volName.includes(k))) isManga = true;
+    if (series) {
+        // Trust the existing database flag
+        isManga = (series as any).isManga || false;
+    } else {
+        // Run deep scan on the physical file itself
+        const seriesYearMatch = (req.activeDownloadName || path.basename(sourcePath)).match(/\((\d{4})\)/);
+        const detectedYear = seriesYearMatch ? parseInt(seriesYearMatch[1]) : 0;
+        isManga = await detectManga({ name: cleanSeriesName, publisher: { name: 'Other' }, year: detectedYear }, sourcePath);
+    }
 
     let libraryRoot = config.library_path;
     if (isManga && config.manga_library_path) {
@@ -88,11 +149,9 @@ export const Importer = {
     }
 
     const publisherName = (series?.publisher && series.publisher !== "Unknown") ? sanitize(series.publisher) : "Other";
-    const rawSeriesName = series ? series.name : (req.activeDownloadName || "Request_" + requestId);
-    const cleanSeriesName = rawSeriesName.replace(/\s*#\d+.*$/, '').trim();
-    const seriesYear = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
+    const seriesYearFromMeta = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
     
-    const seriesFolderName = sanitize(`${cleanSeriesName} ${seriesYear ? `(${seriesYear})` : ''}`.trim());
+    const seriesFolderName = sanitize(`${series?.name || cleanSeriesName} ${seriesYearFromMeta ? `(${seriesYearFromMeta})` : ''}`.trim());
     const idealDestFolder = path.join(libraryRoot, publisherName, seriesFolderName);
 
     let destFolder = "";
@@ -131,57 +190,17 @@ export const Importer = {
         destFolder = idealDestFolder;
     }
 
-    let sourcePath = "";
-    const downloadRoot = config.download_path || './downloads';
-
-    const trackingHash = req.downloadLink && !req.downloadLink.startsWith('http') ? req.downloadLink : null;
-
-    if (trackingHash) {
-      try {
-          const allActive = await DownloadService.getAllActiveDownloads();
-          const downloadItem = allActive.find((t: any) => t.id === trackingHash);
-          if (!downloadItem) {
-            Logger.log("[Importer] Download not found in active client list.", "error");
-            return false;
-          }
-          const rawPath = path.join(downloadRoot, downloadItem.name);
-          sourcePath = await resolveRemotePath(rawPath);
-      } catch (e: any) {
-          Logger.log(`[Importer] Failed to fetch client info: ${e.message}`, "error");
-          return false;
-      }
-    } else {
-      const rawPath = path.join(downloadRoot, 'GetComics', req.activeDownloadName || "");
-      sourcePath = await resolveRemotePath(rawPath);
-
-      if (!fs.existsSync(sourcePath)) {
-          const legacyRawPath = path.join(downloadRoot, req.activeDownloadName || "");
-          const legacySourcePath = await resolveRemotePath(legacyRawPath);
-          if (fs.existsSync(legacySourcePath)) {
-              sourcePath = legacySourcePath;
-          }
-      }
-    }
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    if (!fs.existsSync(sourcePath)) {
-      Logger.log(`[Importer] Source file not found at: ${sourcePath}. Check Path Mappings!`, "error");
-      return false;
-    }
-
     const rawFileName = path.basename(sourcePath);
     const ext = path.extname(rawFileName);
     const extractedNum = extractIssueNumber(rawFileName);
     
     let fileName = sanitize(rawFileName); 
 
-    // --- FIX: AUTO-STANDARDIZE FILENAME ON IMPORT ---
-    if (series?.name) {
-        const safeSeriesName = sanitize(series.name);
+    // Auto-Standardize Filename
+    if (series?.name || cleanSeriesName) {
+        const safeSeriesName = sanitize(series?.name || cleanSeriesName);
         let formattedNum = extractedNum;
         
-        // Replicate the 2-digit padding logic (e.g. #05 instead of #5)
         if (!extractedNum.includes('.') && extractedNum.length === 1) {
             formattedNum = `0${extractedNum}`;
         }
@@ -199,6 +218,7 @@ export const Importer = {
         finalPath = path.join(destFolder, `${Date.now()}_${fileName}`);
       }
       
+      // --- 4. SAFE FILE TRANSFER ---
       let moveSuccess = false;
       for (let attempt = 1; attempt <= 5; attempt++) {
           try {
@@ -207,8 +227,8 @@ export const Importer = {
                   break; 
               }
 
-              if (req.downloadHash) {
-                  Logger.log(`[Importer] Copying Torrent to Library: ${sourcePath} -> ${finalPath}`, "info");
+              if (isFromClient || trackingHash) {
+                  Logger.log(`[Importer] Copying Torrent to Library (Preserving Seed): ${sourcePath} -> ${finalPath}`, "info");
                   await fs.copy(sourcePath, finalPath, { overwrite: true });
               } else {
                   Logger.log(`[Importer] Moving DDL to Library: ${sourcePath} -> ${finalPath}`, "info");
@@ -232,7 +252,6 @@ export const Importer = {
       }
 
       if (series?.id) {
-         // The number parses identical whether it has a leading 0 or not, meaning it binds cleanly to the database.
          const issueNum = extractIssueNumber(fileName);
          
          await prisma.issue.upsert({
@@ -264,8 +283,10 @@ export const Importer = {
       }
 
       try {
-          Logger.log("[Importer] Triggering direct internal metadata sync...", "info");
-          await syncSeriesMetadata(parseInt(req.volumeId), destFolder);
+          if (req.volumeId !== "0") {
+              Logger.log("[Importer] Triggering direct internal metadata sync...", "info");
+              await syncSeriesMetadata(parseInt(req.volumeId), destFolder);
+          }
       } catch (syncErr: any) {
           Logger.log(`[Importer] Metadata sync failed: ${syncErr.message}`, "warn");
       }
@@ -275,6 +296,27 @@ export const Importer = {
         data: { status: 'COMPLETED', progress: 100 }
       });
 
+      // --- 5. CLEAN UP UNMATCHED QUEUE ---
+      if (trackingHash) {
+          try {
+              const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });
+              let ignored: string[] = [];
+              if (ignoredSetting?.value) {
+                  try { ignored = JSON.parse(ignoredSetting.value); } catch(e) {}
+              }
+              if (!ignored.includes(trackingHash)) {
+                  ignored.push(trackingHash);
+                  await prisma.systemSetting.upsert({
+                      where: { key: 'ignored_downloads' },
+                      update: { value: JSON.stringify(ignored) },
+                      create: { key: 'ignored_downloads', value: JSON.stringify(ignored) }
+                  });
+              }
+          } catch (ignoreErr) {
+              Logger.log(`[Importer] Failed to add ${trackingHash} to ignored downloads.`, "warn");
+          }
+      }
+
       await DiscordNotifier.sendAlert('comic_available', {
           title: req.activeDownloadName || series?.name || "Unknown Comic",
           imageUrl: req.imageUrl,
@@ -282,7 +324,7 @@ export const Importer = {
           description: series?.description,
           publisher: series?.publisher,
           year: series?.year?.toString()
-      });
+      }).catch(() => {});
 
       Logger.log(`[Importer] Successfully imported to: ${destFolder}`, "success");
       return true;
@@ -297,7 +339,7 @@ export const Importer = {
               description: series?.description,
               publisher: series?.publisher,
               year: series?.year?.toString()
-          });
+          }).catch(() => {});
       }
       return false;
     }

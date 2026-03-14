@@ -5,33 +5,22 @@ import axios from 'axios';
 
 export async function GET() {
   try {
-    // 1. Fetch the exact config array you saved in Settings
-    const setting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
-    
-    if (!setting || !setting.value) {
-        return NextResponse.json({ success: true, activeDownloads: [] });
-    }
-
-    const clients = JSON.parse(setting.value);
+    // 1. Fetch clients directly from native DB table
+    const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) {
         return NextResponse.json({ success: true, activeDownloads: [] });
     }
 
     let allDownloads: any[] = [];
     
-    // Apply any custom headers (like Cloudflare)
-    const headerSetting = await prisma.systemSetting.findUnique({ where: { key: 'custom_headers' } });
+    // 2. Fetch custom headers natively
+    const customHeaders = await prisma.customHeader.findMany();
     let headers: any = { 'User-Agent': 'Omnibus/1.0' };
-    if (headerSetting?.value) {
-        try {
-            const hData = JSON.parse(headerSetting.value);
-            if (Array.isArray(hData)) {
-                hData.forEach((h: any) => { if (h.key && h.value) headers[h.key] = h.value; });
-            }
-        } catch(e) {}
-    }
+    customHeaders.forEach((h: any) => {
+        if (h.key && h.value) headers[h.key.trim()] = h.value.trim();
+    });
 
-    // 2. Loop through every client and ping them live
+    // 3. Loop through every client and ping them live
     for (const client of clients) {
         const cleanUrl = client.url?.replace(/\/$/, "");
         if (!cleanUrl) continue;
@@ -89,7 +78,7 @@ export async function GET() {
                 }
             }
         } catch (e: any) {
-            // THE FIX: Fail gracefully. 
+            // Fail gracefully. 
             // Instead of throwing a 500 error and breaking the loop, we just silently skip the offline client.
             console.warn(`[Active Downloads] ${client.name} failed to respond or timed out. Skipping.`);
             continue; 
@@ -97,6 +86,7 @@ export async function GET() {
     }
 
     // --- FILTER OUT IGNORED DOWNLOADS ---
+    // Note: Ignored downloads is kept as a simple JSON string since it's just a flat array of IDs.
     const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });
     let ignoredIds: string[] = [];
     if (ignoredSetting?.value) {

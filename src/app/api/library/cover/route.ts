@@ -10,16 +10,12 @@ export async function GET(request: Request) {
   if (!filePath) return new Response("Missing path", { status: 400 });
 
   try {
-    const configSetting = await prisma.systemSetting.findMany({ 
-        where: { key: { in: ['library_path', 'manga_library_path'] } } 
-    });
-    const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
-
-    const libRoot = (config.library_path && config.library_path.trim() !== '') ? path.normalize(config.library_path).toLowerCase() : null;
-    const mangaRoot = (config.manga_library_path && config.manga_library_path.trim() !== '') ? path.normalize(config.manga_library_path).toLowerCase() : null;
+    // NATIVE DB FETCH: Get all configured libraries to authorize the path
+    const libraries = await prisma.library.findMany();
+    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     const targetPath = path.normalize(filePath).toLowerCase();
 
-    const isAuthorized = (libRoot && targetPath.startsWith(libRoot)) || (mangaRoot && targetPath.startsWith(mangaRoot));
+    const isAuthorized = authorizedRoots.some(root => targetPath.startsWith(root));
 
     if (!isAuthorized) {
       return new Response("Unauthorized", { status: 403 });
@@ -30,8 +26,6 @@ export async function GET(request: Request) {
     let finalPath = filePath;
     const stat = fs.statSync(filePath);
     
-    // --- DEFERRED DISK CHECK ---
-    // If the library page handed us a folder, look for the cover inside it!
     if (stat.isDirectory()) {
         const possibleCovers = ['cover.jpg', 'cover.png', 'folder.jpg', 'poster.jpg'];
         let found = false;
@@ -46,7 +40,6 @@ export async function GET(request: Request) {
         if (!found) return new Response("Not Found", { status: 404 });
     }
 
-    // Determine content type dynamically
     const ext = path.extname(finalPath).toLowerCase();
     let contentType = 'image/jpeg';
     if (ext === '.png') contentType = 'image/png';
@@ -57,7 +50,6 @@ export async function GET(request: Request) {
     return new NextResponse(buffer, { 
         headers: { 
             'Content-Type': contentType,
-            // Cache aggressively in the browser for 24 hours to eliminate future load times
             'Cache-Control': 'public, max-age=86400, stale-while-revalidate=43200' 
         } 
     });

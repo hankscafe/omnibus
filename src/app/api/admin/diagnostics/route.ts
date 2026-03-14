@@ -66,20 +66,22 @@ export async function POST(request: Request) {
         // --- SCAN: ORPHANED FILES ---
         if (action === 'scan-orphans') {
             Logger.log("[UI Job] Manual Orphaned File scan started", "info");
-            const configSetting = await prisma.systemSetting.findMany({ where: { key: { in: ['library_path', 'manga_library_path', 'ignored_orphans'] } } });
-            const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
+            
+            const libraries = await prisma.library.findMany();
             
             let physicalFiles: string[] = [];
-            if (config.library_path) await getPhysicalFiles(config.library_path, physicalFiles);
-            if (config.manga_library_path) await getPhysicalFiles(config.manga_library_path, physicalFiles);
+            for (const lib of libraries) {
+                await getPhysicalFiles(lib.path, physicalFiles);
+            }
 
             const issues = await prisma.issue.findMany();
             const dbPaths = new Set(issues.map(i => i.filePath ? path.normalize(i.filePath).toLowerCase() : ''));
             
+            const configSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_orphans' } });
             let ignoredPaths = new Set<string>();
-            if (config.ignored_orphans) {
+            if (configSetting?.value) {
                 try {
-                    const parsed = JSON.parse(config.ignored_orphans);
+                    const parsed = JSON.parse(configSetting.value);
                     if (Array.isArray(parsed)) ignoredPaths = new Set(parsed.map(p => path.normalize(p).toLowerCase()));
                 } catch(e) {}
             }
@@ -89,7 +91,6 @@ export async function POST(request: Request) {
                 return !dbPaths.has(normP) && !ignoredPaths.has(normP);
             });
 
-            // LOG TO DATABASE
             await prisma.jobLog.create({
                 data: {
                     jobType: 'DIAGNOSTICS',

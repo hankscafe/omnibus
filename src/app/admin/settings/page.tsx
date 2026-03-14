@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
-  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, Pencil, AlertCircle, Send, Fingerprint
+  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -19,9 +19,10 @@ import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 
 // --- Types ---
+interface LibraryConfig { id: string; name: string; path: string; isManga: boolean; isDefault: boolean; }
 interface IndexerConfig { id: number; name: string; priority: number; seedTime: number; seedRatio: number; rss: boolean; protocol: string; }
-interface CustomHeader { key: string; value: string; }
-interface AcronymConfig { key: string; value: string; }
+interface CustomHeader { id?: string; key: string; value: string; }
+interface AcronymConfig { id?: string; key: string; value: string; }
 interface ClientConfig { 
     id: string; 
     name: string; 
@@ -78,95 +79,112 @@ export default function SettingsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [availableIndexers, setAvailableIndexers] = useState<any[]>([])
   const [hasRefreshed, setHasRefreshed] = useState(false)
+
+  // DB Array States (No more JSON.parse!)
+  const [configuredLibraries, setConfiguredLibraries] = useState<LibraryConfig[]>([])
   const [configuredIndexers, setConfiguredIndexers] = useState<IndexerConfig[]>([])
+  const [configuredClients, setConfiguredClients] = useState<ClientConfig[]>([])
+  const [configuredWebhooks, setConfiguredWebhooks] = useState<WebhookConfig[]>([])
+  const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([])
+  const [customAcronyms, setCustomAcronyms] = useState<AcronymConfig[]>([]) 
+
   const [indexerModalOpen, setIndexerModalOpen] = useState(false)
   const [editingIndexer, setEditingIndexer] = useState<IndexerConfig>({ 
     id: 0, name: "", priority: 1, seedTime: 0, seedRatio: 0, rss: false, protocol: "torrent" 
   })
 
-  const [configuredClients, setConfiguredClients] = useState<ClientConfig[]>([])
   const [clientModalOpen, setClientModalOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<ClientConfig | null>(null)
 
-  // Webhooks State
-  const [configuredWebhooks, setConfiguredWebhooks] = useState<WebhookConfig[]>([])
   const [webhookModalOpen, setWebhookModalOpen] = useState(false)
   const [editingWebhook, setEditingWebhook] = useState<WebhookConfig | null>(null)
 
-  const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([])
-  const [customAcronyms, setCustomAcronyms] = useState<AcronymConfig[]>([]) 
   const { toast } = useToast()
   
   const [config, setConfig] = useState<any>({
-    prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", library_path: "", cv_api_key: "",
+    prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", cv_api_key: "",
     remote_path_mapping: "", local_path_mapping: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     omnibus_api_key: "", download_retry_delay: "5", 
-    manga_library_path: "",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: ""
   })
 
   useEffect(() => {
     fetch('/api/admin/config').then(res => res.json()).then(data => {
-        const newConfig: any = { ...config }
-        let hasAcronyms = false;
+        // Map Native Database Tables
+        setConfiguredLibraries(data.libraries || []);
+        setConfiguredClients(data.downloadClients || []);
+        setConfiguredWebhooks(data.discordWebhooks || []);
+        setConfiguredIndexers(data.indexers || []);
+        
+        const parsedHeaders = (data.customHeaders || []).map((h: any) => ({ ...h, id: h.id || `tmp_${Math.random()}` }));
+        setCustomHeaders(parsedHeaders);
 
-        if (Array.isArray(data)) {
-            data.forEach((item: any) => { 
-                if (item.key === 'prowlarr_indexers_config') {
-                    try { setConfiguredIndexers(JSON.parse(item.value)) } catch (e) { setConfiguredIndexers([]) }
-                } else if (item.key === 'download_clients_config') {
-                    try { setConfiguredClients(JSON.parse(item.value)) } catch (e) { setConfiguredClients([]) }
-                } else if (item.key === 'custom_headers') {
-                    try { setCustomHeaders(JSON.parse(item.value)) } catch (e) { setCustomHeaders([]) }
-                } else if (item.key === 'discord_webhooks') {
-                    try { setConfiguredWebhooks(JSON.parse(item.value)) } catch (e) { setConfiguredWebhooks([]) }
-                } else if (item.key === 'search_acronyms') {
-                    try { setCustomAcronyms(JSON.parse(item.value)); hasAcronyms = true; } catch (e) { setCustomAcronyms([]) }
-                } else {
-                    if (item.value) newConfig[item.key] = item.value 
-                }
-            });
+        const parsedAcronyms = (data.searchAcronyms || []).map((a: any) => ({ ...a, id: a.id || `tmp_${Math.random()}` }));
+        if (parsedAcronyms.length > 0) {
+            setCustomAcronyms(parsedAcronyms);
+        } else {
+            setCustomAcronyms([
+                { id: 'tmp_1', key: 'tmnt', value: 'teenage mutant ninja turtles' },
+                { id: 'tmp_2', key: 'asm', value: 'amazing spider-man' },
+                { id: 'tmp_3', key: 'f4', value: 'fantastic four' },
+                { id: 'tmp_4', key: 'jla', value: 'justice league of america' },
+                { id: 'tmp_5', key: 'jl', value: 'justice league' },
+                { id: 'tmp_6', key: 'gotg', value: 'guardians of the galaxy' },
+                { id: 'tmp_7', key: 'avx', value: 'avengers vs x-men' },
+                { id: 'tmp_8', key: 'x-men', value: 'x men' }
+            ]);
         }
 
-        // Initialize with default acronyms if none exist in the database yet
-        if (!hasAcronyms) {
-            setCustomAcronyms([
-                { key: 'tmnt', value: 'teenage mutant ninja turtles' },
-                { key: 'asm', value: 'amazing spider-man' },
-                { key: 'f4', value: 'fantastic four' },
-                { key: 'jla', value: 'justice league of america' },
-                { key: 'jl', value: 'justice league' },
-                { key: 'gotg', value: 'guardians of the galaxy' },
-                { key: 'avx', value: 'avengers vs x-men' },
-                { key: 'x-men', value: 'x men' }
-            ]);
+        // Map Key-Value Flat Settings
+        const newConfig: any = { ...config };
+        if (Array.isArray(data.settings)) {
+            data.settings.forEach((item: any) => { 
+                newConfig[item.key] = item.value;
+            });
         }
 
         if (!newConfig.download_retry_delay) newConfig.download_retry_delay = "5";
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
         setConfig(newConfig);
     })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleSave = async () => {
     setLoading(true);
 
     const payload = { 
-        ...config,
-        prowlarr_indexers_config: JSON.stringify(configuredIndexers), 
-        custom_headers: JSON.stringify(customHeaders),
-        search_acronyms: JSON.stringify(customAcronyms), 
-        download_clients_config: JSON.stringify(configuredClients),
-        discord_webhooks: JSON.stringify(configuredWebhooks)
+        settings: config,
+        libraries: configuredLibraries,
+        indexers: configuredIndexers, 
+        customHeaders: customHeaders,
+        searchAcronyms: customAcronyms, 
+        downloadClients: configuredClients,
+        discordWebhooks: configuredWebhooks
     }
-    
-    setConfig(payload);
 
     try {
       const res = await fetch('/api/admin/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (res.ok) toast({ title: "Settings Saved", description: "Configuration persisted to database." })
     } finally { setLoading(false) }
+  }
+
+  // --- Multi-Library Management Handlers ---
+  const addLibrary = () => {
+    setConfiguredLibraries([...configuredLibraries, {
+        id: `tmp_${Date.now()}`, name: "", path: "", isManga: false, isDefault: configuredLibraries.length === 0
+    }]);
+  }
+  const removeLibrary = (id: string) => setConfiguredLibraries(configuredLibraries.filter(l => l.id !== id));
+  const updateLibrary = (id: string, field: keyof LibraryConfig, value: any) => {
+    setConfiguredLibraries(prev => prev.map(lib => lib.id === id ? { ...lib, [field]: value } : lib));
+  }
+  const setLibraryDefault = (id: string, isMangaType: boolean) => {
+    setConfiguredLibraries(prev => prev.map(lib => {
+        if (lib.isManga === isMangaType) return { ...lib, isDefault: lib.id === id };
+        return lib;
+    }));
   }
 
   const generateApiKey = () => {
@@ -239,7 +257,7 @@ export default function SettingsPage() {
       setEditingWebhook({ ...webhook })
     } else {
       setEditingWebhook({
-        id: Math.random().toString(36).substr(2, 9),
+        id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
         name: "", url: "", events: [], isActive: true
       })
     }
@@ -314,7 +332,7 @@ export default function SettingsPage() {
     const names: Record<string, string> = { qbit: 'qBittorrent', deluge: 'Deluge', sab: 'SABnzbd', nzbget: 'NZBGet' };
     setTestResults(prev => ({ ...prev, clients: null }));
     setEditingClient({
-        id: Math.random().toString(36).substr(2, 9),
+        id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
         type, name: names[type], protocol: protocols[type],
         url: "", user: "", pass: "", apiKey: "", category: "comics",
         remotePath: "", localPath: ""
@@ -360,9 +378,9 @@ export default function SettingsPage() {
     }
   }
 
-  const addHeader = (k = "") => setCustomHeaders([...customHeaders, { key: k, value: "" }])
-  const updateHeader = (i: number, f: 'key' | 'value', v: string) => { const h = [...customHeaders]; h[i][f] = v; setCustomHeaders(h); }
-  const removeHeader = (i: number) => setCustomHeaders(customHeaders.filter((_, idx) => idx !== i))
+  const addHeader = (k = "") => setCustomHeaders([...customHeaders, { id: `tmp_${Math.random()}`, key: k, value: "" }])
+  const updateHeader = (i: number, f: 'key' | 'value', v: string) => { const h = [...customHeaders]; (h[i] as any)[f] = v; setCustomHeaders(h); }
+  const removeHeader = (id: string) => setCustomHeaders(customHeaders.filter(c => c.id !== id))
 
   const StatusBox = ({ result }: { result: { success: boolean, text: string } | null }) => {
     if (!result) return null;
@@ -568,42 +586,52 @@ export default function SettingsPage() {
             </Card>
         </TabsContent>
 
-        {/* 4. PATHS & AUTO-ROUTING */}
+        {/* 4. PATHS & AUTO-ROUTING (UPGRADED) */}
         <TabsContent value="paths" className="space-y-6">
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-foreground">
-                        <HardDrive className="w-5 h-5 text-primary" /> Library Directories & Routing
+                        <HardDrive className="w-5 h-5 text-primary" /> Root Library Folders
                     </CardTitle>
-                    <CardDescription className="text-muted-foreground">Configure where Omnibus reads and writes files across your system.</CardDescription>
+                    <CardDescription className="text-muted-foreground">Manage where Omnibus organizes your downloaded comics. You can add infinite root folders.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-8">
                     
-                    {/* STANDARD AND MANGA LIBRARIES */}
-                    <div className="grid gap-6 md:grid-cols-2 bg-muted/30 p-4 rounded-lg border border-border">
-                        <div className="space-y-2">
-                            <Label className="text-base sm:text-lg font-bold text-foreground">Standard Library Destination</Label>
-                            <Input 
-                                value={config.library_path} 
-                                onChange={e => setConfig({...config, library_path: e.target.value})} 
-                                placeholder={typeof window !== 'undefined' && navigator.platform.indexOf('Win') > -1 ? "C:\\Comics\\Library" : "/library"} 
-                                className="h-12 sm:h-10 font-mono bg-background border-border text-foreground"
-                            />
-                            <p className="text-[11px] text-muted-foreground">The primary home for your standard Western comics.</p>
-                        </div>
-                        <div className="space-y-2">
-                            <Label className="text-base sm:text-lg font-bold text-primary">Manga Library Destination <span className="text-xs font-normal text-muted-foreground ml-1">(Optional)</span></Label>
-                            <Input 
-                                value={config.manga_library_path || ""} 
-                                onChange={e => setConfig({...config, manga_library_path: e.target.value})} 
-                                placeholder={typeof window !== 'undefined' && navigator.platform.indexOf('Win') > -1 ? "C:\\Comics\\Manga" : "/manga"} 
-                                className="h-12 sm:h-10 font-mono bg-background border-border text-foreground"
-                            />
-                            <p className="text-[11px] text-muted-foreground">Manga series automatically detected by the engine will be routed here instead of the Standard Library.</p>
-                        </div>
+                    <div className="space-y-4">
+                        {configuredLibraries.map((lib, i) => (
+                            <div key={lib.id} className={`grid gap-6 md:grid-cols-[1fr_2fr] p-4 rounded-lg border relative group transition-colors ${lib.isDefault ? 'border-primary/50 bg-primary/5 shadow-sm' : 'bg-muted/30 border-border'}`}>
+                                <div className="space-y-3">
+                                    <div className="space-y-1.5">
+                                        <Label className="text-base sm:text-lg font-bold text-foreground">Library Name</Label>
+                                        <Input value={lib.name} onChange={e => updateLibrary(lib.id, 'name', e.target.value)} placeholder="e.g. Main Comics" className="h-12 sm:h-10 font-bold bg-background border-border text-foreground" />
+                                    </div>
+                                    <div className="flex flex-col gap-2 pt-1">
+                                        <div className="flex items-center gap-2">
+                                            <Switch checked={lib.isManga} onCheckedChange={v => { updateLibrary(lib.id, 'isManga', v); if(lib.isDefault) setLibraryDefault(lib.id, v); }} className="scale-110 sm:scale-100" />
+                                            <Label className="cursor-pointer font-bold text-sm text-foreground">Manga Destination</Label>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Switch checked={lib.isDefault} onCheckedChange={v => v && setLibraryDefault(lib.id, lib.isManga)} className="scale-110 sm:scale-100" />
+                                            <Label className="cursor-pointer font-bold text-sm text-foreground">Default for Auto-Import</Label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label className="text-base sm:text-lg font-bold text-primary">Root Path</Label>
+                                    <Input value={lib.path} onChange={e => updateLibrary(lib.id, 'path', e.target.value)} placeholder={typeof window !== 'undefined' && navigator.platform.indexOf('Win') > -1 ? "C:\\Comics\\Library" : "/library"} className="h-12 sm:h-10 font-mono bg-background border-border text-foreground text-sm" />
+                                </div>
+                                <Button variant="ghost" size="icon" className="absolute top-2 right-2 h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-opacity opacity-100 sm:opacity-0 group-hover:opacity-100" onClick={() => removeLibrary(lib.id)}>
+                                    <Trash2 className="w-5 h-5 sm:h-4 sm:w-4" />
+                                </Button>
+                            </div>
+                        ))}
+                        
+                        <Button variant="outline" className="w-full h-12 sm:h-10 border-dashed border-2 border-border text-muted-foreground hover:text-foreground font-bold hover:bg-muted/50" onClick={addLibrary}>
+                            <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2" /> Add Library Route
+                        </Button>
                     </div>
 
-                    <div className="grid gap-2">
+                    <div className="grid gap-2 pt-6 border-t border-border">
                         <Label className="text-foreground font-semibold">Download Scan Root</Label>
                         <Input 
                             value={config.download_path} 
@@ -611,7 +639,7 @@ export default function SettingsPage() {
                             placeholder={typeof window !== 'undefined' && navigator.platform.indexOf('Win') > -1 ? "C:\\Downloads\\Comics" : "/downloads"} 
                             className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                         />
-                        <p className="text-[11px] text-muted-foreground">The folder Omnibus scans for finished downloads before importing them.</p>
+                        <p className="text-[11px] text-muted-foreground">The folder Omnibus scans for finished downloads before routing them into your libraries.</p>
                     </div>
 
                     <div className="border-t border-border my-4" />
@@ -706,11 +734,11 @@ export default function SettingsPage() {
                         </div>
                         <div className="space-y-3">
                             {customHeaders.map((h, i) => (
-                                <div key={i} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/50 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border border-border">
+                                <div key={h.id} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/50 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border border-border">
                                     <Input placeholder="Header Name" value={h.key} onChange={e => updateHeader(i, 'key', e.target.value)} className="h-12 sm:h-10 bg-background border-border text-foreground" />
                                     <div className="flex gap-2 w-full">
                                       <Input type="password" placeholder="Header Value" value={h.value} onChange={e => updateHeader(i, 'value', e.target.value)} className="h-12 sm:h-10 flex-1 bg-background border-border text-foreground" />
-                                      <Button variant="ghost" size="icon" onClick={() => removeHeader(i)} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200"><Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
+                                      <Button variant="ghost" size="icon" onClick={() => removeHeader(h.id!)} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200"><Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
                                     </div>
                                 </div>
                             ))}
@@ -778,7 +806,7 @@ export default function SettingsPage() {
                                 <Label className="text-base font-bold text-foreground">Search Acronym Expansion</Label>
                                 <p className="text-[11px] text-muted-foreground mt-1">Automatically expand acronyms during automated fuzzy searches (e.g., "TMNT" &rarr; "Teenage Mutant Ninja Turtles").</p>
                             </div>
-                            <Button variant="outline" size="sm" onClick={() => setCustomAcronyms([...customAcronyms, { key: "", value: "" }])} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground">
+                            <Button variant="outline" size="sm" onClick={() => setCustomAcronyms([...customAcronyms, { id: `tmp_${Math.random()}`, key: "", value: "" }])} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground">
                                 <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-1 text-primary"/> Add Acronym
                             </Button>
                         </div>
@@ -786,7 +814,7 @@ export default function SettingsPage() {
                         <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
                             {customAcronyms.length === 0 && <p className="text-sm text-muted-foreground italic bg-muted/20 p-4 rounded-md border border-border">No custom acronyms defined. System defaults will be used.</p>}
                             {customAcronyms.map((ac, i) => (
-                                <div key={i} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/30 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border border-border">
+                                <div key={ac.id} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/30 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border border-border">
                                     <Input 
                                         placeholder="Acronym (e.g. tmnt)" 
                                         value={ac.key} 
@@ -800,7 +828,7 @@ export default function SettingsPage() {
                                           onChange={e => { const a = [...customAcronyms]; a[i].value = e.target.value; setCustomAcronyms(a); }} 
                                           className="h-12 sm:h-10 flex-1 bg-background border-border font-mono text-sm text-foreground" 
                                       />
-                                      <Button variant="ghost" size="icon" onClick={() => setCustomAcronyms(customAcronyms.filter((_, idx) => idx !== i))} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200">
+                                      <Button variant="ghost" size="icon" onClick={() => setCustomAcronyms(customAcronyms.filter(c => c.id !== ac.id))} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200">
                                           <Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/>
                                       </Button>
                                     </div>

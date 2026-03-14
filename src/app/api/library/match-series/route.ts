@@ -1,4 +1,3 @@
-// src/app/api/library/match-series/route.ts
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
@@ -16,15 +15,12 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const settings = await prisma.systemSetting.findMany({
-        where: { key: { in: ['library_path', 'manga_library_path'] } }
-    });
-    const libPath = settings.find(s => s.key === 'library_path')?.value || '';
-    const mangaPath = settings.find(s => s.key === 'manga_library_path')?.value || '';
-
+    // NATIVE DB FETCH: Authorize against all known libraries
+    const libraries = await prisma.library.findMany();
+    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     const normalizedOld = path.normalize(oldFolderPath).toLowerCase();
-    const isAuthorized = (libPath && normalizedOld.startsWith(path.normalize(libPath).toLowerCase())) || 
-                         (mangaPath && normalizedOld.startsWith(path.normalize(mangaPath).toLowerCase()));
+    
+    const isAuthorized = authorizedRoots.some(root => normalizedOld.startsWith(root));
 
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
     if (!fs.existsSync(oldFolderPath)) return NextResponse.json({ error: "Folder not found." }, { status: 404 });
@@ -37,12 +33,11 @@ export async function POST(request: Request) {
     let realName = name && name !== 'Unknown Series' ? name : '';
     let realYear = year ? parseInt(year) : 0;
     let imageUrl = null;
-    let status = 'Ongoing'; // Default to ongoing
+    let status = 'Ongoing'; 
     
-    // FAIL-FAST CV FETCH
     try {
         const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
-            params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image,end_year' }, // Added end_year
+            params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image,end_year' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 2000 
         });
@@ -52,11 +47,9 @@ export async function POST(request: Request) {
             if (!realName && vol.name) realName = vol.name;
             if (!realYear && vol.start_year) realYear = parseInt(vol.start_year) || 0;
             imageUrl = vol.image?.medium_url || vol.image?.super_url;
-            if (vol.end_year) status = 'Ended'; // Auto-detect ended
+            if (vol.end_year) status = 'Ended'; 
         }
-    } catch(e) { 
-        console.warn("[Matcher] ComicVine connection throttled or timed out. Using fallback data.");
-    }
+    } catch(e) { }
 
     if (!realName) realName = path.basename(oldFolderPath).replace(/\s\(\d{4}\)$/, "").trim(); 
     if (!realPublisher) realPublisher = 'Other';
@@ -67,7 +60,15 @@ export async function POST(request: Request) {
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
     
-    let newFolderPath = (isManga && mangaPath) ? mangaPath : libPath;
+    // NATIVE DB FETCH: Find correct target library
+    let targetLib = isManga 
+        ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+        : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+        
+    if (!targetLib) targetLib = libraries[0];
+    if (!targetLib) return NextResponse.json({ error: "No libraries configured." }, { status: 400 });
+
+    let newFolderPath = targetLib.path;
     if (safePublisher) newFolderPath = path.join(newFolderPath, safePublisher);
     newFolderPath = path.join(newFolderPath, `${safeName}${safeYear}`);
 
@@ -92,33 +93,22 @@ export async function POST(request: Request) {
         publisher: realPublisher,
         folderPath: newFolderPath,
         isManga: isManga,
-        status: status, // Apply detected status
+        status: status,
+        libraryId: targetLib.id, // Assign to correct library
         coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null
     };
 
     if (existingRecord) {
-        // WIPE OUT THE OLD "MISSING ISSUES" GHOSTS
         await prisma.issue.deleteMany({
-            where: {
-                seriesId: existingRecord.id,
-                OR: [
-                    { filePath: null },
-                    { filePath: "" }
-                ]
-            }
+            where: { seriesId: existingRecord.id, OR: [ { filePath: null }, { filePath: "" } ] }
         });
-
         existingRecord = await prisma.series.update({ where: { id: existingRecord.id }, data: updateData });
     } else {
         existingRecord = await prisma.series.create({ data: updateData });
     }
 
     DiscordNotifier.sendAlert('metadata_match', { 
-        title: safeName, 
-        publisher: realPublisher, 
-        year: realYear.toString(), 
-        imageUrl: imageUrl,
-        user: "Admin" 
+        title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 
     }).catch(() => {});
 
     let activeFolderPath = oldFolderPath;
@@ -156,7 +146,6 @@ export async function POST(request: Request) {
                 if (issueNumStr) {
                     let formattedNum = issueNumStr;
                     if (!issueNumStr.includes('.') && issueNumStr.length === 1) formattedNum = `0${issueNumStr}`;
-                    
                     const prefix = isManga ? 'Vol. ' : '#';
                     const newFileName = `${safeName} ${prefix}${formattedNum}${ext}`;
                     
@@ -165,7 +154,6 @@ export async function POST(request: Request) {
                     
                     if (oldFilePath !== newFilePath && !fs.existsSync(newFilePath)) {
                         await fs.promises.rename(oldFilePath, newFilePath);
-                        
                         if (existingRecord) {
                             pathUpdates.push(prisma.issue.updateMany({
                                 where: { seriesId: existingRecord.id, number: issueNumStr },
@@ -176,67 +164,38 @@ export async function POST(request: Request) {
                 }
             }
         }
-        
-        if (pathUpdates.length > 0) {
-            await prisma.$transaction(pathUpdates).catch(() => {});
-        }
+        if (pathUpdates.length > 0) await prisma.$transaction(pathUpdates).catch(() => {});
 
         if (imageUrl) {
             try {
-                const imgRes = await axios.get(imageUrl, { 
-                    responseType: 'arraybuffer', 
-                    timeout: 3000,
-                    headers: { 'User-Agent': 'Omnibus/1.0' } 
-                });
+                const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 3000, headers: { 'User-Agent': 'Omnibus/1.0' } });
                 await fs.promises.writeFile(path.join(activeFolderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-            } catch(e) {
-                console.warn("[Matcher] Cover art download skipped due to rate limit.");
-            }
+            } catch(e) {}
         }
-        
     } catch (err) { }
 
     try {
         const pendingRequests = await prisma.request.findMany({
-            where: { 
-                volumeId: targetCvId.toString(),
-                status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } 
-            }
+            where: { volumeId: targetCvId.toString(), status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } }
         });
 
         if (pendingRequests.length > 0) {
-            const seriesIssues = await prisma.issue.findMany({
-                where: { series: { cvId: targetCvId } }
-            });
-
+            const seriesIssues = await prisma.issue.findMany({ where: { series: { cvId: targetCvId } } });
             for (const req of pendingRequests) {
                 const searchStr = (req.activeDownloadName || req.title || req.name || "");
                 const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
                 const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
-
                 if (issueNum === null) continue;
-
-                const matchingIssue = seriesIssues.find(i => 
-                    parseFloat(i.number) === issueNum && 
-                    i.filePath && i.filePath.length > 0
-                );
+                const matchingIssue = seriesIssues.find(i => parseFloat(i.number) === issueNum && i.filePath && i.filePath.length > 0);
 
                 if (matchingIssue) {
-                    await prisma.request.update({
-                        where: { id: req.id },
-                        data: { status: 'COMPLETED', progress: 100 }
-                    });
+                    await prisma.request.update({ where: { id: req.id }, data: { status: 'COMPLETED', progress: 100 } });
                 }
             }
         }
-    } catch (e) {
-        console.error("Match Auto-Healer Error:", e);
-    }
+    } catch (e) { }
     
-    revalidateTag('library');
-    revalidatePath('/library');
-    revalidatePath('/library/series');
-
+    revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
     return NextResponse.json({ success: true, newPath: activeFolderPath, cvId: targetCvId });
 
   } catch (error: any) {

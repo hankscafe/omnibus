@@ -371,8 +371,6 @@ async function searchAndDownload(requestId: string, name: string, year: string, 
 }
 
 async function getDownloadClient() {
-  const setting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
-  if (!setting?.value) return null;
-  const clients = JSON.parse(setting.value);
+  const clients = await prisma.downloadClient.findMany();
   return clients.length > 0 ? clients[0] : null;
 }

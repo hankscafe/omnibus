@@ -2,6 +2,7 @@
 import axios from 'axios';
 import { prisma } from './db';
 import { Logger } from './logger';
+import { getCustomHeaders } from './utils/headers';
 
 export const ProwlarrService = {
   async searchComics(query: string, isInteractive: boolean = false) {
@@ -24,30 +25,19 @@ export const ProwlarrService = {
         searchCategories = categoriesStr.split(',').map((c: string) => c.trim()).filter(Boolean);
     }
 
+    // NATIVE DB FETCH: Pull configured indexers directly from the database table
     let configuredIndexers: any[] = [];
     try {
-        if (config.prowlarr_indexers_config) {
-            configuredIndexers = JSON.parse(config.prowlarr_indexers_config);
-        }
+        configuredIndexers = await prisma.indexer.findMany();
     } catch (e) {
-        Logger.log(`[Prowlarr] Failed to parse indexers config`, 'warn');
+        Logger.log(`[Prowlarr] Failed to fetch indexers from database`, 'warn');
     }
-
-    // --- RE-ADD CUSTOM HEADERS FROM SETTINGS ---
-    let reqHeaders: any = { 'X-Api-Key': config.prowlarr_key };
-    try {
-        if (config.custom_headers) {
-            const parsedHeaders = JSON.parse(config.custom_headers);
-            parsedHeaders.forEach((h: any) => {
-                if (h.key && h.value) reqHeaders[h.key] = h.value;
-            });
-        }
-    } catch (e) {}
 
     const params = new URLSearchParams();
     params.append('query', cleanQuery);
     params.append('type', 'search');
-    params.append('apikey', config.prowlarr_key);
+    
+    // THE FIX: apikey URL parameter removed here!
 
     searchCategories.forEach(cat => {
         params.append('categories', cat);
@@ -59,24 +49,31 @@ export const ProwlarrService = {
         });
     }
 
+    // NATIVE DB FETCH: Grab your Cloudflare Access headers!
+    const customHeaders = await getCustomHeaders();
+    
+    // SECURE AUTH: The API key is passed securely in the hidden HTTP headers
+    const reqHeaders: any = { 
+        'X-Api-Key': config.prowlarr_key,
+        ...customHeaders
+    };
+
     try {
       const url = `${config.prowlarr_url.replace(/\/$/, '')}/api/v1/search?${params.toString()}`;
       
-      Logger.log(`[Prowlarr] Searching: ${url.replace(config.prowlarr_key, 'REDACTED')}`, 'info');
+      // Update logger so it no longer needs the REDACTED string replacement since the URL is clean
+      Logger.log(`[Prowlarr] Searching: ${url}`, 'info');
 
       const { data } = await axios.get(url, {
           headers: reqHeaders, 
           timeout: 30000 
       });
 
-      // --- NEW DEBUGGING LOGIC ---
       if (!Array.isArray(data)) {
           let preview = "";
           if (typeof data === 'string') {
-              // If it's an HTML page (Cloudflare block), grab the first 200 chars
               preview = data.substring(0, 200).replace(/\n/g, ''); 
           } else {
-              // If it's a JSON error object from Prowlarr, print it
               preview = JSON.stringify(data).substring(0, 200);
           }
           Logger.log(`[Prowlarr] Unexpected response format. Received payload: ${preview}`, 'error');

@@ -15,15 +15,20 @@ export const DiscordNotifier = {
     version?: string | null
   }) {
     try {
-      const setting = await prisma.systemSetting.findUnique({ where: { key: 'discord_webhooks' } });
-      if (!setting?.value) return;
+      // NATIVE DB CALL: Fetch only active webhooks directly from the table
+      const webhooks = await prisma.discordWebhook.findMany({
+          where: { isActive: true }
+      });
 
-      let webhooks: any[] = [];
-      try {
-          webhooks = JSON.parse(setting.value);
-      } catch (e) { return; }
+      if (webhooks.length === 0) return;
 
-      const activeWebhooks = webhooks.filter(w => w.isActive && w.events.includes(event));
+      const activeWebhooks = webhooks.filter(w => {
+          try {
+              const events = JSON.parse(w.events);
+              return events.includes(event);
+          } catch(e) { return false; }
+      });
+
       if (activeWebhooks.length === 0) return;
 
       let embed: any = {
@@ -36,7 +41,6 @@ export const DiscordNotifier = {
           embed.thumbnail = { url: payload.imageUrl };
       }
 
-      // Helper to uniformly inject rich metadata across all comic events
       const appendMetadata = () => {
           if (payload.publisher && payload.publisher !== "Unknown" && payload.publisher !== "Other") {
               embed.fields.push({ name: "Publisher", value: payload.publisher, inline: true });
@@ -45,7 +49,6 @@ export const DiscordNotifier = {
               embed.fields.push({ name: "Release Year", value: payload.year, inline: true });
           }
           if (payload.description) {
-              // Strip HTML tags from ComicVine synopses
               let cleanDesc = payload.description.replace(/(<([^>]+)>)/gi, "").replace(/&nbsp;/gi, " ").trim();
               if (cleanDesc.length > 250) cleanDesc = cleanDesc.substring(0, 247) + "...";
               if (cleanDesc.length > 0) {

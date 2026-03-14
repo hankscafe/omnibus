@@ -52,6 +52,17 @@ model Request {
   user               User     @relation(fields: [userId], references: [id])
 }
 
+// --- NEW MULTI-LIBRARY ARCHITECTURE ---
+model Library {
+  id        String   @id @default(cuid())
+  name      String
+  path      String   @unique
+  isManga   Boolean  @default(false)
+  isDefault Boolean  @default(false)
+
+  series    Series[]
+}
+
 model Series {
   id              String   @id @default(cuid())
   cvId            Int      @unique
@@ -63,15 +74,17 @@ model Series {
   isManga         Boolean  @default(false)
   size            Float?   @default(0)
   
-  // --- NEW METADATA FIELDS ---
   description     String?
-  status          String?  // e.g., "Ongoing" or "Ended"
+  status          String?
   coverUrl        String?
-
   issues          Issue[]
   favorites       Favorite[]
   collectionItems CollectionItem[]
   issueReports    IssueReport[]
+
+  // Links to the new Library model
+  libraryId       String?
+  library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
 }
 
 model Issue {
@@ -84,7 +97,6 @@ model Issue {
   filePath        String?
   downloadId      String?
 
-  // --- NEW METADATA FIELDS ---
   name            String?
   description     String?
   releaseDate     String?
@@ -113,6 +125,54 @@ model IssueReport {
   series        Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
+
+// --- NEW CONFIGURATION TABLES ---
+
+model DownloadClient {
+  id         String  @id @default(cuid())
+  name       String
+  type       String  // qbit, sab, deluge, nzbget
+  protocol   String  // Torrent, Usenet
+  url        String
+  user       String?
+  pass       String?
+  apiKey     String?
+  category   String?
+  remotePath String?
+  localPath  String?
+}
+
+model DiscordWebhook {
+  id       String  @id @default(cuid())
+  name     String
+  url      String
+  isActive Boolean @default(true)
+  events   String  // JSON array string of event triggers
+}
+
+model Indexer {
+  id        Int     @id // Prowlarr's internal ID
+  name      String
+  protocol  String
+  priority  Int     @default(25)
+  seedTime  Int     @default(0)
+  seedRatio Float   @default(0)
+  rss       Boolean @default(true)
+}
+
+model CustomHeader {
+  id    String @id @default(cuid())
+  key   String
+  value String
+}
+
+model SearchAcronym {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+}
+
+// --------------------------------
 
 model MetadataCache {
   key       String   @id
@@ -169,10 +229,10 @@ model Collection {
 }
 
 model CollectionItem {
-  id           String     @id @default(cuid())
+  id           String   @id @default(cuid())
   collectionId String
   seriesId     String
-  order        Int        @default(0) 
+  order        Int      @default(0) 
   
   collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
   series       Series     @relation(fields: [seriesId], references: [id], onDelete: Cascade)
@@ -221,7 +281,7 @@ model ReadingList {
   name        String
   description String?
   coverUrl    String?
-  userId      String?           // Nullable if it's a global/shared event, or linked to a User
+  userId      String?
   user        User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
   items       ReadingListItem[]
   createdAt   DateTime          @default(now())
@@ -233,12 +293,12 @@ model ReadingListItem {
   listId      String
   list        ReadingList  @relation(fields: [listId], references: [id], onDelete: Cascade)
   
-  issueId     String?      // Links to your physical Issue in the DB (if downloaded)
+  issueId     String?      
   issue       Issue?       @relation(fields: [issueId], references: [id], onDelete: SetNull)
   
-  cvIssueId   Int?         // The ComicVine ID (used to track and request MISSING issues)
-  title       String       // e.g., "Civil War #1"
-  order       Int          // The reading order position (1, 2, 3...)
+  cvIssueId   Int?
+  title       String       
+  order       Int          
   
   @@unique([listId, order])
 }

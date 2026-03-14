@@ -19,8 +19,7 @@ export async function POST(request: Request) {
         where: { id: { in: seriesIds } }
     });
 
-    const configSetting = await prisma.systemSetting.findMany();
-    const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
+    const libraries = await prisma.library.findMany();
 
     let filesRenamed = 0;
     let foldersRenamed = 0;
@@ -30,12 +29,13 @@ export async function POST(request: Request) {
     for (const s of seriesList) {
         if (!s.folderPath || !fs.existsSync(s.folderPath)) continue;
 
-        const libraryRoot = s.isManga ? config.manga_library_path : config.library_path;
+        // NATIVE DB FETCH: Find the exact library this series lives in
+        const lib = libraries.find(l => l.id === s.libraryId) || libraries.find(l => l.isDefault && l.isManga === s.isManga) || libraries[0];
+        if (!lib) continue;
+
+        const libraryRoot = lib.path;
         let currentFolder = s.folderPath;
 
-        // ---------------------------------------------------------
-        // 1. STANDARDIZE THE FOLDER PATH FIRST
-        // ---------------------------------------------------------
         if (libraryRoot) {
             const safePublisher = s.publisher && s.publisher !== "Unknown" ? sanitize(s.publisher) : "";
             const safeSeries = `${sanitize(s.name || "Unknown")}${s.year ? ` (${s.year})` : ''}`;
@@ -57,21 +57,15 @@ export async function POST(request: Request) {
             }
         }
 
-        // ---------------------------------------------------------
-        // 2. RENAME THE FILES INSIDE THE FOLDER
-        // ---------------------------------------------------------
         const issues = await prisma.issue.findMany({ where: { seriesId: s.id } });
 
         for (const issue of issues) {
-            // Re-calculate current path in case the folder was just moved!
             const currentFileName = path.basename(issue.filePath || "");
             const actualFilePath = path.join(currentFolder, currentFileName);
 
             if (!fs.existsSync(actualFilePath)) continue;
 
             const ext = path.extname(actualFilePath);
-            
-            // Format Issue Number (Auto-Pad to 3 digits for beautiful sorting)
             let paddedNum = issue.number;
             if (!paddedNum.includes('.')) {
                 paddedNum = paddedNum.padStart(3, '0');
@@ -80,7 +74,6 @@ export async function POST(request: Request) {
                 paddedNum = `${parts[0].padStart(3, '0')}.${parts[1]}`;
             }
 
-            // Construct New File Name from User Template
             let newFileName = pattern
                 .replace('{Publisher}', s.publisher || 'Unknown')
                 .replace('{Series}', s.name || 'Unknown')
@@ -90,7 +83,6 @@ export async function POST(request: Request) {
             newFileName = sanitize(newFileName) + ext;
             const newFilePath = path.join(currentFolder, newFileName);
 
-            // Execute the Rename!
             if (actualFilePath !== newFilePath) {
                 try {
                     if (!fs.existsSync(newFilePath)) {
@@ -101,11 +93,8 @@ export async function POST(request: Request) {
                         });
                         filesRenamed++;
                     }
-                } catch (e) {
-                    console.error(`File Rename Failed: ${actualFilePath}`, e);
-                }
+                } catch (e) { }
             } else if (issue.filePath !== newFilePath) {
-                // Fallback: If folder moved but filename is the same, catch the DB up
                  await prisma.issue.update({
                     where: { id: issue.id },
                     data: { filePath: newFilePath }
@@ -117,7 +106,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, filesRenamed, foldersRenamed });
 
   } catch (error: any) {
-    console.error("Rename Error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

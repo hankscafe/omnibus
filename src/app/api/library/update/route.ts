@@ -1,4 +1,3 @@
-// src/app/api/library/update/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -12,12 +11,16 @@ export async function POST(request: Request) {
     const parsedIsManga = isManga === true || isManga === 'true' || isManga === 'on' || isManga === 1;
     const parsedMonitored = monitored === true || monitored === 'true' || monitored === 'on' || monitored === 1;
 
-    const configSetting = await prisma.systemSetting.findMany();
-    const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
+    // NATIVE DB FETCH: Find the best target library
+    const libraries = await prisma.library.findMany();
+    let targetLib = parsedIsManga 
+        ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+        : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+        
+    if (!targetLib) targetLib = libraries[0];
+    if (!targetLib) return NextResponse.json({ error: "No libraries configured in Settings." }, { status: 400 });
 
-    const libraryRoot = (parsedIsManga && config.manga_library_path) ? config.manga_library_path : config.library_path;
-    
-    if (!libraryRoot) return NextResponse.json({ error: "Library root not found. Please check settings." }, { status: 400 });
+    const libraryRoot = targetLib.path;
 
     function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
     
@@ -59,7 +62,8 @@ export async function POST(request: Request) {
                 folderPath: activePath,
                 monitored: parsedMonitored,
                 isManga: parsedIsManga, 
-                cvId: parsedCvId !== null ? parsedCvId : existingRecord.cvId
+                cvId: parsedCvId !== null ? parsedCvId : existingRecord.cvId,
+                libraryId: targetLib.id
             }
         });
 
@@ -84,11 +88,11 @@ export async function POST(request: Request) {
             where: { cvId: parsedCvId },
             update: {
                 name: cleanName, year: parsedYear, publisher: publisher || null,
-                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga
+                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
             },
             create: {
                 cvId: parsedCvId, name: cleanName, year: parsedYear, publisher: publisher || null,
-                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga
+                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
             }
         });
     }

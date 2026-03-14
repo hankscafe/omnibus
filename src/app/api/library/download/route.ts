@@ -10,17 +10,12 @@ export async function GET(request: Request) {
   if (!filePath) return new Response("Missing path parameter", { status: 400 });
 
   try {
-    // Security verification
-    const configSetting = await prisma.systemSetting.findMany({ 
-        where: { key: { in: ['library_path', 'manga_library_path'] } } 
-    });
-    const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
-
-    const libRoot = (config.library_path && config.library_path.trim() !== '') ? path.normalize(config.library_path).toLowerCase() : null;
-    const mangaRoot = (config.manga_library_path && config.manga_library_path.trim() !== '') ? path.normalize(config.manga_library_path).toLowerCase() : null;
+    // NATIVE DB FETCH: Get all configured libraries to authorize the path
+    const libraries = await prisma.library.findMany();
+    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     const targetPath = path.normalize(filePath).toLowerCase();
 
-    const isAuthorized = (libRoot && targetPath.startsWith(libRoot)) || (mangaRoot && targetPath.startsWith(mangaRoot));
+    const isAuthorized = authorizedRoots.some(root => targetPath.startsWith(root));
 
     if (!isAuthorized) {
       return new Response("Unauthorized path access", { status: 403 });
@@ -33,7 +28,6 @@ export async function GET(request: Request) {
     const stat = fs.statSync(filePath);
     const fileName = path.basename(filePath);
 
-    // Convert standard Node stream into Web ReadableStream for Next.js
     const stream = fs.createReadStream(filePath);
     const readableStream = new ReadableStream({
         start(controller) {

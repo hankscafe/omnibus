@@ -46,9 +46,7 @@ async function getFolderSize(folderPath: string): Promise<number> {
 }
 
 async function getDownloadClient() {
-    const setting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
-    if (!setting?.value) return null;
-    const clients = JSON.parse(setting.value);
+    const clients = await prisma.downloadClient.findMany();
     return clients.length > 0 ? clients[0] : null;
 }
 
@@ -152,22 +150,30 @@ export async function POST(request: Request) {
 
             (async () => {
                 try {
-                    const [users, series, issues, readProgresses, settings, requests] = await Promise.all([
-                        prisma.user.findMany(),
-                        prisma.series.findMany(),
-                        prisma.issue.findMany(),
-                        prisma.readProgress.findMany(),
-                        prisma.systemSetting.findMany(),
-                        prisma.request.findMany()
+                    // NATIVE DB FETCH: Grab absolutely everything!
+                    const [
+                        users, series, issues, readProgresses, settings, requests,
+                        libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
+                        collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
+                    ] = await Promise.all([
+                        prisma.user.findMany(), prisma.series.findMany(), prisma.issue.findMany(),
+                        prisma.readProgress.findMany(), prisma.systemSetting.findMany(), prisma.request.findMany(),
+                        prisma.library.findMany(), prisma.downloadClient.findMany(), prisma.discordWebhook.findMany(),
+                        prisma.indexer.findMany(), prisma.customHeader.findMany(), prisma.searchAcronym.findMany(),
+                        prisma.collection.findMany(), prisma.collectionItem.findMany(), prisma.readingList.findMany(),
+                        prisma.readingListItem.findMany(), prisma.trophy.findMany(), prisma.userTrophy.findMany(), prisma.issueReport.findMany()
                     ]);
 
                     const backupData = {
                         timestamp: new Date().toISOString(),
-                        version: "1.0",
-                        data: { users, series, issues, readProgresses, settings, requests }
+                        version: "2.0",
+                        data: { 
+                            users, series, issues, readProgresses, settings, requests,
+                            libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
+                            collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
+                        }
                     };
 
-                    // Use the environment variable, or default to the internal /backups mount
                     const backupDir = process.env.BACKUP_PATH || '/backups';
                     
                     await fs.ensureDir(backupDir);
@@ -179,7 +185,6 @@ export async function POST(request: Request) {
                     const files = await fs.readdir(backupDir);
                     const backupFiles = files.filter(f => f.startsWith('omnibus_backup_')).sort();
                     
-                    // Retain the last 5 backups
                     if (backupFiles.length > 5) {
                         const toDelete = backupFiles.slice(0, backupFiles.length - 5);
                         for (const file of toDelete) {

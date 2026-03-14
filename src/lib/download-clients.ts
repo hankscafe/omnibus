@@ -8,16 +8,11 @@ import { pipeline } from 'stream/promises';
 import { DiscordNotifier } from './discord';
 
 async function getNetworkHeaders() {
-    const settings = await prisma.systemSetting.findUnique({ where: { key: 'custom_headers' } });
+    const customHeaders = await prisma.customHeader.findMany();
     const headers: Record<string, string> = {};
-    if (settings?.value) {
-        try {
-            const parsed = JSON.parse(settings.value);
-            parsed.forEach((h: { key: string, value: string }) => {
-                if (h.key && h.value) headers[h.key.trim()] = h.value.trim();
-            });
-        } catch (e) { Logger.log("Header parse error", "error"); }
-    }
+    customHeaders.forEach((h: any) => {
+        if (h.key && h.value) headers[h.key.trim()] = h.value.trim();
+    });
     return headers;
 }
 
@@ -92,7 +87,7 @@ export const DownloadService = {
       
       const getComicsFolder = path.join(targetPath, 'GetComics');
       const filePath = path.join(getComicsFolder, finalFilename);
-      const partFilePath = `${filePath}.part`; // The new temporary file
+      const partFilePath = `${filePath}.part`; 
 
       try {
           try {
@@ -101,7 +96,6 @@ export const DownloadService = {
               }
           } catch (mkdirErr: any) {}
 
-          // Clean up any stale .part files from previous crashed runs
           if (fs.existsSync(partFilePath)) {
               try { fs.unlinkSync(partFilePath); } catch (e) {}
           }
@@ -140,13 +134,11 @@ export const DownloadService = {
               }
           }
 
-          // FAILSAFE 1: Content-Type check
           const contentType = (response.headers['content-type'] || '').toLowerCase();
           if (contentType.includes('text/html')) {
               throw new Error("Download URL returned an HTML webpage instead of a comic file.");
           }
 
-          // We now stream into the safe .part file, avoiding the locked .cbz file
           const writer = fs.createWriteStream(partFilePath);
           const totalLength = response.headers['content-length'];
           let downloadedBytes = 0;
@@ -166,20 +158,17 @@ export const DownloadService = {
 
           await pipeline(response.data, writer);
 
-          // FAILSAFE 2: Verify the file is actually larger than 500kb
           const stats = fs.statSync(partFilePath);
           if (stats.size < 500000) {
              throw new Error(`Downloaded file is suspiciously small (${Math.round(stats.size/1024)}kb). Aborting.`);
           }
 
-          // Try to delete the old file if it exists
           if (fs.existsSync(filePath)) {
               try { fs.unlinkSync(filePath); } catch(e) {
                    Logger.log(`[Internal DL] Warning: Could not overwrite existing file (might be locked by Windows).`, 'warn');
               }
           }
 
-          // Rename .part to .cbz. If Windows still has the old file locked, append a timestamp!
           try {
               fs.renameSync(partFilePath, filePath);
           } catch (renameErr) {
@@ -191,7 +180,6 @@ export const DownloadService = {
           Logger.log(`[Internal DL] Download complete. Handing off to Importer...`, 'success');
           return true;
       } catch (error: any) {
-          // Cleanup the .part file if a mid-download crash occurs
           if (fs.existsSync(partFilePath)) try { fs.unlinkSync(partFilePath); } catch (e) {}
           
           Logger.log(`[Internal DL] Download Failed: ${error.message}`, 'error');
@@ -218,14 +206,12 @@ export const DownloadService = {
   },
 
   async getAllActiveDownloads() {
-    const clientSetting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
-    if (!clientSetting?.value) return [];
+    // NATIVE DB CALL: Fetch clients directly from the new table
+    const clients = await prisma.downloadClient.findMany();
+    if (clients.length === 0) return [];
     
     const networkHeaders = await getNetworkHeaders();
     const baseHeaders = { 'User-Agent': 'Omnibus/1.0', ...networkHeaders };
-
-    let clients = [];
-    try { clients = JSON.parse(clientSetting.value); } catch (e) { return []; }
 
     let allDownloads: any[] = [];
 

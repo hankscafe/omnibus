@@ -7,15 +7,15 @@ import { resolveRemotePath } from './utils/path-resolver';
 import axios from 'axios';
 import { DiscordNotifier } from './discord';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
-import { detectManga } from './manga-detector'; // <-- Added detectManga import
+import { detectManga } from './manga-detector';
 
 function sanitize(str: string) {
   return str.replace(/[<>:"/\\|?*]/g, '').trim();
 }
 
 function extractIssueNumber(filename: string): string {
-    let clean = filename.replace(/\.\w+$/, ''); // Strip extension
-    clean = clean.replace(/\[\d{4}\]/g, '').replace(/\(\d{4}\)/g, ''); // Strip years
+    let clean = filename.replace(/\.\w+$/, ''); 
+    clean = clean.replace(/\[\d{4}\]/g, '').replace(/\(\d{4}\)/g, ''); 
     
     const explicitMatch = clean.match(/(?:#|issue\s*|vol(?:ume)?\s*|v\s*|ch(?:apter)?\s*)0*(\d+(?:\.\d+)?)/i);
     if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
@@ -23,7 +23,7 @@ function extractIssueNumber(filename: string): string {
     const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) return parseFloat(matches[matches.length - 1][1]).toString();
     
-    return "1"; // Default to 1 instead of 0 for one-shots
+    return "1"; 
 }
 
 export const Importer = {
@@ -41,17 +41,15 @@ export const Importer = {
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const cvApiKey = config.cv_api_key;
 
-    // --- 1. RESOLVE SOURCE PATH & SET SAFE-SEEDING FLAG ---
+    // --- 1. RESOLVE SOURCE PATH ---
     let sourcePath = "";
     let isFromClient = false;
     const downloadRoot = config.download_path || './downloads';
-
     const trackingHash = req.downloadLink && !req.downloadLink.startsWith('http') ? req.downloadLink : null;
 
     if (trackingHash) {
       try {
           const allActive = await DownloadService.getAllActiveDownloads();
-          // Match by Hash OR Name for manual unmatched linkings
           const downloadItem = allActive.find((t: any) => t.id === trackingHash || t.name === req.activeDownloadName);
           if (downloadItem) {
               isFromClient = true;
@@ -65,7 +63,6 @@ export const Importer = {
       }
     } 
     
-    // Intelligent Fallback: Check Root directory first (Torrent behavior)
     if (!sourcePath) {
       const rootRawPath = path.join(downloadRoot, req.activeDownloadName || "");
       const rootSourcePath = await resolveRemotePath(rootRawPath);
@@ -75,10 +72,10 @@ export const Importer = {
 
       if (fs.existsSync(rootSourcePath)) {
           sourcePath = rootSourcePath; 
-          isFromClient = true; // Assume root files are Torrents, so we copy instead of move!
+          isFromClient = true; 
       } else if (fs.existsSync(getComicsSourcePath)) {
           sourcePath = getComicsSourcePath; 
-          isFromClient = false; // Explicitly GetComics DDL
+          isFromClient = false; 
       } else {
           sourcePath = rootSourcePath; 
       }
@@ -118,34 +115,52 @@ export const Importer = {
         }
     }
 
-    // --- 3. DETECT MANGA STATUS (Checks Database first, then falls back to Physical File metadata) ---
+    // --- 3. DETECT MANGA STATUS & ASSIGN MULTI-LIBRARY ROUTING ---
     let isManga = false;
     let cleanSeriesName = (req.activeDownloadName || path.basename(sourcePath))
-        .replace(/\.[^/.]+$/, "") // strip extension
-        .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(\d+(?:\.\d+)?)/i, '') // strip issue numbers
-        .replace(/\[.*?\]/g, '') // strip brackets
-        .replace(/\(.*?\)/g, '') // strip parens
+        .replace(/\.[^/.]+$/, "") 
+        .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(\d+(?:\.\d+)?)/i, '') 
+        .replace(/\[.*?\]/g, '') 
+        .replace(/\(.*?\)/g, '') 
         .trim();
 
     if (series) {
-        // Trust the existing database flag
         isManga = (series as any).isManga || false;
     } else {
-        // Run deep scan on the physical file itself
         const seriesYearMatch = (req.activeDownloadName || path.basename(sourcePath)).match(/\((\d{4})\)/);
         const detectedYear = seriesYearMatch ? parseInt(seriesYearMatch[1]) : 0;
         isManga = await detectManga({ name: cleanSeriesName, publisher: { name: 'Other' }, year: detectedYear }, sourcePath);
     }
 
-    let libraryRoot = config.library_path;
-    if (isManga && config.manga_library_path) {
-        libraryRoot = config.manga_library_path;
-        Logger.log(`[Importer] Auto-routed to Manga Library`, "info");
+    // NATIVE DB FETCH: Find the correct destination library
+    const libraries = await prisma.library.findMany();
+    let targetLibrary = null;
+
+    if (series && series.libraryId) {
+        // Series already belongs to a specific library, respect it!
+        targetLibrary = libraries.find(l => l.id === series.libraryId);
     }
 
+    if (!targetLibrary) {
+        if (isManga) {
+            // Find default Manga library, fallback to any Manga library
+            targetLibrary = libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga);
+        }
+        if (!targetLibrary) {
+            // Find default Standard library, fallback to any Standard library, fallback to the very first library available
+            targetLibrary = libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga) || libraries[0];
+        }
+    }
+
+    const libraryRoot = targetLibrary?.path;
+
     if (!libraryRoot) {
-      Logger.log("[Importer] No Library Path found for this import!", "error");
+      Logger.log("[Importer] No Library Path found for this import! Please add a Library in Settings.", "error");
       return false;
+    }
+
+    if (isManga && targetLibrary.isManga) {
+        Logger.log(`[Importer] Auto-routed to Manga Library: ${targetLibrary.name}`, "info");
     }
 
     const publisherName = (series?.publisher && series.publisher !== "Unknown") ? sanitize(series.publisher) : "Other";
@@ -164,7 +179,7 @@ export const Importer = {
                 
                 await prisma.series.update({
                     where: { id: series.id },
-                    data: { folderPath: idealDestFolder }
+                    data: { folderPath: idealDestFolder, libraryId: targetLibrary.id }
                 });
 
                 const existingIssues = await prisma.issue.findMany({ where: { seriesId: series.id } });
@@ -200,11 +215,7 @@ export const Importer = {
     if (series?.name || cleanSeriesName) {
         const safeSeriesName = sanitize(series?.name || cleanSeriesName);
         let formattedNum = extractedNum;
-        
-        if (!extractedNum.includes('.') && extractedNum.length === 1) {
-            formattedNum = `0${extractedNum}`;
-        }
-        
+        if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
         const prefix = isManga ? 'Vol. ' : '#';
         fileName = `${safeSeriesName} ${prefix}${formattedNum}${ext}`;
     }
@@ -247,37 +258,24 @@ export const Importer = {
           }
       }
 
-      if (!moveSuccess) {
-          throw new Error("Failed to move file after multiple attempts due to network locks.");
-      }
+      if (!moveSuccess) throw new Error("Failed to move file after multiple attempts due to network locks.");
 
       if (series?.id) {
          const issueNum = extractIssueNumber(fileName);
          
          await prisma.issue.upsert({
-             where: {
-                 seriesId_number: {
-                     seriesId: series.id,
-                     number: issueNum
-                 }
-             },
+             where: { seriesId_number: { seriesId: series.id, number: issueNum } },
              create: {
-                 seriesId: series.id,
-                 cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
-                 number: issueNum,
-                 status: 'DOWNLOADED',
-                 filePath: finalPath
+                 seriesId: series.id, cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
+                 number: issueNum, status: 'DOWNLOADED', filePath: finalPath
              },
-             update: {
-                 status: 'DOWNLOADED',
-                 filePath: finalPath
-             }
+             update: { status: 'DOWNLOADED', filePath: finalPath }
          });
 
          try {
              await prisma.series.update({
                  where: { id: series.id },
-                 data: { folderPath: destFolder }
+                 data: { folderPath: destFolder, libraryId: targetLibrary.id }
              });
          } catch (e) { }
       }
@@ -296,7 +294,6 @@ export const Importer = {
         data: { status: 'COMPLETED', progress: 100 }
       });
 
-      // --- 5. CLEAN UP UNMATCHED QUEUE ---
       if (trackingHash) {
           try {
               const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });
@@ -312,9 +309,7 @@ export const Importer = {
                       create: { key: 'ignored_downloads', value: JSON.stringify(ignored) }
                   });
               }
-          } catch (ignoreErr) {
-              Logger.log(`[Importer] Failed to add ${trackingHash} to ignored downloads.`, "warn");
-          }
+          } catch (ignoreErr) { }
       }
 
       await DiscordNotifier.sendAlert('comic_available', {

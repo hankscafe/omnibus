@@ -3,7 +3,6 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
-// NEW: Prevent Next.js from caching this backup file
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
@@ -12,32 +11,32 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-        // Fetch all critical data
-        const [users, series, issues, readProgresses, settings, requests] = await Promise.all([
-            prisma.user.findMany(),
-            prisma.series.findMany(),
-            prisma.issue.findMany(),
-            prisma.readProgress.findMany(),
-            prisma.systemSetting.findMany(),
-            prisma.request.findMany()
+        // NATIVE DB FETCH: Grab absolutely everything, including all the new configuration tables!
+        const [
+            users, series, issues, readProgresses, settings, requests,
+            libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
+            collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
+        ] = await Promise.all([
+            prisma.user.findMany(), prisma.series.findMany(), prisma.issue.findMany(),
+            prisma.readProgress.findMany(), prisma.systemSetting.findMany(), prisma.request.findMany(),
+            prisma.library.findMany(), prisma.downloadClient.findMany(), prisma.discordWebhook.findMany(),
+            prisma.indexer.findMany(), prisma.customHeader.findMany(), prisma.searchAcronym.findMany(),
+            prisma.collection.findMany(), prisma.collectionItem.findMany(), prisma.readingList.findMany(),
+            prisma.readingListItem.findMany(), prisma.trophy.findMany(), prisma.userTrophy.findMany(), prisma.issueReport.findMany()
         ]);
 
         const backupData = {
             timestamp: new Date().toISOString(),
-            version: "1.0",
+            version: "2.0", // Bumped version to indicate the new relational schema
             data: {
-                users,
-                series,
-                issues,
-                readProgresses,
-                settings,
-                requests
+                users, series, issues, readProgresses, settings, requests,
+                libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
+                collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
             }
         };
 
         const jsonString = JSON.stringify(backupData, null, 2);
         
-        // Return as a downloadable file
         return new NextResponse(jsonString, {
             status: 200,
             headers: {

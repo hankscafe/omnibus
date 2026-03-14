@@ -62,15 +62,19 @@ export async function POST(request: Request) {
         const isManga = status === 'MANGA';
         const seriesList = await prisma.series.findMany({ where: { id: { in: seriesIds } } });
         
-        const configSetting = await prisma.systemSetting.findMany();
-        const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
-        const targetRoot = isManga ? config.manga_library_path : config.library_path;
-        
-        if (!targetRoot) return NextResponse.json({ error: "Target library path not configured in Settings." }, { status: 400 });
+        const libraries = await prisma.library.findMany();
+        let targetLib = isManga 
+            ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+            : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+            
+        if (!targetLib) targetLib = libraries[0];
+        if (!targetLib) return NextResponse.json({ error: "No libraries configured in Settings." }, { status: 400 });
+
+        const targetRoot = targetLib.path;
 
         for (const s of seriesList) {
             if (!s.folderPath || !fs.existsSync(s.folderPath)) {
-                await prisma.series.update({ where: { id: s.id }, data: { isManga } });
+                await prisma.series.update({ where: { id: s.id }, data: { isManga, libraryId: targetLib.id } });
                 continue;
             }
             
@@ -93,7 +97,7 @@ export async function POST(request: Request) {
 
             await prisma.series.update({
                 where: { id: s.id },
-                data: { isManga, folderPath: activePath.replace(/\\/g, '/') }
+                data: { isManga, folderPath: activePath.replace(/\\/g, '/'), libraryId: targetLib.id }
             });
 
             if (activePath !== oldPath) {
@@ -143,7 +147,7 @@ export async function GET(request: Request) {
 
     const q = searchParams.get('q') || '';
     const type = searchParams.get('type') || 'ALL';
-    const library = searchParams.get('library') || 'ALL';
+    const libraryFilterParam = searchParams.get('library') || 'ALL';
     const publisherFilter = searchParams.get('publisher') || 'ALL';
     const favorites = searchParams.get('favorites') === 'true';
     const collectionId = searchParams.get('collection') || 'ALL';
@@ -154,23 +158,20 @@ export async function GET(request: Request) {
     const userId = (session?.user as any)?.id || null;
 
     if (shouldScanDisk) {
-        const configSetting = await prisma.systemSetting.findMany({ 
-            where: { key: { in: ['library_path', 'manga_library_path'] } } 
-        });
-        const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
+        // NATIVE DB FETCH: Get all configured libraries
+        const libraries = await prisma.library.findMany();
+        let allOnline = true;
         
-        const libraryRoot = config.library_path?.trim() ? path.normalize(config.library_path) : null;
-        const mangaRoot = config.manga_library_path?.trim() ? path.normalize(config.manga_library_path) : null;
+        for (const lib of libraries) {
+            if (!fs.existsSync(lib.path)) {
+                allOnline = false;
+                break;
+            }
+        }
 
-        let libOnline = true;
-        let mangaOnline = true;
-        
-        if (libraryRoot) libOnline = fs.existsSync(libraryRoot);
-        if (mangaRoot) mangaOnline = fs.existsSync(mangaRoot);
-
-        if (!libOnline || !mangaOnline) {
+        if (!allOnline && libraries.length > 0) {
             return NextResponse.json({ 
-                error: "Network Drive Disconnected. Scan aborted to protect database.", 
+                error: "One or more Network Drives Disconnected. Scan aborted to protect database.", 
                 series: [], 
                 hasMore: false 
             }, { status: 503 });
@@ -198,13 +199,13 @@ export async function GET(request: Request) {
             }
         } catch(e) { }
 
-        // OPTIMIZATION: Semi-Parallel Disk Scanning
-        if (libraryRoot || mangaRoot) {
+        // OPTIMIZATION: Semi-Parallel Disk Scanning across ALL libraries
+        if (libraries.length > 0) {
             const existingSeries = await prisma.series.findMany({
                 select: { id: true, folderPath: true }
             });
 
-            const findSeriesFolders = async (dir: string, baseRoot: string) => {
+            const findSeriesFolders = async (dir: string, baseRoot: string, libId: string, libIsManga: boolean) => {
                 const folderName = path.basename(dir);
                 if (folderName.startsWith('.')) return;
 
@@ -226,7 +227,7 @@ export async function GET(request: Request) {
                             const firstArchive = bookFiles.find(f => f.toLowerCase().endsWith('.cbz') || f.toLowerCase().endsWith('.zip'));
                             const firstArchivePath = firstArchive ? path.join(dir, firstArchive) : null;
 
-                            const isManga = await detectManga(
+                            const isMangaDetect = await detectManga(
                                 { name: cleanedName, publisher: { name: publisher }, year: parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0") },
                                 firstArchivePath
                             );
@@ -238,7 +239,8 @@ export async function GET(request: Request) {
                                     year: parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0"),
                                     publisher: publisher,
                                     cvId: -Math.abs(Math.floor(Math.random() * 1000000000)), 
-                                    isManga: isManga
+                                    isManga: libIsManga || isMangaDetect,
+                                    libraryId: libId
                                 }
                             });
                             existingSeries.push({ id: newSeries.id, folderPath: newSeries.folderPath });
@@ -246,16 +248,18 @@ export async function GET(request: Request) {
                     }
                 }
                 
-                // Process up to 5 subdirectories concurrently instead of awaiting one by one
                 const subDirs = entries.filter(e => e.isDirectory());
                 while (subDirs.length > 0) {
                     const batch = subDirs.splice(0, 5);
-                    await Promise.all(batch.map(dirent => findSeriesFolders(path.join(dir, dirent.name), baseRoot)));
+                    await Promise.all(batch.map(dirent => findSeriesFolders(path.join(dir, dirent.name), baseRoot, libId, libIsManga)));
                 }
             };
 
-            if (libraryRoot && fs.existsSync(libraryRoot)) await findSeriesFolders(libraryRoot, libraryRoot);
-            if (mangaRoot && fs.existsSync(mangaRoot)) await findSeriesFolders(mangaRoot, mangaRoot);
+            for (const lib of libraries) {
+                if (fs.existsSync(lib.path)) {
+                    await findSeriesFolders(lib.path, lib.path, lib.id, lib.isManga);
+                }
+            }
             
             // OPTIMIZATION: BLAZING FAST AUTO-HEALER (N+1 Query Fixed)
             try {
@@ -264,16 +268,13 @@ export async function GET(request: Request) {
                 });
 
                 if (pendingRequests.length > 0) {
-                    // 1. Get unique CV IDs needed
                     const reqCvIds = [...new Set(pendingRequests.map(r => r.cvId || (r as any).volumeId).filter(Boolean).map(id => parseInt(id.toString())))];
                     
-                    // 2. Fetch ALL relevant issues in ONE database query
                     const allRelevantIssues = await prisma.issue.findMany({
                         where: { series: { cvId: { in: reqCvIds } } },
                         select: { filePath: true, number: true, name: true, series: { select: { cvId: true } } }
                     });
 
-                    // 3. Map them for instant lookup
                     const issuesByCvId = new Map();
                     for (const issue of allRelevantIssues) {
                         const sCvId = issue.series?.cvId;
@@ -308,7 +309,6 @@ export async function GET(request: Request) {
                         }
                     }
 
-                    // 4. Resolve them all in ONE update query
                     if (requestsToComplete.length > 0) {
                         await prisma.request.updateMany({
                             where: { id: { in: requestsToComplete } },
@@ -323,8 +323,8 @@ export async function GET(request: Request) {
     }
 
     let where: any = {};
-    if (library === 'COMICS') where.isManga = false;
-    if (library === 'MANGA') where.isManga = true;
+    if (libraryFilterParam === 'COMICS') where.isManga = false;
+    if (libraryFilterParam === 'MANGA') where.isManga = true;
     if (publisherFilter !== 'ALL') where.publisher = publisherFilter;
     if (favorites && userId) where.favorites = { some: { userId } };
 
@@ -363,7 +363,7 @@ export async function GET(request: Request) {
         const cSeriesIds = cItems.map(i => i.seriesId);
 
         let filteredIds = cSeriesIds;
-        if (q || publisherFilter !== 'ALL' || library !== 'ALL' || favorites) {
+        if (q || publisherFilter !== 'ALL' || libraryFilterParam !== 'ALL' || favorites) {
              const matchingSeries = await prisma.series.findMany({
                  where: { ...where, id: { in: cSeriesIds } },
                  select: { id: true }

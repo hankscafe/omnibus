@@ -254,7 +254,7 @@ Complete, granular control over your instance, your users, and your underlying a
 </p> 
 
 * **Download Client Integration:** Connects seamlessly with your favorite Torrent clients (qBittorrent, Transmission) and USENET clients (SABnzbd, NZBGet) behind the scenes.
-* **Indexer Support:** Plug in Prowlarr or Jackett to search dozens of trackers simultaneously.
+* **Indexer Support:** Plug in Prowlarr or Jackett to search dozens of trackers simultaneously, and use torznab IDs to prevent unwanted results.
 * **Queue & History Management:** View active, pending, paused, and completed downloads with real-time progress bars, speeds, and ETA.
 * **Automated Post-Processing:** Once a comic is downloaded, Omnibus automatically:
   1. Extracts the file (if necessary).
@@ -264,7 +264,7 @@ Complete, granular control over your instance, your users, and your underlying a
 * **User & Role Management:** * Create independent accounts for friends and family so everyone has their own reading progress.
   * Admin or User roles
   * Users can be assigned auto-approval permission and download permission
-* **Library Path Mapping:** Easily map multiple root directories from your NAS (e.g., separate folders for `/comics`, `/manga`, and `/magazines`).
+* **Library Path Mapping:** Omnibus supports multiple libraries to aasily map multiple root directories from your NAS (e.g., separate folders for `/comics`, `/manga`, and `/magazines`).
 * **API & Service Configuration:** Securely plug in your ComicVine API keys, Indexer credentials, and Download Client details.
 * [**External API Integrations:**](./docs/API.md) Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.
 * **Scheduled Tasks (Cron):** Configure how often Omnibus should scan your disk for new files, refresh metadata, or check indexers for missing requested issues.

@@ -9,21 +9,18 @@ import { getCustomHeaders } from './utils/headers';
 // =========================================================================
 
 export async function getCustomAcronyms(): Promise<Record<string, string>> {
-    const setting = await prisma.systemSetting.findUnique({ where: { key: 'search_acronyms' } });
+    // NATIVE DB FETCH: Read from the search acronym table
+    const acronyms = await prisma.searchAcronym.findMany();
     const defaults = { 'tmnt': 'teenage mutant ninja turtles', 'asm': 'amazing spider-man', 'f4': 'fantastic four', 'jla': 'justice league of america', 'jl': 'justice league', 'gotg': 'guardians of the galaxy', 'avx': 'avengers vs x-men', 'x-men': 'x men' };
     
-    if (!setting?.value) return defaults;
+    if (acronyms.length === 0) return defaults;
     
-    try {
-        const parsed = JSON.parse(setting.value);
-        const acMap: Record<string, string> = {};
-        parsed.forEach((item: any) => { 
-            if (item.key && item.value) acMap[item.key.toLowerCase()] = item.value.toLowerCase(); 
-        });
-        return Object.keys(acMap).length > 0 ? acMap : defaults;
-    } catch (e) {
-        return defaults;
-    }
+    const acMap: Record<string, string> = {};
+    acronyms.forEach((a: any) => { 
+        if (a.key && a.value) acMap[a.key.toLowerCase()] = a.value.toLowerCase(); 
+    });
+    
+    return Object.keys(acMap).length > 0 ? acMap : defaults;
 }
 
 export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>): string[] {
@@ -103,14 +100,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
 // Used exclusively by the Admin "Force Search" button for manual overrides
 // =========================================================================
 
-interface IndexerConfig {
-    id: number;
-    name: string;
-    priority: number;
-    seedTime: number;
-    rss: boolean;
-}
-
 export const SearchEngine = {
 
     async performSmartSearch(query: string) {
@@ -121,14 +110,8 @@ export const SearchEngine = {
             throw new Error("Prowlarr not configured");
         }
 
-        let indexerConfigs: IndexerConfig[] = [];
-        try {
-            if (config.prowlarr_indexers_config) {
-                indexerConfigs = JSON.parse(config.prowlarr_indexers_config);
-            }
-        } catch (e) {
-            console.error("Failed to parse indexer config", e);
-        }
+        // NATIVE DB FETCH: Indexers
+        const indexerConfigs = await prisma.indexer.findMany();
 
         const customHeaders = await getCustomHeaders();
         const cleanUrl = config.prowlarr_url.replace(/\/$/, "");
@@ -173,16 +156,15 @@ export const SearchEngine = {
                  return { success: false, message: "Best match had no download link" };
             }
 
-            const hash = await DownloadService.addTorrent(downloadLink, 'comics');
+            // NATIVE DB FETCH: Clients
+            const clients = await prisma.downloadClient.findMany();
+            if (clients.length === 0) return { success: false, message: "No download client configured." };
+            const client = clients[0]; // Find the first client (or however you plan to select defaults)
 
-            if (hash) {
-                if (bestMatch._seedTime > 0) {
-                    await DownloadService.setSeedingLimit(hash, bestMatch._seedTime);
-                }
-                return { success: true, release: bestMatch.title, indexer: bestMatch.indexer };
-            } else {
-                return { success: false, message: "Failed to add to qBittorrent" };
-            }
+            // Add the download to the new mapped DB Client format
+            await DownloadService.addDownload(client, downloadLink, bestMatch.title, bestMatch._seedTime || 0, 0);
+
+            return { success: true, release: bestMatch.title, indexer: bestMatch.indexer };
 
         } catch (e: any) {
             return { success: false, message: `Download client error: ${e.message}` };

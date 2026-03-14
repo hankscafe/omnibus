@@ -160,37 +160,47 @@ export default function SetupWizard() {
       setStep(prev => prev + 1);
   };
 
-  const handleFinish = async () => {
+const handleFinish = async () => {
       setIsTesting('finish');
       
-      const finalConfig = {
-          cv_api_key: formData.cv_api_key,
-          library_path: formData.library_path,
-          manga_library_path: formData.manga_library_path,
-          download_path: formData.download_path,
-          download_clients_config: JSON.stringify(configuredClients),
-          prowlarr_url: formData.prowlarr_url,
-          prowlarr_key: formData.prowlarr_key,
-          prowlarr_indexers_config: JSON.stringify(configuredIndexers),
-          filter_enabled: formData.filter_enabled.toString(),
-          filter_publishers: formData.filter_publishers,
-          filter_keywords: formData.filter_keywords,
-          oidc_enabled: formData.oidc_enabled.toString(),
-          oidc_issuer: formData.oidc_issuer,
-          oidc_client_id: formData.oidc_client_id,
-          oidc_client_secret: formData.oidc_client_secret,
-          setup_complete: 'true' 
+      // Create the default libraries natively
+      const libraries = [];
+      if (formData.library_path?.trim()) {
+          libraries.push({ id: `tmp_1`, name: "Standard Comics", path: formData.library_path, isManga: false, isDefault: true });
+      }
+      if (formData.manga_library_path?.trim()) {
+          libraries.push({ id: `tmp_2`, name: "Manga", path: formData.manga_library_path, isManga: true, isDefault: true });
+      }
+
+      // Match the exact payload structure of the new Config API
+      const finalPayload = {
+          settings: {
+              cv_api_key: formData.cv_api_key,
+              download_path: formData.download_path,
+              prowlarr_url: formData.prowlarr_url,
+              prowlarr_key: formData.prowlarr_key,
+              filter_enabled: formData.filter_enabled.toString(),
+              filter_publishers: formData.filter_publishers,
+              filter_keywords: formData.filter_keywords,
+              oidc_enabled: formData.oidc_enabled.toString(),
+              oidc_issuer: formData.oidc_issuer,
+              oidc_client_id: formData.oidc_client_id,
+              oidc_client_secret: formData.oidc_client_secret,
+              setup_complete: 'true' 
+          },
+          libraries: libraries,
+          downloadClients: configuredClients,
+          indexers: configuredIndexers
       };
 
       try {
           const res = await fetch('/api/admin/config', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(finalConfig)
+              body: JSON.stringify(finalPayload)
           });
           
           if (res.ok) {
-              // Trigger background sync to populate discover page immediately!
               if (formData.cv_api_key) {
                   fetch('/api/admin/jobs/trigger', {
                       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -198,7 +208,6 @@ export default function SetupWizard() {
                   }).catch(() => {});
               }
 
-              // NEW: Trigger background library scan to index existing files!
               fetch('/api/admin/jobs/trigger', {
                   method: 'POST', headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ job: 'library' })

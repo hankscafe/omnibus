@@ -26,44 +26,44 @@ export async function POST(request: Request) {
 
         Logger.log("[Restore] Starting safe database restoration from backup file...", "info");
 
-        // We use sequential UPSERTs so that we gracefully merge the old data 
-        // without triggering CASCADE deletes that would wipe out your new Trophies or Collections!
-
-        if (backup.data.users) {
-            for (const item of backup.data.users) {
-                await prisma.user.upsert({ where: { id: item.id }, update: item, create: item }).catch(()=>{});
+        // Helper function for safe, repetitive upserts
+        const restoreTable = async (dataArray: any[], model: any, pk: string = 'id') => {
+            if (!dataArray || !Array.isArray(dataArray)) return;
+            for (const item of dataArray) {
+                await model.upsert({
+                    where: { [pk]: item[pk] },
+                    update: item,
+                    create: item
+                }).catch(() => {});
             }
-        }
+        };
 
-        if (backup.data.settings) {
-            for (const item of backup.data.settings) {
-                await prisma.systemSetting.upsert({ where: { key: item.key }, update: item, create: item }).catch(()=>{});
-            }
-        }
+        // 1. Restore Base Entities
+        await restoreTable(backup.data.users, prisma.user);
+        await restoreTable(backup.data.settings, prisma.systemSetting, 'key');
+        await restoreTable(backup.data.libraries, prisma.library);
+        await restoreTable(backup.data.downloadClients, prisma.downloadClient);
+        await restoreTable(backup.data.discordWebhooks, prisma.discordWebhook);
+        await restoreTable(backup.data.indexers, prisma.indexer);
+        await restoreTable(backup.data.customHeaders, prisma.customHeader);
+        await restoreTable(backup.data.searchAcronyms, prisma.searchAcronym);
+        await restoreTable(backup.data.trophies, prisma.trophy);
 
-        if (backup.data.series) {
-            for (const item of backup.data.series) {
-                await prisma.series.upsert({ where: { id: item.id }, update: item, create: item }).catch(()=>{});
-            }
-        }
+        // 2. Restore Level 1 Dependencies (Require Libraries/Users)
+        await restoreTable(backup.data.series, prisma.series);
+        await restoreTable(backup.data.collections, prisma.collection);
+        await restoreTable(backup.data.readingLists, prisma.readingList);
 
-        if (backup.data.issues) {
-            for (const item of backup.data.issues) {
-                await prisma.issue.upsert({ where: { id: item.id }, update: item, create: item }).catch(()=>{});
-            }
-        }
+        // 3. Restore Level 2 Dependencies (Require Series/Lists)
+        await restoreTable(backup.data.issues, prisma.issue);
+        await restoreTable(backup.data.requests, prisma.request);
+        await restoreTable(backup.data.userTrophies, prisma.userTrophy);
 
-        if (backup.data.requests) {
-            for (const item of backup.data.requests) {
-                await prisma.request.upsert({ where: { id: item.id }, update: item, create: item }).catch(()=>{});
-            }
-        }
-
-        if (backup.data.readProgresses) {
-            for (const item of backup.data.readProgresses) {
-                await prisma.readProgress.upsert({ where: { id: item.id }, update: item, create: item }).catch(()=>{});
-            }
-        }
+        // 4. Restore Level 3 Dependencies (Require Issues)
+        await restoreTable(backup.data.readProgresses, prisma.readProgress);
+        await restoreTable(backup.data.collectionItems, prisma.collectionItem);
+        await restoreTable(backup.data.readingListItems, prisma.readingListItem);
+        await restoreTable(backup.data.issueReports, prisma.issueReport);
 
         Logger.log("[Restore] Database restoration completed successfully.", "success");
         return NextResponse.json({ success: true });

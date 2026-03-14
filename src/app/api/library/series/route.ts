@@ -13,7 +13,6 @@ const safeParse = (str: string | null) => {
     try { return JSON.parse(str); } catch { return []; }
 }
 
-// BULLETPROOF ISSUE NUMBER EXTRACTOR
 function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
     clean = clean.replace(/\[\d{4}\]/g, '').replace(/\(\d{4}\)/g, ''); 
@@ -22,13 +21,8 @@ function extractIssueNumber(filename: string): string {
     if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
     
     const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) {
-        return parseFloat(matches[matches.length - 1][1]).toString();
-    }
-    
-    // ONE-SHOT FIX: If the filename has absolutely no numbers, it's a Graphic Novel or One-Shot.
-    // ComicVine always catalogs these as Issue #1. 
-    return "1";
+    if (matches.length > 0) return parseFloat(matches[matches.length - 1][1]).toString();
+    return "1"; 
 }
 
 export async function GET(request: Request) {
@@ -49,13 +43,9 @@ export async function GET(request: Request) {
         userId = user?.id || null;
     }
 
-    const configSetting = await prisma.systemSetting.findMany({ 
-        where: { key: { in: ['library_path', 'manga_library_path'] } } 
-    });
-    const config = Object.fromEntries(configSetting.map(s => [s.key, s.value]));
-
-    const cleanLib = config.library_path?.trim() ? path.normalize(config.library_path).replace(/\\/g, '/').toLowerCase() : null;
-    const cleanManga = config.manga_library_path?.trim() ? path.normalize(config.manga_library_path).replace(/\\/g, '/').toLowerCase() : null;
+    // NATIVE DB FETCH: Get all configured libraries to authorize the path
+    const libraries = await prisma.library.findMany();
+    const authorizedRoots = libraries.map(l => path.normalize(l.path).replace(/\\/g, '/').toLowerCase());
     const cleanTarget = path.normalize(folderPath).replace(/\\/g, '/').toLowerCase();
 
     let seriesRecord = await prisma.series.findFirst({ where: { folderPath: folderPath } });
@@ -65,10 +55,7 @@ export async function GET(request: Request) {
       seriesRecord = allSeries.find(s => path.normalize(s.folderPath).replace(/\\/g, '/').toLowerCase() === cleanTarget) || null;
     }
 
-    const isAuthorized = 
-        (cleanLib && cleanTarget.startsWith(cleanLib)) || 
-        (cleanManga && cleanTarget.startsWith(cleanManga)) ||
-        (seriesRecord !== null);
+    const isAuthorized = authorizedRoots.some(root => cleanTarget.startsWith(root)) || (seriesRecord !== null);
 
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
     if (!fs.existsSync(folderPath)) return NextResponse.json({ error: "Ghost Record: The physical folder is missing from the drive." }, { status: 404 });
@@ -267,7 +254,6 @@ export async function DELETE(request: Request) {
             return NextResponse.json({ error: "No series IDs or folder path provided" }, { status: 400 });
         }
 
-        // 1. Delete from Database if it has a DB record
         if (seriesIds && seriesIds.length > 0) {
             const seriesToDelete = await prisma.series.findMany({ where: { id: { in: seriesIds } } });
 
@@ -288,9 +274,7 @@ export async function DELETE(request: Request) {
                 user: session.user.name 
             }).catch(() => {});
             
-        } 
-        // 2. FALLBACK: Delete the physical folder even if it's an "Unmatched" folder with no DB record
-        else if (folderPath && deleteFiles) {
+        } else if (folderPath && deleteFiles) {
             if (fs.existsSync(folderPath)) {
                 try { await fs.remove(folderPath); } catch (err) {}
             }

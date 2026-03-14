@@ -24,6 +24,7 @@ export function TitleManager() {
     else if (pathname.startsWith("/admin/trophies")) newTitle = "Omnibus - Trophies";
     else if (pathname.startsWith("/admin/users")) newTitle = "Omnibus - Users";
     else if (pathname.startsWith("/admin/download-clients")) newTitle = "Omnibus - Download Clients";
+    else if (pathname.startsWith("/admin/updates")) newTitle = "Omnibus - Updates";
     else if (pathname === "/admin") newTitle = "Omnibus - Admin";
     else if (pathname.startsWith("/library/series")) newTitle = "Omnibus - Series";
     else if (pathname.startsWith("/library/history")) newTitle = "Omnibus - Reading History";
@@ -33,6 +34,7 @@ export function TitleManager() {
     else if (pathname.startsWith("/reader")) newTitle = "Omnibus - Reader";
     else if (pathname.startsWith("/profile")) newTitle = "Omnibus - Profile";
     else if (pathname.startsWith("/login")) newTitle = "Omnibus - Login";
+    
 
     // 1. Set the title immediately
     document.title = newTitle;

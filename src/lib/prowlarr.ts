@@ -15,7 +15,17 @@ export const ProwlarrService = {
     const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => !stopWords.includes(w) && w.length > 0);
     const requiredWords = queryWords.slice(0, Math.min(2, queryWords.length)); 
 
-    const params = new URLSearchParams({ apikey: config.prowlarr_key, t: 'search', q: cleanQuery, cat: '7030,7000,8000', extended: '1' });
+    // Extract configurable Torznab categories, default to Comics (7030) and Manga (8030)
+    const categoriesStr = config.prowlarr_categories || '7030,8030';
+    const cleanCats = categoriesStr.split(',').map((c: string) => c.trim()).filter(Boolean).join(',');
+
+    const params = new URLSearchParams({ 
+        apikey: config.prowlarr_key, 
+        t: 'search', 
+        q: cleanQuery, 
+        cat: cleanCats, 
+        extended: '1' 
+    });
 
     try {
       const url = `${config.prowlarr_url.replace(/\/$/, '')}/api/v1/search?${params.toString()}`;

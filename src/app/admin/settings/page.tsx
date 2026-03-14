@@ -98,7 +98,7 @@ export default function SettingsPage() {
   const { toast } = useToast()
   
   const [config, setConfig] = useState<any>({
-    prowlarr_url: "", prowlarr_key: "", download_path: "", library_path: "", cv_api_key: "",
+    prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", library_path: "", cv_api_key: "",
     remote_path_mapping: "", local_path_mapping: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     omnibus_api_key: "", download_retry_delay: "5", 
@@ -144,6 +144,7 @@ export default function SettingsPage() {
         }
 
         if (!newConfig.download_retry_delay) newConfig.download_retry_delay = "5";
+        if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
         setConfig(newConfig);
     })
   }, [])
@@ -436,6 +437,13 @@ export default function SettingsPage() {
                         <Input type="password" value={config.prowlarr_key} onChange={(e) => setConfig({...config, prowlarr_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
                         <p className="text-[0.8rem] text-muted-foreground">Found in Prowlarr Settings → General → Security → API Key</p>
                     </div>
+                    {/* ADDED CATEGORIES CONFIGURATION HERE */}
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">Search Categories (Torznab IDs)</Label>
+                        <Input value={config.prowlarr_categories || ""} onChange={(e) => setConfig({...config, prowlarr_categories: e.target.value})} placeholder="e.g. 7030, 8030" className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
+                        <p className="text-[0.8rem] text-muted-foreground">Standard categories: <strong>7030</strong> (Comics), <strong>8030</strong> (Manga). Use a comma-separated list.</p>
+                    </div>
+
                     <div className="border-t border-border my-4" />
                     <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('prowlarr')} disabled={!!testing}>Test Connection</Button>
                     <StatusBox result={testResults.prowlarr} />

@@ -48,7 +48,11 @@ export function RequestSearch() {
   const [loading, setLoading] = useState(false)
   const [selectedItem, setSelectedItem] = useState<any>(null)
   const [volumeIssues, setVolumeIssues] = useState<Issue[]>([])
-  const [requestingId, setRequestingId] = useState<number | null>(null)
+  
+  // NEW: Targeted Loading and Tracking States
+  const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
+  const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set())
+  const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
   
   const [ownedSeries, setOwnedSeries] = useState<Set<number>>(new Set())
   const [ownedIssues, setOwnedIssues] = useState<Set<number>>(new Set())
@@ -71,18 +75,21 @@ export function RequestSearch() {
 
   const getVolumeStatus = (volumeId: number, name: string): StatusType => {
       if (ownedSeries.has(volumeId)) return 'LIBRARY';
+      if (requestedVolumes.has(volumeId)) return 'REQUESTED';
+      
       const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
           if (allCompleted) return 'LIBRARY';
           if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
-          return 'REQUESTED';
       }
       return null;
   }
 
   const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
       if (ownedIssues.has(issueId)) return 'LIBRARY';
+      if (requestedIssues.has(issueName)) return 'REQUESTED';
+
       const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
       if (req) {
           if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'LIBRARY';
@@ -158,7 +165,8 @@ export function RequestSearch() {
   }, [selectedItem?.id, selectedItem?.isVolume]);
 
   const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false) => {
-    setRequestingId(id)
+    const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
+    setRequestingTarget(targetKey);
     try {
       const res = await fetch('/api/request', {
         method: 'POST',
@@ -167,11 +175,15 @@ export function RequestSearch() {
       });
       if (res.ok) {
         toast({ title: "Success", description: `${name} added to queue.` })
-        // Instant UI Update
-        setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
-        if (type === 'volume') setOpen(false)
+        if (type === 'volume') {
+            setRequestedVolumes(prev => new Set(prev).add(id));
+            setOpen(false);
+        } else {
+            setRequestedIssues(prev => new Set(prev).add(name));
+            setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
+        }
       }
-    } finally { setRequestingId(null) }
+    } finally { setRequestingTarget(null) }
   }
 
   const hasCreators = selectedItem && ((selectedItem.writers?.length ?? 0) > 0 || (selectedItem.artists?.length ?? 0) > 0);
@@ -268,32 +280,50 @@ export function RequestSearch() {
                           </div>
                           
                           {(() => {
+                              const issueTargetName = selectedItem.isVolume ? `${selectedItem.name.split(' #')[0]} #1` : selectedItem.name;
                               const volStatus = getVolumeStatus(selectedItem.volumeId, selectedItem.name.split(' #')[0]);
-                              const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, selectedItem.name);
+                              const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, issueTargetName);
                               const overallStatus = selectedItem.isVolume ? volStatus : issueStatus;
 
                               return (
                                 <div className="flex flex-col gap-3">
-                                    <Button className="w-full gap-2 shadow-sm" variant={volStatus ? "outline" : "default"} onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown' })} disabled={requestingId === selectedItem.volumeId || volStatus !== null}>
-                                        {volStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedItem.volumeId ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Plus className="w-4 h-4" /> Request Series</>)}
+                                    <Button 
+                                        className="w-full gap-2 shadow-sm" 
+                                        variant="default" 
+                                        onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown' })} 
+                                        disabled={requestingTarget === `vol-${selectedItem.volumeId}` || volStatus === 'REQUESTED' || volStatus === 'PENDING_APPROVAL'}
+                                    >
+                                        {volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
+                                         volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
+                                         requestingTarget === `vol-${selectedItem.volumeId}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
+                                         (<><Plus className="w-4 h-4" /> Request Series</>)}
                                     </Button>
                                     
-                                    <Button className={`w-full gap-2 shadow-sm ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} variant="outline" onClick={() => handleRequest(selectedItem.volumeId, selectedItem.isVolume ? `${selectedItem.name.split(' #')[0]} #1` : selectedItem.name, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher)} disabled={requestingId === selectedItem.id || issueStatus !== null}>
-                                        {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedItem.id ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Download className="w-4 h-4" /> Request Issue</>)}
+                                    <Button 
+                                        className={`w-full gap-2 shadow-sm ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} 
+                                        variant="outline" 
+                                        onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher)} 
+                                        disabled={requestingTarget === `iss-${issueTargetName}` || issueStatus !== null}
+                                    >
+                                        {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : 
+                                         issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
+                                         issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
+                                         requestingTarget === `iss-${issueTargetName}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
+                                         (<><Download className="w-4 h-4" /> Request Issue</>)}
                                     </Button>
                                     
                                     <Button 
                                       variant="outline" 
                                       className="w-full gap-2 border-dashed shadow-sm border-border text-foreground hover:bg-muted" 
                                       onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? selectedItem.name.split(' #')[0] : selectedItem.name, type: selectedItem.isVolume ? 'volume' : 'issue' })}
-                                      disabled={overallStatus === 'LIBRARY'}
+                                      disabled={(!selectedItem.isVolume && issueStatus === 'LIBRARY') || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                     >
-                                        {overallStatus === 'LIBRARY' ? (
-                                            <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>
-                                        ) : overallStatus === 'PENDING_APPROVAL' ? (
+                                        {overallStatus === 'PENDING_APPROVAL' ? (
                                             <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>
                                         ) : overallStatus === 'REQUESTED' ? (
                                             <><Clock className="w-4 h-4 text-orange-500" /> Requested</>
+                                        ) : (!selectedItem.isVolume && issueStatus === 'LIBRARY') ? (
+                                            <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>
                                         ) : (
                                             <><Search className="w-4 h-4 text-primary" /> Interactive Search</>
                                         )}
@@ -343,7 +373,7 @@ export function RequestSearch() {
                                               <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm transition-colors duration-300">
                                                   <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
                                                   <div className="absolute inset-0 bg-black/70 opacity-0 group-hover/issue:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 gap-2 z-20">
-                                                      {!relIssueStatus && (<Button size="sm" variant="default" className="w-full h-7 text-[10px] font-bold bg-primary text-primary-foreground hover:bg-primary/90" disabled={requestingId === issue.id} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue'); }}>{requestingId === issue.id ? <Loader2 className="w-3 h-3 animate-spin"/> : "Get"}</Button>)}
+                                                      {!relIssueStatus && (<Button size="sm" variant="default" className="w-full h-7 text-[10px] font-bold bg-primary text-primary-foreground hover:bg-primary/90" disabled={requestingTarget === `iss-${issue.name}`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue', selectedItem.publisher); }}>{requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-3 h-3 animate-spin"/> : "Get"}</Button>)}
                                                       <Button size="sm" variant="secondary" className="w-full h-7 text-[10px] font-bold text-foreground" onClick={(e) => { 
                                                           e.preventDefault(); 
                                                           e.stopPropagation(); 
@@ -398,7 +428,7 @@ export function RequestSearch() {
         />
       )}
       <Dialog open={!!monitorPrompt} onOpenChange={(open) => !open && setMonitorPrompt(null)}>
-        <DialogContent className="sm:max-w-md bg-background border-border rounded-xl">
+        <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
           <DialogHeader>
               <DialogTitle className="text-xl font-bold text-foreground">Monitor Series?</DialogTitle>
               <DialogDescription className="text-base text-muted-foreground mt-2">

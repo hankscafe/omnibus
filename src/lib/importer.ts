@@ -137,17 +137,14 @@ export const Importer = {
     let targetLibrary = null;
 
     if (series && series.libraryId) {
-        // Series already belongs to a specific library, respect it!
         targetLibrary = libraries.find(l => l.id === series.libraryId);
     }
 
     if (!targetLibrary) {
         if (isManga) {
-            // Find default Manga library, fallback to any Manga library
             targetLibrary = libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga);
         }
         if (!targetLibrary) {
-            // Find default Standard library, fallback to any Standard library, fallback to the very first library available
             targetLibrary = libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga) || libraries[0];
         }
     }
@@ -163,17 +160,33 @@ export const Importer = {
         Logger.log(`[Importer] Auto-routed to Manga Library: ${targetLibrary.name}`, "info");
     }
 
+    // --- NEW: DYNAMIC PATH AND FILE NAMING GENERATION ---
+    const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
+    const filePattern = config.file_naming_pattern || "{Series} #{Issue}";
+    const mangaFilePattern = config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
+
     const publisherName = (series?.publisher && series.publisher !== "Unknown") ? sanitize(series.publisher) : "Other";
     const seriesYearFromMeta = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
+    const seriesNameFromMeta = series?.name || cleanSeriesName;
     
-    const seriesFolderName = sanitize(`${series?.name || cleanSeriesName} ${seriesYearFromMeta ? `(${seriesYearFromMeta})` : ''}`.trim());
-    const idealDestFolder = path.join(libraryRoot, publisherName, seriesFolderName);
+    // Replace Folder Tags
+    let relFolderPath = folderPattern
+        .replace(/{Publisher}/gi, publisherName)
+        .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
+        .replace(/{Year}/gi, seriesYearFromMeta)
+        .replace(/\(\s*\)/g, '') // Remove empty parens if year is missing
+        .replace(/\[\s*\]/g, '') // Remove empty brackets
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
+    const idealDestFolder = path.join(libraryRoot, ...folderParts);
 
     let destFolder = "";
     if (series?.folderPath && series.folderPath.trim() !== "") {
         if (series.folderPath !== idealDestFolder && fs.existsSync(series.folderPath)) {
             try {
-                Logger.log(`[Importer] Metadata updated. Auto-relocating folder to: ${idealDestFolder}`, "info");
+                Logger.log(`[Importer] Standardizing folder to: ${idealDestFolder}`, "info");
                 await fs.ensureDir(path.dirname(idealDestFolder));
                 await fs.move(series.folderPath, idealDestFolder, { overwrite: false });
                 
@@ -209,16 +222,22 @@ export const Importer = {
     const ext = path.extname(rawFileName);
     const extractedNum = extractIssueNumber(rawFileName);
     
-    let fileName = sanitize(rawFileName); 
+    // Replace File Tags
+    let formattedNum = extractedNum;
+    if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
+    
+    const filePatToUse = isManga ? mangaFilePattern : filePattern;
+    let newFileName = filePatToUse
+        .replace(/{Publisher}/gi, publisherName)
+        .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
+        .replace(/{Year}/gi, seriesYearFromMeta)
+        .replace(/{Issue}/gi, formattedNum)
+        .replace(/\(\s*\)/g, '')
+        .replace(/\[\s*\]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
 
-    // Auto-Standardize Filename
-    if (series?.name || cleanSeriesName) {
-        const safeSeriesName = sanitize(series?.name || cleanSeriesName);
-        let formattedNum = extractedNum;
-        if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
-        const prefix = isManga ? 'Vol. ' : '#';
-        fileName = `${safeSeriesName} ${prefix}${formattedNum}${ext}`;
-    }
+    let fileName = `${sanitize(newFileName)}${ext}`;
 
     let finalPath = path.join(destFolder, fileName);
 

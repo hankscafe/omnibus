@@ -20,6 +20,11 @@ export async function POST(request: Request) {
     });
 
     const libraries = await prisma.library.findMany();
+    
+    // --- FETCH GLOBAL FOLDER SETTING ---
+    const settings = await prisma.systemSetting.findMany();
+    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
 
     let filesRenamed = 0;
     let foldersRenamed = 0;
@@ -29,7 +34,6 @@ export async function POST(request: Request) {
     for (const s of seriesList) {
         if (!s.folderPath || !fs.existsSync(s.folderPath)) continue;
 
-        // NATIVE DB FETCH: Find the exact library this series lives in
         const lib = libraries.find(l => l.id === s.libraryId) || libraries.find(l => l.isDefault && l.isManga === s.isManga) || libraries[0];
         if (!lib) continue;
 
@@ -37,12 +41,22 @@ export async function POST(request: Request) {
         let currentFolder = s.folderPath;
 
         if (libraryRoot) {
-            const safePublisher = s.publisher && s.publisher !== "Unknown" ? sanitize(s.publisher) : "";
-            const safeSeries = `${sanitize(s.name || "Unknown")}${s.year ? ` (${s.year})` : ''}`;
+            const safePublisher = s.publisher && s.publisher !== "Unknown" ? sanitize(s.publisher) : "Other";
+            const safeSeries = sanitize(s.name || "Unknown");
+            const safeYear = s.year ? s.year.toString() : "";
             
-            const targetFolder = safePublisher 
-                ? path.join(libraryRoot, safePublisher, safeSeries)
-                : path.join(libraryRoot, safeSeries);
+            // Generate dynamic folder name
+            let relFolderPath = folderPattern
+                .replace(/{Publisher}/gi, safePublisher)
+                .replace(/{Series}/gi, safeSeries)
+                .replace(/{Year}/gi, safeYear)
+                .replace(/\(\s*\)/g, '') 
+                .replace(/\[\s*\]/g, '') 
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
+            const targetFolder = path.join(libraryRoot, ...folderParts);
 
             if (path.normalize(currentFolder).toLowerCase() !== path.normalize(targetFolder).toLowerCase()) {
                 await fs.ensureDir(path.dirname(targetFolder));
@@ -75,10 +89,10 @@ export async function POST(request: Request) {
             }
 
             let newFileName = pattern
-                .replace('{Publisher}', s.publisher || 'Unknown')
-                .replace('{Series}', s.name || 'Unknown')
-                .replace('{Year}', s.year?.toString() || '0000')
-                .replace('{Issue}', paddedNum);
+                .replace(/{Publisher}/gi, s.publisher || 'Unknown')
+                .replace(/{Series}/gi, s.name || 'Unknown')
+                .replace(/{Year}/gi, s.year?.toString() || '0000')
+                .replace(/{Issue}/gi, paddedNum);
             
             newFileName = sanitize(newFileName) + ext;
             const newFilePath = path.join(currentFolder, newFileName);

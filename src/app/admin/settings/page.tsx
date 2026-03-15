@@ -106,7 +106,8 @@ export default function SettingsPage() {
     remote_path_mapping: "", local_path_mapping: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     omnibus_api_key: "", download_retry_delay: "5", 
-    oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: ""
+    oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
+    folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: ""
   })
 
   useEffect(() => {
@@ -586,7 +587,7 @@ export default function SettingsPage() {
             </Card>
         </TabsContent>
 
-        {/* 4. PATHS & AUTO-ROUTING (UPGRADED) */}
+        {/* 4. PATHS, ROUTING & MEDIA MANAGEMENT */}
         <TabsContent value="paths" className="space-y-6">
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
@@ -647,6 +648,103 @@ export default function SettingsPage() {
                         {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
                     </Button>
                     <StatusBox result={testResults.paths} />
+
+                    {/* --- NEW: MEDIA NAMING CONVENTIONS --- */}
+                    <div className="grid gap-4 pt-6 border-t border-border">
+                        <div>
+                            <h3 className="text-lg font-bold text-foreground">Media Naming Conventions</h3>
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                Customize how Omnibus names your folders and files during imports. 
+                                Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>
+                            </p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-2">
+                                <Label className="text-foreground font-semibold">Series Folder Format</Label>
+                                <Input 
+                                    value={config.folder_naming_pattern || "{Publisher}/{Series} ({Year})"} 
+                                    onChange={e => setConfig({...config, folder_naming_pattern: e.target.value})} 
+                                    placeholder="{Publisher}/{Series} ({Year})" 
+                                    className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Use slashes (/) to create sub-folders.</p>
+                            </div>
+                            
+                            <div className="space-y-2">
+                                <Label className="text-foreground font-semibold">Standard Comic File Format</Label>
+                                <Input 
+                                    value={config.file_naming_pattern || "{Series} #{Issue}"} 
+                                    onChange={e => setConfig({...config, file_naming_pattern: e.target.value})} 
+                                    placeholder="{Series} #{Issue}" 
+                                    className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Applied to standard Western comics.</p>
+                            </div>
+
+                            <div className="space-y-2 md:col-span-2 lg:col-span-1">
+                                <Label className="text-foreground font-semibold">Manga File Format</Label>
+                                <Input 
+                                    value={config.manga_file_naming_pattern || "{Series} Vol. {Issue}"} 
+                                    onChange={e => setConfig({...config, manga_file_naming_pattern: e.target.value})} 
+                                    placeholder="{Series} Vol. {Issue}" 
+                                    className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Applied to items flagged as Manga.</p>
+                            </div>
+                        </div>
+
+                        {/* --- LIVE PREVIEW BOX --- */}
+                        <div className="bg-muted/30 p-4 rounded-lg border border-border space-y-3 mt-2">
+                            <Label className="text-xs font-bold text-foreground uppercase tracking-widest flex items-center gap-2 mb-3">
+                                Live Example Previews
+                            </Label>
+                            <div className="grid gap-3 text-xs font-mono">
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+                                    <span className="text-muted-foreground w-28 shrink-0">Folder:</span>
+                                    <span className="text-primary break-all">
+                                        {(config.folder_naming_pattern || "{Publisher}/{Series} ({Year})")
+                                            .replace(/{Publisher}/gi, "Marvel")
+                                            .replace(/{Series}/gi, "Amazing Spider-Man")
+                                            .replace(/{Year}/gi, "2022")
+                                            .replace(/\(\s*\)/g, '')
+                                            .replace(/\[\s*\]/g, '')
+                                            .replace(/\s+/g, ' ')
+                                            .trim()}
+                                    </span>
+                                </div>
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+                                    <span className="text-muted-foreground w-28 shrink-0">Standard Comic:</span>
+                                    <span className="text-primary break-all">
+                                        {(config.file_naming_pattern || "{Series} #{Issue}")
+                                            .replace(/{Publisher}/gi, "Marvel")
+                                            .replace(/{Series}/gi, "Amazing Spider-Man")
+                                            .replace(/{Year}/gi, "2022")
+                                            .replace(/{Issue}/gi, "001")
+                                            .replace(/\(\s*\)/g, '')
+                                            .replace(/\[\s*\]/g, '')
+                                            .replace(/\s+/g, ' ')
+                                            .trim()}.cbz
+                                    </span>
+                                </div>
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+                                    <span className="text-muted-foreground w-28 shrink-0">Manga:</span>
+                                    <span className="text-primary break-all">
+                                        {(config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
+                                            .replace(/{Publisher}/gi, "Shueisha")
+                                            .replace(/{Series}/gi, "Chainsaw Man")
+                                            .replace(/{Year}/gi, "2018")
+                                            .replace(/{Issue}/gi, "001")
+                                            .replace(/\(\s*\)/g, '')
+                                            .replace(/\[\s*\]/g, '')
+                                            .replace(/\s+/g, ' ')
+                                            .trim()}.cbz
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 </CardContent>
             </Card>
 
@@ -1023,9 +1121,17 @@ export default function SettingsPage() {
                     
                     <div className="border-t border-border my-4" />
                     
-                    <Button variant="secondary" onClick={generateApiKey} className="h-12 sm:h-10 font-bold w-full sm:w-auto bg-muted hover:bg-muted/80 text-foreground transition-all">
-                        <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Generate New Key
-                    </Button>
+                    <div className="flex flex-col sm:flex-row justify-between gap-4">
+                        <Button variant="secondary" onClick={generateApiKey} className="h-12 sm:h-10 font-bold w-full sm:w-auto bg-muted hover:bg-muted/80 text-foreground transition-all">
+                            <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Generate New Key
+                        </Button>
+                        
+                        <Button variant="outline" asChild className="h-12 sm:h-10 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground transition-all">
+                            <Link href="/admin/api-guide">
+                                View API Documentation
+                            </Link>
+                        </Button>
+                    </div>
                 </CardContent>
             </Card>
         </TabsContent>

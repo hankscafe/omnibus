@@ -22,16 +22,28 @@ export async function POST(request: Request) {
 
     const libraryRoot = targetLib.path;
 
+    const settings = await prisma.systemSetting.findMany();
+    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
+
     function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
     
-    const safePublisher = publisher && publisher !== "Unknown" ? sanitize(publisher) : "";
-    const safeSeries = `${sanitize(name)}${year ? ` (${year})` : ''}`;
+    const safePublisher = publisher && publisher !== "Unknown" ? sanitize(publisher) : "Other";
+    const safeSeries = sanitize(name || "Unknown Series");
+    const safeYear = year ? year.toString() : "";
     
-    let newPath = safePublisher 
-        ? path.join(libraryRoot, safePublisher, safeSeries)
-        : path.join(libraryRoot, safeSeries);
+    // --- NEW: DYNAMIC TAG REPLACEMENT ---
+    let relFolderPath = folderPattern
+        .replace(/{Publisher}/gi, safePublisher)
+        .replace(/{Series}/gi, safeSeries)
+        .replace(/{Year}/gi, safeYear)
+        .replace(/\(\s*\)/g, '') 
+        .replace(/\[\s*\]/g, '') 
+        .replace(/\s+/g, ' ')
+        .trim();
 
-    newPath = newPath.replace(/\\/g, '/');
+    const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
+    let newPath = path.join(libraryRoot, ...folderParts).replace(/\\/g, '/');
     let activePath = currentPath.replace(/\\/g, '/');
 
     if (activePath.toLowerCase() !== newPath.toLowerCase()) {

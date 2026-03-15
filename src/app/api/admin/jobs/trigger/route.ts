@@ -13,7 +13,6 @@ import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
 import { DiscordNotifier } from '@/lib/discord';
 
-// --- NEW: Helper to check if an issue is actually released ---
 function isReleasedYet(storeDate: string | null, coverDate: string | null) {
     const now = new Date();
     if (storeDate) return new Date(storeDate) <= now;
@@ -43,6 +42,52 @@ async function getFolderSize(folderPath: string): Promise<number> {
     } catch (e) {
         return 0;
     }
+}
+
+// --- UNIFIED STORAGE ENGINE ---
+// Rebuilds the Storage Deep Dive Cache & updates DB sizes for Analytics
+async function runStorageScan() {
+    const nowStr = Date.now().toString();
+    await prisma.systemSetting.upsert({
+        where: { key: 'storage_deep_dive_last_run' },
+        update: { value: nowStr },
+        create: { key: 'storage_deep_dive_last_run', value: nowStr }
+    });
+
+    const seriesList = await prisma.series.findMany({
+        select: { id: true, name: true, publisher: true, folderPath: true, isManga: true, _count: { select: { issues: true } } }
+    });
+
+    const storageData: any[] = [];
+    const batchSize = 10;
+    
+    for (let i = 0; i < seriesList.length; i += batchSize) {
+        const batch = seriesList.slice(i, i + batchSize);
+        const batchResults = await Promise.all(batch.map(async (s) => {
+            const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
+            
+            // Sync to the DB for the Analytics Page
+            await prisma.series.update({ where: { id: s.id }, data: { size } }).catch(() => {});
+            
+            return {
+                id: s.id, name: s.name, publisher: s.publisher || "Unknown",
+                isManga: s.isManga, issueCount: s._count.issues,
+                path: s.folderPath, sizeBytes: size
+            };
+        }));
+        storageData.push(...batchResults);
+    }
+
+    storageData.sort((a, b) => b.sizeBytes - a.sizeBytes);
+
+    // Save to cache for the Storage Deep Dive Page
+    await prisma.systemSetting.upsert({
+        where: { key: 'storage_deep_dive_cache' },
+        update: { value: JSON.stringify(storageData) },
+        create: { key: 'storage_deep_dive_cache', value: JSON.stringify(storageData) }
+    });
+    
+    return storageData.length;
 }
 
 async function getDownloadClient() {
@@ -150,7 +195,6 @@ export async function POST(request: Request) {
 
             (async () => {
                 try {
-                    // NATIVE DB FETCH: Grab absolutely everything!
                     const [
                         users, series, issues, readProgresses, settings, requests,
                         libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
@@ -199,7 +243,6 @@ export async function POST(request: Request) {
                     await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } });
                     DiscordNotifier.sendAlert('job_db_backup', { description: `Database backup failed: ${e.message}` }).catch(() => {});
                     Logger.log(`[Background Job] Database Backup Failed: ${e.message}`, "error");
-                    
                 }
             })();
 
@@ -212,34 +255,32 @@ export async function POST(request: Request) {
             await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
             
             try {
+                // 1. Force the physical disk scan (Fast - only looks for new folders)
                 const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                await axios.get(`${baseUrl}/api/library`).catch(() => {});
+                await axios.get(`${baseUrl}/api/library?refresh=true`, { timeout: 300000 }).catch(() => {});
                 
-                const allSeries = await prisma.series.findMany({ select: { id: true, folderPath: true } });
+                // 2. SMART THROTTLE: Only run the heavy storage scan if it's been > 24 hours
+                const lastStorageRun = await prisma.systemSetting.findUnique({ where: { key: 'storage_deep_dive_last_run' } });
+                const lastRunTime = parseInt(lastStorageRun?.value || "0");
+                const hoursSinceLastRun = (Date.now() - lastRunTime) / (1000 * 60 * 60);
+
                 let processedCount = 0;
-                
-                const batchSize = 10;
-                for (let i = 0; i < allSeries.length; i += batchSize) {
-                    const batch = allSeries.slice(i, i + batchSize);
-                    await Promise.all(batch.map(async (s) => {
-                        if (s.folderPath) {
-                            const size = await getFolderSize(s.folderPath);
-                            await prisma.series.update({
-                                where: { id: s.id },
-                                data: { size }
-                            });
-                            processedCount++;
-                        }
-                    }));
+                let storageMessage = "Skipped heavy storage scan (calculated recently).";
+
+                if (hoursSinceLastRun >= 24) {
+                    Logger.log("[Background Job] 24+ hours passed. Running heavy storage size calculation...", "info");
+                    processedCount = await runStorageScan();
+                    storageMessage = `Storage calculation completed for ${processedCount} series.`;
                 }
 
                 await prisma.jobLog.create({ 
-                    data: { jobType: 'LIBRARY_SCAN', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Scan and storage calculation completed for ${processedCount} series.` } 
+                    data: { jobType: 'LIBRARY_SCAN', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Library scan complete. ${storageMessage}` } 
                 });
 
-                Logger.log(`[Manual Job] Local Library Auto-Scan completed. Updated storage for ${processedCount} series.`, "success");
-                DiscordNotifier.sendAlert('job_library_scan', { description: `Scan and storage calculation completed for ${processedCount} series.` }).catch(() => {});
-                return NextResponse.json({ success: true, message: "Library scan and storage calculation completed." });
+                Logger.log(`[Manual Job] Local Library Auto-Scan completed.`, "success");
+                DiscordNotifier.sendAlert('job_library_scan', { description: `Library scan complete. ${storageMessage}` }).catch(() => {});
+                
+                return NextResponse.json({ success: true, message: `Library scan complete. ${storageMessage}` });
             } catch (e: any) {
                 await prisma.jobLog.create({ data: { jobType: 'LIBRARY_SCAN', status: 'FAILED', durationMs: Date.now() - startTime, message: e.message } });
                 DiscordNotifier.sendAlert('job_library_scan', { description: `Failed to scan library.` }).catch(() => {});
@@ -300,20 +341,17 @@ export async function POST(request: Request) {
             await prisma.systemSetting.upsert({ where: { key: 'last_monitor_sync' }, update: { value: nowStr }, create: { key: 'last_monitor_sync', value: nowStr } });
 
             (async () => {
-                // 1. Get explicitly monitored series
                 const monitoredSeries = await prisma.series.findMany({
                     where: { monitored: true },
                     include: { issues: true }
                 });
                 const monitoredCvIds = monitoredSeries.map(s => s.cvId);
 
-                // 2. Get any UNRELEASED requests (even if the series isn't monitored)
                 const unreleasedRequests = await prisma.request.findMany({
                     where: { status: 'UNRELEASED' }
                 });
                 const unreleasedVolumeIds = unreleasedRequests.map(r => parseInt(r.volumeId)).filter(id => !isNaN(id));
 
-                // 3. Combine into a unique list of ComicVine Volume IDs to check
                 const allCvIdsToCheck = [...new Set([...monitoredCvIds, ...unreleasedVolumeIds])];
 
                 if (allCvIdsToCheck.length === 0) {
@@ -333,11 +371,9 @@ export async function POST(request: Request) {
                     try {
                         Logger.log(`[Monitor] Checking CV for Volume ID: ${cvId}`, 'info');
                         
-                        // Determine if this volume is actually monitored (to queue completely new issues)
                         const seriesRecord = monitoredSeries.find(s => s.cvId === cvId);
                         const isMonitored = !!seriesRecord;
                         
-                        // Fallback data if we don't have a Series record yet
                         const seriesName = seriesRecord?.name || unreleasedRequests.find(r => parseInt(r.volumeId) === cvId)?.activeDownloadName?.split(' #')[0] || `Volume ${cvId}`;
                         const seriesPublisher = seriesRecord?.publisher || "Unknown";
                         const seriesYear = seriesRecord?.year?.toString() || new Date().getFullYear().toString();
@@ -348,7 +384,6 @@ export async function POST(request: Request) {
                         let loopCount = 0;
                         const allCvIssues = [];
 
-                        // Fetch all issues for this volume from ComicVine
                         while (offset < totalResults && loopCount < 20) {
                             const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
                                 params: { 
@@ -376,7 +411,6 @@ export async function POST(request: Request) {
                             const cvNum = parseFloat(cvIssue.issue_number);
                             if (isNaN(cvNum)) continue;
 
-                            // Skip if it's already physically in the library
                             const alreadyInLibrary = seriesRecord?.issues.some(i => 
                                 parseFloat(i.number) === cvNum && i.filePath && i.filePath.length > 0
                             );
@@ -395,7 +429,6 @@ export async function POST(request: Request) {
                             const issueImage = cvIssue.image?.medium_url || cvIssue.image?.small_url;
                             const issueYear = (cvIssue.store_date || cvIssue.cover_date || seriesYear).split('-')[0];
 
-                            // --- THE UPGRADE LOGIC ---
                             if (alreadyReq) {
                                 if (alreadyReq.status === 'UNRELEASED' && isReleased) {
                                     Logger.log(`[Monitor] Issue ${searchName} is now released! Upgrading to PENDING.`, 'success');
@@ -406,7 +439,6 @@ export async function POST(request: Request) {
                                         data: { status: 'PENDING' }
                                     });
                                     
-                                    // Send it to Prowlarr/GetComics!
                                     searchAndDownload(alreadyReq.id, searchName, issueYear, seriesPublisher, isManga)
                                         .catch(e => console.error("Monitor Automation Error:", e));
                                         
@@ -415,7 +447,6 @@ export async function POST(request: Request) {
                                 continue; 
                             }
 
-                            // --- NEW ISSUE LOGIC (ONLY IF MONITORED) ---
                             if (isMonitored) {
                                 const issueStatus = isReleased ? 'PENDING' : 'UNRELEASED';
 
@@ -513,7 +544,6 @@ export async function POST(request: Request) {
             Logger.log("[Background Job] Checking GitHub for Omnibus updates...", "info");
             
             try {
-                // Fetch latest release from GitHub
                 const res = await axios.get('https://api.github.com/repos/hankscafe/omnibus/releases?per_page=1', {
                     headers: { 'User-Agent': 'Omnibus-App', 'Accept': 'application/vnd.github.v3+json' },
                     timeout: 10000
@@ -522,22 +552,16 @@ export async function POST(request: Request) {
                 if (res.data && res.data.length > 0) {
                     const latestVersion = res.data[0].tag_name.replace(/^v/, '');
                     
-                    // Fetch the version we last sent a Discord notification for
                     const notifiedSetting = await prisma.systemSetting.findUnique({ where: { key: 'last_notified_version' } });
                     const lastNotified = notifiedSetting?.value || "";
 
-                    // If it's a new version we haven't alerted about yet
                     if (latestVersion !== lastNotified) {
-                        
-                        // Dynamically read current version so we don't notify if they already updated
                         const packageJson = require(process.cwd() + '/package.json');
                         const currentVersion = packageJson.version || "1.0.0";
 
                         if (latestVersion !== currentVersion) {
-                            // Send the Discord Alert!
                             await DiscordNotifier.sendAlert('update_available', { version: latestVersion });
                             
-                            // Lock it in the database so it never sends this specific version alert again
                             await prisma.systemSetting.upsert({
                                 where: { key: 'last_notified_version' },
                                 update: { value: latestVersion },
@@ -558,42 +582,13 @@ export async function POST(request: Request) {
         if (job === 'storage_scan' || job === 'analytics') {
             Logger.log("[Background Job] Initiating Storage Deep Dive Scan...", "info");
             
-            await prisma.systemSetting.upsert({
-                where: { key: 'storage_deep_dive_last_run' },
-                update: { value: nowStr },
-                create: { key: 'storage_deep_dive_last_run', value: nowStr }
-            });
-
             (async () => {
-                const seriesList = await prisma.series.findMany({
-                  select: { id: true, name: true, publisher: true, folderPath: true, isManga: true, _count: { select: { issues: true } } }
-                });
-
-                const storageData: any[] = [];
-                const batchSize = 10;
-                
-                for (let i = 0; i < seriesList.length; i += batchSize) {
-                    const batch = seriesList.slice(i, i + batchSize);
-                    const batchResults = await Promise.all(batch.map(async (s) => {
-                        const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
-                        return {
-                            id: s.id, name: s.name, publisher: s.publisher || "Unknown",
-                            isManga: s.isManga, issueCount: s._count.issues,
-                            path: s.folderPath, sizeBytes: size
-                        };
-                    }));
-                    storageData.push(...batchResults);
+                try {
+                    const processedCount = await runStorageScan();
+                    Logger.log(`[Background Job] Storage Scan Complete. Processed ${processedCount} series.`, "success");
+                } catch(e) {
+                    Logger.log(`[Background Job] Storage Scan Failed.`, "error");
                 }
-
-                storageData.sort((a, b) => b.sizeBytes - a.sizeBytes);
-
-                await prisma.systemSetting.upsert({
-                    where: { key: 'storage_deep_dive_cache' },
-                    update: { value: JSON.stringify(storageData) },
-                    create: { key: 'storage_deep_dive_cache', value: JSON.stringify(storageData) }
-                });
-
-                Logger.log(`[Background Job] Storage Scan Complete. Processed ${storageData.length} series.`, "success");
             })();
 
             if (job === 'storage_scan') {

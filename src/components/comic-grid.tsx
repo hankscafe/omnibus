@@ -57,7 +57,10 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   const [limit, setLimit] = useState(14)
   const [isInitialized, setIsInitialized] = useState(false)
 
-  const [requestingId, setRequestingId] = useState<number | null>(null)
+  // NEW: Targeted Loading and Tracking States
+  const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
+  const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set())
+  const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
   
   const [ownedSeries, setOwnedSeries] = useState<Set<number>>(new Set())
   const [ownedIssues, setOwnedIssues] = useState<Set<number>>(new Set())
@@ -98,18 +101,21 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
 
   const getVolumeStatus = (volumeId: number, name: string): StatusType => {
       if (ownedSeries.has(volumeId)) return 'LIBRARY';
+      if (requestedVolumes.has(volumeId)) return 'REQUESTED';
+      
       const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
           if (allCompleted) return 'LIBRARY';
           if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
-          return 'REQUESTED';
       }
       return null;
   }
 
   const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
       if (ownedIssues.has(issueId)) return 'LIBRARY';
+      if (requestedIssues.has(issueName)) return 'REQUESTED';
+
       const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
       if (req) {
           if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'LIBRARY';
@@ -172,7 +178,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   }, [selectedComic?.volumeId])
 
   const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false) => {
-    setRequestingId(id)
+    const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
+    setRequestingTarget(targetKey);
     try {
       const res = await fetch('/api/request', {
         method: 'POST',
@@ -181,9 +188,14 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       });
       if (res.ok) {
           toast({ title: "Success", description: `${name} added to queue.` })
-          setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
+          if (type === 'volume') {
+              setRequestedVolumes(prev => new Set(prev).add(id));
+          } else {
+              setRequestedIssues(prev => new Set(prev).add(name));
+              setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
+          }
       }
-    } finally { setRequestingId(null) }
+    } finally { setRequestingTarget(null) }
   }
 
   const handleNext = () => {
@@ -285,32 +297,50 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                             </div>
                             
                             {(() => {
+                                const issueTargetName = selectedComic.issueNumber ? selectedComic.name : `${selectedComic.name.split(' #')[0]} #1`;
                                 const volStatus = getVolumeStatus(selectedComic.volumeId, selectedComic.name.split(' #')[0]);
-                                const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, selectedComic.name);
+                                const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, issueTargetName);
                                 const overallStatus = selectedComic.issueNumber ? issueStatus : volStatus;
 
                                 return (
                                   <div className="flex flex-col gap-2.5 sm:gap-3">
-                                      <Button className="w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold" variant={volStatus ? "outline" : "default"} onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown' })} disabled={requestingId === selectedComic.volumeId || volStatus !== null}>
-                                          {volStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedComic.volumeId ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Plus className="w-4 h-4" /> Request Series</>)}
+                                      <Button 
+                                          className="w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold" 
+                                          variant="default" 
+                                          onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown' })} 
+                                          disabled={requestingTarget === `vol-${selectedComic.volumeId}` || volStatus === 'REQUESTED' || volStatus === 'PENDING_APPROVAL'}
+                                      >
+                                          {volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
+                                           volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
+                                           requestingTarget === `vol-${selectedComic.volumeId}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
+                                           (<><Plus className="w-4 h-4" /> Request Series</>)}
                                       </Button>
                                       
-                                      <Button className={`w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} variant="outline" onClick={() => handleRequest(selectedComic.volumeId, selectedComic.name, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher)} disabled={requestingId === selectedComic.id || issueStatus !== null}>
-                                          {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : requestingId === selectedComic.id ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<><Download className="w-4 h-4" /> Request Issue</>)}
+                                      <Button 
+                                          className={`w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} 
+                                          variant="outline" 
+                                          onClick={() => handleRequest(selectedComic.volumeId, issueTargetName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher)} 
+                                          disabled={requestingTarget === `iss-${issueTargetName}` || issueStatus !== null}
+                                      >
+                                          {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : 
+                                           issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
+                                           issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
+                                           requestingTarget === `iss-${issueTargetName}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
+                                           (<><Download className="w-4 h-4" /> Request Issue</>)}
                                       </Button>
                                       
                                       <Button 
                                         variant="outline" 
                                         className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted" 
                                         onClick={() => setInteractiveQuery({ query: selectedComic.issueNumber ? selectedComic.name : selectedComic.name.split(' #')[0], type: selectedComic.issueNumber ? 'issue' : 'volume' })}
-                                        disabled={overallStatus === 'LIBRARY'}
+                                        disabled={(selectedComic.issueNumber ? issueStatus === 'LIBRARY' : false) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                       >
-                                          {overallStatus === 'LIBRARY' ? (
-                                              <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>
-                                          ) : overallStatus === 'PENDING_APPROVAL' ? (
+                                          {overallStatus === 'PENDING_APPROVAL' ? (
                                               <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>
                                           ) : overallStatus === 'REQUESTED' ? (
                                               <><Clock className="w-4 h-4 text-orange-500" /> Requested</>
+                                          ) : (selectedComic.issueNumber && issueStatus === 'LIBRARY') ? (
+                                              <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>
                                           ) : (
                                               <><SearchIcon className="w-4 h-4 text-primary" /> Interactive Search</>
                                           )}
@@ -375,26 +405,23 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                 <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
                                                     <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
                                                     
-                                                    {/* Gradient overlay to ensure text is readable */}
                                                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none" />
                                                     
-                                                    {/* Issue Number Display */}
                                                     <div className="absolute bottom-1 left-2 z-20 text-white text-[11px] font-black truncate drop-shadow-md">#{issue.issueNumber}</div>
                                                     
-                                                    {/* Permanent Download Icon on Mobile, Hover on Desktop */}
                                                     {!relIssueStatus && (
                                                         <div className="absolute bottom-1 right-1 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity">
                                                             <Button 
                                                                 size="icon" 
                                                                 className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg" 
-                                                                disabled={requestingId === issue.id} 
+                                                                disabled={requestingTarget === `iss-${issue.name}`} 
                                                                 onClick={(e) => { 
                                                                     e.preventDefault(); 
                                                                     e.stopPropagation(); 
                                                                     handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher); 
                                                                 }}
                                                             >
-                                                                {requestingId === issue.id ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
+                                                                {requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
                                                             </Button>
                                                         </div>
                                                     )}
@@ -414,7 +441,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                 </div>
                 <div className="p-3 sm:p-4 bg-background border-t border-border flex flex-col sm:flex-row gap-2 sm:justify-between z-10 shrink-0">
                         {selectedComic.siteUrl && (<Button variant="secondary" asChild className="h-12 sm:h-10 sm:mr-auto bg-background shadow-sm font-bold hover:bg-muted text-foreground border-border"><Link href={selectedComic.siteUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> View on ComicVine</Link></Button>)}
-                        <Button variant="outline" onClick={() => setSelectedComic(null)} className="h-12 sm:h-10 font-bold border-border hover:bg-muted">Close</Button>
+                        <Button variant="outline" className="text-foreground" onClick={() => setSelectedComic(null)}>Close</Button>
                 </div>
                 </>
             )}

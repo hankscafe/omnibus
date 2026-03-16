@@ -59,16 +59,24 @@ export async function GET(request: Request) {
                     const finalArtists = [...new Set(newArtists)];
                     const finalCharacters = [...new Set(newCharacters)];
 
-                    // Save it to the database so it's instant next time!
-                    await prisma.issue.update({
+                    const issueExists = await prisma.issue.findUnique({
                         where: { id: issue.id },
-                        data: {
-                            writers: JSON.stringify(finalWriters),
-                            artists: JSON.stringify(finalArtists),
-                            characters: JSON.stringify(finalCharacters),
-                            description: newDescription
-                        }
+                        select: { id: true }
                     });
+
+                    if (issueExists) {
+                        await prisma.issue.update({
+                            where: { id: issue.id },
+                            data: {
+                                writers: JSON.stringify(finalWriters),
+                                artists: JSON.stringify(finalArtists),
+                                characters: JSON.stringify(finalCharacters),
+                                description: newDescription
+                            }
+                        }).catch(err => {
+                            console.warn("[Issue API] Failed to save lazy-loaded metadata:", err.message);
+                        });
+                    }
 
                     return NextResponse.json({
                         writers: finalWriters,

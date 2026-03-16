@@ -438,7 +438,9 @@ function SeriesContent() {
           setIsDeleting(false);
           setDeleteModalOpen(false);
           
-          router.push(`/library?refetch=${Date.now()}`);
+          // FIX: Redirect to library with a hard refresh flag to ensure the 
+          // ghost record is purged from the UI immediately.
+          router.push('/library?refetch=true');
       } catch (e: any) {
           toast({ title: "Delete Failed", description: e.message, variant: "destructive" });
           setIsDeleting(false);

@@ -101,7 +101,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 * **Popular Issues:** Uses ComicVines api to pull a list of popular issues/series that is cached to help performance and is updated using a scheduled task in the admin section, or using the "Refresh Data" button on the homepage.
 * **New Releases:** Uses ComicVines api to pull a list of new releases that is cached to help performance and is updated using a scheduled task in the admin section, or using the "Refresh Data" button on the homepage.
 * **Manual Search:** A manual search powered by ComicVines api where users can input any series they want and choose from the results which show cover images, publisher, year, and issue count to ensure they are selecting the issue or series they are looking for.
-* **One-Click Requests:** Found a missing issue or an entire story arc? Click "Request" to instantly send it to your automated download queue.
+* **One-Click Requests:** Found a missing issue or an entire story arc? Click "Request" to instantly send it to your automated download queue.  Allows for requesting through indexers with a fallback to GetComics, or send a request straight to GetComics.
 * **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
 * **Unreleased Badges:** When a request is made Omnibus will check ComicVine for the issues release date and if it is not released it will tag it as UNRELEASED.  As the Monitor Series job runs it will also check items tagged as UNRELEASED and update it as available once it is availalbe, allowing future issues to be automatically downloaded.
 * **Requests & Downloads:** Your automated librarian. Tell Omnibus what you want, and it handles the complex world of tracking, downloading, and organizing.
@@ -160,9 +160,9 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 * **Individual Progress Tracking:** Every issue displays its own distinct status (Unread, In Progress with a visual progress bar, or Read). 
 * **Bulk Actions:** Effortlessly manage your collection with one-click buttons to "Mark All as Read," "Refresh Metadata," or delete specific files right from the browser.
 * **Missing Issue Detection:** Visually highlights gaps in your collection (e.g., if you have issues #1, #2, and #4, it will flag #3 as missing) and offers a one-click button to send the missing issue to your download queue.
-* **Sorting Options:** Sort issues sequentially (Issue #1 to #100) or reverse chronological (newest releases first) for ongoing weekly pulls.
+* **Sorting Options:** Sort issues sequentially (Issue # 1 to # 100) or reverse chronological (newest releases first) for ongoing weekly pulls.
 * **Download Option:** Admins can enable a per-user permission for users to download individual issues for viewing offline if they have a comic reader.
-* **Customize Directory & File Naming:** *(Coming Soon)* Admins can customize the directory and file naming to their liking similar to Radarr/Sonarr.
+* **Customize Directory & File Naming:** Admins can customize the directory and file naming to their liking similar to Radarr/Sonarr.
 
 ### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.
@@ -381,16 +381,12 @@ services:
       - NEXTAUTH_SECRET=super_secret_generated_key_123!
       # REQUIRED: Tells the app to store the database in our persistent config mount
       - DATABASE_URL=file:/config/omnibus.db
-      # REQUIRED: Tells the app to store the temp extracted .cbr files to the cache mount
-      - OMNIBUS_CACHE_DIR=/cache
       # OPTIONAL: Tells the app what path to use for the database backups, if not used Omnibus will default to /backups
       - OMNIBUS_BACKUP_DIR=/backups
 
     volumes:
       # REQUIRED: Persistent storage for your database, logs, and settings
       - /path/to/your/nas/config:/config
-      # REQUIRED: Maps folder for .cache directory for .cbr files
-      - /path/to/your/nas/cache:/cache
       # REQUIRED: Maps backup folder for database backups (can be defined using environment variable)
       - /path/to/your/nas/backups:/backups
       # REQUIRED: Persistent storage for user avatars and banners

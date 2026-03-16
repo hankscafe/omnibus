@@ -173,31 +173,36 @@ export async function GET(request: Request) {
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id || null;
 
-    // FIX: CRITICAL AUTHENTICATION ENFORCEMENT
     if (!userId) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const { searchParams } = new URL(request.url);
     
-    // FIX: PREVENT NEGATIVE PAGINATION 500 ERRORS
     let page = parseInt(searchParams.get('page') || '1', 10);
     if (isNaN(page) || page < 1) page = 1;
     
     let limit = parseInt(searchParams.get('limit') || '24', 10);
     if (isNaN(limit) || limit < 1) limit = 24;
     
-    const skip = (page - 1) * limit;
+    let skip = (page - 1) * limit;
     
     const shouldScanDisk = searchParams.get('refresh') === 'true';
 
+    // Core Filters
     const q = searchParams.get('q') || '';
     const type = searchParams.get('type') || 'ALL';
     const libraryFilterParam = searchParams.get('library') || 'ALL';
     const publisherFilter = searchParams.get('publisher') || 'ALL';
-    const favorites = searchParams.get('favorites') === 'true';
-    const collectionId = searchParams.get('collection') || 'ALL';
     const sort = searchParams.get('sort') || 'alpha_asc';
+    const collectionId = searchParams.get('collection') || 'ALL';
+    
+    // Advanced Filters
+    const favorites = searchParams.get('favorites') === 'true';
+    const unmatchedOnly = searchParams.get('unmatched') === 'true';
+    const monitored = searchParams.get('monitored') === 'true';
+    const era = searchParams.get('era') || 'ALL';
+    const readStatus = searchParams.get('readStatus') || 'ALL';
 
     if (shouldScanDisk) {
         const libraries = await prisma.library.findMany();
@@ -361,28 +366,63 @@ export async function GET(request: Request) {
         }
     }
 
-    let where: any = {};
-    if (libraryFilterParam === 'COMICS') where.isManga = false;
-    if (libraryFilterParam === 'MANGA') where.isManga = true;
-    if (publisherFilter !== 'ALL') where.publisher = publisherFilter;
-    if (favorites && userId) where.favorites = { some: { userId } };
+    // FIX: Rock solid DB query construction. EVERYTHING is strictly forced into the AND array.
+    let where: any = { AND: [] };
+    
+    if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
+    if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });
+    if (publisherFilter !== 'ALL') where.AND.push({ publisher: publisherFilter });
+    if (favorites && userId) where.AND.push({ favorites: { some: { userId } } });
+    if (unmatchedOnly) where.AND.push({ cvId: { lte: 0 } });
+    if (monitored) where.AND.push({ monitored: true });
+
+    // Era Filter Logic
+    if (era !== 'ALL') {
+        if (era === '2020s') where.AND.push({ year: { gte: 2020, lt: 2030 } });
+        else if (era === '2010s') where.AND.push({ year: { gte: 2010, lt: 2020 } });
+        else if (era === '2000s') where.AND.push({ year: { gte: 2000, lt: 2010 } });
+        else if (era === '1990s') where.AND.push({ year: { gte: 1990, lt: 2000 } });
+        else if (era === '1980s') where.AND.push({ year: { gte: 1980, lt: 1990 } });
+        else if (era === 'CLASSIC') where.AND.push({ year: { gt: 0, lt: 1980 } });
+    }
+
+    // Read Status Filter Logic
+    if (readStatus !== 'ALL') {
+        if (readStatus === 'UNREAD') {
+            where.AND.push({ issues: { some: {} } }); 
+            where.AND.push({ issues: { none: { readProgresses: { some: { userId, isCompleted: true } } } } });
+        } else if (readStatus === 'COMPLETED') {
+            where.AND.push({ issues: { some: {} } }); 
+            where.AND.push({ issues: { every: { readProgresses: { some: { userId, isCompleted: true } } } } });
+        } else if (readStatus === 'IN_PROGRESS') {
+            where.AND.push({ issues: { some: { readProgresses: { some: { userId } } } } });
+            where.AND.push({ NOT: { issues: { every: { readProgresses: { some: { userId, isCompleted: true } } } } } });
+        }
+    }
 
     if (q) {
         if (type === 'TITLE') {
-            where.OR = [ { name: { contains: q } }, { publisher: { contains: q } } ];
+            where.AND.push({ OR: [ { name: { contains: q } }, { publisher: { contains: q } } ] });
         } else if (type === 'WRITER') {
-            where.issues = { some: { writers: { contains: q } } };
+            where.AND.push({ issues: { some: { writers: { contains: q } } } });
         } else if (type === 'ARTIST') {
-            where.issues = { some: { artists: { contains: q } } };
+            where.AND.push({ issues: { some: { artists: { contains: q } } } });
         } else if (type === 'CHARACTER') {
-            where.issues = { some: { characters: { contains: q } } };
+            where.AND.push({ issues: { some: { characters: { contains: q } } } });
         } else {
-            where.OR = [
-                { name: { contains: q } },
-                { publisher: { contains: q } },
-                { issues: { some: { OR: [ { writers: { contains: q } }, { artists: { contains: q } }, { characters: { contains: q } } ] } } }
-            ];
+            where.AND.push({
+                OR: [
+                    { name: { contains: q } },
+                    { publisher: { contains: q } },
+                    { issues: { some: { OR: [ { writers: { contains: q } }, { artists: { contains: q } }, { characters: { contains: q } } ] } } }
+                ]
+            });
         }
+    }
+
+    // Prisma cleanup
+    if (where.AND.length === 0) {
+        where = {}; 
     }
 
     let orderBy: any = { name: 'asc' };
@@ -390,6 +430,7 @@ export async function GET(request: Request) {
     else if (sort === 'year_desc') orderBy = { year: 'desc' };
     else if (sort === 'year_asc') orderBy = { year: 'asc' };
     else if (sort === 'count_desc') orderBy = { issues: { _count: 'desc' } };
+    else if (sort === 'random') orderBy = { id: 'asc' }; // Fallback
 
     let totalCount = 0;
     let dbSeries = [];
@@ -402,7 +443,7 @@ export async function GET(request: Request) {
         const cSeriesIds = cItems.map(i => i.seriesId);
 
         let filteredIds = cSeriesIds;
-        if (q || publisherFilter !== 'ALL' || libraryFilterParam !== 'ALL' || favorites) {
+        if (Object.keys(where).length > 0) {
              const matchingSeries = await prisma.series.findMany({
                  where: { ...where, id: { in: cSeriesIds } },
                  select: { id: true }
@@ -412,6 +453,7 @@ export async function GET(request: Request) {
         }
 
         totalCount = filteredIds.length;
+        if (sort === 'random' && totalCount > limit) skip = Math.floor(Math.random() * (totalCount - limit));
         const paginatedIds = filteredIds.slice(skip, skip + limit);
 
         const dbSeriesUnsorted = await prisma.series.findMany({
@@ -430,17 +472,27 @@ export async function GET(request: Request) {
             }
         });
 
-        for (const id of paginatedIds) {
-            const found = dbSeriesUnsorted.find(s => s.id === id);
-            if (found) dbSeries.push(found);
+        if (sort === 'random') {
+            dbSeries = dbSeriesUnsorted.sort(() => Math.random() - 0.5);
+        } else {
+            for (const id of paginatedIds) {
+                const found = dbSeriesUnsorted.find(s => s.id === id);
+                if (found) dbSeries.push(found);
+            }
         }
     } else {
         if (collectionId !== 'ALL') {
             const cItems = await prisma.collectionItem.findMany({ where: { collectionId } });
-            where.id = { in: cItems.map(i => i.seriesId) };
+            where.AND = where.AND || [];
+            where.AND.push({ id: { in: cItems.map(i => i.seriesId) } });
         }
         
         totalCount = await prisma.series.count({ where });
+
+        if (sort === 'random' && totalCount > limit) {
+            skip = Math.floor(Math.random() * (totalCount - limit));
+        }
+
         dbSeries = await prisma.series.findMany({
             where, skip, take: limit, orderBy,
             include: {
@@ -456,6 +508,10 @@ export async function GET(request: Request) {
                 favorites: { where: { userId: userId || 'none' }, select: { userId: true } }
             }
         });
+
+        if (sort === 'random') {
+            dbSeries = dbSeries.sort(() => Math.random() - 0.5);
+        }
     }
 
     const publishersRaw = await prisma.series.findMany({ select: { publisher: true }, distinct: ['publisher'] });
@@ -501,9 +557,10 @@ export async function GET(request: Request) {
         };
     });
 
-    return NextResponse.json({ series: formatted, publishers: globalPublishers, hasMore: skip + limit < totalCount });
+    return NextResponse.json({ series: formatted, publishers: globalPublishers, hasMore: sort === 'random' ? false : skip + limit < totalCount });
 
   } catch (error: any) {
+    console.error("Library Query Error:", error);
     return NextResponse.json({ error: error.message, series: [], hasMore: false }, { status: 500 });
   }
 }

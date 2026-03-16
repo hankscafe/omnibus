@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button"
 import { 
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
-  CheckSquare, Square, Eye, EyeOff, Library, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit
+  CheckSquare, Square, Eye, EyeOff, Library, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
+  AlertTriangle, Dices, Clock, X
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -50,24 +51,32 @@ function LibraryContent() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   
-  const [editing, setEditing] = useState<any>(null)
-  const [updating, setUpdating] = useState(false)
-  const [copied, setCopied] = useState(false);
-  
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [pageSize, setPageSize] = useState<number>(24);
   const [isInitialized, setIsInitialized] = useState(false);
+  
+  const [editing, setEditing] = useState<any>(null)
+  const [updating, setUpdating] = useState(false)
+  const [copied, setCopied] = useState(false);
   
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("") 
   const [searchType, setSearchType] = useState("ALL") 
   const [publisherFilter, setPublisherFilter] = useState("ALL")
   const [uniquePublishers, setUniquePublishers] = useState<string[]>([])
-  const [libraryFilter, setLibraryFilter] = useState<'ALL' | 'COMICS' | 'MANGA'>('ALL') 
+  const [libraryFilter, setLibraryFilter] = useState<'ALL' | 'COMICS' | 'MANGA' | 'UNMATCHED'>('ALL') 
   const [sortOption, setSortOption] = useState("alpha_asc")
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+  
+  // Advanced State Filters
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false) 
+  const [monitoredFilter, setMonitoredFilter] = useState(false)
+  const [eraFilter, setEraFilter] = useState("ALL")
+  const [readStatus, setReadStatus] = useState("ALL")
+  
+  // FIX: Isolated trigger to force fresh random shuffles
+  const [randomTrigger, setRandomTrigger] = useState(0)
 
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [refreshTarget, setRefreshTarget] = useState<{cvId: number, path: string} | null>(null)
@@ -94,7 +103,7 @@ function LibraryContent() {
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
   const { toast } = useToast()
-  const isAdmin = session?.user?.role === 'ADMIN'
+  const isAdmin = (session?.user as any)?.role === 'ADMIN'
 
   useEffect(() => {
     const savedView = localStorage.getItem('omnibus-library-view') as 'grid' | 'list'
@@ -129,9 +138,32 @@ function LibraryContent() {
       setTimeout(() => setNavigatingTo(null), 2000); 
   }
 
+  const handleSurpriseMe = () => {
+      setSortOption("random");
+      setRandomTrigger(prev => prev + 1); // Forces an instant refresh!
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL";
+
+  const handleResetFilters = () => {
+      setSearchQuery("");
+      setSearchType("ALL");
+      setPublisherFilter("ALL");
+      setLibraryFilter("ALL");
+      setSortOption("alpha_asc");
+      setShowFavoritesOnly(false);
+      setMonitoredFilter(false);
+      setEraFilter("ALL");
+      setReadStatus("ALL");
+      setActiveCollection("ALL");
+      setPage(1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   const fetchCollections = useCallback(async () => {
     try {
-      const res = await fetch('/api/library/collections');
+      const res = await fetch('/api/library/collections', { cache: 'no-store' });
       if (res.ok) setCollections(await res.json());
     } catch (e) { console.error(e); }
   }, []);
@@ -142,20 +174,31 @@ function LibraryContent() {
     else setLoadingMore(true);
 
     try {
-        const params = new URLSearchParams({
-            page: pageNum.toString(),
-            limit: currentLimit.toString(),
-            ...(forceRefresh && { refresh: 'true' }),
-            ...(debouncedSearch.trim() && { q: debouncedSearch.trim(), type: searchType }),
-            ...(libraryFilter !== 'ALL' && { library: libraryFilter }),
-            ...(publisherFilter !== 'ALL' && { publisher: publisherFilter }),
-            ...(sortOption && { sort: sortOption }),
-            ...(showFavoritesOnly && { favorites: 'true' }),
-            ...(activeCollection !== 'ALL' && { collection: activeCollection })
-        });
+        const params = new URLSearchParams();
+        params.append('page', pageNum.toString());
+        params.append('limit', currentLimit.toString());
+        
+        if (forceRefresh) params.append('refresh', 'true');
+        if (debouncedSearch.trim()) { 
+            params.append('q', debouncedSearch.trim()); 
+            params.append('type', searchType); 
+        }
+        
+        if (libraryFilter !== 'ALL' && libraryFilter !== 'UNMATCHED') params.append('library', libraryFilter);
+        if (libraryFilter === 'UNMATCHED') params.append('unmatched', 'true');
+        if (publisherFilter !== 'ALL') params.append('publisher', publisherFilter);
+        if (sortOption) params.append('sort', sortOption);
+        if (showFavoritesOnly) params.append('favorites', 'true');
+        if (monitoredFilter) params.append('monitored', 'true');
+        if (eraFilter !== 'ALL') params.append('era', eraFilter);
+        if (readStatus !== 'ALL') params.append('readStatus', readStatus);
+        if (activeCollection !== 'ALL') params.append('collection', activeCollection);
 
-        const res = await fetch(`/api/library?${params.toString()}`, { cache: forceRefresh ? 'no-store' : 'default' })
-        const data = await res.json()
+        // Bust cache when randomizing
+        if (sortOption === 'random') params.append('_t', Date.now().toString());
+
+        const res = await fetch(`/api/library?${params.toString()}`, { cache: 'no-store' });
+        const data = await res.json();
         
         if (!res.ok && data.error) {
             toast({ title: "Scan Aborted", description: data.error, variant: "destructive" });
@@ -165,10 +208,8 @@ function LibraryContent() {
         if (data.series) {
             setSeries(prev => {
                 if (!append) return data.series;
-                
                 const existingIds = new Set(prev.map(s => s.id || s.path));
                 const newItems = data.series.filter((s: any) => !existingIds.has(s.id || s.path));
-                
                 return [...prev, ...newItems];
             });
             setHasMore(data.hasMore);
@@ -177,24 +218,27 @@ function LibraryContent() {
             setUniquePublishers(data.publishers);
         }
     } catch (e) {} finally { setLoading(false); setLoadingMore(false); setIsRefreshing(false); }
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection]);
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger]);
 
   const refetchTrigger = searchParams.get('refetch');
 
   useEffect(() => { 
-      if (isInitialized) { 
-          const forceRefresh = !!refetchTrigger;
-          setPage(1); 
-          fetchLibraryData(1, false, forceRefresh, pageSize); 
-          fetchCollections(); 
+      if (!isInitialized) return;
+      
+      const forceRefresh = !!refetchTrigger;
+      
+      // FIX: Force React to reset to page 1 AND trigger fetch simultaneously
+      setPage(1); 
+      fetchLibraryData(1, false, forceRefresh, pageSize); 
+      
+      if (collections.length === 0) fetchCollections(); 
 
-          if (forceRefresh) {
-              const newUrl = new URL(window.location.href);
-              newUrl.searchParams.delete('refetch');
-              window.history.replaceState({}, '', newUrl.toString());
-          }
+      if (forceRefresh) {
+          const newUrl = new URL(window.location.href);
+          newUrl.searchParams.delete('refetch');
+          window.history.replaceState({}, '', newUrl.toString());
       }
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, pageSize, isInitialized, refetchTrigger, fetchLibraryData, fetchCollections])
+  }, [fetchLibraryData, isInitialized, refetchTrigger, pageSize, fetchCollections])
 
   const handleRefresh = () => {
       setPage(1);
@@ -377,11 +421,7 @@ function LibraryContent() {
           const res = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seriesIds: Array.from(selectedSeries), action, status }) });
           if (res.ok) {
               toast({ title: "Bulk Update Complete" }); 
-              
-              if (action === 'bulk-remove-list') {
-                  fetchCollections();
-              }
-              
+              if (action === 'bulk-remove-list') fetchCollections();
               setPage(1);
               fetchLibraryData(1, false, true, pageSize); 
               setSelectedSeries(new Set()); 
@@ -449,11 +489,17 @@ function LibraryContent() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <h1 className="text-3xl font-bold flex items-center gap-2 text-foreground">Library</h1>
         <div className="flex flex-wrap items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-end">
-            <div className="flex bg-muted p-1 rounded-md shrink-0 shadow-inner border border-border">
+            <div className="flex bg-muted p-1 rounded-md shrink-0 shadow-inner border border-border overflow-x-auto max-w-full">
                 <Button variant={libraryFilter === 'ALL' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'ALL' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('ALL')}>All</Button>
                 <Button variant={libraryFilter === 'COMICS' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'COMICS' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('COMICS')}>Comics</Button>
                 <Button variant={libraryFilter === 'MANGA' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'MANGA' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('MANGA')}>Manga</Button>
+                {isAdmin && (
+                    <Button variant={libraryFilter === 'UNMATCHED' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'UNMATCHED' ? 'shadow-sm bg-orange-500 hover:bg-orange-600 text-white' : 'text-orange-500 hover:text-orange-600'}`} onClick={() => setLibraryFilter('UNMATCHED')}>
+                        Unmatched
+                    </Button>
+                )}
             </div>
+            
             <div className="flex items-center gap-2 shrink-0">
                 <Button variant={isSelectionMode ? "secondary" : "outline"} size="sm" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedSeries(new Set()); }} className={`h-10 sm:h-9 ${isSelectionMode ? "bg-primary/20 text-primary border-primary/50 hover:bg-primary/30" : "border-border"}`}>
                     <CheckSquare className="w-4 h-4 mr-2" /> {isSelectionMode ? "Cancel Select" : "Select"}
@@ -465,30 +511,81 @@ function LibraryContent() {
         </div>
       </div>
 
-      {/* --- ADVANCED TOOLBAR --- */}
-      <div className="flex flex-col xl:flex-row gap-4 mb-8 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
-          <div className="relative flex flex-col sm:flex-row flex-1 min-w-[200px] gap-2">
-              <Select value={searchType} onValueChange={setSearchType}>
-                  <SelectTrigger className="w-full sm:w-[140px] bg-background shadow-sm border-border shrink-0 h-10 sm:h-9">
-                      <SelectValue placeholder="Search In" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                      <SelectItem value="ALL">Everything</SelectItem>
-                      <SelectItem value="TITLE">Title / Pub</SelectItem>
-                      <SelectItem value="WRITER">Writer</SelectItem>
-                      <SelectItem value="ARTIST">Artist</SelectItem>
-                      <SelectItem value="CHARACTER">Character</SelectItem>
-                  </SelectContent>
-              </Select>
-              <div className="relative flex-1 w-full">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder={`Search ${searchType === 'ALL' ? 'series, creators, or characters' : searchType.toLowerCase()}...`} className="pl-9 h-10 sm:h-9 bg-background shadow-sm border-border w-full" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+      {/* --- ADVANCED TOOLBAR (DOUBLE STACKED) --- */}
+      <div className="flex flex-col gap-4 mb-8 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
+          
+          {/* TOP ROW: Search & Favorites & Surprise Me & View Options */}
+          <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full">
+              <div className="relative flex flex-col sm:flex-row flex-1 w-full gap-2">
+                  <Select value={searchType} onValueChange={setSearchType}>
+                      <SelectTrigger className="w-full sm:w-[140px] bg-background shadow-sm border-border shrink-0 h-10 sm:h-9">
+                          <SelectValue placeholder="Search In" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-popover border-border">
+                          <SelectItem value="ALL">Everything</SelectItem>
+                          <SelectItem value="TITLE">Title / Pub</SelectItem>
+                          <SelectItem value="WRITER">Writer</SelectItem>
+                          <SelectItem value="ARTIST">Artist</SelectItem>
+                          <SelectItem value="CHARACTER">Character</SelectItem>
+                      </SelectContent>
+                  </Select>
+                  <div className="relative flex-1 w-full">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input placeholder={`Search ${searchType === 'ALL' ? 'series, creators, or characters' : searchType.toLowerCase()}...`} className="pl-9 h-10 sm:h-9 bg-background shadow-sm border-border w-full" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                  </div>
+              </div>
+              <div className="flex flex-row flex-wrap w-full lg:w-auto gap-3 items-center justify-between lg:justify-end">
+                  
+                  <Button variant={showFavoritesOnly ? "default" : "outline"} className={`h-10 sm:h-9 font-bold shadow-sm flex-1 sm:flex-none ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
+                      <Heart className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''} sm:mr-2`} />
+                      <span className="hidden sm:inline-block">Favorites</span>
+                  </Button>
+                  
+                  <Button variant="outline" className="h-10 sm:h-9 shadow-sm bg-blue-600 hover:bg-blue-700 text-white border-0 px-3 flex-1 sm:flex-none" onClick={handleSurpriseMe}>
+                      <Dices className="w-4 h-4 sm:mr-2" />
+                      <span className="hidden sm:inline font-bold">Surprise Me</span>
+                  </Button>
+                  
+                  <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
+                      <SelectTrigger className="flex-1 lg:w-[130px] lg:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                          <div className="flex items-center gap-2 truncate"><List className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Show 24" /></div>
+                      </SelectTrigger>
+                      <SelectContent className="bg-popover border-border">
+                          <SelectItem value="16">Show 16</SelectItem>
+                          <SelectItem value="24">Show 24</SelectItem>
+                          <SelectItem value="32">Show 32</SelectItem>
+                          <SelectItem value="48">Show 48</SelectItem>
+                          <SelectItem value="64">Show 64</SelectItem>
+                      </SelectContent>
+                  </Select>
+                  
+                  <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
+                    <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'grid' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('grid')}>
+                        <LayoutGrid className="w-4 h-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'list' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('list')}>
+                        <List className="w-4 h-4" />
+                    </Button>
+                </div>
               </div>
           </div>
-          <div className="flex flex-wrap gap-3 w-full xl:w-auto items-center">
-              <div className="flex items-center gap-1 w-full sm:w-auto shrink-0">
+
+          {/* BOTTOM ROW: Filters & Toggles */}
+          <div className="flex flex-col sm:flex-row flex-wrap gap-3 items-center w-full">
+              {/* Quick Admin Toggles */}
+              {isAdmin && (
+                  <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 max-w-full">
+                      <Button variant={monitoredFilter ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${monitoredFilter ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setMonitoredFilter(!monitoredFilter)}>
+                          <Activity className={`w-4 h-4 sm:mr-2`} />
+                          <span className="hidden sm:inline-block">Monitored</span>
+                      </Button>
+                  </div>
+              )}
+
+              {/* Collections & Dropdown Filters */}
+              <div className="flex items-center gap-1 w-full sm:w-auto flex-1 sm:flex-none">
                   <Select value={activeCollection} onValueChange={setActiveCollection}>
-                      <SelectTrigger className={`w-full sm:w-[170px] h-10 sm:h-9 shadow-sm ${activeCollection !== "ALL" ? "bg-primary/10 text-primary border-primary/30 font-bold" : "bg-background border-border"}`}>
+                      <SelectTrigger className={`w-full sm:w-[150px] h-10 sm:h-9 shadow-sm ${activeCollection !== "ALL" ? "bg-primary/10 text-primary border-primary/30 font-bold" : "bg-background border-border"}`}>
                           <div className="flex items-center gap-2 truncate"><Layers className="w-3 h-3 shrink-0"/> <SelectValue placeholder="Reading Lists" /></div>
                       </SelectTrigger>
                       <SelectContent className="bg-popover border-border">
@@ -499,8 +596,34 @@ function LibraryContent() {
                   </Select>
                   <Button variant="outline" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 shrink-0 bg-background border-border shadow-sm" onClick={() => setManageListsOpen(true)} title="Manage Lists"><Settings2 className="w-4 h-4 text-muted-foreground" /></Button>
               </div>
-              <Button variant={showFavoritesOnly ? "default" : "outline"} className={`flex-1 sm:flex-none h-10 sm:h-9 font-bold shadow-sm ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}><Heart className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''} sm:mr-2`} /><span className="hidden sm:inline-block">Favorites</span></Button>
               
+              <Select value={readStatus} onValueChange={setReadStatus}>
+                  <SelectTrigger className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                      <div className="flex items-center gap-2 truncate"><BookOpen className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Read Status" /></div>
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
+                      <SelectItem value="ALL">All Statuses</SelectItem>
+                      <SelectItem value="UNREAD">Unread</SelectItem>
+                      <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
+                      <SelectItem value="COMPLETED">Completed</SelectItem>
+                  </SelectContent>
+              </Select>
+
+              <Select value={eraFilter} onValueChange={setEraFilter}>
+                  <SelectTrigger className="flex-1 sm:w-[130px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                      <div className="flex items-center gap-2 truncate"><Clock className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Era" /></div>
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
+                      <SelectItem value="ALL">All Eras</SelectItem>
+                      <SelectItem value="2020s">2020s</SelectItem>
+                      <SelectItem value="2010s">2010s</SelectItem>
+                      <SelectItem value="2000s">2000s</SelectItem>
+                      <SelectItem value="1990s">1990s</SelectItem>
+                      <SelectItem value="1980s">1980s</SelectItem>
+                      <SelectItem value="CLASSIC">Pre-1980s</SelectItem>
+                  </SelectContent>
+              </Select>
+
               <Select value={publisherFilter} onValueChange={setPublisherFilter}>
                   <SelectTrigger className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
                       <div className="flex items-center gap-2 truncate"><Filter className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Publisher" /></div>
@@ -521,29 +644,18 @@ function LibraryContent() {
                       <SelectItem value="year_desc">Release Year (Newest)</SelectItem>
                       <SelectItem value="year_asc">Release Year (Oldest)</SelectItem>
                       <SelectItem value="count_desc">Issue Count (High)</SelectItem>
+                      <SelectItem value="random" className="text-blue-500 font-bold">Random</SelectItem>
                   </SelectContent>
               </Select>
 
-              <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
-                  <SelectTrigger className="flex-1 sm:w-[130px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
-                      <div className="flex items-center gap-2 truncate"><List className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Show 24" /></div>
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                      <SelectItem value="16">Show 16</SelectItem>
-                      <SelectItem value="24">Show 24</SelectItem>
-                      <SelectItem value="32">Show 32</SelectItem>
-                      <SelectItem value="48">Show 48</SelectItem>
-                      <SelectItem value="64">Show 64</SelectItem>
-                  </SelectContent>
-              </Select>
-              <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
-                <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'grid' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('grid')}>
-                    <LayoutGrid className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'list' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('list')}>
-                    <List className="w-4 h-4" />
-                </Button>
-            </div>
+                {/* NEW: Clear Filters Button (Only visible when a filter is active) */}
+                  {hasActiveFilters && (
+                      <Button variant="ghost" className="h-10 sm:h-9 text-muted-foreground hover:text-foreground px-3 flex-1 sm:flex-none" onClick={handleResetFilters}>
+                          <X className="w-4 h-4 sm:mr-2" />
+                          <span className="hidden sm:inline font-bold">Clear Filters</span>
+                      </Button>
+                  )}
+
           </div>
       </div>
 
@@ -832,9 +944,7 @@ function LibraryContent() {
                 ))
             )}
           </div>
-          <DialogFooter>
-            <Button onClick={() => setManageListsOpen(false)} variant="outline" className="w-full sm:w-auto h-12 sm:h-10 border-border hover:bg-muted">Close</Button>
-          </DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0"><Button onClick={() => setManageListsOpen(false)} variant="outline" className="w-full sm:w-auto h-12 sm:h-10 border-border hover:bg-muted">Close</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -861,11 +971,7 @@ function LibraryContent() {
               <Input placeholder="e.g. Webtoons, Marvel Events, Mature..." value={newCollectionName} className="bg-background h-12 sm:h-10 border-border" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} />
             </div>
           </div>
-          <DialogFooter>
-            <Button onClick={submitBulkAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold w-full h-12 sm:h-10">
-               {addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <ListPlus className="w-5 h-5 mr-2" />} Save to List
-            </Button>
-          </DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setBulkListModalOpen(false)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitBulkAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold w-full h-12 sm:h-10">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <ListPlus className="w-5 h-5 mr-2" />} Save to List</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -928,7 +1034,7 @@ function LibraryContent() {
               <div className="space-y-2"><Label>Select Existing List</Label><Select value={selectedCollectionId} onValueChange={(v) => { setSelectedCollectionId(v); setNewCollectionName(""); }}><SelectTrigger className="bg-background border-border h-12 sm:h-10"><SelectValue placeholder="Choose a list..." /></SelectTrigger><SelectContent className="bg-popover border-border">{collections.length === 0 && <SelectItem value="none" disabled>No lists available</SelectItem>}{collections.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent></Select></div>
               <div className="space-y-2"><Label>Create New List</Label><Input placeholder="e.g. Marvel Events" value={newCollectionName} className="bg-background border-border h-12 sm:h-10" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} /></div>
           </div>
-          <DialogFooter><Button onClick={submitAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="h-12 sm:h-10 w-full sm:w-auto font-bold bg-primary hover:bg-primary/90 text-primary-foreground">Save to List</Button></DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setTargetSeries(null)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="h-12 sm:h-10 w-full sm:w-auto font-bold bg-primary hover:bg-primary/90 text-primary-foreground">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save to List</Button></DialogFooter>
         </DialogContent>
       </Dialog>
       

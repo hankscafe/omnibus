@@ -94,26 +94,42 @@ export default async function RootLayout({
           }}
         />
       </head>
-      <body className={`${inter.className} min-h-screen flex flex-col bg-background text-foreground antialiased overflow-x-hidden`}>
-        <AuthProvider>
-          <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-            
-            <TitleManager />
-            
-            <NavigationWrapper>
-              <SiteHeader />
-            </NavigationWrapper>
-            
-            <main className="flex-1">
-              {children}
-            </main>
+      
+      {/* Set body to bg-transparent so the fixed layer below can be seen */}
+      <body className={`${inter.className} text-foreground antialiased overflow-x-hidden bg-transparent`}>
+        
+        {/* --- FIXED BACKGROUND LAYER --- */}
+        {/* This completely ignores scrollbar padding and stays locked to the edges of the monitor */}
+        <div className="fixed inset-0 z-[-1] pointer-events-none">
+          {/* Base Image */}
+          <div className="absolute inset-0 bg-[url('/images/omnibus-branding-3.webp')] bg-cover bg-center bg-no-repeat" />
+          {/* Glassmorphism Tint/Blur */}
+          <div className="absolute inset-0 bg-background/80 dark:bg-background/90 backdrop-blur-[2px]" />
+        </div>
 
-            <NavigationWrapper>
-              <SiteFooter />
-            </NavigationWrapper>
+        {/* --- MAIN APP CONTENT --- */}
+        <div className="min-h-screen flex flex-col relative z-0">
+          <AuthProvider>
+            <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+              
+              <TitleManager />
+              
+              <NavigationWrapper>
+                <SiteHeader />
+              </NavigationWrapper>
+              
+              <main className="flex-1">
+                {children}
+              </main>
 
-          </ThemeProvider>
-        </AuthProvider>
+              <NavigationWrapper>
+                <SiteFooter />
+              </NavigationWrapper>
+
+            </ThemeProvider>
+          </AuthProvider>
+        </div>
+        
       </body>
     </html>
   );

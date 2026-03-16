@@ -96,7 +96,8 @@ export default function Home() {
   }
 
   return (
-    <div className="bg-background min-h-full pb-20 transition-colors duration-300">
+    // FIX: Changed bg-background to bg-transparent so the layout image shows through
+    <div className="bg-transparent min-h-full pb-20 transition-colors duration-300">
       <div className="container mx-auto px-6 py-12 space-y-10">
         
         {/* Admin Notification Banners */}

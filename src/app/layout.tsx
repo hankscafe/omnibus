@@ -94,7 +94,7 @@ export default async function RootLayout({
           }}
         />
       </head>
-      <body className={`${inter.className} min-h-screen flex flex-col bg-background text-foreground antialiased`}>
+      <body className={`${inter.className} min-h-screen flex flex-col bg-background text-foreground antialiased overflow-x-hidden`}>
         <AuthProvider>
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
             

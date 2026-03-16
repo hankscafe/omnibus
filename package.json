@@ -1,6 +1,6 @@
 {
   "name": "omnibus",
-  "version": "1.0.2-beta.002",
+  "version": "1.0.3-beta.001",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -35,6 +35,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.7.0",
+    "sharp": "^0.34.5",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {

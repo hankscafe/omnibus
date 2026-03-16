@@ -198,10 +198,10 @@ export default function Home() {
           </div>
 
           <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl text-foreground">
-            What are we reading today?
+            Explore the multiverse...
           </h1>
           <p className="text-lg text-muted-foreground max-w-xl mx-auto">
-            Search for a specific series or discover something new below.
+            Search for a specific series or discover something new below...
           </p>
           
           <div className="pt-2 max-w-2xl mx-auto relative z-20">

@@ -30,15 +30,37 @@ export async function POST(request: Request) {
       const issueIds = issues.map(i => i.id);
 
       if (status === 'READ') {
-        await prisma.$transaction(
-          issueIds.map(id => 
-            prisma.readProgress.upsert({
-              where: { userId_issueId: { userId, issueId: id } },
-              update: { isCompleted: true, currentPage: 1, totalPages: 1 },
-              create: { userId, issueId: id, isCompleted: true, currentPage: 1, totalPages: 1 }
-            })
-          )
-        );
+        const existingProgress = await prisma.readProgress.findMany({
+            where: { userId, issueId: { in: issueIds } },
+            select: { issueId: true }
+        });
+        
+        const existingIds = new Set(existingProgress.map(p => p.issueId));
+        const newIds = issueIds.filter(id => !existingIds.has(id));
+
+        const transactions = [];
+        
+        if (existingIds.size > 0) {
+            transactions.push(
+                prisma.readProgress.updateMany({
+                    where: { userId, issueId: { in: Array.from(existingIds) } },
+                    data: { isCompleted: true, currentPage: 100, totalPages: 100 }
+                })
+            );
+        }
+
+        if (newIds.length > 0) {
+            transactions.push(
+                prisma.readProgress.createMany({
+                    data: newIds.map(id => ({ userId, issueId: id, isCompleted: true, currentPage: 100, totalPages: 100 }))
+                })
+            );
+        }
+
+        if (transactions.length > 0) {
+            await prisma.$transaction(transactions);
+        }
+
         return NextResponse.json({ success: true, message: `Marked ${seriesIds.length} series as read.` });
       } 
       
@@ -62,6 +84,13 @@ export async function POST(request: Request) {
         const isManga = status === 'MANGA';
         const seriesList = await prisma.series.findMany({ where: { id: { in: seriesIds } } });
         
+        const allIssues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } } });
+        const issuesBySeries = new Map();
+        for (const issue of allIssues) {
+            if (!issuesBySeries.has(issue.seriesId)) issuesBySeries.set(issue.seriesId, []);
+            issuesBySeries.get(issue.seriesId).push(issue);
+        }
+        
         const libraries = await prisma.library.findMany();
         let targetLib = isManga 
             ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
@@ -71,10 +100,11 @@ export async function POST(request: Request) {
         if (!targetLib) return NextResponse.json({ error: "No libraries configured in Settings." }, { status: 400 });
 
         const targetRoot = targetLib.path;
+        const dbUpdates = []; 
 
         for (const s of seriesList) {
             if (!s.folderPath || !fs.existsSync(s.folderPath)) {
-                await prisma.series.update({ where: { id: s.id }, data: { isManga, libraryId: targetLib.id } });
+                dbUpdates.push(prisma.series.update({ where: { id: s.id }, data: { isManga, libraryId: targetLib.id } }));
                 continue;
             }
             
@@ -95,26 +125,27 @@ export async function POST(request: Request) {
                 activePath = newPath;
             }
 
-            await prisma.series.update({
+            dbUpdates.push(prisma.series.update({
                 where: { id: s.id },
                 data: { isManga, folderPath: activePath.replace(/\\/g, '/'), libraryId: targetLib.id }
-            });
+            }));
 
             if (activePath !== oldPath) {
-                const issues = await prisma.issue.findMany({ where: { seriesId: s.id } });
-                const pathUpdates = [];
+                const issues = issuesBySeries.get(s.id) || [];
                 for (const issue of issues) {
                    if (issue.filePath) {
                        const fileName = path.basename(issue.filePath);
-                       pathUpdates.push(prisma.issue.update({
+                       dbUpdates.push(prisma.issue.update({
                            where: { id: issue.id },
                            data: { filePath: path.join(activePath, fileName).replace(/\\/g, '/') }
                        }));
                    }
                 }
-                if (pathUpdates.length > 0) await prisma.$transaction(pathUpdates).catch(()=>{});
             }
         }
+
+        if (dbUpdates.length > 0) await prisma.$transaction(dbUpdates).catch(()=>{});
+
         return NextResponse.json({ success: true, message: `Moved ${seriesIds.length} series.` });
     }
 
@@ -138,9 +169,24 @@ export async function POST(request: Request) {
 // --- GET HANDLER (PRO SERVER-SIDE FILTERING) ---
 export async function GET(request: Request) {
   try {
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const userId = (session?.user as any)?.id || null;
+
+    // FIX: CRITICAL AUTHENTICATION ENFORCEMENT
+    if (!userId) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '24');
+    
+    // FIX: PREVENT NEGATIVE PAGINATION 500 ERRORS
+    let page = parseInt(searchParams.get('page') || '1', 10);
+    if (isNaN(page) || page < 1) page = 1;
+    
+    let limit = parseInt(searchParams.get('limit') || '24', 10);
+    if (isNaN(limit) || limit < 1) limit = 24;
+    
     const skip = (page - 1) * limit;
     
     const shouldScanDisk = searchParams.get('refresh') === 'true';
@@ -153,12 +199,7 @@ export async function GET(request: Request) {
     const collectionId = searchParams.get('collection') || 'ALL';
     const sort = searchParams.get('sort') || 'alpha_asc';
 
-    const authOptions = await getAuthOptions();
-    const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id || null;
-
     if (shouldScanDisk) {
-        // NATIVE DB FETCH: Get all configured libraries
         const libraries = await prisma.library.findMany();
         let allOnline = true;
         
@@ -199,7 +240,6 @@ export async function GET(request: Request) {
             }
         } catch(e) { }
 
-        // OPTIMIZATION: Semi-Parallel Disk Scanning across ALL libraries
         if (libraries.length > 0) {
             const existingSeries = await prisma.series.findMany({
                 select: { id: true, folderPath: true }
@@ -261,7 +301,6 @@ export async function GET(request: Request) {
                 }
             }
             
-            // OPTIMIZATION: BLAZING FAST AUTO-HEALER (N+1 Query Fixed)
             try {
                 const pendingRequests = await prisma.request.findMany({
                     where: { status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } }

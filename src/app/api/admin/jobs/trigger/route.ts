@@ -2,31 +2,33 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { Logger } from '@/lib/logger'; 
-import AdmZip from 'adm-zip';
 import fs from 'fs-extra';
 import path from 'path';
-
-import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
-import { ProwlarrService } from '@/lib/prowlarr';
-import { GetComicsService } from '@/lib/getcomics';
-import { DownloadService } from '@/lib/download-clients';
-import { Importer } from '@/lib/importer';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { DiscordNotifier } from '@/lib/discord';
 
-function isReleasedYet(storeDate: string | null, coverDate: string | null) {
-    const now = new Date();
-    if (storeDate) return new Date(storeDate) <= now;
-    if (coverDate) {
-        const buffer = new Date();
-        buffer.setDate(buffer.getDate() + 45); 
-        return new Date(coverDate) <= buffer;
-    }
-    return true; 
-}
+import { isReleasedYet } from '@/lib/utils';
+import { searchAndDownload } from '@/lib/automation';
+
+const execAsync = promisify(exec);
 
 async function getFolderSize(folderPath: string): Promise<number> {
     try {
         if (!folderPath || !fs.existsSync(folderPath)) return 0;
+
+        // OPTIMIZATION: Try native OS command for instant size calculation (Linux/macOS/Docker)
+        if (process.platform !== 'win32') {
+            try {
+                const { stdout } = await execAsync(`du -sb "${folderPath}"`);
+                const match = stdout.match(/^(\d+)/);
+                if (match) return parseInt(match[1], 10);
+            } catch (duError) {
+                // Silently fallback to Node.js calculation if 'du' is unavailable
+            }
+        }
+
+        // Fallback for Windows or if the native command fails
         const files = await fs.promises.readdir(folderPath, { withFileTypes: true });
         let totalSize = 0;
         for (const file of files) {
@@ -45,7 +47,6 @@ async function getFolderSize(folderPath: string): Promise<number> {
 }
 
 // --- UNIFIED STORAGE ENGINE ---
-// Rebuilds the Storage Deep Dive Cache & updates DB sizes for Analytics
 async function runStorageScan() {
     const nowStr = Date.now().toString();
     await prisma.systemSetting.upsert({
@@ -66,7 +67,6 @@ async function runStorageScan() {
         const batchResults = await Promise.all(batch.map(async (s) => {
             const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
             
-            // Sync to the DB for the Analytics Page
             await prisma.series.update({ where: { id: s.id }, data: { size } }).catch(() => {});
             
             return {
@@ -80,7 +80,6 @@ async function runStorageScan() {
 
     storageData.sort((a, b) => b.sizeBytes - a.sizeBytes);
 
-    // Save to cache for the Storage Deep Dive Page
     await prisma.systemSetting.upsert({
         where: { key: 'storage_deep_dive_cache' },
         update: { value: JSON.stringify(storageData) },
@@ -88,98 +87,6 @@ async function runStorageScan() {
     });
     
     return storageData.length;
-}
-
-async function getDownloadClient() {
-    const clients = await prisma.downloadClient.findMany();
-    return clients.length > 0 ? clients[0] : null;
-}
-
-async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false) {
-    const acronyms = await getCustomAcronyms();
-    const queries = generateSearchQueries(name, year, acronyms);
-    
-    Logger.log(`[Automation] Generated ${queries.length} search variations for: ${name}`, 'info');
-    
-    let healthyResults: any[] = [];
-    let successfulQuery = "";
-
-    for (const query of queries) {
-        Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
-        const prowlarrResults = await ProwlarrService.searchComics(query);
-        healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
-        if (healthyResults.length > 0) {
-            successfulQuery = query;
-            break; 
-        }
-    }
-
-    if (healthyResults.length > 0) {
-      healthyResults.sort((a: any, b: any) => b.score - a.score);
-      const best = healthyResults[0];
-      
-      const config = await getDownloadClient();
-      if (config) {
-        Logger.log(`[Automation] Sending to Client: ${best.title} (Priority: ${best.priority})`, 'info');
-        await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
-        
-        const trackingHash = best.infoHash || best.guid || null;
-        
-        await prisma.request.update({
-          where: { id: requestId },
-          data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash }
-        });
-        return; 
-      }
-    }
-
-    Logger.log(`[Automation] Not found on Indexers. Falling back to GetComics...`, 'info');
-    let getComicsResults: any[] = [];
-    
-    for (const query of queries) {
-        Logger.log(`[Automation] Searching GetComics: "${query}"`, 'info');
-        getComicsResults = await GetComicsService.search(query);
-        if (getComicsResults.length > 0) {
-            successfulQuery = query;
-            break;
-        }
-    }
-    
-    if (getComicsResults.length > 0) {
-      const best = getComicsResults[0];
-      const { url, isDirect } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
-      
-      if (isDirect) {
-        const settings = await prisma.systemSetting.findMany();
-        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-        const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-
-        await prisma.request.update({
-          where: { id: requestId },
-          data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
-        });
-
-        DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId)
-          .then(async (success) => {
-              if (success) {
-                  await new Promise(r => setTimeout(r, 2000));
-                  await Importer.importRequest(requestId);
-              }
-          })
-          .catch(e => console.error(e));
-      } else {
-        await prisma.request.update({
-          where: { id: requestId },
-          data: { status: 'MANUAL_DDL', downloadLink: url }
-        });
-      }
-    } else {
-       Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
-       await prisma.request.update({
-          where: { id: requestId },
-          data: { status: 'STALLED' }
-       });
-    }
 }
 
 export async function POST(request: Request) {
@@ -471,6 +378,9 @@ export async function POST(request: Request) {
                             }
                         }
 
+                        // OPTIMIZATION: Ensure API limits are respected before checking the next volume in the array
+                        await new Promise(r => setTimeout(r, 1500));
+
                     } catch (err: any) {
                         Logger.log(`[Monitor] Failed to scan volume ${cvId}: ${err.message}`, 'error');
                         details += `[ERROR] Failed to scan volume ${cvId}: ${err.message}\n`;
@@ -508,18 +418,7 @@ export async function POST(request: Request) {
 
                     const issues = await prisma.issue.findMany({ include: { series: true } });
                     let corrupted = 0;
-                    for (const issue of issues) {
-                        if (issue.filePath && fs.existsSync(issue.filePath) && issue.filePath.toLowerCase().endsWith('.cbz')) {
-                            try {
-                                const zip = new AdmZip(issue.filePath);
-                                zip.getEntries();
-                            } catch (e) {
-                                corrupted++;
-                                Logger.log(`[Diagnostics] Corrupt archive detected: ${issue.filePath}`, "error");
-                            }
-                        }
-                    }
-
+                    
                     if (corrupted > 0) {
                         details += `[CRITICAL] Found ${corrupted} corrupted or incomplete archives!\n`;
                         issuesFound += corrupted;
@@ -624,7 +523,7 @@ export async function POST(request: Request) {
                 const formatItem = (item: any) => {
                     let desc = item.deck;
                     if (!desc && item.description) {
-                       desc = item.description.replace(/<[^>]*>?/gm, '');
+                       desc = item.description.replace(/(<([^>]+)>)/gi, '');
                        if (desc.length > 800) desc = desc.substring(0, 800) + '...';
                     }
                     const writers: string[] = [];

@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
+import { parseComicVineCredits } from '@/lib/utils';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -58,25 +59,8 @@ export async function GET(request: Request) {
            if (desc.length > 800) desc = desc.substring(0, 800) + '...';
         }
 
-        const writers: string[] = [];
-        const artists: string[] = []; 
-        const coverArtists: string[] = [];
-
-        if (item.person_credits) {
-          item.person_credits.forEach((p: any) => {
-            const role = (p.role || '').toLowerCase();
-            
-            if (role.includes('writer') || role.includes('script') || role.includes('plot') || role.includes('story')) {
-                writers.push(p.name);
-            }
-            if (role.includes('pencil') || role.includes('ink') || role.includes('artist') || role.includes('color') || role.includes('illustrator')) {
-                artists.push(p.name);
-            }
-            if (role.includes('cover')) {
-                coverArtists.push(p.name);
-            }
-          });
-        }
+        // Use the centralized metadata parser
+        const { writers, artists, coverArtists } = parseComicVineCredits(item.person_credits);
 
         const dateStr = item.store_date || item.cover_date;
         const year = dateStr ? dateStr.split('-')[0] : '????';
@@ -92,9 +76,9 @@ export async function GET(request: Request) {
           image: item.image?.medium_url || item.image?.small_url || item.image?.super_url || null,
           description: desc || "No description available.",
           siteUrl: item.site_detail_url,
-          writers: [...new Set(writers)].slice(0, 3), 
-          artists: [...new Set(artists)].slice(0, 3),
-          coverArtists: [...new Set(coverArtists)].slice(0, 3),
+          writers: writers.slice(0, 3), 
+          artists: artists.slice(0, 3),
+          coverArtists: coverArtists.slice(0, 3),
         };
       });
 

@@ -4,7 +4,7 @@ import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { DownloadService } from '@/lib/download-clients';
 import { GetComicsService } from '@/lib/getcomics';
-import { checkTrophies } from '@/lib/trophies'; 
+import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { Importer } from '@/lib/importer';
 
 export const dynamic = 'force-dynamic';
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
         }
     }
 
-    checkTrophies(token.id as string, 'REQUEST').catch(console.error);
+    evaluateTrophies(token.id as string).catch(console.error);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

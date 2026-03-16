@@ -174,17 +174,6 @@ model SearchAcronym {
 
 // --------------------------------
 
-model MetadataCache {
-  key       String   @id
-  data      String   
-  expiresAt DateTime
-}
-
-model SystemConfig {
-  key   String @id
-  value String 
-}
-
 model SystemSetting {
   key   String @id @unique
   value String

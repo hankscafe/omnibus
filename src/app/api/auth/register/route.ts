@@ -5,10 +5,23 @@ import { DiscordNotifier } from '@/lib/discord';
 
 export async function POST(request: Request) {
   try {
-    const { username, email, password } = await request.json();
+    // FIX: Safely parse JSON to prevent 500 crashes on malformed payloads
+    let body;
+    try {
+        body = await request.json();
+    } catch (e) {
+        return NextResponse.json({ error: "Malformed JSON payload" }, { status: 400 });
+    }
+
+    const { username, email, password } = body;
 
     if (!username || !email || !password) {
       return NextResponse.json({ error: "Username, email, and password are required" }, { status: 400 });
+    }
+
+    // FIX: Prevent ridiculous username lengths
+    if (username.length > 50) {
+        return NextResponse.json({ error: "Username must be 50 characters or less" }, { status: 400 });
     }
 
     // 1. Email Format Validation

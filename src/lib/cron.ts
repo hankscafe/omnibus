@@ -5,7 +5,6 @@ import { Importer } from './importer';
 import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route';
 import { DiscordNotifier } from '@/lib/discord';
 
-// Attach strictly to globalThis so Next.js internal reloads never bypass the lock
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
 export function initCronJobs() {
@@ -14,7 +13,6 @@ export function initCronJobs() {
 
   Logger.log("[Cron] Initializing native background automation...", "info");
 
-  // 1. Download Status Checker (Runs every 60 seconds)
   setInterval(async () => {
     try {
       const stalledRequests = await prisma.request.findMany({
@@ -62,16 +60,58 @@ export function initCronJobs() {
           }
         }
       }
+
+      // --- B. Auto-Import Completed Torrents / Usenet ---
+      const activeDownloads = await DownloadService.getAllActiveDownloads();
+      const completedTorrents = activeDownloads.filter((t: any) => parseFloat(t.progress) >= 100);
+
+      if (completedTorrents.length > 0) {
+          const downloadingRequests = await prisma.request.findMany({
+              where: { status: 'DOWNLOADING' }
+          });
+
+          for (const torrent of completedTorrents) {
+              // 1. Strict match on tracking hash/guid
+              let match = downloadingRequests.find(r => r.downloadLink && r.downloadLink.toLowerCase() === torrent.id.toLowerCase());
+              
+              // 2. Exact fallback match on active download name
+              if (!match) match = downloadingRequests.find(r => r.activeDownloadName === torrent.name);
+              
+              // 3. FIX: Smart Fuzzy Match (Compare significant words)
+              if (!match) {
+                  match = downloadingRequests.find(r => {
+                      if (!r.activeDownloadName) return false;
+                      const reqWords = r.activeDownloadName.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+                      const torWords = torrent.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+                      
+                      let matches = 0;
+                      reqWords.forEach(w => { if (torWords.includes(w)) matches++; });
+                      // Return true if at least 3 significant words match, OR all of them match
+                      return matches >= 3 || (reqWords.length > 0 && matches === reqWords.length);
+                  });
+              }
+              
+              if (match) {
+                  Logger.log(`[Cron] Client download completed: ${torrent.name}. Triggering importer...`, 'info');
+                  
+                  await prisma.request.update({
+                      where: { id: match.id },
+                      data: { activeDownloadName: torrent.name, downloadLink: torrent.id }
+                  });
+
+                  await Importer.importRequest(match.id);
+              }
+          }
+      }
+
     } catch (error: any) {
       Logger.log(`[Cron] Download Checker Error: ${error.message}`, 'error');
     }
-  }, 60000); // 60 seconds
+  }, 60000); 
 
-  // 2. General Scheduled Jobs (Runs every 15 minutes)
   setInterval(async () => {
     const now = Date.now();
 
-    // Reusable helper function to check database schedules and trigger internal API
     const checkAndTrigger = async (jobName: string, scheduleKey: string, lastSyncKey: string, logName: string) => {
         try {
             const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: scheduleKey } });
@@ -102,31 +142,24 @@ export function initCronJobs() {
         }
     };
 
-    // Process ALL 6 job queues sequentially
     await checkAndTrigger('metadata', 'metadata_sync_schedule', 'last_metadata_sync', 'ComicVine Metadata Sync');
     await checkAndTrigger('library', 'library_sync_schedule', 'last_library_sync', 'Library Scan');
     await checkAndTrigger('monitor', 'monitor_sync_schedule', 'last_monitor_sync', 'Series Monitor Scan');
     await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
-    
-    // --- ADDED MISSING TRIGGERS HERE ---
     await checkAndTrigger('popular', 'popular_sync_schedule', 'last_popular_sync', 'Discover Sync');
     await checkAndTrigger('backup', 'backup_sync_schedule', 'last_backup_sync', 'Database Backup');
 
-    // --- Hardcoded 24-hour Update Check ---
     try {
         const lastUpdateCheck = await prisma.systemSetting.findUnique({ where: { key: 'last_update_check_time' } });
         const lastUpdateCheckTime = parseInt(lastUpdateCheck?.value || "0");
 
-        // If it has been more than 24 hours (86,400,000 ms)
         if (now - lastUpdateCheckTime > 86400000) {
-            // Reset the timer immediately
             await prisma.systemSetting.upsert({
                 where: { key: 'last_update_check_time' },
                 update: { value: now.toString() },
                 create: { key: 'last_update_check_time', value: now.toString() }
             });
 
-            // Trigger the internal API route
             const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -138,5 +171,5 @@ export function initCronJobs() {
         Logger.log(`[Cron] Update Check Error: ${err.message}`, "error");
     }
 
-  }, 900000); // 15 minutes (900,000 ms)
+  }, 900000); 
 }

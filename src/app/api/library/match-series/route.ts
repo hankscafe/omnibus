@@ -94,7 +94,7 @@ export async function POST(request: Request) {
         folderPath: newFolderPath,
         isManga: isManga,
         status: status,
-        libraryId: targetLib.id, // Assign to correct library
+        libraryId: targetLib.id, 
         coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null
     };
 
@@ -181,6 +181,10 @@ export async function POST(request: Request) {
 
         if (pendingRequests.length > 0) {
             const seriesIssues = await prisma.issue.findMany({ where: { series: { cvId: targetCvId } } });
+            
+            // OPTIMIZATION: Collect IDs and execute in a single updateMany
+            const requestsToComplete = [];
+
             for (const req of pendingRequests) {
                 const searchStr = (req.activeDownloadName || req.title || req.name || "");
                 const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
@@ -189,8 +193,15 @@ export async function POST(request: Request) {
                 const matchingIssue = seriesIssues.find(i => parseFloat(i.number) === issueNum && i.filePath && i.filePath.length > 0);
 
                 if (matchingIssue) {
-                    await prisma.request.update({ where: { id: req.id }, data: { status: 'COMPLETED', progress: 100 } });
+                    requestsToComplete.push(req.id);
                 }
+            }
+
+            if (requestsToComplete.length > 0) {
+                await prisma.request.updateMany({
+                    where: { id: { in: requestsToComplete } },
+                    data: { status: 'COMPLETED', progress: 100 }
+                });
             }
         }
     } catch (e) { }

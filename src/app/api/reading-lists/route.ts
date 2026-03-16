@@ -27,33 +27,66 @@ export async function GET(request: Request) {
         });
 
         let requiresRefresh = false;
+        
+        // OPTIMIZATION: Collect all actions into bulk arrays
+        const unlinkIds: string[] = [];
+        const missingCvIssueIds: number[] = [];
 
         for (const list of lists) {
             for (const item of list.items) {
-                // 1. GHOST BUSTER: Un-link issues that don't actually have a physical file!
+                // 1. GHOST BUSTER PREP: Un-link issues that don't actually have a physical file!
                 if (item.issueId && (!item.issue || !item.issue.filePath || item.issue.filePath.length === 0)) {
-                    await prisma.readingListItem.update({
-                        where: { id: item.id },
-                        data: { issueId: null }
-                    });
-                    requiresRefresh = true;
+                    unlinkIds.push(item.id);
                 }
-                // 2. AUTO-LINKER: Only link issues if they possess a physical file!
+                // 2. AUTO-LINKER PREP: Gather CV IDs to search the DB in bulk
                 else if (!item.issueId && item.cvIssueId) {
-                    const potentialIssues = await prisma.issue.findMany({
-                        where: { cvId: item.cvIssueId }
-                    });
-                    
-                    const validIssue = potentialIssues.find(i => i.filePath && i.filePath.length > 0);
-                    
-                    if (validIssue) {
-                        await prisma.readingListItem.update({
-                            where: { id: item.id },
-                            data: { issueId: validIssue.id }
-                        });
-                        requiresRefresh = true;
+                    missingCvIssueIds.push(item.cvIssueId);
+                }
+            }
+        }
+
+        // Execute bulk unlinking
+        if (unlinkIds.length > 0) {
+            await prisma.readingListItem.updateMany({
+                where: { id: { in: unlinkIds } },
+                data: { issueId: null }
+            });
+            requiresRefresh = true;
+        }
+
+        // Execute bulk auto-linking
+        if (missingCvIssueIds.length > 0) {
+            // Fetch ALL potential matching issues in ONE query
+            const potentialIssues = await prisma.issue.findMany({
+                where: { 
+                    cvId: { in: missingCvIssueIds },
+                    filePath: { not: null } 
+                }
+            });
+            
+            const linkUpdates = [];
+
+            for (const list of lists) {
+                for (const item of list.items) {
+                    if (!item.issueId && item.cvIssueId) {
+                        const validIssue = potentialIssues.find(i => i.cvId === item.cvIssueId && i.filePath && i.filePath.length > 0);
+                        
+                        if (validIssue) {
+                            linkUpdates.push(
+                                prisma.readingListItem.update({
+                                    where: { id: item.id },
+                                    data: { issueId: validIssue.id }
+                                })
+                            );
+                        }
                     }
                 }
+            }
+
+            // Execute all links in a single database transaction
+            if (linkUpdates.length > 0) {
+                await prisma.$transaction(linkUpdates);
+                requiresRefresh = true;
             }
         }
 

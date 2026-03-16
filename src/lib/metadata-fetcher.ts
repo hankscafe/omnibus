@@ -1,9 +1,9 @@
-// src/lib/metadata-fetcher.ts
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from './logger';
+import { parseComicVineCredits } from '@/lib/utils';
 
 export async function syncSeriesMetadata(cvId: number, folderPath: string) {
     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -26,16 +26,12 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
     const imageUrl = volData.image?.medium_url || volData.image?.super_url;
 
-    const volWriters: string[] = [];
-    const volArtists: string[] = [];
-    if (volData.person_credits) {
-        volData.person_credits.forEach((p: any) => {
-            const role = (p.role || '').toLowerCase();
-            if (role.includes('writer') || role.includes('script') || role.includes('plot') || role.includes('story')) volWriters.push(p.name);
-            if (role.includes('pencil') || role.includes('ink') || role.includes('artist') || role.includes('color') || role.includes('illustrator')) volArtists.push(p.name);
-        });
-    }
-    const volCharacters = volData.character_credits ? volData.character_credits.map((c: any) => c.name) : [];
+    // Use the centralized metadata parser for the Volume data
+    const { 
+        writers: volWriters, 
+        artists: volArtists, 
+        characters: volCharacters 
+    } = parseComicVineCredits(volData.person_credits, volData.character_credits);
 
     await prisma.series.update({
         where: { id: series.id },
@@ -81,21 +77,13 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
         const cvIssues = data.results || [];
 
         for (const cvIssue of cvIssues) {
-            const writers: string[] = [];
-            const artists: string[] = [];
-
-            if (cvIssue.person_credits) {
-                cvIssue.person_credits.forEach((p: any) => {
-                    const role = (p.role || '').toLowerCase();
-                    if (role.includes('writer') || role.includes('script') || role.includes('plot') || role.includes('story')) writers.push(p.name);
-                    if (role.includes('pencil') || role.includes('ink') || role.includes('artist') || role.includes('color') || role.includes('illustrator')) artists.push(p.name);
-                });
-            }
-
-            const characters = cvIssue.character_credits ? cvIssue.character_credits.map((c: any) => c.name) : [];
+            
+            // Use the centralized metadata parser for individual issues
+            const { writers, artists, characters } = parseComicVineCredits(cvIssue.person_credits, cvIssue.character_credits);
 
             const issueNumStr = parseFloat(cvIssue.issue_number?.toString() || "0").toString();
 
+            // Fallback to volume creators if individual issue credits are missing
             const finalWriters = writers.length > 0 ? writers : volWriters;
             const finalArtists = artists.length > 0 ? artists : volArtists;
             const finalCharacters = characters.length > 0 ? characters : volCharacters;
@@ -107,18 +95,18 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
                     description: cvIssue.description || cvIssue.deck || null,
                     releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
                     coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
-                    writers: JSON.stringify([...new Set(finalWriters)]),
-                    artists: JSON.stringify([...new Set(finalArtists)]),
-                    characters: JSON.stringify([...new Set(finalCharacters)]),
+                    writers: JSON.stringify(finalWriters),
+                    artists: JSON.stringify(finalArtists),
+                    characters: JSON.stringify(finalCharacters),
                 },
                 update: {
                     cvId: cvIssue.id, name: cvIssue.name,
                     description: cvIssue.description || cvIssue.deck || null,
                     releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
                     coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
-                    writers: JSON.stringify([...new Set(finalWriters)]),
-                    artists: JSON.stringify([...new Set(finalArtists)]),
-                    characters: JSON.stringify([...new Set(finalCharacters)]),
+                    writers: JSON.stringify(finalWriters),
+                    artists: JSON.stringify(finalArtists),
+                    characters: JSON.stringify(finalCharacters),
                 }
             });
             syncedCount++;

@@ -35,13 +35,18 @@ export async function GET(request: Request) {
         query: query,
         resources: 'volume', 
         limit: limit,           
-        page: page, // FIX: The ComicVine search endpoint specifically requires 'page', not 'offset'!
+        page: page,
         field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description' 
       },
       headers: {
         'User-Agent': 'Omnibus/1.0' 
       }
     });
+
+    // FIX: Safely check if Comicvine returned an actual array (protects against Unicode rejections)
+    if (!response.data || !Array.isArray(response.data.results)) {
+        return NextResponse.json({ results: [], hasMore: false });
+    }
 
     const results = response.data.results.map((vol: any) => {
       let desc = vol.deck;

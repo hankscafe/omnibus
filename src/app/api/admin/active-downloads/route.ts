@@ -5,7 +5,6 @@ import axios from 'axios';
 
 export async function GET() {
   try {
-    // 1. Fetch clients directly from native DB table
     const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) {
         return NextResponse.json({ success: true, activeDownloads: [] });
@@ -13,17 +12,23 @@ export async function GET() {
 
     let allDownloads: any[] = [];
     
-    // 2. Fetch custom headers natively
     const customHeaders = await prisma.customHeader.findMany();
     let headers: any = { 'User-Agent': 'Omnibus/1.0' };
     customHeaders.forEach((h: any) => {
         if (h.key && h.value) headers[h.key.trim()] = h.value.trim();
     });
 
-    // 3. Loop through every client and ping them live
     for (const client of clients) {
         const cleanUrl = client.url?.replace(/\/$/, "");
         if (!cleanUrl) continue;
+
+        // IN-MEMORY FILTER SETUP
+        const categoryString = client.category || 'comics';
+        const allowedCategories = categoryString.toLowerCase().split(',').map(c => c.trim());
+        const isAllowedCategory = (cat: string) => {
+            if (!cat) return false;
+            return allowedCategories.includes(cat.toLowerCase());
+        };
 
         try {
             if (client.type === 'qbit') {
@@ -41,12 +46,14 @@ export async function GET() {
                 const cookie = authRes.headers['set-cookie'];
 
                 const { data: torrents } = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
-                    params: { category: client.category || 'comics' }, 
+                    params: { filter: 'all' }, 
                     headers: { ...headers, Cookie: cookie },
                     timeout: 10000
                 });
 
-                const mapped = torrents.map((t: any) => ({
+                const validTorrents = torrents.filter((t: any) => isAllowedCategory(t.category));
+
+                const mapped = validTorrents.map((t: any) => ({
                     id: t.hash,
                     name: t.name,
                     progress: (t.progress * 100).toFixed(1),
@@ -64,7 +71,8 @@ export async function GET() {
                 });
 
                 if (res.data?.queue?.slots) {
-                    const mapped = res.data.queue.slots.map((t: any) => ({
+                    const validSlots = res.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
+                    const mapped = validSlots.map((t: any) => ({
                         id: t.nzo_id,
                         name: t.filename,
                         progress: t.percentage,
@@ -78,15 +86,11 @@ export async function GET() {
                 }
             }
         } catch (e: any) {
-            // Fail gracefully. 
-            // Instead of throwing a 500 error and breaking the loop, we just silently skip the offline client.
             console.warn(`[Active Downloads] ${client.name} failed to respond or timed out. Skipping.`);
             continue; 
         }
     }
 
-    // --- FILTER OUT IGNORED DOWNLOADS ---
-    // Note: Ignored downloads is kept as a simple JSON string since it's just a flat array of IDs.
     const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });
     let ignoredIds: string[] = [];
     if (ignoredSetting?.value) {
@@ -95,11 +99,9 @@ export async function GET() {
 
     const filteredDownloads = allDownloads.filter(d => !ignoredIds.includes(d.id));
 
-    // Always return a 200 Success, even if it's an empty array because the client was asleep!
     return NextResponse.json({ success: true, activeDownloads: filteredDownloads });
 
   } catch (error: any) {
-    // This only catches absolute catastrophic server failures now
     return NextResponse.json({ 
         success: false, 
         error: "Failed to process download clients.", 

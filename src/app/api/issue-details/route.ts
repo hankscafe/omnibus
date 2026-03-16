@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
+import { parseComicVineCredits } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,17 +66,8 @@ export async function GET(request: Request) {
         } catch(e) {}
     }
 
-    const writers: string[] = [];
-    const artists: string[] = [];
-    if (person_credits) {
-      person_credits.forEach((p: any) => {
-        const role = (p.role || '').toLowerCase();
-        if (role.includes('writer') || role.includes('script')) writers.push(p.name);
-        if (role.includes('pencil') || role.includes('artist') || role.includes('ink')) artists.push(p.name);
-      });
-    }
-
-    const characters = character_credits ? character_credits.map((c: any) => c.name) : [];
+    // Use the centralized metadata parser
+    const { writers, artists, characters } = parseComicVineCredits(person_credits, character_credits);
 
     let displayName = issueData.name;
     if (isIssue && issueData.volume?.name) {
@@ -90,9 +82,9 @@ export async function GET(request: Request) {
       publisher: publisher || 'Unknown', 
       image: issueData.image?.medium_url || issueData.image?.super_url || issueData.image?.small_url || null,
       description: (htmlDescription || "").replace(/<[^>]*>?/gm, '').trim().substring(0, 800),
-      writers: [...new Set(writers)].slice(0, 5),
-      artists: [...new Set(artists)].slice(0, 5),
-      characters: [...new Set(characters)].slice(0, 15),
+      writers: writers.slice(0, 5),
+      artists: artists.slice(0, 5),
+      characters: characters.slice(0, 15),
       siteUrl: issueData.site_detail_url,
       rawImage: issueData.image || null,
       person_credits,

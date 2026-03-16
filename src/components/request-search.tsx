@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, ExternalLink, PenTool, Paintbrush, Image as ImageIcon, Users } from "lucide-react"
+import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } from "@/components/ui/dialog"
@@ -43,13 +43,14 @@ export function RequestSearch() {
   const [open, setOpen] = useState(false)
   const [homeQuery, setHomeQuery] = useState("")
   const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
-  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string } | null>(null);
+  
+  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, directSource?: 'getcomics' } | null>(null);
+  
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedItem, setSelectedItem] = useState<any>(null)
   const [volumeIssues, setVolumeIssues] = useState<Issue[]>([])
   
-  // NEW: Targeted Loading and Tracking States
   const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
   const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set())
   const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
@@ -164,14 +165,14 @@ export function RequestSearch() {
       });
   }, [selectedItem?.id, selectedItem?.isVolume]);
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false) => {
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string) => {
     const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
     setRequestingTarget(targetKey);
     try {
       const res = await fetch('/api/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored })
+        body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored, directSource })
       });
       if (res.ok) {
         toast({ title: "Success", description: `${name} added to queue.` })
@@ -185,8 +186,6 @@ export function RequestSearch() {
       }
     } finally { setRequestingTarget(null) }
   }
-
-  const hasCreators = selectedItem && ((selectedItem.writers?.length ?? 0) > 0 || (selectedItem.artists?.length ?? 0) > 0);
 
   const getDisplayDescription = () => {
     if (selectedItem?.description?.trim() && selectedItem.description !== "No description available.") {
@@ -205,6 +204,7 @@ export function RequestSearch() {
   };
 
   const displayDescription = getDisplayDescription();
+  const hasCreators = selectedItem && ((selectedItem.writers?.length ?? 0) > 0 || (selectedItem.artists?.length ?? 0) > 0);
 
   return (
     <div className="w-full max-w-2xl mx-auto transition-colors duration-300">
@@ -273,9 +273,9 @@ export function RequestSearch() {
                       )}
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-8 mb-8">
-                      <div className="space-y-4">
-                          <div className="relative aspect-[2/3] w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
+                  <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 mb-8">
+                      <div className="space-y-5 flex flex-col items-center md:items-stretch">
+                          <div className="relative aspect-[2/3] w-[200px] md:w-[240px] mx-auto rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
                               <img src={selectedItem.image} alt={selectedItem.name} className="absolute inset-0 w-full h-full object-contain" />
                           </div>
                           
@@ -286,36 +286,66 @@ export function RequestSearch() {
                               const overallStatus = selectedItem.isVolume ? volStatus : issueStatus;
 
                               return (
-                                <div className="flex flex-col gap-3">
-                                    <Button 
-                                        className="w-full gap-2 shadow-sm" 
-                                        variant="default" 
-                                        onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown' })} 
-                                        disabled={requestingTarget === `vol-${selectedItem.volumeId}` || volStatus === 'REQUESTED' || volStatus === 'PENDING_APPROVAL'}
-                                    >
-                                        {volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
-                                         volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
-                                         requestingTarget === `vol-${selectedItem.volumeId}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
-                                         (<><Plus className="w-4 h-4" /> Request Series</>)}
-                                    </Button>
+                                <div className="flex flex-col gap-2.5 sm:gap-3 w-full max-w-[300px] mx-auto md:max-w-none mt-2">
+                                    {/* VOLUME BUTTONS */}
+                                    {volStatus === 'PENDING_APPROVAL' || volStatus === 'REQUESTED' ? (
+                                        <Button className="w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold" variant="default" disabled>
+                                            {volStatus === 'PENDING_APPROVAL' ? <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</> : <><Clock className="w-4 h-4 text-orange-500" /> Requested</>}
+                                        </Button>
+                                    ) : (
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
+                                            <Button 
+                                                className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold px-2" 
+                                                variant="default" 
+                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: undefined })} 
+                                                disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
+                                            >
+                                                {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Plus className="w-4 h-4" /> {volStatus === 'LIBRARY' ? 'Update Series' : 'Request Series'}</>}
+                                            </Button>
+                                            <Button 
+                                                className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white px-2 border-0" 
+                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: 'getcomics' })} 
+                                                disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
+                                                title="Force direct download from GetComics"
+                                            >
+                                                {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Globe className="w-4 h-4" /> GetComics</>}
+                                            </Button>
+                                        </div>
+                                    )}
                                     
-                                    <Button 
-                                        className={`w-full gap-2 shadow-sm ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} 
-                                        variant="outline" 
-                                        onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher)} 
-                                        disabled={requestingTarget === `iss-${issueTargetName}` || issueStatus !== null}
-                                    >
-                                        {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : 
-                                         issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
-                                         issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
-                                         requestingTarget === `iss-${issueTargetName}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
-                                         (<><Download className="w-4 h-4" /> Request Issue</>)}
-                                    </Button>
+                                    {/* ISSUE BUTTONS */}
+                                    {issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || issueStatus === 'LIBRARY' ? (
+                                        <Button className={`w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted text-foreground`} variant="outline" disabled>
+                                            {issueStatus === 'LIBRARY' && <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>}
+                                            {issueStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>}
+                                            {issueStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500" /> Requested</>}
+                                        </Button>
+                                    ) : (
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
+                                            <Button 
+                                                className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 px-2" 
+                                                variant="outline" 
+                                                onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher)} 
+                                                disabled={requestingTarget === `iss-${issueTargetName}`}
+                                            >
+                                                {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Download className="w-4 h-4" /> Request Issue</>}
+                                            </Button>
+                                            <Button 
+                                                className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 px-2" 
+                                                variant="outline" 
+                                                onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, 'getcomics')} 
+                                                disabled={requestingTarget === `iss-${issueTargetName}`}
+                                                title="Force direct download from GetComics"
+                                            >
+                                                {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Globe className="w-4 h-4" /> GetComics</>}
+                                            </Button>
+                                        </div>
+                                    )}
                                     
                                     <Button 
                                       variant="outline" 
-                                      className="w-full gap-2 border-dashed shadow-sm border-border text-foreground hover:bg-muted" 
-                                      onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? selectedItem.name.split(' #')[0] : selectedItem.name, type: selectedItem.isVolume ? 'volume' : 'issue' })}
+                                      className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted text-foreground" 
+                                      onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? selectedItem.name.split(' #')[0] : selectedItem.name, type: selectedItem.isVolume ? 'issue' : 'volume' })}
                                       disabled={(!selectedItem.isVolume && issueStatus === 'LIBRARY') || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                     >
                                         {overallStatus === 'PENDING_APPROVAL' ? (
@@ -334,14 +364,14 @@ export function RequestSearch() {
 
                       </div>
                       <div className="space-y-6">
-                            {hasCreators && (
+                             {hasCreators && (
                                 <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
                                     {selectedItem.writers?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedItem.writers.join(", ")}</p></div>)}
                                     {selectedItem.artists?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.artists.join(", ")}</p></div>)}
                                 </div>
                              )}
 
-                            {selectedItem.characters && selectedItem.characters.length > 0 && (
+                             {selectedItem.characters && selectedItem.characters.length > 0 && (
                                 <div className="space-y-2">
                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Users className="w-4 h-4"/> Key Appearances</h4>
                                     <div className="flex flex-wrap gap-1.5">
@@ -352,16 +382,16 @@ export function RequestSearch() {
                                 </div>
                              )}
 
-                            <div className="space-y-2">
-                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Info className="w-4 h-4"/> Synopsis</h4>
-                              <div className="text-sm text-muted-foreground leading-relaxed p-4 bg-muted/50 rounded-md border border-border min-h-[100px] break-words transition-colors duration-300">
-                                  {displayDescription || <span className="italic opacity-70">No synopsis available.</span>}
-                              </div>
-                            </div>
+                             <div className="space-y-2">
+                                <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Info className="w-4 h-4"/> Synopsis</h4>
+                                <div className="text-sm text-muted-foreground leading-relaxed p-4 bg-muted/50 rounded-md border border-border min-h-[100px] break-words transition-colors duration-300">
+                                    {displayDescription || <span className="italic opacity-70">No synopsis available.</span>}
+                                </div>
+                             </div>
                       </div>
                   </div>
                   <div className="space-y-4 pt-4 border-t border-border">
-                      <h4 className="font-semibold flex items-center gap-2 text-lg text-foreground"><Layers className="w-5 h-5"/> More in this Series</h4>
+                      <h4 className="font-semibold flex items-center gap-2 text-base sm:text-lg text-foreground"><Layers className="w-4 h-4 sm:w-5 h-5"/> More in this Series</h4>
                       <div className="w-full">
                           {volumeIssues.length > 0 ? (
                               <ScrollArea className="w-full whitespace-nowrap pb-4">
@@ -369,27 +399,59 @@ export function RequestSearch() {
                                       {volumeIssues.map(issue => {
                                           const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, issue.name);
                                           return (
-                                          <div key={issue.id} className="w-[120px] shrink-0 group/issue">
-                                              <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm transition-colors duration-300">
+                                          <div 
+                                              key={issue.id} 
+                                              className="w-[110px] sm:w-[130px] shrink-0 group/issue cursor-pointer relative"
+                                              onClick={() => {
+                                                  setSelectedItem({
+                                                      ...issue,
+                                                      volumeId: selectedItem.volumeId,
+                                                      publisher: selectedItem.publisher,
+                                                      issueNumber: issue.issueNumber,
+                                                      description: undefined,
+                                                      writers: undefined,
+                                                      artists: undefined,
+                                                      characters: undefined
+                                                  });
+                                              }}
+                                            >
+                                              <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
                                                   <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
-                                                  <div className="absolute inset-0 bg-black/70 opacity-0 group-hover/issue:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 gap-2 z-20">
-                                                      {!relIssueStatus && (<Button size="sm" variant="default" className="w-full h-7 text-[10px] font-bold bg-primary text-primary-foreground hover:bg-primary/90" disabled={requestingTarget === `iss-${issue.name}`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue', selectedItem.publisher); }}>{requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-3 h-3 animate-spin"/> : "Get"}</Button>)}
-                                                      <Button size="sm" variant="secondary" className="w-full h-7 text-[10px] font-bold text-foreground" onClick={(e) => { 
-                                                          e.preventDefault(); 
-                                                          e.stopPropagation(); 
-                                                          setSelectedItem({
-                                                              ...issue, 
-                                                              volumeId: selectedItem.volumeId, 
-                                                              publisher: selectedItem.publisher, 
-                                                              isVolume: false,
-                                                              description: undefined,
-                                                              writers: undefined,
-                                                              artists: undefined,
-                                                              characters: undefined
-                                                          }); 
-                                                      }}>Info</Button>
-                                                  </div>
-                                                  <div className="absolute bottom-0 inset-x-0 bg-black/80 text-white text-[10px] font-bold py-1 px-2">#{issue.issueNumber}</div>
+                                                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none" />
+                                                  
+                                                  <div className="absolute top-1 right-1 bg-black/80 text-white rounded-md px-1.5 py-0.5 text-[10px] font-bold z-20 shadow-sm border border-white/20">#{issue.issueNumber}</div>
+
+                                                  {!relIssueStatus && (
+                                                      <div className="absolute bottom-2 inset-x-2 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity flex justify-between items-center pointer-events-none">
+                                                          <Button
+                                                              size="icon"
+                                                              className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg pointer-events-auto"
+                                                              disabled={requestingTarget === `iss-${issue.name}`}
+                                                              onClick={(e) => {
+                                                                  e.preventDefault();
+                                                                  e.stopPropagation();
+                                                                  handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue', selectedItem.publisher);
+                                                              }}
+                                                              title="Standard Request"
+                                                          >
+                                                              {requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
+                                                          </Button>
+                                                          <Button
+                                                              size="icon"
+                                                              className="h-8 w-8 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg pointer-events-auto border-0"
+                                                              disabled={requestingTarget === `iss-${issue.name}`}
+                                                              onClick={(e) => {
+                                                                  e.preventDefault();
+                                                                  e.stopPropagation();
+                                                                  handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue', selectedItem.publisher, false, 'getcomics');
+                                                              }}
+                                                              title="Direct from GetComics"
+                                                          >
+                                                              {requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Globe className="w-4 h-4"/>}
+                                                          </Button>
+                                                      </div>
+                                                  )}
+
                                                   {relIssueStatus === 'REQUESTED' && (<div className="absolute top-1 left-1 bg-orange-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">REQUESTED</div>)}
                                                   {relIssueStatus === 'PENDING_APPROVAL' && (<div className="absolute top-1 left-1 bg-yellow-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20" title="Pending Admin Approval">PENDING</div>)}
                                                   {relIssueStatus === 'LIBRARY' && (<div className="absolute top-1 left-1 bg-green-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">OWNED</div>)}
@@ -437,13 +499,13 @@ export function RequestSearch() {
           </DialogHeader>
           <div className="flex flex-col gap-3 mt-4 sm:mt-6">
             <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true);
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true, monitorPrompt.directSource);
                 setMonitorPrompt(null);
             }}>
                 Yes, Request & Monitor
             </Button>
-            <Button variant="outline" className="w-full font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false);
+            <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false, monitorPrompt.directSource);
                 setMonitorPrompt(null);
             }}>
                 No, Just Request Current Issues

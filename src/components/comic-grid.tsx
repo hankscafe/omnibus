@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users } from "lucide-react"
+import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users, Globe } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogHeader } from "@/components/ui/dialog"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
@@ -71,7 +71,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   const [loadingRelated, setLoadingRelated] = useState(false)
   const { toast } = useToast()
   const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
-  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string } | null>(null);
+  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, directSource?: 'getcomics' } | null>(null);
 
   useEffect(() => {
     const savedLimit = localStorage.getItem(`omnibus-grid-limit-${type}`);
@@ -177,14 +177,14 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       .finally(() => setLoadingRelated(false))
   }, [selectedComic?.volumeId])
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false) => {
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string) => {
     const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
     setRequestingTarget(targetKey);
     try {
       const res = await fetch('/api/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored })
+        body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored, directSource })
       });
       if (res.ok) {
           toast({ title: "Success", description: `${name} added to queue.` })
@@ -209,8 +209,6 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
     setCurrentIndex(prev => Math.max(0, prev - 1));
   }
 
-  const hasCreators = selectedComic && ((selectedComic.writers?.length ?? 0) > 0 || (selectedComic.artists?.length ?? 0) > 0);
-
   const getDisplayDescription = () => {
     if (selectedComic?.description?.trim() && selectedComic.description !== "No description available.") {
         return selectedComic.description;
@@ -228,6 +226,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   };
 
   const displayDescription = getDisplayDescription();
+  const hasCreators = selectedComic && ((selectedComic.writers?.length ?? 0) > 0 || (selectedComic.artists?.length ?? 0) > 0);
 
   return (
     <div className="space-y-4">
@@ -290,9 +289,9 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                            {selectedComic.publisher && selectedComic.publisher !== 'Unknown' && (<span className="text-sm font-bold text-muted-foreground">{selectedComic.publisher}</span>)}
                          </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-6 sm:gap-8 mb-8">
-                        <div className="space-y-4">
-                            <div className="relative aspect-[2/3] w-[180px] sm:w-[200px] mx-auto md:w-full rounded-lg overflow-hidden border border-border bg-muted shadow-md">
+                    <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 mb-8">
+                        <div className="space-y-5 flex flex-col items-center md:items-stretch">
+                            <div className="relative aspect-[2/3] w-[200px] md:w-[240px] mx-auto rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
                                 <img src={selectedComic.image} alt={selectedComic.name} className="absolute inset-0 w-full h-full object-contain" />
                             </div>
                             
@@ -303,43 +302,73 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                 const overallStatus = selectedComic.issueNumber ? issueStatus : volStatus;
 
                                 return (
-                                  <div className="flex flex-col gap-2.5 sm:gap-3">
-                                      <Button 
-                                          className="w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold" 
-                                          variant="default" 
-                                          onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown' })} 
-                                          disabled={requestingTarget === `vol-${selectedComic.volumeId}` || volStatus === 'REQUESTED' || volStatus === 'PENDING_APPROVAL'}
-                                      >
-                                          {volStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
-                                           volStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
-                                           requestingTarget === `vol-${selectedComic.volumeId}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
-                                           (<><Plus className="w-4 h-4" /> Request Series</>)}
-                                      </Button>
+                                  <div className="flex flex-col gap-2.5 sm:gap-3 w-full max-w-[300px] mx-auto md:max-w-none mt-2">
+                                      {/* VOLUME BUTTONS */}
+                                      {volStatus === 'PENDING_APPROVAL' || volStatus === 'REQUESTED' ? (
+                                          <Button className="w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold" variant="default" disabled>
+                                              {volStatus === 'PENDING_APPROVAL' ? <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</> : <><Clock className="w-4 h-4 text-orange-500" /> Requested</>}
+                                          </Button>
+                                      ) : (
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
+                                              <Button 
+                                                  className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold px-2" 
+                                                  variant="default" 
+                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined })} 
+                                                  disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
+                                              >
+                                                  {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Plus className="w-4 h-4" /> {volStatus === 'LIBRARY' ? 'Update Series' : 'Request Series'}</>}
+                                              </Button>
+                                              <Button 
+                                                  className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white px-2 border-0" 
+                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: 'getcomics' })} 
+                                                  disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
+                                                  title="Force direct download from GetComics"
+                                              >
+                                                  {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Globe className="w-4 h-4" /> GetComics</>}
+                                              </Button>
+                                          </div>
+                                      )}
                                       
-                                      <Button 
-                                          className={`w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold ${!issueStatus ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'border-border hover:bg-muted text-foreground'}`} 
-                                          variant="outline" 
-                                          onClick={() => handleRequest(selectedComic.volumeId, issueTargetName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher)} 
-                                          disabled={requestingTarget === `iss-${issueTargetName}` || issueStatus !== null}
-                                      >
-                                          {issueStatus === 'LIBRARY' ? (<><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>) : 
-                                           issueStatus === 'PENDING_APPROVAL' ? (<><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>) : 
-                                           issueStatus === 'REQUESTED' ? (<><Clock className="w-4 h-4 text-orange-500" /> Requested</>) : 
-                                           requestingTarget === `iss-${issueTargetName}` ? (<Loader2 className="w-4 h-4 animate-spin" />) : 
-                                           (<><Download className="w-4 h-4" /> Request Issue</>)}
-                                      </Button>
+                                      {/* ISSUE BUTTONS */}
+                                      {issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || issueStatus === 'LIBRARY' ? (
+                                          <Button className={`w-full gap-2 shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted text-foreground`} variant="outline" disabled>
+                                              {issueStatus === 'LIBRARY' && <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>}
+                                              {issueStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>}
+                                              {issueStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500" /> Requested</>}
+                                          </Button>
+                                      ) : (
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
+                                              <Button 
+                                                  className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 px-2" 
+                                                  variant="outline" 
+                                                  onClick={() => handleRequest(selectedComic.volumeId, issueTargetName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher)} 
+                                                  disabled={requestingTarget === `iss-${issueTargetName}`}
+                                              >
+                                                  {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Download className="w-4 h-4" /> Request Issue</>}
+                                              </Button>
+                                              <Button 
+                                                  className="w-full gap-2 shadow-sm h-12 sm:h-10 text-xs sm:text-sm font-bold bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 px-2" 
+                                                  variant="outline" 
+                                                  onClick={() => handleRequest(selectedComic.volumeId, issueTargetName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, 'getcomics')} 
+                                                  disabled={requestingTarget === `iss-${issueTargetName}`}
+                                                  title="Force direct download from GetComics"
+                                              >
+                                                  {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Globe className="w-4 h-4" /> GetComics</>}
+                                              </Button>
+                                          </div>
+                                      )}
                                       
                                       <Button 
                                         variant="outline" 
-                                        className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted" 
-                                        onClick={() => setInteractiveQuery({ query: selectedComic.issueNumber ? selectedComic.name : selectedComic.name.split(' #')[0], type: selectedComic.issueNumber ? 'issue' : 'volume' })}
-                                        disabled={(selectedComic.issueNumber ? issueStatus === 'LIBRARY' : false) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
+                                        className="w-full gap-2 border-dashed shadow-sm h-12 sm:h-10 text-sm font-bold border-border hover:bg-muted text-foreground" 
+                                        onClick={() => setInteractiveQuery({ query: selectedComic.isVolume ? selectedComic.name.split(' #')[0] : selectedComic.name, type: selectedComic.isVolume ? 'issue' : 'volume' })}
+                                        disabled={(!selectedComic.isVolume && issueStatus === 'LIBRARY') || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                       >
                                           {overallStatus === 'PENDING_APPROVAL' ? (
                                               <><Clock className="w-4 h-4 text-yellow-500" /> Pending Approval</>
                                           ) : overallStatus === 'REQUESTED' ? (
                                               <><Clock className="w-4 h-4 text-orange-500" /> Requested</>
-                                          ) : (selectedComic.issueNumber && issueStatus === 'LIBRARY') ? (
+                                          ) : (!selectedComic.isVolume && issueStatus === 'LIBRARY') ? (
                                               <><CheckCircle2 className="w-4 h-4 text-green-500" /> In Library</>
                                           ) : (
                                               <><SearchIcon className="w-4 h-4 text-primary" /> Interactive Search</>
@@ -352,7 +381,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                         </div>
                         <div className="space-y-6">
                              {hasCreators && (
-                                <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border">
+                                <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
                                     {selectedComic.writers && selectedComic.writers.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedComic.writers.join(", ")}</p></div>)}
                                     {selectedComic.artists && selectedComic.artists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedComic.artists.join(", ")}</p></div>)}
                                 </div>
@@ -363,7 +392,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Users className="w-4 h-4"/> Key Appearances</h4>
                                     <div className="flex flex-wrap gap-1.5">
                                         {selectedComic.characters.map((char: string) => (
-                                            <Badge key={char} variant="secondary" className="font-medium text-[10px] bg-muted text-foreground hover:bg-muted/80">{char}</Badge>
+                                            <Badge key={char} variant="secondary" className="font-medium text-[10px] bg-muted text-foreground border-border hover:bg-muted/80">{char}</Badge>
                                         ))}
                                     </div>
                                 </div>
@@ -371,7 +400,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
 
                              <div className="space-y-2">
                                 <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Info className="w-4 h-4"/> Synopsis</h4>
-                                <div className="text-sm text-muted-foreground leading-relaxed p-4 bg-muted/50 rounded-md border border-border min-h-[100px] break-words">
+                                <div className="text-sm text-muted-foreground leading-relaxed p-4 bg-muted/50 rounded-md border border-border min-h-[100px] break-words transition-colors duration-300">
                                     {displayDescription || <span className="italic opacity-70">No synopsis available.</span>}
                                 </div>
                              </div>
@@ -382,46 +411,59 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                         <div className="w-full">
                             {loadingRelated ? (<div className="flex gap-3 sm:gap-4 overflow-hidden">{[1,2,3,4,5].map(i => (<div key={i} className="w-[120px] aspect-[2/3] bg-muted animate-pulse rounded-md border border-border" />))}</div>) : relatedIssues.length > 0 ? (
                                 <ScrollArea className="w-full whitespace-nowrap pb-4">
-                                    <div className="flex w-max gap-3 sm:gap-4 px-1">
+                                    <div className="flex w-max gap-4 px-1">
                                         {relatedIssues.map(issue => {
                                             const relIssueStatus = getIssueStatus(issue.id, selectedComic.volumeId, issue.name);
                                             return (
                                             <div 
-                                              key={issue.id} 
-                                              className="w-[110px] sm:w-[130px] shrink-0 group/issue cursor-pointer relative"
-                                              onClick={() => {
-                                                  setSelectedComic({
-                                                      ...issue,
-                                                      volumeId: selectedComic.volumeId,
-                                                      publisher: selectedComic.publisher,
-                                                      issueNumber: issue.issueNumber,
-                                                      description: undefined,
-                                                      writers: undefined,
-                                                      artists: undefined,
-                                                      characters: undefined
-                                                  } as Comic);
-                                              }}
-                                            >
+                                                key={issue.id} 
+                                                className="w-[110px] sm:w-[130px] shrink-0 group/issue cursor-pointer relative"
+                                                onClick={() => {
+                                                    setSelectedComic({
+                                                        ...issue,
+                                                        volumeId: selectedComic.volumeId,
+                                                        publisher: selectedComic.publisher,
+                                                        issueNumber: issue.issueNumber,
+                                                        description: undefined,
+                                                        writers: undefined,
+                                                        artists: undefined,
+                                                        characters: undefined
+                                                    } as Comic);
+                                                }}
+                                              >
                                                 <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
                                                     <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
-                                                    
                                                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none" />
                                                     
                                                     <div className="absolute bottom-1 left-2 z-20 text-white text-[11px] font-black truncate drop-shadow-md">#{issue.issueNumber}</div>
-                                                    
+
                                                     {!relIssueStatus && (
-                                                        <div className="absolute bottom-1 right-1 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity">
-                                                            <Button 
-                                                                size="icon" 
-                                                                className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg" 
-                                                                disabled={requestingTarget === `iss-${issue.name}`} 
-                                                                onClick={(e) => { 
-                                                                    e.preventDefault(); 
-                                                                    e.stopPropagation(); 
-                                                                    handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher); 
+                                                        <div className="absolute bottom-2 inset-x-2 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity flex justify-between items-center pointer-events-none">
+                                                            <Button
+                                                                size="icon"
+                                                                className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg pointer-events-auto"
+                                                                disabled={requestingTarget === `iss-${issue.name}`}
+                                                                onClick={(e) => {
+                                                                    e.preventDefault();
+                                                                    e.stopPropagation();
+                                                                    handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher);
                                                                 }}
+                                                                title="Standard Request"
                                                             >
                                                                 {requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
+                                                            </Button>
+                                                            <Button
+                                                                size="icon"
+                                                                className="h-8 w-8 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg pointer-events-auto border-0"
+                                                                disabled={requestingTarget === `iss-${issue.name}`}
+                                                                onClick={(e) => {
+                                                                    e.preventDefault();
+                                                                    e.stopPropagation();
+                                                                    handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher, false, 'getcomics');
+                                                                }}
+                                                                title="Direct from GetComics"
+                                                            >
+                                                                {requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Globe className="w-4 h-4"/>}
                                                             </Button>
                                                         </div>
                                                     )}
@@ -435,7 +477,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                     </div>
                                     <ScrollBar orientation="horizontal" className="h-1.5" />
                                 </ScrollArea>
-                            ) : (<p className="text-sm text-muted-foreground">No other issues found.</p>)}
+                            ) : (<p className="text-sm text-muted-foreground">No individual issues found.</p>)}
                         </div>
                     </div>
                 </div>
@@ -465,19 +507,19 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
         <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
           <DialogHeader>
               <DialogTitle className="text-xl font-bold text-foreground">Monitor Series?</DialogTitle>
-              <DialogDescription className="text-sm sm:text-base text-muted-foreground mt-2">
+              <DialogDescription className="text-base text-muted-foreground mt-2">
                 You are requesting the series <strong>{monitorPrompt?.name}</strong>. Would you like Omnibus to automatically monitor this series and download new issues as they are released in the future?
               </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3 mt-4 sm:mt-6">
             <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true);
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true, monitorPrompt.directSource);
                 setMonitorPrompt(null);
             }}>
                 Yes, Request & Monitor
             </Button>
             <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false);
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false, monitorPrompt.directSource);
                 setMonitorPrompt(null);
             }}>
                 No, Just Request Current Issues

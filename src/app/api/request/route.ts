@@ -3,31 +3,13 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import axios from 'axios';
-import { ProwlarrService } from '@/lib/prowlarr';
-import { GetComicsService } from '@/lib/getcomics';
-import { DownloadService } from '@/lib/download-clients';
 import { DiscordNotifier } from '@/lib/discord';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
 import { detectManga } from '@/lib/manga-detector'; 
-import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
-import { Importer } from '@/lib/importer';
+import { isReleasedYet } from '@/lib/utils';
+import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
 
 export const dynamic = 'force-dynamic';
-
-// --- NEW: Helper to check if an issue is actually released ---
-function isReleasedYet(storeDate: string | null, coverDate: string | null) {
-  const now = new Date();
-  if (storeDate) {
-    return new Date(storeDate) <= now;
-  }
-  if (coverDate) {
-    // Comic cover dates are usually printed 1-2 months ahead of physical release.
-    const buffer = new Date();
-    buffer.setDate(buffer.getDate() + 45); 
-    return new Date(coverDate) <= buffer;
-  }
-  return true; // If CV has no date, assume it's out
-}
 
 export async function POST(request: NextRequest) {
   const token = await getToken({ req: request });
@@ -35,8 +17,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { cvId, name, year, type, image, monitored } = body; 
+    const { cvId, name, year, type, image, monitored, directSource } = body; 
     let { publisher, description } = body;
+
+    const skipIndexers = directSource === 'getcomics';
 
     if (!cvId || !name) return NextResponse.json({ error: 'Missing metadata' }, { status: 400 });
 
@@ -124,11 +108,9 @@ export async function POST(request: NextRequest) {
         const searchName = `${name} #${issue.issue_number}`;
         const issueImage = issue.image?.medium_url || issue.image?.small_url || image;
 
-        // --- NEW: Check Release Date ---
         const isReleased = isReleasedYet(issue.store_date, issue.cover_date);
         let issueStatus = initialStatus;
         
-        // If it's not released, force it to UNRELEASED so it bypasses search entirely
         if (!isReleased) {
             issueStatus = 'UNRELEASED';
         }
@@ -144,13 +126,14 @@ export async function POST(request: NextRequest) {
               volumeId: cvId.toString(),
               status: issueStatus,
               activeDownloadName: searchName,
-              imageUrl: issueImage 
+              imageUrl: issueImage,
+              // Inject a temporary flag if pending approval
+              downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null 
             }
           });
           
-          // Only push to the automation queue if it's PENDING and actually released
           if (issueStatus === 'PENDING') {
-            createdRequests.push({ id: newReq.id, name: searchName, year: issueYear, publisher: safePublisher, isManga });
+            createdRequests.push({ id: newReq.id, name: searchName, year: issueYear, publisher: safePublisher, isManga, skipIndexers });
           }
         }
       }
@@ -167,14 +150,15 @@ export async function POST(request: NextRequest) {
       });
 
     } else {
-      // Logic for single issue request (assumes it's out since the user specifically clicked it)
       const newReq = await prisma.request.create({
         data: {
           userId: token.id as string,
           volumeId: cvId.toString(),
           status: initialStatus,
           activeDownloadName: name,
-          imageUrl: image 
+          imageUrl: image,
+          // Inject a temporary flag if pending approval
+          downloadLink: skipIndexers && initialStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
         }
       });
 
@@ -190,7 +174,7 @@ export async function POST(request: NextRequest) {
       }
 
       if (initialStatus === 'PENDING') {
-        searchAndDownload(newReq.id, name, year, safePublisher, isManga).catch(e => console.error(e));
+        searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => console.error(e));
       }
 
       evaluateTrophies(token.id as string).catch(console.error);
@@ -219,6 +203,9 @@ export async function PATCH(request: NextRequest) {
 
     const reqRecord = await prisma.request.findUnique({ where: { id } });
     if (!reqRecord) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+
+    // Check if the temporary GetComics flag was attached during the original request
+    const skipIndexers = reqRecord.downloadLink === 'DIRECT_GETCOMICS';
 
     await prisma.request.update({
       where: { id },
@@ -252,7 +239,9 @@ export async function PATCH(request: NextRequest) {
       }).catch(() => {});
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
-      searchAndDownload(id, searchName, year, publisher, isManga).catch(e => console.error(e));
+      
+      // Pass the extracted skipIndexers flag directly into the search queue
+      searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => console.error(e));
     }
 
     evaluateTrophies(token.id as string).catch(console.error);
@@ -262,115 +251,4 @@ export async function PATCH(request: NextRequest) {
     Logger.log(`[Request API] Approval Error: ${error.message}`, 'error');
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-}
-
-/**
- * AUTOMATION
- */
-
-async function processAutomationQueue(items: any[]) {
-  for (const item of items) {
-    try {
-      await searchAndDownload(item.id, item.name, item.year, item.publisher, item.isManga);
-      await new Promise(r => setTimeout(r, 5000)); 
-    } catch (e) {
-      console.error(`Automation failed for ${item.name}`);
-    }
-  }
-}
-
-async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false) {
-  const acronyms = await getCustomAcronyms();
-  const queries = generateSearchQueries(name, year, acronyms);
-  
-  Logger.log(`[Automation] Generated ${queries.length} search variations for: ${name}`, 'info');
-  
-  let healthyResults: any[] = [];
-  let successfulQuery = "";
-
-  for (const query of queries) {
-      Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
-      const prowlarrResults = await ProwlarrService.searchComics(query);
-      healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
-      if (healthyResults.length > 0) {
-          successfulQuery = query;
-          break; 
-      }
-  }
-
-  if (healthyResults.length > 0) {
-    healthyResults.sort((a: any, b: any) => b.score - a.score);
-    const best = healthyResults[0];
-    
-    const config = await getDownloadClient();
-    if (config) {
-      Logger.log(`[Automation] Sending to Client: ${best.title} (Priority: ${best.priority})`, 'info');
-      await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
-      
-      const trackingHash = best.infoHash || best.guid || null;
-      
-      await prisma.request.update({
-        where: { id: requestId },
-        data: { 
-          status: 'DOWNLOADING', 
-          activeDownloadName: best.title, 
-          downloadLink: trackingHash 
-        }
-      });
-      return; 
-    }
-  }
-
-  Logger.log(`[Automation] Not found on Indexers. Falling back to GetComics...`, 'info');
-  let getComicsResults: any[] = [];
-  
-  for (const query of queries) {
-      Logger.log(`[Automation] Searching GetComics: "${query}"`, 'info');
-      getComicsResults = await GetComicsService.search(query);
-      if (getComicsResults.length > 0) {
-          successfulQuery = query;
-          break;
-      }
-  }
-  
-  if (getComicsResults.length > 0) {
-    const best = getComicsResults[0];
-    const { url, isDirect } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
-    
-    if (isDirect) {
-      const settings = await prisma.systemSetting.findMany();
-      const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-      
-      const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-
-      await prisma.request.update({
-        where: { id: requestId },
-        data: { 
-            status: 'DOWNLOADING',
-            activeDownloadName: safeTitle 
-        }
-      });
-
-      DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId)
-        .then(async (success) => {
-            if (success) {
-                await new Promise(r => setTimeout(r, 2000));
-                await Importer.importRequest(requestId);
-            }
-        })
-        .catch(e => console.error(e));
-    } else {
-      await prisma.request.update({
-        where: { id: requestId },
-        data: { status: 'MANUAL_DDL', downloadLink: url }
-      });
-    }
-  } else {
-     Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
-  }
-}
-
-async function getDownloadClient() {
-  const clients = await prisma.downloadClient.findMany();
-  return clients.length > 0 ? clients[0] : null;
 }

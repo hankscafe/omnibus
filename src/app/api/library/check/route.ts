@@ -5,19 +5,23 @@ import { prisma } from '@/lib/db';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const cvId = searchParams.get('cvId');
+  const cvIdParam = searchParams.get('cvId');
 
-  if (!cvId) return NextResponse.json({ owned: false });
+  if (!cvIdParam) return NextResponse.json({ owned: false });
+
+  const cvId = parseInt(cvIdParam, 10);
+  if (isNaN(cvId)) return NextResponse.json({ owned: false });
 
   try {
-    // Check if the ID exists in your local library table 
-    // (Assuming you have a 'Library' or 'Comic' table with cvId)
-    const comic = await prisma.comic.findUnique({
-      where: { cvId: cvId.toString() }
-    });
+    // Check if the ComicVine ID exists as a Series (Volume) or an individual Issue
+    const [seriesMatch, issueMatch] = await Promise.all([
+      prisma.series.findUnique({ where: { cvId } }),
+      prisma.issue.findUnique({ where: { cvId } })
+    ]);
 
-    return NextResponse.json({ owned: !!comic });
+    return NextResponse.json({ owned: !!(seriesMatch || issueMatch) });
   } catch (error) {
+    console.error("Library check error:", error);
     return NextResponse.json({ owned: false });
   }
 }

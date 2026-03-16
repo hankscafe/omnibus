@@ -456,7 +456,6 @@ export default function SettingsPage() {
                         <Input type="password" value={config.prowlarr_key} onChange={(e) => setConfig({...config, prowlarr_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
                         <p className="text-[0.8rem] text-muted-foreground">Found in Prowlarr Settings → General → Security → API Key</p>
                     </div>
-                    {/* ADDED CATEGORIES CONFIGURATION HERE */}
                     <div className="grid gap-2">
                         <Label className="text-foreground font-semibold">Search Categories (Torznab IDs)</Label>
                         <Input value={config.prowlarr_categories || ""} onChange={(e) => setConfig({...config, prowlarr_categories: e.target.value})} placeholder="e.g. 7030, 8030" className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
@@ -1230,8 +1229,8 @@ export default function SettingsPage() {
 
                     <div className="grid gap-2">
                         <Label className="text-foreground font-semibold">Download Category / Label</Label>
-                        <Input value={editingClient.category || ""} onChange={e => setEditingClient({...editingClient, category: e.target.value})} placeholder="e.g. comics" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
-                        <p className="text-[11px] text-muted-foreground">Sets the category in the client for automatic folder sorting.</p>
+                        <Input value={editingClient.category || ""} onChange={e => setEditingClient({...editingClient, category: e.target.value})} placeholder="e.g. comics, manga" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                        <p className="text-[11px] text-muted-foreground">Comma-separated list of categories to track. New downloads use the first one. <strong className="text-orange-500">Categories MUST exist in your client!</strong></p>
                     </div>
 
                     <div className="border-t border-border pt-4 mt-2">

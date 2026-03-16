@@ -19,7 +19,11 @@ async function getNetworkHeaders() {
 export const DownloadService = {
   async addDownload(client: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
     const cleanUrl = client.url.replace(/\/$/, '');
-    const category = client.category || 'comics';
+    
+    // NATIVE DB FIX: Get the primary category (the first one before any commas)
+    const categoryString = client.category || 'comics';
+    const primaryCategory = categoryString.split(',')[0].trim();
+    
     const networkHeaders = await getNetworkHeaders();
 
     const baseConfig = {
@@ -45,7 +49,7 @@ export const DownloadService = {
         const form = new FormData();
         if (fileBuffer) form.append('torrents', fileBuffer, 'comic.torrent');
         else form.append('urls', downloadUrl);
-        form.append('category', category);
+        form.append('category', primaryCategory);
         
         if (seedTimeLimit > 0) form.append('seeding_time_limit', seedTimeLimit.toString());
         if (seedRatio > 0) form.append('ratio_limit', seedRatio.toString()); 
@@ -57,17 +61,17 @@ export const DownloadService = {
       else if (client.type === 'deluge') {
         const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, baseConfig);
         const cookie = authRes.headers['set-cookie'];
-        const options: any = { download_location: category };
+        const options: any = { download_location: primaryCategory };
         if (seedRatio > 0) { options.stop_at_ratio = true; options.stop_ratio = seedRatio; }
         const method = downloadUrl.startsWith('magnet:') ? "core.add_torrent_magents" : "core.add_torrent_url";
         await axios.post(`${cleanUrl}/json`, { method: method, params: [[downloadUrl], options], id: 2 }, { ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie } });
       }
       else if (client.type === 'sab') {
-          await axios.get(`${cleanUrl}/api`, { params: { mode: 'addurl', name: downloadUrl, nzbname: title, cat: category, apikey: client.apiKey, output: 'json' }, ...baseConfig });
+          await axios.get(`${cleanUrl}/api`, { params: { mode: 'addurl', name: downloadUrl, nzbname: title, cat: primaryCategory, apikey: client.apiKey, output: 'json' }, ...baseConfig });
       }
       else if (client.type === 'nzbget') {
           const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
-          await axios.post(`${cleanUrl}/jsonrpc`, { method: "append", params: [title, downloadUrl, category, 0, false, false, "", 0, "SCORE", []] }, { ...baseConfig, headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } });
+          await axios.post(`${cleanUrl}/jsonrpc`, { method: "append", params: [title, downloadUrl, primaryCategory, 0, false, false, "", 0, "SCORE", []] }, { ...baseConfig, headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } });
       }
 
       Logger.log(`[${client.type.toUpperCase()}] SUCCESS: Added ${title}`, 'success');
@@ -206,7 +210,6 @@ export const DownloadService = {
   },
 
   async getAllActiveDownloads() {
-    // NATIVE DB CALL: Fetch clients directly from the new table
     const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) return [];
     
@@ -220,19 +223,31 @@ export const DownloadService = {
         const cleanUrl = client.url?.replace(/\/$/, '');
         if (!cleanUrl) continue;
 
+        // IN-MEMORY FILTER SETUP
+        const categoryString = client.category || 'comics';
+        const allowedCategories = categoryString.toLowerCase().split(',').map(c => c.trim());
+        const isAllowedCategory = (cat: string) => {
+            if (!cat) return false;
+            return allowedCategories.includes(cat.toLowerCase());
+        };
+
         if (client.type === 'qbit') {
           const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
             new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
             { headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 5000 }
           );
           const cookie = loginRes.headers['set-cookie'];
+          
+          // FETCH ALL, THEN FILTER
           const listRes = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
-            params: { filter: 'all', category: client.category || 'comics' },
+            params: { filter: 'all' },
             headers: { Cookie: cookie, ...baseHeaders },
             timeout: 5000
           });
+
           if (Array.isArray(listRes.data)) {
-            allDownloads.push(...listRes.data.map((t: any) => ({
+            const validTorrents = listRes.data.filter((t: any) => isAllowedCategory(t.category));
+            allDownloads.push(...validTorrents.map((t: any) => ({
               id: t.hash, name: t.name, progress: (t.progress * 100).toFixed(1),
               status: t.state, clientName: client.name, size: (t.size / 1024 / 1024).toFixed(2) + " MB"
             })));
@@ -244,6 +259,7 @@ export const DownloadService = {
             const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size"], {}], id: 2 }, { headers: { ...baseHeaders, Cookie: cookie } });
             if (listRes.data.result?.torrents) {
                 const torrents = listRes.data.result.torrents;
+                // Deluge labels require plugin, bypassing filter for Deluge
                 allDownloads.push(...Object.keys(torrents).map(hash => ({
                     id: hash, name: torrents[hash].name, progress: torrents[hash].progress.toFixed(1),
                     status: torrents[hash].state, clientName: client.name, size: (torrents[hash].total_size / 1024 / 1024).toFixed(2) + " MB"
@@ -253,14 +269,16 @@ export const DownloadService = {
         else if (client.type === 'sab') {
             const queueRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'queue', apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 5000 });
             if (queueRes.data.queue?.slots) {
-                allDownloads.push(...queueRes.data.queue.slots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
+                const validSlots = queueRes.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
+                allDownloads.push(...validSlots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
             }
         }
         else if (client.type === 'nzbget') {
             const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
             const listRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "listgroups", params: [] }, { headers: { ...baseHeaders, Authorization: `Basic ${auth}` } });
             if (Array.isArray(listRes.data.result)) {
-                allDownloads.push(...listRes.data.result.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
+                const validGroups = listRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
+                allDownloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
             }
         }
       } catch (err) { /* Silent fail for individual client timeout */ }

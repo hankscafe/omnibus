@@ -2,19 +2,31 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import AdmZip from 'adm-zip';
-import crypto from 'crypto';
+import sharp from 'sharp';
 
-const CACHE_DIR = process.env.OMNIBUS_CACHE_DIR || path.join(process.cwd(), '.cache', 'reader');
+// @ts-ignore
+import { createExtractorFromFile } from 'node-unrar-js/esm';
+
 const zipCache = new Map<string, { zip: AdmZip, lastAccessed: number }>();
 
-setInterval(() => {
+// OPTIMIZATION: Lazy Cache Eviction. Called whenever a request is made, avoiding memory leak intervals.
+function getZipInstance(filePath: string) {
     const now = Date.now();
     for (const [key, data] of Array.from(zipCache.entries())) {
         if (now - data.lastAccessed > 5 * 60 * 1000) {
             zipCache.delete(key);
         }
     }
-}, 60000);
+    
+    let cached = zipCache.get(filePath);
+    if (!cached) {
+        cached = { zip: new AdmZip(filePath), lastAccessed: now };
+        zipCache.set(filePath, cached);
+    } else {
+        cached.lastAccessed = now;
+    }
+    return cached.zip;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -26,7 +38,6 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Read just the first 4 bytes of the file for instant Signature Detection
     const fd = fs.openSync(filePath, 'r');
     const magicBuffer = Buffer.alloc(4);
     fs.readSync(fd, magicBuffer, 0, 4, 0);
@@ -40,42 +51,72 @@ export async function GET(request: Request) {
 
     if (!isZip && !isRar) return new NextResponse("Format Not Supported", { status: 400 });
 
-    let buffer: Buffer;
-    let contentType = 'image/jpeg';
-    if (pageName.toLowerCase().endsWith('.png')) contentType = 'image/png';
-    if (pageName.toLowerCase().endsWith('.webp')) contentType = 'image/webp';
+    let buffer: Buffer | null = null;
 
     if (isZip) {
-        let zipInstance = zipCache.get(filePath)?.zip;
-        if (!zipInstance) {
-            zipInstance = new AdmZip(filePath);
-            zipCache.set(filePath, { zip: zipInstance, lastAccessed: Date.now() });
-        } else {
-            zipCache.set(filePath, { zip: zipInstance, lastAccessed: Date.now() });
-        }
-
+        const zipInstance = getZipInstance(filePath);
         const zipEntry = zipInstance.getEntry(pageName) || zipInstance.getEntry(pageName.replace(/\//g, '\\'));
         if (!zipEntry) return new NextResponse("Page Not Found", { status: 404 });
         
         buffer = zipEntry.getData();
 
     } else if (isRar) {
-        const fileHash = crypto.createHash('md5').update(filePath).digest('hex');
-        const extractDir = path.join(CACHE_DIR, fileHash);
+        let options: any = { filepath: filePath };
         
-        const safePageName = pageName.split('/').join(path.sep);
-        const targetFile = path.resolve(extractDir, safePageName);
+        try {
+            const wasmPath = path.join(process.cwd(), 'node_modules', 'node-unrar-js', 'esm', 'js', 'unrar.wasm');
+            if (fs.existsSync(wasmPath)) {
+                const wasmBuf = fs.readFileSync(wasmPath);
+                options.wasmBinary = new Uint8Array(wasmBuf).buffer;
+            }
+        } catch(e) {}
+
+        let extractor = await createExtractorFromFile(options);
         
-        if (!targetFile.startsWith(path.resolve(extractDir))) return new NextResponse("Invalid Path", { status: 403 });
-        if (!fs.existsSync(targetFile)) return new NextResponse("Page Not Found", { status: 404 });
+        const list = extractor.getFileList();
+        const headersArray = Array.from((list.fileHeaders as any) || []);
+        
+        const normalizedPageName = pageName.replace(/\\/g, '/');
+        const targetHeader = headersArray.find((h: any) => h.name.replace(/\\/g, '/') === normalizedPageName);
 
-        const now = new Date();
-        fs.promises.utimes(extractDir, now, now).catch(() => {});
+        if (!targetHeader) return new NextResponse("Page Not Found in RAR", { status: 404 });
 
-        buffer = await fs.promises.readFile(targetFile);
+        // Reset pointer stream by re-initializing before extracting the single matched file
+        extractor = await createExtractorFromFile(options);
+        const extracted = extractor.extract({ files: [targetHeader.name] });
+        
+        let fileData = extracted.files[0]?.extraction;
+
+        if (!fileData) {
+            extractor = await createExtractorFromFile(options);
+            const fullExtraction = extractor.extract();
+            const matchedFile = fullExtraction.files.find((f: any) => f.fileHeader.name === targetHeader.name);
+            fileData = matchedFile?.extraction;
+        }
+        
+        if (!fileData) return new NextResponse("Extraction Failed", { status: 404 });
+        
+        buffer = Buffer.from(fileData);
     }
 
-    return new NextResponse(buffer!, {
+    if (!buffer) return new NextResponse("Page Not Found", { status: 404 });
+
+    let finalBuffer = buffer;
+    let contentType = 'image/jpeg';
+
+    try {
+        finalBuffer = await sharp(buffer)
+            .resize({ width: 1600, withoutEnlargement: true }) 
+            .webp({ quality: 80 })
+            .toBuffer();
+        contentType = 'image/webp';
+    } catch (imgErr) {
+        console.error("Sharp processing failed, serving original", imgErr);
+        if (pageName.toLowerCase().endsWith('.png')) contentType = 'image/png';
+        if (pageName.toLowerCase().endsWith('.webp')) contentType = 'image/webp';
+    }
+
+    return new NextResponse(finalBuffer, {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=86400', 

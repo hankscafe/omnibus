@@ -75,7 +75,6 @@ export default function AdminPage() {
   const [reqsLoading, setReqsLoading] = useState(true)
   const [downloadsLoading, setDownloadsLoading] = useState(true)
 
-  // --- NEW: Update Check State ---
   const [updateData, setUpdateData] = useState<any>(null)
 
   const [importing, setImporting] = useState<string | null>(null)
@@ -142,7 +141,6 @@ export default function AdminPage() {
       fetchStats();
       fetchRequests();
       fetchDownloads();
-      // Silently fetch update data in the background
       fetch('/api/admin/update-check').then(res => res.json()).then(setUpdateData).catch(() => {});
   };
 
@@ -278,20 +276,35 @@ export default function AdminPage() {
     finally { setIsDeleting(false); setRequestToDelete(null); }
   }
 
-  const mappedRequests = requests.map(req => {
+const mappedRequests = requests.map(req => {
       let liveStatus = req.status;
       let liveProgress = req.progress;
 
       if (req.status === 'DOWNLOADING') {
           let match = null;
-          if (req.activeDownloadName) match = torrents.find((d: any) => d.name === req.activeDownloadName);
-          if (!match && req.baseSeriesName) match = torrents.find((d: any) => d.name.toLowerCase().includes(req.baseSeriesName.toLowerCase()));
+          
+          if (req.downloadLink && !req.downloadLink.startsWith('http')) {
+              match = torrents.find((d: any) => d.id?.toLowerCase() === req.downloadLink?.toLowerCase());
+          }
+          if (!match && req.activeDownloadName) {
+              match = torrents.find((d: any) => d.name === req.activeDownloadName);
+          }
+          // FIX: Smart Fuzzy Match for UI updates
+          if (!match && req.activeDownloadName) {
+              match = torrents.find((d: any) => {
+                  const reqWords = req.activeDownloadName.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                  const torWords = d.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                  let matches = 0;
+                  reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
+                  return matches >= 3 || (reqWords.length > 0 && matches === reqWords.length);
+              });
+          }
 
           if (match) {
               liveProgress = parseFloat(match.progress);
               if (['pausedDL', 'stalledDL', 'error'].includes(match.status)) liveStatus = 'STALLED';
               else if (match.status === 'uploading' || match.status === 'stalledUP' || liveProgress >= 100) {
-                  liveStatus = 'IMPORTED';
+                  liveStatus = 'IMPORTING'; 
                   liveProgress = 100;
               }
           }
@@ -299,10 +312,28 @@ export default function AdminPage() {
       return { ...req, status: liveStatus, progress: liveProgress };
   });
 
-  const activeList = torrents.filter(t => parseFloat(t.progress) < 100)
-  const completedUnmatched = torrents.filter(t => parseFloat(t.progress) >= 100)
-  const pendingRequests = mappedRequests.filter(r => ['PENDING', 'MANUAL_DDL', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR'].includes(r.status))
-  const pendingApprovals = mappedRequests.filter(r => r.status === 'PENDING_APPROVAL')
+  // Ensure IMPORTING is included so it stays visible while the cron job runs
+  const pendingRequests = mappedRequests.filter(r => ['PENDING', 'MANUAL_DDL', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR', 'IMPORTING'].includes(r.status));
+  const pendingApprovals = mappedRequests.filter(r => r.status === 'PENDING_APPROVAL');
+
+  // Filter out any torrents that cleanly match a request so they aren't double-listed in the UI
+  const activeList = torrents.filter(t => {
+      if (parseFloat(t.progress) >= 100) return false;
+      const isMatched = mappedRequests.some(r => 
+          (r.status === 'DOWNLOADING' || r.status === 'IMPORTED' || r.status === 'STALLED' || r.status === 'IMPORTING') &&
+          (r.downloadLink?.toLowerCase() === t.id.toLowerCase() || r.activeDownloadName === t.name)
+      );
+      return !isMatched;
+  });
+
+  const completedUnmatched = torrents.filter(t => {
+      if (parseFloat(t.progress) < 100) return false;
+      const isMatched = mappedRequests.some(r => 
+          (r.status === 'DOWNLOADING' || r.status === 'IMPORTED' || r.status === 'COMPLETED' || r.status === 'IMPORTING') &&
+          (r.downloadLink?.toLowerCase() === t.id.toLowerCase() || r.activeDownloadName === t.name)
+      );
+      return !isMatched;
+  });
 
   return (
     <div className="container mx-auto py-6 sm:py-10 px-4 sm:px-6 space-y-8 sm:space-y-10 transition-colors duration-300">
@@ -383,7 +414,7 @@ export default function AdminPage() {
                 </CardContent>
               </Card>
 
-              {/* --- NEW: THEMED SYSTEM HEALTH & UPDATES CARD --- */}
+              {/* System Health / Updates Card */}
               {updateData?.updateAvailable ? (
                 <Link href="/admin/updates" className="block transition-transform hover:scale-[1.02] h-full">
                   <Card className="shadow-sm border-primary bg-primary/10 hover:bg-primary/20 transition-colors cursor-pointer h-full">
@@ -437,7 +468,6 @@ export default function AdminPage() {
           )}
       </div>
 
-      {/* COMPACT ADMIN CONTROL PANEL */}
       <div className="space-y-4">
         <div className="flex items-center gap-2 px-1">
           <Settings className="w-5 h-5 text-foreground" />
@@ -447,7 +477,6 @@ export default function AdminPage() {
           <CardContent className="p-0">
             <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-border">
               
-              {/* Column 1: Library Management */}
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
                 <h4 className="text-[10px] sm:text-xs font-black text-muted-foreground uppercase tracking-wider mb-1 sm:mb-2 px-2 pt-2">Library Management</h4>
                 <Link href="/admin/smart-match" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
@@ -473,7 +502,6 @@ export default function AdminPage() {
                 </Link>
               </div>
 
-              {/* Column 2: System & Monitoring */}
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
                 <h4 className="text-[10px] sm:text-xs font-black text-muted-foreground uppercase tracking-wider mb-1 sm:mb-2 px-2 pt-2">System & Monitoring</h4>
                 <Link href="/admin/analytics" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
@@ -499,7 +527,6 @@ export default function AdminPage() {
                 </Link>
               </div>
 
-              {/* Column 3: Configuration */}
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
                 <h4 className="text-[10px] sm:text-xs font-black text-muted-foreground uppercase tracking-wider mb-1 sm:mb-2 px-2 pt-2">Configuration & Access</h4>
                 <Link href="/admin/settings" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
@@ -539,7 +566,6 @@ export default function AdminPage() {
               <Badge className="bg-orange-500 text-white ml-2">{pendingApprovals.length}</Badge>
             </div>
 
-            {/* --- NEW: Multi-Select Bulk Actions Toolbar --- */}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <Button 
                 variant="outline" 
@@ -579,7 +605,6 @@ export default function AdminPage() {
                 }`}
                 onClick={() => toggleSelection(req.id)}
               >
-                {/* --- NEW: Selection Indicator --- */}
                 <div className="absolute top-2 right-2 z-10">
                   <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${selectedRequests.has(req.id) ? 'bg-primary border-primary text-primary-foreground' : 'bg-background/80 border-border text-transparent'}`}>
                     <Check className="w-3.5 h-3.5" />
@@ -668,8 +693,8 @@ export default function AdminPage() {
                                         <span className="font-bold text-sm sm:text-base truncate text-foreground">{req.seriesName}</span>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] sm:text-xs text-muted-foreground">
-                                        <Badge variant={req.status === 'MANUAL_DDL' ? 'destructive' : 'outline'} className={`text-[9px] uppercase font-black px-1.5 py-0 ${req.status === 'STALLED' ? 'border-orange-500 text-orange-600' : ''} ${isExhausted ? 'border-red-500 text-red-600' : ''}`}>
-                                            {req.status === 'MANUAL_DDL' ? 'GETCOMICS' : req.status}
+                                        <Badge variant={req.status === 'MANUAL_DDL' ? 'destructive' : req.status === 'IMPORTING' ? 'secondary' : 'outline'} className={`text-[9px] uppercase font-black px-1.5 py-0 ${req.status === 'STALLED' ? 'border-orange-500 text-orange-600' : ''} ${isExhausted ? 'border-red-500 text-red-600' : ''} ${req.status === 'IMPORTING' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-300' : ''}`}>
+                                            {req.status === 'MANUAL_DDL' ? 'GETCOMICS' : req.status === 'IMPORTING' ? 'IMPORTING...' : req.status}
                                         </Badge>
                                         <span className="flex items-center gap-1 font-medium truncate"><Users className="w-3 h-3" /> {req.userName}</span>
                                         {req.status === 'DOWNLOADING' && (
@@ -708,19 +733,12 @@ export default function AdminPage() {
                       )})}
 
                       {activeList.map((t) => {
-                          const match = requests.find(r => r.activeDownloadName === t.name || (r.baseSeriesName && t.name.toLowerCase().includes(r.baseSeriesName.toLowerCase())));
-                          const imageUrl = match?.imageUrl;
-
                           return (
                           <div key={t.id} className="flex flex-col md:flex-row items-start md:items-center justify-between p-3 sm:p-4 bg-background border border-border rounded-lg shadow-sm gap-3 sm:gap-4 transition-all hover:border-primary/50">
                               
                               <div className="flex gap-3 w-full md:w-auto md:flex-1 min-w-0">
                                 <div className="w-10 h-14 sm:w-12 sm:h-16 bg-muted shrink-0 rounded overflow-hidden border border-border flex items-center justify-center">
-                                  {imageUrl ? (
-                                      <img src={imageUrl} className="w-full h-full object-cover" alt="" />
-                                  ) : (
                                       <ImageIcon className="w-4 h-4 text-muted-foreground/50" />
-                                  )}
                                 </div>
 
                                 <div className="flex-1 min-w-0 flex flex-col justify-center">

@@ -1,9 +1,18 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export async function GET() {
   try {
+    // FIX: ADDED ADMIN AUTHENTICATION GUARD
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    if (session?.user?.role !== 'ADMIN') {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -24,9 +33,6 @@ export async function GET() {
       prisma.user.count()
     ]);
 
-    // HEALTH LOGIC: 
-    // If more than 15% of recent requests failed, mark as "Warning"
-    // If more than 40% failed, mark as "Degraded"
     const totalRecent = completed30d + failed30d;
     const failureRate = totalRecent > 0 ? (failed30d / totalRecent) : 0;
     

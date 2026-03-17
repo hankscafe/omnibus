@@ -109,6 +109,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
 
   return {
     providers,
+    secret: process.env.NEXTAUTH_SECRET, // <-- FIX: Explicitly bind the secret here
     callbacks: {
       async signIn({ user, account }) {
         if (account?.provider === "credentials") return true;

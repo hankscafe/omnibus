@@ -32,20 +32,17 @@ export async function POST(request: Request) {
       });
       let nextOrder = lastItem ? lastItem.order + 1 : 0;
 
-      // Process individually to gracefully catch constraints (e.g. if the item is already in the list)
-      let addedCount = 0;
-      for (const sId of idsToProcess) {
-          try {
-              await prisma.collectionItem.create({
-                  data: { collectionId, seriesId: sId, order: nextOrder++ }
-              });
-              addedCount++;
-          } catch (error: any) {
-              if (error.code !== 'P2002') throw error; // Ignore Prisma's "Already exists" error
-          }
-      }
+      // REFACTOR: Use highly-optimized bulk insert with duplicate skipping
+      const result = await prisma.collectionItem.createMany({
+          data: idsToProcess.map((sId: string) => ({ 
+              collectionId, 
+              seriesId: sId, 
+              order: nextOrder++ 
+          })),
+          skipDuplicates: true // Gracefully ignores duplicates
+      });
 
-      return NextResponse.json({ success: true, message: `Added ${addedCount} items to list.` });
+      return NextResponse.json({ success: true, message: `Added ${result.count} items to list.` });
 
     } else if (action === 'remove') {
       await prisma.collectionItem.deleteMany({

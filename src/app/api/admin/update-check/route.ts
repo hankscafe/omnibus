@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server';
-// Directly import the package.json to guarantee version reading inside Docker
-import packageJson from '../../../../../package.json';
 
 // Helper function to properly compare SemVer strings (e.g., 1.0.0-beta.4 > 1.0.0-beta.3)
 function isNewerVersion(latest: string, current: string): boolean {
@@ -58,10 +56,10 @@ function isNewerVersion(latest: string, current: string): boolean {
 
 export async function GET() {
   try {
-    // 1. Get current version securely (Safe for Docker)
-    const currentVersion = packageJson.version || "1.0.0";
+    // FIX: Get current version securely without crashing Docker's standalone output
+    const currentVersion = process.env.npm_package_version || "1.0.0";
     
-    // 2. Fetch the last 10 releases from your GitHub repo
+    // 2. Fetch the last 100 releases from your GitHub repo
     const res = await fetch('https://api.github.com/repos/hankscafe/omnibus/releases?per_page=100', {
         headers: { 
           'User-Agent': 'Omnibus-App',
@@ -93,7 +91,7 @@ export async function GET() {
     return NextResponse.json(
       { 
         updateAvailable: false, 
-        currentVersion: packageJson?.version || "1.0.0", 
+        currentVersion: process.env.npm_package_version || "1.0.0", 
         releases: [],
         error: "Could not check for updates" 
       }, 

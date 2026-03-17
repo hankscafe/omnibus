@@ -13,11 +13,47 @@ import { searchAndDownload } from '@/lib/automation';
 
 const execAsync = promisify(exec);
 
+// --- NEW: Helper function to strictly check if a version is newer ---
+function isNewerVersion(latest: string, current: string): boolean {
+    const cleanLatest = latest.replace(/^v/, '');
+    const cleanCurrent = current.replace(/^v/, '');
+    if (cleanLatest === cleanCurrent) return false;
+    const parse = (v: string) => {
+        const [main, pre] = v.split('-');
+        return { nums: main.split('.').map(n => parseInt(n, 10) || 0), preParts: pre ? pre.split('.') : [] };
+    };
+    const l = parse(cleanLatest);
+    const c = parse(cleanCurrent);
+    for (let i = 0; i < 3; i++) {
+        const lNum = l.nums[i] || 0;
+        const cNum = c.nums[i] || 0;
+        if (lNum > cNum) return true;
+        if (lNum < cNum) return false;
+    }
+    if (l.preParts.length === 0 && c.preParts.length > 0) return true; 
+    if (l.preParts.length > 0 && c.preParts.length === 0) return false; 
+    for (let i = 0; i < Math.max(l.preParts.length, c.preParts.length); i++) {
+        const lPart = l.preParts[i];
+        const cPart = c.preParts[i];
+        if (lPart === undefined) return false; 
+        if (cPart === undefined) return true;
+        const lIsNum = !isNaN(Number(lPart));
+        const cIsNum = !isNaN(Number(cPart));
+        if (lIsNum && cIsNum) {
+            if (Number(lPart) > Number(cPart)) return true;
+            if (Number(lPart) < Number(cPart)) return false;
+        } else if (!lIsNum && !cIsNum) {
+            if (lPart > cPart) return true;
+            if (lPart < cPart) return false;
+        } else { return !lIsNum; }
+    }
+    return false;
+}
+
 async function getFolderSize(folderPath: string): Promise<number> {
     try {
         if (!folderPath || !fs.existsSync(folderPath)) return 0;
 
-        // OPTIMIZATION: Try native OS command for instant size calculation (Linux/macOS/Docker)
         if (process.platform !== 'win32') {
             try {
                 const { stdout } = await execAsync(`du -sb "${folderPath}"`);
@@ -28,7 +64,6 @@ async function getFolderSize(folderPath: string): Promise<number> {
             }
         }
 
-        // Fallback for Windows or if the native command fails
         const files = await fs.promises.readdir(folderPath, { withFileTypes: true });
         let totalSize = 0;
         for (const file of files) {
@@ -60,22 +95,18 @@ async function runStorageScan() {
     });
 
     const storageData: any[] = [];
-    const batchSize = 10;
     
-    for (let i = 0; i < seriesList.length; i += batchSize) {
-        const batch = seriesList.slice(i, i + batchSize);
-        const batchResults = await Promise.all(batch.map(async (s) => {
-            const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
-            
-            await prisma.series.update({ where: { id: s.id }, data: { size } }).catch(() => {});
-            
-            return {
-                id: s.id, name: s.name, publisher: s.publisher || "Unknown",
-                isManga: s.isManga, issueCount: s._count.issues,
-                path: s.folderPath, sizeBytes: size
-            };
-        }));
-        storageData.push(...batchResults);
+    // Loop sequentially to avoid EMFILE errors on massive libraries
+    for (const s of seriesList) {
+        const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
+        
+        await prisma.series.update({ where: { id: s.id }, data: { size } }).catch(() => {});
+        
+        storageData.push({
+            id: s.id, name: s.name, publisher: s.publisher || "Unknown",
+            isManga: s.isManga, issueCount: s._count.issues,
+            path: s.folderPath, sizeBytes: size
+        });
     }
 
     storageData.sort((a, b) => b.sizeBytes - a.sizeBytes);
@@ -455,10 +486,11 @@ export async function POST(request: Request) {
                     const lastNotified = notifiedSetting?.value || "";
 
                     if (latestVersion !== lastNotified) {
-                        const packageJson = require(process.cwd() + '/package.json');
-                        const currentVersion = packageJson.version || "1.0.0";
+                        // FIX: Safe environment variable checking for Docker compat.
+                        const currentVersion = process.env.npm_package_version || "1.0.0";
 
-                        if (latestVersion !== currentVersion) {
+                        // Strict semantic version comparison preventing false alerts
+                        if (isNewerVersion(latestVersion, currentVersion)) {
                             await DiscordNotifier.sendAlert('update_available', { version: latestVersion });
                             
                             await prisma.systemSetting.upsert({

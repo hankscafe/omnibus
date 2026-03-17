@@ -57,7 +57,6 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   const [limit, setLimit] = useState(14)
   const [isInitialized, setIsInitialized] = useState(false)
 
-  // NEW: Targeted Loading and Tracking States
   const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
   const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set())
   const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
@@ -87,6 +86,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
     localStorage.setItem(`omnibus-grid-limit-${type}`, val);
   };
 
+  // FIX: Fetch library IDs only once on mount, or when forced to refresh. 
+  // Prevents massive DB/Network spam on grid navigation.
   useEffect(() => {
     fetch('/api/library/ids')
       .then(res => res.json())
@@ -96,8 +97,9 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
               setOwnedIssues(new Set(data.issues || []));
               setActiveRequests(data.requests || []);
           }
-      });
-  }, [currentIndex, selectedComic]);
+      })
+      .catch(() => {});
+  }, [refreshSignal]);
 
   const getVolumeStatus = (volumeId: number, name: string): StatusType => {
       if (ownedSeries.has(volumeId)) return 'LIBRARY';

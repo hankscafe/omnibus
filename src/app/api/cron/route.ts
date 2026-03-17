@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
+import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route'; // <-- Imported direct route handler
 
 export const dynamic = 'force-dynamic';
 
@@ -55,12 +56,14 @@ export async function GET() {
 
         for (const job of jobsToRun) {
             Logger.log(`[CRON] External heartbeat triggering job: ${job}`, 'info');
-            // Force internal loopback routing
-            fetch(`http://127.0.0.1:3000/api/admin/jobs/trigger`, {
+            // --- FIX: Use internal function call instead of self-fetching HTTP ---
+            const req = new Request('http://localhost/api/admin/jobs/trigger', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ job })
-            }).catch(() => {});
+            });
+            await executeJobRoute(req).catch(() => {});
+            // -------------------------------------------------------------------
             await new Promise(r => setTimeout(r, 2000));
         }
 

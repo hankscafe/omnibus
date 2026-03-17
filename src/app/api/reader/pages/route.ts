@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import AdmZip from 'adm-zip';
+import { prisma } from '@/lib/db'; // Added prisma import
 
 // @ts-ignore
 import { createExtractorFromFile } from 'node-unrar-js/esm';
@@ -15,6 +16,18 @@ export async function GET(request: Request) {
   }
 
   try {
+    // --- PATH TRAVERSAL FIX: Authorize against known libraries ---
+    const libraries = await prisma.library.findMany();
+    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
+    const targetPath = path.normalize(filePath).toLowerCase();
+
+    const isAuthorized = authorizedRoots.some(root => targetPath.startsWith(root));
+
+    if (!isAuthorized) {
+      return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
+    }
+    // -------------------------------------------------------------
+
     // OPTIMIZATION: Read only the first 4 bytes into memory to detect file type!
     const fd = await fs.promises.open(filePath, 'r');
     const magicBuffer = Buffer.alloc(4);

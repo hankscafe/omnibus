@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { DownloadService } from '@/lib/download-clients';
-import packageJson from '../../../../../package.json';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,7 +54,6 @@ export async function GET(req: NextRequest) {
   const validKey = setting?.value?.trim();
 
   if (!validKey || providedKey !== validKey) {
-    // THIS LOG WILL TELL US EXACTLY WHAT HOMEPAGE IS SENDING!
     console.log(`[Stats API] Auth Failed! Received: '${providedKey}' | Expected: '${validKey}'`);
     return NextResponse.json({ error: 'Unauthorized. Invalid API Key.' }, { status: 401 });
   }
@@ -80,7 +78,8 @@ export async function GET(req: NextRequest) {
         systemHealthy = false;
     }
 
-    const currentVersion = packageJson.version || "1.0.0";
+    // FIX: Retrieve version correctly 
+    const currentVersion = process.env.npm_package_version || "1.0.0";
     let updateAvailable = false;
     let latestVersion = currentVersion;
 

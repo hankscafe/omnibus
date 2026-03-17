@@ -2,25 +2,37 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 
+// In-memory cache to prevent DB spam and massive memory spikes
+const globalForCache = globalThis as unknown as {
+    libraryIdsCache: any;
+    libraryIdsCacheTime: number;
+};
+
 export async function GET() {
   try {
-    // Only return series/issues that actually have a physical file linked to them!
-    // A valid file path will always contain a dot (e.g. .cbz, .cbr)
-    const series = await prisma.series.findMany({ 
-        where: { issues: { some: { filePath: { contains: '.' } } } },
-        select: { cvId: true } 
-    });
-    
-    const issues = await prisma.issue.findMany({ 
-        where: { filePath: { contains: '.' } },
-        select: { cvId: true } 
-    });
-    
-    const requests = await prisma.request.findMany({ 
-        select: { volumeId: true, status: true, activeDownloadName: true } 
-    });
+    const now = Date.now();
+    // Serve from cache if requested within the last 30 seconds
+    if (globalForCache.libraryIdsCache && globalForCache.libraryIdsCacheTime && now - globalForCache.libraryIdsCacheTime < 30000) {
+        return NextResponse.json(globalForCache.libraryIdsCache);
+    }
 
-    return NextResponse.json({
+    // Only return series/issues that actually have a physical file linked to them!
+    // OPTIMIZATION: Removed `{ contains: '.' }` as it causes full table scans.
+    const [series, issues, requests] = await Promise.all([
+        prisma.series.findMany({ 
+            where: { issues: { some: { filePath: { not: null, not: '' } } } },
+            select: { cvId: true } 
+        }),
+        prisma.issue.findMany({ 
+            where: { filePath: { not: null, not: '' } },
+            select: { cvId: true } 
+        }),
+        prisma.request.findMany({ 
+            select: { volumeId: true, status: true, activeDownloadName: true } 
+        })
+    ]);
+
+    const payload = {
         series: series.map(s => s.cvId),
         issues: issues.map(i => i.cvId),
         requests: requests.map(r => ({ 
@@ -28,8 +40,15 @@ export async function GET() {
             status: r.status, 
             name: r.activeDownloadName 
         }))
-    });
+    };
+
+    // Save to cache
+    globalForCache.libraryIdsCache = payload;
+    globalForCache.libraryIdsCacheTime = now;
+
+    return NextResponse.json(payload);
   } catch (error) {
+    console.error("Library IDs API Error:", error);
     return NextResponse.json({ series: [], issues: [], requests: [] });
   }
 }

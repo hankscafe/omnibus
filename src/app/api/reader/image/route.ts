@@ -3,21 +3,25 @@ import fs from 'fs';
 import path from 'path';
 import AdmZip from 'adm-zip';
 import sharp from 'sharp';
+import { prisma } from '@/lib/db'; 
 
 // @ts-ignore
 import { createExtractorFromFile } from 'node-unrar-js/esm';
 
 const zipCache = new Map<string, { zip: AdmZip, lastAccessed: number }>();
 
-// OPTIMIZATION: Lazy Cache Eviction. Called whenever a request is made, avoiding memory leak intervals.
-function getZipInstance(filePath: string) {
+// OPTIMIZATION: Standalone interval to prevent memory leaks from abandoned AdmZip instances
+setInterval(() => {
     const now = Date.now();
-    for (const [key, data] of Array.from(zipCache.entries())) {
+    for (const [key, data] of zipCache.entries()) {
         if (now - data.lastAccessed > 5 * 60 * 1000) {
             zipCache.delete(key);
         }
     }
-    
+}, 60000); // Runs every 60 seconds independently
+
+function getZipInstance(filePath: string) {
+    const now = Date.now();
     let cached = zipCache.get(filePath);
     if (!cached) {
         cached = { zip: new AdmZip(filePath), lastAccessed: now };
@@ -38,6 +42,18 @@ export async function GET(request: Request) {
   }
 
   try {
+    // --- PATH TRAVERSAL FIX: Authorize against known libraries ---
+    const libraries = await prisma.library.findMany();
+    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
+    const targetPath = path.normalize(filePath).toLowerCase();
+
+    const isAuthorized = authorizedRoots.some(root => targetPath.startsWith(root));
+
+    if (!isAuthorized) {
+      return new NextResponse("Unauthorized path access", { status: 403 });
+    }
+    // -------------------------------------------------------------
+
     const fd = fs.openSync(filePath, 'r');
     const magicBuffer = Buffer.alloc(4);
     fs.readSync(fd, magicBuffer, 0, 4, 0);

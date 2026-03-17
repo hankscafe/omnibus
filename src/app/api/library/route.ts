@@ -8,6 +8,9 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { detectManga } from '@/lib/manga-detector';
 
+// --- NEW IMPORT ---
+import { parseComicInfo } from '@/lib/metadata-extractor';
+
 // --- POST HANDLER FOR BULK ACTIONS ---
 export async function POST(request: Request) {
   try {
@@ -260,20 +263,30 @@ export async function GET(request: Request) {
 
                 if (bookFiles.length > 0) {
                     const relative = path.relative(baseRoot, dir);
-                    const publisher = relative.split(path.sep).length > 1 ? relative.split(path.sep)[0] : "Other";
                     const normDir = path.normalize(dir).toLowerCase();
                     const existing = existingSeries.find(s => path.normalize(s.folderPath).toLowerCase() === normDir);
 
                     if (!existing) {
                         try {
-                            let cleanedName = folderName.replace(/\s\(\d{4}\)$/, "").trim();
-                            if (!cleanedName) cleanedName = "Unknown Series";
-
-                            const firstArchive = bookFiles.find(f => f.toLowerCase().endsWith('.cbz') || f.toLowerCase().endsWith('.zip'));
+                            const firstArchive = bookFiles.find(f => f.toLowerCase().endsWith('.cbz') || f.toLowerCase().endsWith('.zip') || f.toLowerCase().endsWith('.cbr'));
                             const firstArchivePath = firstArchive ? path.join(dir, firstArchive) : null;
 
-                            const isMangaDetect = await detectManga(
-                                { name: cleanedName, publisher: { name: publisher }, year: parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0") },
+                            // --- NEW LOGIC: Check internal ComicInfo.xml metadata FIRST ---
+                            let embeddedMeta = null;
+                            if (firstArchivePath) {
+                                embeddedMeta = await parseComicInfo(firstArchivePath);
+                            }
+
+                            // Use embedded meta if it exists, otherwise fall back to folder guessing
+                            let cleanedName = embeddedMeta?.series || folderName.replace(/\s\(\d{4}\)$/, "").trim() || "Unknown Series";
+                            let year = embeddedMeta?.year || parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0");
+                            let publisher = embeddedMeta?.publisher || (relative.split(path.sep).length > 1 ? relative.split(path.sep)[0] : "Other");
+                            
+                            // If the embedded XML contains an exact ComicVine ID, save it immediately!
+                            let cvId = embeddedMeta?.cvId || -Math.abs(Math.floor(Math.random() * 1000000000));
+
+                            const isMangaDetect = embeddedMeta?.isManga || libIsManga || await detectManga(
+                                { name: cleanedName, publisher: { name: publisher }, year },
                                 firstArchivePath
                             );
 
@@ -281,10 +294,10 @@ export async function GET(request: Request) {
                                 data: {
                                     folderPath: dir.replace(/\\/g, '/'),
                                     name: cleanedName,
-                                    year: parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0"),
+                                    year: year,
                                     publisher: publisher,
-                                    cvId: -Math.abs(Math.floor(Math.random() * 1000000000)), 
-                                    isManga: libIsManga || isMangaDetect,
+                                    cvId: cvId, 
+                                    isManga: isMangaDetect,
                                     libraryId: libId
                                 }
                             });
@@ -366,7 +379,6 @@ export async function GET(request: Request) {
         }
     }
 
-    // FIX: Rock solid DB query construction. EVERYTHING is strictly forced into the AND array.
     let where: any = { AND: [] };
     
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
@@ -376,7 +388,6 @@ export async function GET(request: Request) {
     if (unmatchedOnly) where.AND.push({ cvId: { lte: 0 } });
     if (monitored) where.AND.push({ monitored: true });
 
-    // Era Filter Logic
     if (era !== 'ALL') {
         if (era === '2020s') where.AND.push({ year: { gte: 2020, lt: 2030 } });
         else if (era === '2010s') where.AND.push({ year: { gte: 2010, lt: 2020 } });
@@ -386,7 +397,6 @@ export async function GET(request: Request) {
         else if (era === 'CLASSIC') where.AND.push({ year: { gt: 0, lt: 1980 } });
     }
 
-    // Read Status Filter Logic
     if (readStatus !== 'ALL') {
         if (readStatus === 'UNREAD') {
             where.AND.push({ issues: { some: {} } }); 
@@ -420,7 +430,6 @@ export async function GET(request: Request) {
         }
     }
 
-    // Prisma cleanup
     if (where.AND.length === 0) {
         where = {}; 
     }
@@ -430,7 +439,7 @@ export async function GET(request: Request) {
     else if (sort === 'year_desc') orderBy = { year: 'desc' };
     else if (sort === 'year_asc') orderBy = { year: 'asc' };
     else if (sort === 'count_desc') orderBy = { issues: { _count: 'desc' } };
-    else if (sort === 'random') orderBy = { id: 'asc' }; // Fallback
+    else if (sort === 'random') orderBy = { id: 'asc' }; 
 
     let totalCount = 0;
     let dbSeries = [];

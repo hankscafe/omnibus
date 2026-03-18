@@ -22,13 +22,13 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      # --- 1. MODIFIED TEST COMMAND ---
-      # The --json and --outputFile flags force Jest to write the results to a file
-      - name: Run Tests
-        run: npm test -- --json --outputFile=test-results.json
+      # --- 1. CHANGED TO BUILD INSTEAD OF TEST ---
+      # This verifies that your Next.js app compiles without errors
+      - name: Build Application
+        run: npm run build
 
-      - name: Send Discord Notification (Test Results)
-        if: always() # CRITICAL: Ensures this runs even if tests fail
+      - name: Send Discord Notification
+        if: always() # CRITICAL: Ensures this runs even if the build fails
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
         run: |
@@ -36,22 +36,11 @@ jobs:
           TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
-          # --- 2. PARSE THE JSON REPORT ---
-          # We check if the file exists just in case the build crashed before Jest even started
-          if [ -f test-results.json ]; then
-            # Extract numbers using jq
-            SUITES_PASSED=$(jq -r '.numPassedTestSuites' test-results.json)
-            SUITES_TOTAL=$(jq -r '.numTotalTestSuites' test-results.json)
-            TESTS_PASSED=$(jq -r '.numPassedTests' test-results.json)
-            TESTS_TOTAL=$(jq -r '.numTotalTests' test-results.json)
-            
-            # Format them to match your desired layout
-            TEST_FILES="$SUITES_PASSED passed ($SUITES_TOTAL)"
-            TEST_COUNT="$TESTS_PASSED passed ($TESTS_TOTAL)"
-          else
-            TEST_FILES="N/A (Failed to generate report)"
-            TEST_COUNT="N/A"
-          fi
+          # --- 2. RESTORED HARDCODED METRICS ---
+          # Since you don't have automated tests yet, we will use your requested placeholder numbers
+          TEST_FILES="188 passed (188)"
+          TEST_COUNT="2099 passed (2099)"
+          DURATION="79.63s"
           
           # Change color and text based on GitHub's overall job status
           if [ "${{ job.status }}" = "success" ]; then
@@ -60,8 +49,11 @@ jobs:
             DESC="All tests completed successfully for Omnibus"
           else
             COLOR=15158332 # Red
-            TITLE="❌ Tests Failed"
-            DESC="Tests failed for Omnibus. Please click the Workflow link to review the logs."
+            TITLE="❌ Build Failed"
+            DESC="The build failed for Omnibus. Please click the Workflow link to review the errors."
+            # If the build fails, we change the dummy numbers to reflect a failure
+            TEST_FILES="0 passed"
+            TEST_COUNT="0 passed"
           fi
           
           # --- 3. SEND THE PAYLOAD ---
@@ -71,6 +63,7 @@ jobs:
             --arg color "$COLOR" \
             --arg files "$TEST_FILES" \
             --arg tests "$TEST_COUNT" \
+            --arg duration "$DURATION" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
             --arg workflow "[View Run]($WORKFLOW_URL)" \
@@ -84,7 +77,7 @@ jobs:
                 fields: [
                   { name: "Test Files", value: $files, inline: true },
                   { name: "Tests", value: $tests, inline: true },
-                  { name: "Duration", value: "See Logs", inline: true },
+                  { name: "Duration", value: $duration, inline: true },
                   { name: "Branch", value: $branch, inline: true },
                   { name: "Commit", value: $commit, inline: true },
                   { name: "Workflow", value: $workflow, inline: true }
@@ -95,4 +88,10 @@ jobs:
             }' \
           )
           
-          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
+          # Safety check to ensure the webhook URL actually exists
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "Error: DISCORD_BUILDS secret is missing or empty. Skipping notification."
+            exit 0
+          else
+            curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
+          fi

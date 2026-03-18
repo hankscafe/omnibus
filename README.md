@@ -164,7 +164,7 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 * **Bulk Actions:** Effortlessly manage your collection with one-click buttons to "Mark All as Read," "Refresh Metadata," or delete specific files right from the browser.
 * **Missing Issue Detection:** Visually highlights gaps in your collection (e.g., if you have issues #1 and #3, it flags #2 as missing). Click "Request Missing" to queue them all up at once.
 * **Sorting Options:** Sort issues sequentially (Issue # 1 to # 100) or reverse chronological (newest releases first) for ongoing weekly pulls.
-* **Offline Downloading:** Admins can grant users permission to download raw .cbz files directly from the browser for offline reading in third-party apps.
+* **Offline Downloading:** Admins can grant users permission to download raw .cbz or .cbr files directly from the browser for offline reading in third-party apps.
 
 ### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.

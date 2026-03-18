@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { DownloadService } from '@/lib/download-clients';
+import packageJson from '../../../../../package.json';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,13 +42,11 @@ function isNewerVersion(latest: string, current: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  // 1. Hyper-Resilient Auth Checking
   const authHeader = req.headers.get('authorization') || '';
   const tokenFromBearer = authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : null;
   const apiKeyHeader = req.headers.get('x-api-key')?.trim();
   const apiKeyQuery = req.nextUrl.searchParams.get('apiKey')?.trim();
 
-  // Accept the key from literally anywhere
   const providedKey = apiKeyHeader || tokenFromBearer || apiKeyQuery;
 
   const setting = await prisma.systemSetting.findUnique({ where: { key: 'omnibus_api_key' } });
@@ -78,8 +77,8 @@ export async function GET(req: NextRequest) {
         systemHealthy = false;
     }
 
-    // FIX: Retrieve version correctly 
-    const currentVersion = process.env.npm_package_version || "1.0.0";
+    // FIX: Retrieve version securely via Webpack
+    const currentVersion = packageJson.version || "1.0.0";
     let updateAvailable = false;
     let latestVersion = currentVersion;
 

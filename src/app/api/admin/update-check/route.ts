@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import packageJson from '../../../../../package.json';
 
 // Helper function to properly compare SemVer strings (e.g., 1.0.0-beta.4 > 1.0.0-beta.3)
 function isNewerVersion(latest: string, current: string): boolean {
@@ -18,7 +19,6 @@ function isNewerVersion(latest: string, current: string): boolean {
     const l = parse(cleanLatest);
     const c = parse(cleanCurrent);
 
-    // 1. Compare Major.Minor.Patch
     for (let i = 0; i < 3; i++) {
         const lNum = l.nums[i] || 0;
         const cNum = c.nums[i] || 0;
@@ -26,11 +26,9 @@ function isNewerVersion(latest: string, current: string): boolean {
         if (lNum < cNum) return false;
     }
 
-    // 2. Main versions are identical. Check pre-releases.
-    if (l.preParts.length === 0 && c.preParts.length > 0) return true; // 1.0.0 > 1.0.0-beta
-    if (l.preParts.length > 0 && c.preParts.length === 0) return false; // 1.0.0-beta < 1.0.0
+    if (l.preParts.length === 0 && c.preParts.length > 0) return true; 
+    if (l.preParts.length > 0 && c.preParts.length === 0) return false; 
 
-    // 3. Both are pre-releases (e.g., beta.3 vs beta.4). Compare dot-separated parts.
     for (let i = 0; i < Math.max(l.preParts.length, c.preParts.length); i++) {
         const lPart = l.preParts[i];
         const cPart = c.preParts[i];
@@ -56,16 +54,15 @@ function isNewerVersion(latest: string, current: string): boolean {
 
 export async function GET() {
   try {
-    // FIX: Get current version securely without crashing Docker's standalone output
-    const currentVersion = process.env.npm_package_version || "1.0.0";
+    // FIX: Use Webpack-bundled package version instead of environment variable
+    const currentVersion = packageJson.version || "1.0.0";
     
-    // 2. Fetch the last 100 releases from your GitHub repo
     const res = await fetch('https://api.github.com/repos/hankscafe/omnibus/releases?per_page=100', {
         headers: { 
           'User-Agent': 'Omnibus-App',
           'Accept': 'application/vnd.github.v3+json'
         },
-        next: { revalidate: 3600 } // Cache for 1 hour to respect GitHub API limits
+        next: { revalidate: 3600 } 
     });
     
     if (!res.ok) throw new Error("Failed to fetch from GitHub");
@@ -75,7 +72,6 @@ export async function GET() {
         return NextResponse.json({ updateAvailable: false, currentVersion, latestVersion: currentVersion, releases: [] });
     }
 
-    // 3. Compare latest release tag using our mathematical SemVer check
     const latestVersion = releases[0].tag_name.replace(/^v/, '');
     const updateAvailable = isNewerVersion(latestVersion, currentVersion);
 
@@ -83,15 +79,14 @@ export async function GET() {
       updateAvailable,
       currentVersion,
       latestVersion,
-      releases // Send the whole array to the frontend for the history page
+      releases 
     });
 
   } catch (error) {
-    // Fail gracefully so the Admin Dashboard doesn't crash if GitHub is down
     return NextResponse.json(
       { 
         updateAvailable: false, 
-        currentVersion: process.env.npm_package_version || "1.0.0", 
+        currentVersion: packageJson.version || "1.0.0", 
         releases: [],
         error: "Could not check for updates" 
       }, 

@@ -10,6 +10,7 @@ import { DiscordNotifier } from '@/lib/discord';
 
 import { isReleasedYet } from '@/lib/utils';
 import { searchAndDownload } from '@/lib/automation';
+import packageJson from '../../../../../../package.json';
 
 const execAsync = promisify(exec);
 
@@ -486,8 +487,8 @@ export async function POST(request: Request) {
                     const lastNotified = notifiedSetting?.value || "";
 
                     if (latestVersion !== lastNotified) {
-                        // FIX: Safe environment variable checking for Docker compat.
-                        const currentVersion = process.env.npm_package_version || "1.0.0";
+                        // FIX: Use Webpack-bundled package version instead of environment variable
+                        const currentVersion = packageJson.version || "1.0.0";
 
                         // Strict semantic version comparison preventing false alerts
                         if (isNewerVersion(latestVersion, currentVersion)) {

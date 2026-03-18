@@ -98,7 +98,7 @@ jobs:
       - name: Send Discord Notification (Docker Published)
         if: success() # Only runs if the image builds and pushes successfully
         env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
         run: |
           # 1. Format variables
           COMMIT_SHORT="${GITHUB_SHA:0:7}"

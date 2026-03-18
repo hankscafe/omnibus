@@ -30,7 +30,7 @@ jobs:
       - name: Send Discord Notification (Test Results)
         if: always() # CRITICAL: Ensures this runs even if tests fail
         env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
         run: |
           COMMIT_SHORT="${GITHUB_SHA:0:7}"
           TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')

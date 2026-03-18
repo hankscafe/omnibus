@@ -58,7 +58,7 @@ export function RecentlyAdded() {
                   </div>
               </div>
 
-              <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4 text-center gap-2 z-20">
+              <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 hidden sm:flex flex-col justify-end p-4 text-center gap-2 z-20">
                   <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md">{item.name}</h3>
                   <p className="text-white/80 text-xs mb-2 drop-shadow-md">{item.year || '????'}</p>
                   

@@ -714,8 +714,8 @@ function LibraryContent() {
                           {progress > 0 && !isCompleted && (<div className="absolute bottom-0 left-0 right-0 h-2.5 bg-black/80 z-10 border-t border-black/40"><div className="h-full bg-primary transition-all duration-500 shadow-sm shadow-primary/50" style={{ width: `${progress}%` }} /></div>)}
                       </div>
 
-                      {/* Hover Overlay with chunky mobile buttons */}
-                      <div className={`absolute inset-0 bg-black/80 transition-opacity flex flex-col items-center justify-center gap-1.5 p-3 z-20 ${isSelectionMode ? 'hidden' : 'opacity-0 sm:group-hover:opacity-100'}`}>
+                      {/* Hover Overlay (Hidden on Mobile, Visible on Desktop Hover) */}
+                        <div className={`absolute inset-0 bg-black/80 transition-opacity flex-col items-center justify-center gap-1.5 p-3 z-20 ${isSelectionMode ? 'hidden' : 'hidden sm:flex opacity-0 group-hover:opacity-100'}`}>
                         <Button 
                             variant="default" 
                             size="sm" 
@@ -726,15 +726,25 @@ function LibraryContent() {
                             <span className="truncate">{navigatingTo === navId ? "Loading..." : "Read Series"}</span>
                         </Button>
                         <div className="flex gap-1.5 w-full">
-                            <Button variant="secondary" size="sm" className="h-10 sm:h-8 flex-1 shadow-lg text-xs sm:text-[10px] font-bold px-1.5 min-w-0" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}>
-                                <ListPlus className="w-3 h-3 mr-1 shrink-0" /> 
-                                <span className="truncate">List</span>
+                          <Button 
+                            variant="secondary" 
+                            size="sm" 
+                            className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}
+                            title="Add to List"
+                        >
+                            <ListPlus className="w-4 h-4 shrink-0" /> 
+                        </Button>
+                        {isAdmin && (
+                            <Button 
+                                variant="secondary" 
+                                size="sm" 
+                                className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}
+                                title="Edit Metadata"
+                            >
+                                <Settings2 className="w-4 h-4 shrink-0" /> 
                             </Button>
-                            {isAdmin && (
-                                <Button variant="secondary" size="sm" className="h-10 sm:h-8 flex-1 shadow-lg text-xs sm:text-[10px] font-bold px-1.5 min-w-0" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}>
-                                    <Settings2 className="w-3 h-3 mr-1 shrink-0" /> 
-                                    <span className="truncate">Edit</span>
-                                </Button>
                             )}
                         </div>
                         {isAdmin && (

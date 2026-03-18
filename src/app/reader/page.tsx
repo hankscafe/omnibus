@@ -32,7 +32,6 @@ function ReaderContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isMarkedRead, setIsMarkedRead] = useState(false);
-  const isInitialLoad = useRef(true);
   
   const [isReadyToSync, setIsReadyToSync] = useState(false);
   
@@ -94,6 +93,11 @@ function ReaderContent() {
     if (!filePath) return;
     setLoading(true);
     
+    // Reset reader state immediately when navigating to a new issue
+    setCurrentIndex(0);
+    setIsReadyToSync(false);
+    setPages([]);
+    
     Promise.all([
       fetch(`/api/reader/pages?path=${encodeURIComponent(filePath)}`).then(res => res.json()),
       fetch(`/api/progress?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.json()),
@@ -109,18 +113,23 @@ function ReaderContent() {
             const currentIdx = sortedIssues.findIndex((issue: any) => issue.fullPath === filePath);
             if (currentIdx > -1 && currentIdx < sortedIssues.length - 1) {
                 setNextIssue({ path: sortedIssues[currentIdx + 1].fullPath, name: sortedIssues[currentIdx + 1].name });
+            } else {
+                setNextIssue(null); // Ensure we clear it if it's the last issue
             }
+        } else {
+            setNextIssue(null);
         }
 
-        if (isInitialLoad.current) {
-            if (progressData && progressData.currentPage > 0 && !progressData.isCompleted) {
-                const safePage = Math.min(progressData.currentPage, pageData.pages.length - 1);
-                setCurrentIndex(safePage);
-            }
-            setIsMarkedRead(progressData?.isCompleted || false);
-            isInitialLoad.current = false;
-            setTimeout(() => setIsReadyToSync(true), 500); 
+        // Apply progress for the specific issue we just loaded
+        if (progressData && progressData.currentPage > 0 && !progressData.isCompleted) {
+            const safePage = Math.min(progressData.currentPage, pageData.pages.length - 1);
+            setCurrentIndex(safePage);
+        } else {
+            setCurrentIndex(0); // Explicitly start at 0 if no progress exists
         }
+        
+        setIsMarkedRead(progressData?.isCompleted || false);
+        setTimeout(() => setIsReadyToSync(true), 500); 
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
@@ -202,10 +211,21 @@ function ReaderContent() {
         setCurrentIndex(pages.length - 1);
         if (!showUI) triggerPageToast();
     } else if (nextIssue && seriesPath) {
+        // Force sync the current issue as 100% complete before moving on
+        fetch('/api/progress', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ 
+                filePath, 
+                currentPage: pages.length, 
+                totalPages: pages.length 
+            })
+        }).catch(() => {});
+
         toast({ title: "Loading Next Issue...", description: nextIssue.name });
-        router.push(`/reader?path=${encodeURIComponent(nextIssue.path)}&series=${encodeURIComponent(seriesPath)}`);
+        router.replace(`/reader?path=${encodeURIComponent(nextIssue.path)}&series=${encodeURIComponent(seriesPath)}`);
     }
-  }, [currentIndex, pages.length, nextIssue, seriesPath, router, toast, getStep, showUI, triggerPageToast]);
+  }, [currentIndex, pages.length, nextIssue, seriesPath, router, toast, getStep, showUI, triggerPageToast, filePath, getAuthHeaders]);
 
   const prevPage = useCallback(() => {
     if (currentIndex > 0) {

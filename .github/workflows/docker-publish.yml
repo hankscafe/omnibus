@@ -94,3 +94,43 @@ jobs:
           # This caching makes subsequent builds massively faster
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Send Discord Notification (Docker Published)
+        if: success() # Only runs if the image builds and pushes successfully
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          # 1. Format variables
+          COMMIT_SHORT="${GITHUB_SHA:0:7}"
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          VERSION="v${{ env.VERSION }}"
+          
+          # 2. Safely construct JSON payload using jq
+          PAYLOAD=$(jq -n \
+            --arg title "🐳 Docker Image Published" \
+            --arg desc "Omnibus $VERSION has been built and published to GitHub Container Registry." \
+            --arg version "$VERSION" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg commit "\`$COMMIT_SHORT\`" \
+            --arg pull "\`\`\`bash\ndocker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\n\`\`\`" \
+            --arg footer "Omnibus $VERSION • Built with GitHub Actions" \
+            --arg time "$TIMESTAMP" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: 3447003,
+                fields: [
+                  { name: "Version", value: $version, inline: true },
+                  { name: "Branch", value: $branch, inline: true },
+                  { name: "Commit", value: $commit, inline: true },
+                  { name: "Pull Command", value: $pull, inline: false }
+                ],
+                footer: { text: $footer },
+                timestamp: $time
+              }]
+            }' \
+          )
+          
+          # 3. Post to Discord
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK

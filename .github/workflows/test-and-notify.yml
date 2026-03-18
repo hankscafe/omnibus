@@ -1,0 +1,98 @@
+name: Build, Test & Notify
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      # --- 1. MODIFIED TEST COMMAND ---
+      # The --json and --outputFile flags force Jest to write the results to a file
+      - name: Run Tests
+        run: npm test -- --json --outputFile=test-results.json
+
+      - name: Send Discord Notification (Test Results)
+        if: always() # CRITICAL: Ensures this runs even if tests fail
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          COMMIT_SHORT="${GITHUB_SHA:0:7}"
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          # --- 2. PARSE THE JSON REPORT ---
+          # We check if the file exists just in case the build crashed before Jest even started
+          if [ -f test-results.json ]; then
+            # Extract numbers using jq
+            SUITES_PASSED=$(jq -r '.numPassedTestSuites' test-results.json)
+            SUITES_TOTAL=$(jq -r '.numTotalTestSuites' test-results.json)
+            TESTS_PASSED=$(jq -r '.numPassedTests' test-results.json)
+            TESTS_TOTAL=$(jq -r '.numTotalTests' test-results.json)
+            
+            # Format them to match your desired layout
+            TEST_FILES="$SUITES_PASSED passed ($SUITES_TOTAL)"
+            TEST_COUNT="$TESTS_PASSED passed ($TESTS_TOTAL)"
+          else
+            TEST_FILES="N/A (Failed to generate report)"
+            TEST_COUNT="N/A"
+          fi
+          
+          # Change color and text based on GitHub's overall job status
+          if [ "${{ job.status }}" = "success" ]; then
+            COLOR=3066993 # Green
+            TITLE="✅ Tests Passed"
+            DESC="All tests completed successfully for Omnibus"
+          else
+            COLOR=15158332 # Red
+            TITLE="❌ Tests Failed"
+            DESC="Tests failed for Omnibus. Please click the Workflow link to review the logs."
+          fi
+          
+          # --- 3. SEND THE PAYLOAD ---
+          PAYLOAD=$(jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            --arg color "$COLOR" \
+            --arg files "$TEST_FILES" \
+            --arg tests "$TEST_COUNT" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg commit "\`$COMMIT_SHORT\`" \
+            --arg workflow "[View Run]($WORKFLOW_URL)" \
+            --arg footer "Omnibus CI/CD • Test Suite" \
+            --arg time "$TIMESTAMP" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: ($color | tonumber),
+                fields: [
+                  { name: "Test Files", value: $files, inline: true },
+                  { name: "Tests", value: $tests, inline: true },
+                  { name: "Duration", value: "See Logs", inline: true },
+                  { name: "Branch", value: $branch, inline: true },
+                  { name: "Commit", value: $commit, inline: true },
+                  { name: "Workflow", value: $workflow, inline: true }
+                ],
+                footer: { text: $footer },
+                timestamp: $time
+              }]
+            }' \
+          )
+          
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK

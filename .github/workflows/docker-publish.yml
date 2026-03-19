@@ -95,7 +95,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Automatically sync the README.md to Docker Hub
+      # Automatically sync the README-docker.md to Docker Hub
       - name: Update Docker Hub Description
         if: success() 
         uses: peter-evans/dockerhub-description@v4
@@ -104,7 +104,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKERHUB_REPO }}
           short-description: ${{ github.event.repository.description }}
-          readme-filepath: ./README.md
+          readme-filepath: ./README-docker.md
 
       # Discord notification step
       - name: Send Discord Notification (Docker Published)

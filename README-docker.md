@@ -6,18 +6,23 @@
   <em>The ultimate all-in-one, self-hosted comic book and manga app.</em>
 </p>
 
-<div align="center">
-
-  [![Build Status](https://img.shields.io/github/actions/workflow/status/hankscafe/omnibus/docker-publish.yml?branch=main&style=for-the-badge&logo=github&label=Build)](https://github.com/hankscafe/omnibus/actions/workflows/docker-publish.yml)
-  [![Docker Image (GHCR)](https://img.shields.io/badge/Docker-GHCR-blue?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/hankscafe/omnibus/pkgs/container/omnibus)
-  [![Docker Hub Version](https://img.shields.io/docker/v/hankscafe/omnibus.svg?style=for-the-badge&logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/hankscafe/omnibus)
-  [![Docker Pulls](https://img.shields.io/docker/pulls/hankscafe/omnibus.svg?style=for-the-badge&logo=docker)](https://hub.docker.com/r/hankscafe/omnibus)
-  [![Docker Image Size](https://img.shields.io/docker/image-size/hankscafe/omnibus/latest.svg?style=for-the-badge&logo=docker)](https://hub.docker.com/r/hankscafe/omnibus)
-  [![License](https://img.shields.io/github/license/hankscafe/omnibus?style=for-the-badge&color=green)](https://github.com/hankscafe/omnibus/blob/main/LICENSE)
-  [![GitHub Stars](https://img.shields.io/github/stars/hankscafe/omnibus?style=for-the-badge&logo=github&color=yellow)](https://github.com/hankscafe/omnibus/stargazers)
-  [![Discord](https://img.shields.io/discord/1483588541341503500?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/FBnzdBZP)
-
-</div>
+<p align="center">
+  <a href="https://github.com/hankscafe/omnibus/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/hankscafe/omnibus/docker-publish.yml?branch=main&label=Build&logo=github" alt="Build Status">
+  </a>
+  <a href="https://github.com/hankscafe/omnibus/pkgs/container/omnibus">
+    <img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker&logoColor=white" alt="Docker Image">
+  </a>
+  <a href="https://github.com/hankscafe/omnibus/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/hankscafe/omnibus?color=green" alt="License">
+  </a>
+  <a href="https://github.com/hankscafe/omnibus/stargazers">
+    <img src="https://img.shields.io/github/stars/hankscafe/omnibus?style=flat&logo=github&color=yellow" alt="GitHub Stars">
+  </a>
+  <a href="https://discord.gg/FBnzdBZP">
+    <img src="https://img.shields.io/discord/1483588541341503500?color=5865F2&logo=discord&logoColor=white&label=Discord" alt="Discord">
+  </a>
+</p>
 
 **Omnibus** is the ultimate all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection.
 
@@ -272,18 +277,6 @@ Complete, granular control over your instance, your users, and your underlying a
 * [**External API Integrations:**](https://github.com/hankscafe/omnibus/blob/main/docs/API.md) Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.
 * **Scheduled Tasks (Cron):** Configure how often Omnibus should scan your disk for new files, refresh metadata, or check indexers for missing requested issues.
 * **Live System Logs:** A built-in log viewer to easily troubleshoot API limits, failed downloads, or matching errors.
-
----
-
-## Additional Screenshots
-
-| | | |
-|:---:|:---:|:---:|
-| [![Analytics page showing data cards](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_1.png?raw=true) | [![Analytics page showing purge option for unread series](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_2.png?raw=true) | [![Requests awaiting approval](https://github.com/hankscafe/omnibus/blob/main/docs/images/approvals.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/approvals.png?raw=true) |
-| [![Library diagnostics page](https://github.com/hankscafe/omnibus/blob/main/docs/images/diagnostics.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/diagnostics.png?raw=true) | [![Issue reports page](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_1.png?raw=true) | [![Issue reports admin response](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_2.png?raw=true) |
-| [![Issue reports resolution](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_3.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_3.png?raw=true) | [![My Requests page](https://github.com/hankscafe/omnibus/blob/main/docs/images/my_requests.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/my_requests.png?raw=true) | [![Smart Matcher page](https://github.com/hankscafe/omnibus/blob/main/docs/images/smart_matcher.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/smart_matcher.png?raw=true) |
-| [![Storage Deep Dive page](https://github.com/hankscafe/omnibus/blob/main/docs/images/storage_deep_dive.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/storage_deep_dive.png?raw=true) | [![System Logs live terminal](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_1.png?raw=true) | [![System Logs page](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_2.png?raw=true) |
-| [![User Management page](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true) | | |
 
 ---
 

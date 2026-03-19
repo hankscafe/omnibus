@@ -83,7 +83,8 @@ export async function GET(request: Request) {
             const wasmPath = path.join(process.cwd(), 'node_modules', 'node-unrar-js', 'esm', 'js', 'unrar.wasm');
             if (fs.existsSync(wasmPath)) {
                 const wasmBuf = fs.readFileSync(wasmPath);
-                options.wasmBinary = new Uint8Array(wasmBuf).buffer;
+                // FIXED: Properly isolate ArrayBuffer from Node.js Buffer pool
+                options.wasmBinary = wasmBuf.buffer.slice(wasmBuf.byteOffset, wasmBuf.byteOffset + wasmBuf.byteLength);
             }
         } catch(e) {}
 
@@ -101,12 +102,15 @@ export async function GET(request: Request) {
         extractor = await createExtractorFromFile(options);
         const extracted = extractor.extract({ files: [targetHeader.name] });
         
-        let fileData = extracted.files[0]?.extraction;
+        // FIXED: node-unrar-js returns a generator for files, convert to an Array first!
+        const extractedFiles = Array.from((extracted.files as any) || []);
+        let fileData = extractedFiles[0]?.extraction;
 
         if (!fileData) {
             extractor = await createExtractorFromFile(options);
             const fullExtraction = extractor.extract();
-            const matchedFile = fullExtraction.files.find((f: any) => f.fileHeader.name === targetHeader.name);
+            const allFiles = Array.from((fullExtraction.files as any) || []);
+            const matchedFile = allFiles.find((f: any) => f.fileHeader.name === targetHeader.name);
             fileData = matchedFile?.extraction;
         }
         

@@ -67,7 +67,8 @@ export async function GET(request: Request) {
             const wasmPath = path.join(process.cwd(), 'node_modules', 'node-unrar-js', 'esm', 'js', 'unrar.wasm');
             if (fs.existsSync(wasmPath)) {
                 const wasmBuf = fs.readFileSync(wasmPath);
-                options.wasmBinary = new Uint8Array(wasmBuf).buffer;
+                // FIXED: Properly isolate ArrayBuffer from Node.js Buffer pool
+                options.wasmBinary = wasmBuf.buffer.slice(wasmBuf.byteOffset, wasmBuf.byteOffset + wasmBuf.byteLength);
             }
         } catch(e) {}
 

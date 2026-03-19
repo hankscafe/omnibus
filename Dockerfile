@@ -1,5 +1,8 @@
 FROM node:20-alpine AS base
 
+# ADDED: Update global npm to the latest version to patch core vulnerabilities
+RUN npm install -g npm@latest
+
 # Install OpenSSL for Prisma and libc-compat for Next.js
 RUN apk add --no-cache libc6-compat openssl
 

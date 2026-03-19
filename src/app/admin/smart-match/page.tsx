@@ -22,7 +22,7 @@ export default function SmartMatchPage() {
             .then(async (res) => {
                 const data = await res.json();
                 
-                console.log("SMART MATCHER RESPONSE:", data);
+                Logger.log("SMART MATCHER RESPONSE:", data, 'info');
 
                 if (!res.ok) {
                     toast({ title: "API Error", description: data.error || "Failed to fetch.", variant: "destructive" });
@@ -31,13 +31,13 @@ export default function SmartMatchPage() {
                 if (Array.isArray(data)) {
                     setUnmatched(data);
                 } else if (data && data.error) {
-                    console.error("Backend returned an error:", data.error);
+                    Logger.log("Backend returned an error:", data.error, 'error');
                 }
                 
                 setLoading(false);
             })
             .catch((err) => {
-                console.error("Fetch failed entirely:", err);
+                Logger.log("Fetch failed entirely:", err, 'error');
                 setLoading(false);
             });
     }, []);

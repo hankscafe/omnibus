@@ -7,8 +7,12 @@ import { prisma } from '@/lib/db';
 
 // @ts-ignore
 import { createExtractorFromFile } from 'node-unrar-js/esm';
+import { Logger } from '@/lib/logger';
 
 const zipCache = new Map<string, { zip: AdmZip, lastAccessed: number }>();
+
+// --- SECURITY FIX: Hard limit to prevent RAM exhaustion (OOM crashes) ---
+const MAX_CACHE_SIZE = 10; 
 
 // OPTIMIZATION: Standalone interval to prevent memory leaks from abandoned AdmZip instances
 setInterval(() => {
@@ -23,12 +27,33 @@ setInterval(() => {
 function getZipInstance(filePath: string) {
     const now = Date.now();
     let cached = zipCache.get(filePath);
+    
     if (!cached) {
+        // --- SECURITY FIX: LRU Eviction Logic ---
+        // If we hit the max capacity, find and delete the oldest accessed cache entry
+        if (zipCache.size >= MAX_CACHE_SIZE) {
+            let oldestKey = null;
+            let oldestTime = Infinity;
+            
+            for (const [key, data] of zipCache.entries()) {
+                if (data.lastAccessed < oldestTime) {
+                    oldestTime = data.lastAccessed;
+                    oldestKey = key;
+                }
+            }
+            
+            if (oldestKey) {
+                zipCache.delete(oldestKey);
+            }
+        }
+
+        // Now safe to load the new ZIP into memory
         cached = { zip: new AdmZip(filePath), lastAccessed: now };
         zipCache.set(filePath, cached);
     } else {
         cached.lastAccessed = now;
     }
+    
     return cached.zip;
 }
 
@@ -131,7 +156,7 @@ export async function GET(request: Request) {
             .toBuffer();
         contentType = 'image/webp';
     } catch (imgErr) {
-        console.error("Sharp processing failed, serving original", imgErr);
+        Logger.log("Sharp processing failed, serving original", imgErr, 'error');
         if (pageName.toLowerCase().endsWith('.png')) contentType = 'image/png';
         if (pageName.toLowerCase().endsWith('.webp')) contentType = 'image/webp';
     }
@@ -143,7 +168,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    console.error("Image Extraction Error:", error);
+    Logger.log("Image Extraction Error:", error, 'error');
     return new NextResponse("Server Error", { status: 500 });
   }
 }

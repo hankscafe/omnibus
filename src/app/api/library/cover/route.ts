@@ -55,7 +55,7 @@ export async function GET(request: Request) {
     });
     
   } catch (error) {
-    console.error("Cover Error:", error);
+    Logger.log("Cover Error:", error, 'error');
     return new Response("Error", { status: 500 });
   }
 }

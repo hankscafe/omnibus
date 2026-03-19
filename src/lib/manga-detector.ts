@@ -35,7 +35,7 @@ export async function detectManga(
     if (comicVineData?.publisher?.name) {
         const publisher = comicVineData.publisher.name.toLowerCase();
         if (MANGA_PUBLISHERS.some(mp => publisher.includes(mp))) {
-            console.log(`[Manga Engine] Identified via Publisher: ${publisher}`);
+            Logger.log(`[Manga Engine] Identified via Publisher: ${publisher}`, 'info');
             return true;
         }
     }
@@ -48,7 +48,7 @@ export async function detectManga(
             MANGA_CONCEPTS.includes(concept.name?.toLowerCase())
         );
         if (hasMangaConcept) {
-            console.log(`[Manga Engine] Identified via ComicVine Concepts`);
+            Logger.log(`[Manga Engine] Identified via ComicVine Concepts`, 'info');
             return true;
         }
     }
@@ -59,7 +59,7 @@ export async function detectManga(
     if (comicVineData?.publisher?.name) {
         const publisher = comicVineData.publisher.name.toLowerCase();
         if (WESTERN_PUBLISHERS.some(wp => publisher.includes(wp))) {
-            console.log(`[Manga Engine] Bypassing AniList due to Western Publisher: ${publisher}`);
+            Logger.log(`[Manga Engine] Bypassing AniList due to Western Publisher: ${publisher}`, 'info');
             
             if (filePath && fs.existsSync(filePath)) {
                 const ext = path.extname(filePath).toLowerCase();
@@ -73,7 +73,7 @@ export async function detectManga(
                             const jsonObj = parser.parse(xmlString);
                             const mangaTag = jsonObj?.ComicInfo?.Manga;
                             if (mangaTag === 'Yes' || mangaTag === 'YesAndRightToLeft') {
-                                console.log(`[Manga Engine] Override: Identified via ComicInfo.xml`);
+                                Logger.log(`[Manga Engine] Override: Identified via ComicInfo.xml`, 'info');
                                 return true;
                             }
                         }
@@ -94,11 +94,11 @@ export async function detectManga(
             const isAniListMatch = await checkAniList(comicVineData.name, releaseYear);
             
             if (isAniListMatch) {
-                console.log(`[Manga Engine] Identified via AniList API Match`);
+                Logger.log(`[Manga Engine] Identified via AniList API Match`, 'info');
                 return true;
             }
         } catch (e) {
-            console.warn("[Manga Engine] AniList check failed.", e);
+            Logger.log("[Manga Engine] AniList check failed.", e, 'warn');
         }
     }
 
@@ -164,7 +164,7 @@ async function checkAniList(title: string, releaseYear: number): Promise<boolean
             if (releaseYear > 0 && media.startDate?.year) {
                 const yearDiff = Math.abs(releaseYear - media.startDate.year);
                 if (yearDiff > 4) {
-                    console.log(`[Manga Engine] AniList match rejected due to Year Mismatch (${releaseYear} vs JP ${media.startDate.year})`);
+                    Logger.log(`[Manga Engine] AniList match rejected due to Year Mismatch (${releaseYear} vs JP ${media.startDate.year})`, 'info');
                     continue; // Skip this result, year is too far off
                 }
             }

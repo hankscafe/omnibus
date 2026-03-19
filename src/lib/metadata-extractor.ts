@@ -40,7 +40,7 @@ export async function parseComicInfo(filePath: string) {
             cvId: cvId
         };
     } catch (error) {
-        console.error(`[Metadata] Failed to parse ComicInfo in ${filePath}`);
+        Logger.log(`[Metadata] Failed to parse ComicInfo in ${filePath}`, 'error');
         return null;
     }
 }

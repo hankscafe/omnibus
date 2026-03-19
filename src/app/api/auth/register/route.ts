@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
 import { DiscordNotifier } from '@/lib/discord';
+import { Logger } from '@/lib/logger';
 
 export async function POST(request: Request) {
   try {
@@ -52,23 +53,43 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Username or email is already taken" }, { status: 400 });
     }
 
-    // 4. Determine Role (First user is automatically an Admin)
-    const userCount = await prisma.user.count();
-    const isFirstUser = userCount === 0;
-
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // 5. Create User
-    const newUser = await prisma.user.create({
+    // 4. Safely create the user with default low-level USER permissions
+    let newUser = await prisma.user.create({
       data: {
         username,
         email,
         password: hashedPassword,
-        role: isFirstUser ? "ADMIN" : "USER",
-        isApproved: isFirstUser ? true : false, // First user is auto-approved
-        autoApproveRequests: isFirstUser ? true : false,
+        role: "USER",
+        isApproved: false, 
+        autoApproveRequests: false,
       }
     });
+
+    // 5. SECURITY FIX: Post-creation promotion to prevent TOCTOU race conditions.
+    // Find the chronologically oldest user in the DB. If it's this user, promote them to ADMIN.
+    const firstUserInDb = await prisma.user.findFirst({
+        orderBy: [
+            { createdAt: 'asc' }, 
+            { id: 'asc' } // Deterministic tie-breaker
+        ],
+        select: { id: true }
+    });
+
+    let isFirstUser = false;
+    
+    if (firstUserInDb?.id === newUser.id) {
+        isFirstUser = true;
+        newUser = await prisma.user.update({
+            where: { id: newUser.id },
+            data: {
+                role: "ADMIN",
+                isApproved: true,
+                autoApproveRequests: true,
+            }
+        });
+    }
 
     // 6. Send Discord Notification for New Users (Admins excluded)
     if (!isFirstUser) {
@@ -86,7 +107,7 @@ export async function POST(request: Request) {
     });
 
   } catch (error: any) {
-    console.error("Registration Error:", error);
+    Logger.log("Registration Error:", error, 'error');
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

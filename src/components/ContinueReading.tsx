@@ -37,7 +37,7 @@ function DynamicCover({ seriesCvId, issueNumber, fallbackUrl, altName }: { serie
                         extractCover(issuesArray);
                     }
                 })
-                .catch((err) => console.error(`Fetch failed for CV ID ${seriesCvId}:`, err));
+                .catch((err) => Logger.log(`Fetch failed for CV ID ${seriesCvId}:`, err), 'error');
         }
     }, [seriesCvId, issueNumber]);
 
@@ -75,7 +75,7 @@ export function ContinueReading() {
               body: JSON.stringify({ progressId })
           });
       } catch (err) {
-          console.error("Failed to mark unread:", err);
+          Logger.log("Failed to mark unread:", err, 'error');
       }
   };
 

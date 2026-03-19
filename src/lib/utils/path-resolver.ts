@@ -46,7 +46,7 @@ export async function resolveRemotePath(remotePath: string): Promise<string> {
     return remotePath;
 
   } catch (error) {
-    console.error("[Path Resolver] Error:", error);
+    Logger.log("[Path Resolver] Error:", error, 'error');
     return remotePath;
   }
 }

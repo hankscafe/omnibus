@@ -48,7 +48,7 @@ export async function GET() {
 
     return NextResponse.json(payload);
   } catch (error) {
-    console.error("Library IDs API Error:", error);
+    Logger.log("Library IDs API Error:", error, 'error');
     return NextResponse.json({ series: [], issues: [], requests: [] });
   }
 }

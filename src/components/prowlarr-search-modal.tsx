@@ -89,7 +89,7 @@ export function ProwlarrSearchModal({ requestId, seriesName, seriesYear }: Props
         alert("Failed: " + data.error);
       }
     } catch (e) {
-      console.error(e);
+      Logger.log(e, 'error');
       alert("Error sending download request.");
     } finally {
       setDownloading(null);

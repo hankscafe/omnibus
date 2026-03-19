@@ -9,6 +9,7 @@ import { promisify } from 'util';
 import { DiscordNotifier } from '@/lib/discord';
 
 import { isReleasedYet } from '@/lib/utils';
+import crypto from 'crypto';
 import { searchAndDownload } from '@/lib/automation';
 import packageJson from '../../../../../../package.json';
 
@@ -127,6 +128,7 @@ export async function POST(request: Request) {
         const startTime = Date.now();
         const nowStr = Date.now().toString();
 
+        // ... (inside POST function) ...
         if (job === 'backup') {
             Logger.log("[Background Job] Starting Database Backup...", "info");
             
@@ -149,12 +151,28 @@ export async function POST(request: Request) {
 
                     const backupData = {
                         timestamp: new Date().toISOString(),
-                        version: "2.0",
+                        version: "2.1",
                         data: { 
                             users, series, issues, readProgresses, settings, requests,
                             libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
                             collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
                         }
+                    };
+
+                    // --- SECURITY FIX: Encrypt background backup payload ---
+                    const algorithm = 'aes-256-cbc';
+                    const secret = process.env.NEXTAUTH_SECRET || 'omnibus_default_encryption_key_!@#';
+                    const key = crypto.createHash('sha256').update(String(secret)).digest();
+                    const iv = crypto.randomBytes(16);
+                    
+                    const cipher = crypto.createCipheriv(algorithm, key, iv);
+                    let encrypted = cipher.update(JSON.stringify(backupData), 'utf8', 'hex');
+                    encrypted += cipher.final('hex');
+
+                    const finalPayload = {
+                        encrypted: true,
+                        iv: iv.toString('hex'),
+                        data: encrypted
                     };
 
                     const backupDir = process.env.BACKUP_PATH || '/backups';
@@ -163,7 +181,7 @@ export async function POST(request: Request) {
                     const fileName = `omnibus_backup_${Date.now()}.json`;
                     const filePath = path.join(backupDir, fileName);
                     
-                    await fs.writeJson(filePath, backupData, { spaces: 2 });
+                    await fs.writeJson(filePath, finalPayload, { spaces: 2 });
 
                     const files = await fs.readdir(backupDir);
                     const backupFiles = files.filter(f => f.startsWith('omnibus_backup_')).sort();
@@ -187,6 +205,7 @@ export async function POST(request: Request) {
 
             return NextResponse.json({ success: true, message: "Database backup started in the background." });
         }
+        // ...
 
         if (job === 'library') {
             Logger.log("[Manual Job] Starting Local Library Auto-Scan...", "info");
@@ -379,7 +398,7 @@ export async function POST(request: Request) {
                                     });
                                     
                                     searchAndDownload(alreadyReq.id, searchName, issueYear, seriesPublisher, isManga)
-                                        .catch(e => console.error("Monitor Automation Error:", e));
+                                        .catch(e => Logger.log("Monitor Automation Error:", e), 'error');
                                         
                                     unreleasedUpgraded++;
                                 }
@@ -404,7 +423,7 @@ export async function POST(request: Request) {
 
                                 if (isReleased) {
                                     searchAndDownload(newReq.id, searchName, issueYear, seriesPublisher, isManga)
-                                        .catch(e => console.error("Monitor Automation Error:", e));
+                                        .catch(e => Logger.log("Monitor Automation Error:", e), 'error');
                                     newIssuesFound++;
                                 }
                             }

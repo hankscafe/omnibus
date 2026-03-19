@@ -36,7 +36,7 @@ export async function GET() {
 
         return NextResponse.json({ items: formatted });
     } catch (error: any) {
-        console.error("Recent Library API Error:", error);
+        Logger.log("Recent Library API Error:", error, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

@@ -8,12 +8,12 @@ async function testMapping() {
     const remotePath = process.argv[2];
     
     if (!remotePath) {
-        console.log("\n❌ Error: Please provide a path to test.");
-        console.log("Usage: node scripts/test-mapping.js \"/downloads/comic-file.cbz\"\n");
+        Logger.log("\n❌ Error: Please provide a path to test.", 'info');
+        Logger.log("Usage: node scripts/test-mapping.js \"/downloads/comic-file.cbz\"\n", 'info');
         process.exit(1);
     }
 
-    console.log(`\n🔍 Testing Path: "${remotePath}"`);
+    Logger.log(`\n🔍 Testing Path: "${remotePath}"`, 'info');
 
     try {
         // 2. Fetch Mappings from DB
@@ -22,13 +22,13 @@ async function testMapping() {
         });
 
         if (!settings || !settings.value) {
-            console.log("⚠️  Warning: No Path Mappings found in database.");
-            console.log(`Result: "${path.normalize(remotePath)}" (No changes)`);
+            Logger.log("⚠️  Warning: No Path Mappings found in database.", 'info');
+            Logger.log(`Result: "${path.normalize(remotePath)}" (No changes)`, 'info');
             return;
         }
 
         const mappings = JSON.parse(settings.value);
-        console.log(`✅ Loaded ${mappings.length} mapping rules.`);
+        Logger.log(`✅ Loaded ${mappings.length} mapping rules.`, 'info');
 
         // 3. Run the logic
         let resolved = remotePath;
@@ -43,21 +43,21 @@ async function testMapping() {
                 resolved = normalizedInput.replace(normalizedRemote, normalizedLocal);
                 resolved = path.normalize(resolved);
                 matched = true;
-                console.log(`\n✨ MATCH FOUND:`);
-                console.log(`   Rule:   "${mapping.remote}" -> "${mapping.local}"`);
+                Logger.log(`\n✨ MATCH FOUND:`, 'info');
+                Logger.log(`   Rule:   "${mapping.remote}" -> "${mapping.local}"`, 'info');
                 break;
             }
         }
 
         if (!matched) {
-            console.log("\n❓ NO MATCH: No rules started with this path prefix.");
+            Logger.log("\n❓ NO MATCH: No rules started with this path prefix.", 'info');
         }
 
-        console.log(`\n🚀 FINAL RESOLVED PATH:`);
-        console.log(`   "${resolved}"\n`);
+        Logger.log(`\n🚀 FINAL RESOLVED PATH:`, 'info');
+        Logger.log(`   "${resolved}"\n`, 'info');
 
     } catch (error) {
-        console.error("❌ Script Error:", error.message);
+        Logger.log("❌ Script Error:", error.message, 'error');
     } finally {
         await prisma.$disconnect();
     }

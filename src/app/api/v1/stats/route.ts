@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { DownloadService } from '@/lib/download-clients';
 import packageJson from '../../../../../package.json';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,7 +54,8 @@ export async function GET(req: NextRequest) {
   const validKey = setting?.value?.trim();
 
   if (!validKey || providedKey !== validKey) {
-    console.log(`[Stats API] Auth Failed! Received: '${providedKey}' | Expected: '${validKey}'`);
+    // SECURITY FIX: Replaced the logging of plaintext keys with a safe, generic warning
+    Logger.log(`[Stats API] Auth Failed! An invalid API key was provided.`, 'warn');
     return NextResponse.json({ error: 'Unauthorized. Invalid API Key.' }, { status: 401 });
   }
 
@@ -99,7 +101,7 @@ export async function GET(req: NextRequest) {
     let healthLabel = systemHealthy ? 'Healthy' : 'Degraded (Download Client Issue)';
     if (systemHealthy && updateAvailable) healthLabel = 'Update Available';
 
-    console.log(`[Stats API] Successfully served stats to Homepage.`);
+    Logger.log(`[Stats API] Successfully served stats to Homepage.`, 'info');
 
     return NextResponse.json({
       success: true,
@@ -110,7 +112,8 @@ export async function GET(req: NextRequest) {
       }
     });
   } catch (error: any) {
-    console.error(`[Stats API] Server Error: ${error.message}`);
-    return NextResponse.json({ error: 'Internal Server Error', details: error.message }, { status: 500 });
+    Logger.log(`[Stats API] Server Error: ${error.message}`, 'error');
+    // --- SECURITY FIX: Removed 'details: error.message' ---
+    return NextResponse.json({ error: 'Internal Server Error. Please check the server logs.' }, { status: 500 });
   }
 }

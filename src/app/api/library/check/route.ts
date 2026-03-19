@@ -21,7 +21,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ owned: !!(seriesMatch || issueMatch) });
   } catch (error) {
-    console.error("Library check error:", error);
+    Logger.log("Library check error:", error, 'error');
     return NextResponse.json({ owned: false });
   }
 }

@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true });
 
   } catch (error: any) {
-    console.error("Mark Unread API Error:", error);
+    Logger.log("Mark Unread API Error:", error, 'error');
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

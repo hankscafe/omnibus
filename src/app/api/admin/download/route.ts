@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
 
   } catch (error) {
-    console.error("Download Error:", error);
+    Logger.log("Download Error:", error, 'error');
     return NextResponse.json({ error: 'Failed to send to client' }, { status: 500 });
   }
 }

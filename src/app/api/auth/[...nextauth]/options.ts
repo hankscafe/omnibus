@@ -3,8 +3,37 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
+import { decrypt2FA } from "@/lib/encryption";
+import crypto from "crypto";
+import { Logger } from "@/lib/logger";
 
-// FIX: Safely extract authenticator regardless of how Webpack nests the CommonJS export
+// --- SECURITY SAFEGUARD ---
+const defaultSecret = 'change_this_to_a_random_secure_string_123!';
+
+if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === defaultSecret) {
+    Logger.log("\n=========================================================================", 'error');
+    Logger.log(" 🛑 CRITICAL SECURITY ERROR: INSECURE NEXTAUTH_SECRET DETECTED", 'error');
+    Logger.log("=========================================================================", 'error');
+    Logger.log(" You are using the default (or missing) NEXTAUTH_SECRET.", 'error');
+    Logger.log(" This secret is used to encrypt your database backups and secure sessions.", 'error');
+    Logger.log(" You MUST change this to a unique, secure string in your docker-compose.yml.", 'error');
+    Logger.log(" Example command to generate one: openssl rand -base64 32", 'error');
+    Logger.log(" Omnibus is shutting down to protect your data. Please update and restart.", 'error');
+    Logger.log("=========================================================================\n", 'error');
+    
+    process.exit(1); 
+}
+
+// --- SECURITY: IN-MEMORY RATE LIMITER ---
+// Preserved across hot-reloads in dev, persistent in production memory
+const globalForRateLimit = globalThis as unknown as {
+    loginAttempts: Map<string, { count: number, lockoutUntil: number }>
+};
+if (!globalForRateLimit.loginAttempts) {
+    globalForRateLimit.loginAttempts = new Map();
+}
+const loginAttempts = globalForRateLimit.loginAttempts;
+
 const otplib = require('otplib');
 const authenticator = otplib.authenticator || otplib.default?.authenticator || otplib;
 
@@ -38,6 +67,13 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         if (!credentials?.username || !credentials?.password) return null;
         
         const input = credentials.username.toLowerCase();
+
+        // --- SECURITY FIX: Rate Limit Check ---
+        const attemptData = loginAttempts.get(input) || { count: 0, lockoutUntil: 0 };
+        if (Date.now() < attemptData.lockoutUntil) {
+            const remainingMinutes = Math.ceil((attemptData.lockoutUntil - Date.now()) / 60000);
+            throw new Error(`Account locked due to too many failed attempts. Try again in ${remainingMinutes} minutes.`);
+        }
         
         const users: any[] = await prisma.$queryRaw`
           SELECT * FROM User 
@@ -47,29 +83,40 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         
         const user = users[0];
 
-        if (!user) throw new Error("Invalid username or password");
+        // Helper function to handle failed attempts
+        const handleFailedAttempt = () => {
+            attemptData.count += 1;
+            if (attemptData.count >= 5) {
+                attemptData.lockoutUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lockout
+            }
+            loginAttempts.set(input, attemptData);
+            throw new Error("Invalid username or password");
+        };
+
+        if (!user) handleFailedAttempt();
         if (!user.password) throw new Error("Please log in using SSO.");
 
         const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
-        if (!isPasswordValid) throw new Error("Invalid username or password");
+        if (!isPasswordValid) handleFailedAttempt();
+        
         if (!user.isApproved) throw new Error("Account pending admin approval.");
 
-        // --- 2FA VERIFICATION LOGIC ---
         if (user.twoFactorEnabled && user.twoFactorSecret) {
-            
-            // Strictly catch the "undefined" serialization quirk from NextAuth
             if (!credentials.totpCode || credentials.totpCode === "undefined" || credentials.totpCode.trim() === "") {
                 throw new Error("2FA_REQUIRED"); 
             }
             
+            const decryptedSecret = decrypt2FA(user.twoFactorSecret);
+
             const isValid = typeof authenticator.verify === 'function'
-                ? authenticator.verify({ token: credentials.totpCode, secret: user.twoFactorSecret })
-                : authenticator.check(credentials.totpCode, user.twoFactorSecret);
+                ? authenticator.verify({ token: credentials.totpCode, secret: decryptedSecret })
+                : authenticator.check(credentials.totpCode, decryptedSecret);
                 
-            if (!isValid) {
-                throw new Error("Invalid 2FA code.");
-            }
+            if (!isValid) handleFailedAttempt();
         }
+
+        // --- SECURITY FIX: Clear failed attempts on successful login ---
+        loginAttempts.delete(input);
 
         return { 
             id: user.id, 
@@ -79,7 +126,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             autoApproveRequests: user.autoApproveRequests, 
             canDownload: user.canDownload,
             image: user.avatar,
-            sessionVersion: user.sessionVersion // <-- Added for Revoke Sessions
+            sessionVersion: user.sessionVersion 
         };
       }
     })
@@ -109,7 +156,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
 
   return {
     providers,
-    secret: process.env.NEXTAUTH_SECRET, // <-- FIX: Explicitly bind the secret here
+    secret: process.env.NEXTAUTH_SECRET, 
     callbacks: {
       async signIn({ user, account }) {
         if (account?.provider === "credentials") return true;
@@ -124,19 +171,34 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           let dbUser = dbUsers[0];
           
           if (!dbUser) {
-            const userCount = await prisma.user.count();
-            const isFirstUser = userCount === 0;
             dbUser = await prisma.user.create({
               data: {
                 username: user.name || user.email.split('@')[0],
                 email: user.email,
                 password: '',
-                role: isFirstUser ? "ADMIN" : "USER",
-                isApproved: isFirstUser ? true : false,
-                autoApproveRequests: isFirstUser ? true : false,
-                canDownload: isFirstUser ? true : false,
+                role: "USER",
+                isApproved: false,
+                autoApproveRequests: false,
+                canDownload: false,
               }
             });
+
+            const firstUserInDb = await prisma.user.findFirst({
+                orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+                select: { id: true }
+            });
+
+            if (firstUserInDb?.id === dbUser.id) {
+                dbUser = await prisma.user.update({
+                    where: { id: dbUser.id },
+                    data: {
+                        role: "ADMIN",
+                        isApproved: true,
+                        autoApproveRequests: true,
+                        canDownload: true,
+                    }
+                });
+            }
           }
           if (!dbUser.isApproved) return false;
           user.id = dbUser.id;
@@ -144,7 +206,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           (user as any).autoApproveRequests = dbUser.autoApproveRequests;
           (user as any).canDownload = dbUser.canDownload;
           user.image = dbUser.avatar; 
-          (user as any).sessionVersion = dbUser.sessionVersion; // <-- Added for Revoke Sessions
+          (user as any).sessionVersion = dbUser.sessionVersion; 
           return true;
         }
         return false;
@@ -160,18 +222,18 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           token.autoApproveRequests = (user as any).autoApproveRequests;
           token.canDownload = (user as any).canDownload;
           token.picture = user.image;
-          token.sessionVersion = (user as any).sessionVersion; // <-- Added for Revoke Sessions
+          token.sessionVersion = (user as any).sessionVersion;
           token.lastActive = Date.now();
+          token.lastSessionCheck = Date.now(); 
         }
 
         if (trigger === "update") {
             if (session?.user?.image !== undefined) token.picture = session.user.image;
-            // Update session version live if the user revoked other sessions from this browser
             if (session?.sessionVersion !== undefined) token.sessionVersion = session.sessionVersion; 
             token.lastActive = Date.now();
+            token.lastSessionCheck = Date.now(); 
         }
 
-        // 1. Time-based Expiration Check
         if (token.lastActive) {
             const timeoutLimit = token.role === "ADMIN" ? ADMIN_TIMEOUT_MS : USER_TIMEOUT_MS;
             if (Date.now() - (token.lastActive as number) > timeoutLimit) {
@@ -181,23 +243,49 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             }
         }
 
-        // 2. Database Session Version Check (Revoke Sessions)
+        const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
         if (token.id) {
-            const dbUser = await prisma.user.findUnique({
-                where: { id: token.id as string },
-                select: { sessionVersion: true }
-            });
-            // FIX: Safely fallback to 0 if the token is from before the DB update
-            if (dbUser && dbUser.sessionVersion !== (token.sessionVersion || 0)) {
-                return { error: "SessionExpired" };
+            const now = Date.now();
+            const lastCheck = (token.lastSessionCheck as number) || 0;
+
+            if (now - lastCheck > SESSION_CHECK_INTERVAL_MS) {
+                const dbUser = await prisma.user.findUnique({
+                    where: { id: token.id as string },
+                    select: { sessionVersion: true }
+                });
+                
+                if (dbUser && dbUser.sessionVersion !== (token.sessionVersion || 0)) {
+                    return { error: "SessionExpired" };
+                }
+                
+                token.lastSessionCheck = now;
             }
         }
 
         const cookieStore = await cookies();
-        const impersonateId = cookieStore.get('omnibus_impersonate')?.value;
+        const rawImpersonateCookie = cookieStore.get('omnibus_impersonate')?.value;
+        let impersonateId = null;
 
         if (token.role === "ADMIN" && !token.originalAdminId) {
             token.originalAdminId = token.id;
+        }
+
+        if (rawImpersonateCookie && token.originalAdminId) {
+            const parts = rawImpersonateCookie.split('|');
+            
+            if (parts.length === 3) {
+                const [targetId, cookieAdminId, signature] = parts;
+                const secret = process.env.NEXTAUTH_SECRET || 'fallback_secret';
+                
+                const expectedSignature = crypto.createHmac('sha256', secret).update(`${targetId}|${cookieAdminId}`).digest('hex');
+                
+                if (signature === expectedSignature && cookieAdminId === token.originalAdminId) {
+                    impersonateId = targetId;
+                } else {
+                    Logger.log("🛑 [Security] Blocked invalid or hijacked impersonation cookie replay.", 'warn');
+                }
+            }
         }
 
         if (impersonateId && token.originalAdminId) {

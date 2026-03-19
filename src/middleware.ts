@@ -29,6 +29,14 @@ export async function middleware(req: NextRequest) {
     if (!isAuth && !isPublicApi) {
         return NextResponse.json({ error: "Unauthorized Access" }, { status: 401 });
     }
+
+    // --- SECURITY FIX: Global Admin API Protection ---
+    // This guarantees that no current or future /api/admin route can be accessed by a standard user,
+    // even if the individual route file forgets to verify the session role.
+    const isAdminApi = pathname.startsWith('/api/admin');
+    if (isAdminApi && token?.role !== 'ADMIN') {
+        return NextResponse.json({ error: "Forbidden: Admin privileges required." }, { status: 403 });
+    }
   }
 
   // --- 2. FRONTEND UI PROTECTION (Returns 302 Redirect) ---
@@ -62,7 +70,7 @@ export async function middleware(req: NextRequest) {
   })
 }
 
-// FIX: Removed the (?!api) exclusion. The middleware now guards everything except static assets!
+// The middleware now guards everything except static assets
 export const config = {
   matcher: [
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',

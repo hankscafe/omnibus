@@ -74,7 +74,7 @@ export async function GET(request: Request) {
                                 description: newDescription
                             }
                         }).catch(err => {
-                            console.warn("[Issue API] Failed to save lazy-loaded metadata:", err.message);
+                            Logger.log("[Issue API] Failed to save lazy-loaded metadata:", err.message, 'warn');
                         });
                     }
 
@@ -86,7 +86,7 @@ export async function GET(request: Request) {
                     });
                 }
             } catch (e) {
-                console.error("Deep fetch failed, falling back to DB data:", e);
+                Logger.log("Deep fetch failed, falling back to DB data:", e, 'error');
             }
         }
     }

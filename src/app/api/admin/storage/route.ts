@@ -26,7 +26,7 @@ export async function GET() {
     return NextResponse.json({ series: [], lastRun: null, needsScan: true });
 
   } catch (error: any) {
-    console.error("Storage Cache Error:", error);
+    Logger.log("Storage Cache Error:", error, 'error');
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

@@ -86,7 +86,7 @@ export async function GET() {
                 }
             }
         } catch (e: any) {
-            console.warn(`[Active Downloads] ${client.name} failed to respond or timed out. Skipping.`);
+            Logger.log(`[Active Downloads] ${client.name} failed to respond or timed out. Skipping.`, 'warn');
             continue; 
         }
     }

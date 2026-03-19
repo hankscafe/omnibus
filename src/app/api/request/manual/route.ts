@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
                                 await Importer.importRequest(newReq.id);
                             }
                         })
-                        .catch(e => console.error(e));
+                        .catch(e => Logger.log(e), 'error');
                 } else {
                     await prisma.request.update({
                       where: { id: newReq.id },

@@ -185,7 +185,7 @@ function ReadingListsContent() {
                   if (data.volumeId) volumeId = data.volumeId;
                   if (data.year) year = data.year;
               }
-          } catch (e) { console.error("Lookup failed", e); }
+          } catch (e) { Logger.log("Lookup failed", e, 'error'); }
 
           const standardRes = await fetch('/api/request', {
               method: 'POST',

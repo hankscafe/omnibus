@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import crypto from 'crypto';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,7 +29,7 @@ export async function GET() {
 
         const backupData = {
             timestamp: new Date().toISOString(),
-            version: "2.0", // Bumped version to indicate the new relational schema
+            version: "2.1", // Bumped version to indicate encrypted schema
             data: {
                 users, series, issues, readProgresses, settings, requests,
                 libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
@@ -35,7 +37,23 @@ export async function GET() {
             }
         };
 
-        const jsonString = JSON.stringify(backupData, null, 2);
+        // --- SECURITY FIX: Encrypt the backup payload using AES-256-CBC ---
+        const algorithm = 'aes-256-cbc';
+        const secret = process.env.NEXTAUTH_SECRET || 'omnibus_default_encryption_key_!@#';
+        const key = crypto.createHash('sha256').update(String(secret)).digest();
+        const iv = crypto.randomBytes(16);
+        
+        const cipher = crypto.createCipheriv(algorithm, key, iv);
+        let encrypted = cipher.update(JSON.stringify(backupData), 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+
+        const finalPayload = {
+            encrypted: true,
+            iv: iv.toString('hex'),
+            data: encrypted
+        };
+
+        const jsonString = JSON.stringify(finalPayload, null, 2);
         
         return new NextResponse(jsonString, {
             status: 200,
@@ -46,6 +64,8 @@ export async function GET() {
         });
 
     } catch (error: any) {
-        return NextResponse.json({ error: "Backup generation failed: " + error.message }, { status: 500 });
+        // --- SECURITY FIX: Log the real error internally, return a generic message ---
+        Logger.log("[Backup API] Generation Failed:", error.message, 'error');
+        return NextResponse.json({ error: "Backup generation failed. Please check the server logs." }, { status: 500 });
     }
 }

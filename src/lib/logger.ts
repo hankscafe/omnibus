@@ -1,6 +1,6 @@
-type LogEntry = { timestamp: string; message: string; type: 'info' | 'error' | 'success' };
+// --- ADDED 'warn' TO THE TYPE UNION ---
+type LogEntry = { timestamp: string; message: string; type: 'info' | 'error' | 'success' | 'warn' };
 
-// Prevent logs from being cleared during Next.js Hot Reloads
 const globalForLogger = global as unknown as { logBuffer: LogEntry[] };
 if (!globalForLogger.logBuffer) globalForLogger.logBuffer = [];
 
@@ -17,9 +17,9 @@ export const Logger = {
       globalForLogger.logBuffer.pop();
     }
     
-    // Also print to actual terminal
-    const color = type === 'error' ? '\x1b[31m' : type === 'success' ? '\x1b[32m' : '\x1b[34m';
-    console.log(`${color}[Omnibus] ${message}\x1b[0m`);
+    // --- ADDED YELLOW TERMINAL COLOR FOR WARNINGS ---
+    const color = type === 'error' ? '\x1b[31m' : type === 'success' ? '\x1b[32m' : type === 'warn' ? '\x1b[33m' : '\x1b[34m';
+    Logger.log(`${color}[Omnibus] ${message}\x1b[0m`, 'info');
   },
   getLogs() {
     return globalForLogger.logBuffer;

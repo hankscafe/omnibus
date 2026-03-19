@@ -81,6 +81,6 @@ export async function evaluateTrophies(userId: string) {
         }
 
     } catch (error) {
-        console.error("Trophy Evaluation Error:", error);
+        Logger.log("Trophy Evaluation Error:", error, 'error');
     }
 }

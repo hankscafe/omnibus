@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     }
 
   } catch (error: any) {
-    console.error("Force Search Error:", error);
+    Logger.log("Force Search Error:", error, 'error');
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

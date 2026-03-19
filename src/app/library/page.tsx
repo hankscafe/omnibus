@@ -165,7 +165,7 @@ function LibraryContent() {
     try {
       const res = await fetch('/api/library/collections', { cache: 'no-store' });
       if (res.ok) setCollections(await res.json());
-    } catch (e) { console.error(e); }
+    } catch (e) { Logger.log(e, 'error'); }
   }, []);
 
   const fetchLibraryData = useCallback(async (pageNum = 1, append = false, forceRefresh = false, currentLimit = 24) => {

@@ -84,7 +84,7 @@ export async function GET() {
         });
 
     } catch (error: any) {
-        console.error("Analytics Error Details:", error);
+        Logger.log("Analytics Error Details:", error, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

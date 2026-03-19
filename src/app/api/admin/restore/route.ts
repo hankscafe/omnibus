@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
+import crypto from 'crypto';
 
 export async function POST(request: Request) {
     try {
@@ -18,52 +19,82 @@ export async function POST(request: Request) {
         }
 
         const fileContent = await file.text();
-        const backup = JSON.parse(fileContent);
+        let backup = JSON.parse(fileContent);
 
-        if (!backup.data) {
+        // --- SECURITY FIX: Decrypt incoming backup if encrypted flag is present ---
+        if (backup.encrypted) {
+            try {
+                const algorithm = 'aes-256-cbc';
+                const secret = process.env.NEXTAUTH_SECRET || 'omnibus_default_encryption_key_!@#';
+                const key = crypto.createHash('sha256').update(String(secret)).digest();
+                const iv = Buffer.from(backup.iv, 'hex');
+                
+                const decipher = crypto.createDecipheriv(algorithm, key, iv);
+                let decrypted = decipher.update(backup.data, 'hex', 'utf8');
+                decrypted += decipher.final('utf8');
+                
+                backup = JSON.parse(decrypted);
+            } catch (err) {
+                Logger.log(`[Restore] Decryption failed. Incorrect NEXTAUTH_SECRET.`, "error");
+                return NextResponse.json({ error: "Failed to decrypt backup. Ensure your NEXTAUTH_SECRET matches the server that created this backup." }, { status: 400 });
+            }
+        }
+
+        if (!backup.data || typeof backup.data !== 'object') {
             return NextResponse.json({ error: "Invalid backup file format" }, { status: 400 });
         }
 
         Logger.log("[Restore] Starting safe database restoration from backup file...", "info");
 
-        // Helper function for safe, repetitive upserts
-        const restoreTable = async (dataArray: any[], model: any, pk: string = 'id') => {
-            if (!dataArray || !Array.isArray(dataArray)) return;
-            for (const item of dataArray) {
-                await model.upsert({
-                    where: { [pk]: item[pk] },
-                    update: item,
-                    create: item
-                }).catch(() => {});
-            }
-        };
+        // --- SECURITY FIX: Use a transaction and remove silent .catch() ---
+        // This guarantees the database will roll back entirely if ANY error occurs (e.g. invalid schema fields)
+        await prisma.$transaction(async (tx) => {
+            
+            // Helper function for safe, repetitive upserts inside the transaction
+            const restoreTable = async (dataArray: any[], model: any, pk: string = 'id') => {
+                if (!dataArray || !Array.isArray(dataArray)) return;
+                for (const item of dataArray) {
+                    // Prisma will automatically throw an error if `item` contains arbitrary/invalid fields,
+                    // which will trigger the transaction rollback.
+                    await model.upsert({
+                        where: { [pk]: item[pk] },
+                        update: item,
+                        create: item
+                    }); 
+                }
+            };
 
-        // 1. Restore Base Entities
-        await restoreTable(backup.data.users, prisma.user);
-        await restoreTable(backup.data.settings, prisma.systemSetting, 'key');
-        await restoreTable(backup.data.libraries, prisma.library);
-        await restoreTable(backup.data.downloadClients, prisma.downloadClient);
-        await restoreTable(backup.data.discordWebhooks, prisma.discordWebhook);
-        await restoreTable(backup.data.indexers, prisma.indexer);
-        await restoreTable(backup.data.customHeaders, prisma.customHeader);
-        await restoreTable(backup.data.searchAcronyms, prisma.searchAcronym);
-        await restoreTable(backup.data.trophies, prisma.trophy);
+            // 1. Restore Base Entities
+            await restoreTable(backup.data.users, tx.user);
+            await restoreTable(backup.data.settings, tx.systemSetting, 'key');
+            await restoreTable(backup.data.libraries, tx.library);
+            await restoreTable(backup.data.downloadClients, tx.downloadClient);
+            await restoreTable(backup.data.discordWebhooks, tx.discordWebhook);
+            await restoreTable(backup.data.indexers, tx.indexer);
+            await restoreTable(backup.data.customHeaders, tx.customHeader);
+            await restoreTable(backup.data.searchAcronyms, tx.searchAcronym);
+            await restoreTable(backup.data.trophies, tx.trophy);
 
-        // 2. Restore Level 1 Dependencies (Require Libraries/Users)
-        await restoreTable(backup.data.series, prisma.series);
-        await restoreTable(backup.data.collections, prisma.collection);
-        await restoreTable(backup.data.readingLists, prisma.readingList);
+            // 2. Restore Level 1 Dependencies (Require Libraries/Users)
+            await restoreTable(backup.data.series, tx.series);
+            await restoreTable(backup.data.collections, tx.collection);
+            await restoreTable(backup.data.readingLists, tx.readingList);
 
-        // 3. Restore Level 2 Dependencies (Require Series/Lists)
-        await restoreTable(backup.data.issues, prisma.issue);
-        await restoreTable(backup.data.requests, prisma.request);
-        await restoreTable(backup.data.userTrophies, prisma.userTrophy);
+            // 3. Restore Level 2 Dependencies (Require Series/Lists)
+            await restoreTable(backup.data.issues, tx.issue);
+            await restoreTable(backup.data.requests, tx.request);
+            await restoreTable(backup.data.userTrophies, tx.userTrophy);
 
-        // 4. Restore Level 3 Dependencies (Require Issues)
-        await restoreTable(backup.data.readProgresses, prisma.readProgress);
-        await restoreTable(backup.data.collectionItems, prisma.collectionItem);
-        await restoreTable(backup.data.readingListItems, prisma.readingListItem);
-        await restoreTable(backup.data.issueReports, prisma.issueReport);
+            // 4. Restore Level 3 Dependencies (Require Issues)
+            await restoreTable(backup.data.readProgresses, tx.readProgress);
+            await restoreTable(backup.data.collectionItems, tx.collectionItem);
+            await restoreTable(backup.data.readingListItems, tx.readingListItem);
+            await restoreTable(backup.data.issueReports, tx.issueReport);
+            
+        }, {
+            // Set a generous timeout for the transaction since large backups can take a few seconds
+            timeout: 30000 
+        });
 
         Logger.log("[Restore] Database restoration completed successfully.", "success");
         return NextResponse.json({ success: true });

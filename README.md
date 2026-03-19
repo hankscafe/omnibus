@@ -309,7 +309,7 @@ services:
       # or your NAS IP (e.g., [http://192.168.1.100:3000](http://192.168.1.100:3000))
       - NEXTAUTH_URL=[http://192.168.1.100:3000](http://192.168.1.100:3000)
       # REQUIRED: Generate a random string for security
-      - NEXTAUTH_SECRET=super_secret_generated_key_123!
+      - NEXTAUTH_SECRET=
       # REQUIRED: Tells the app to store the database in our persistent config mount
       - DATABASE_URL=file:/config/omnibus.db
       # OPTIONAL: Tells the app what path to use for the database backups, if not used Omnibus will default to /backups

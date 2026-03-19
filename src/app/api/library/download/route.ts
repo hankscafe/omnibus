@@ -47,7 +47,7 @@ export async function GET(request: Request) {
     });
 
   } catch (error: any) {
-    console.error("Download Error:", error);
+    Logger.log("Download Error:", error, 'error');
     return new Response("Failed to download file", { status: 500 });
   }
 }

@@ -151,7 +151,7 @@ function SeriesContent() {
             const current = data.downloadedIssues.find((i: any) => !i.isRead && i.readProgress < 100) || data.downloadedIssues[0];
             setActiveIssue(current);
         })
-        .catch(e => { console.error("Scan Failed:", e.message); })
+        .catch(e => { Logger.log("Scan Failed:", e.message, 'error'); })
         .finally(() => setLoading(false));
   }, [folderPath]);
 
@@ -206,7 +206,7 @@ function SeriesContent() {
               }, 1500);
           }
       } catch (e) {
-          console.error(e);
+          Logger.log(e, 'error');
       } finally {
           setIsRefreshingMetadata(false);
       }

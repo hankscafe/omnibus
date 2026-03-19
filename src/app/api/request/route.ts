@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
       }
 
       if (initialStatus === 'PENDING') {
-        searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => console.error(e));
+        searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => Logger.log(e), 'error');
       }
 
       evaluateTrophies(token.id as string).catch(console.error);
@@ -241,7 +241,7 @@ export async function PATCH(request: NextRequest) {
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
       
       // Pass the extracted skipIndexers flag directly into the search queue
-      searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => console.error(e));
+      searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(e), 'error');
     }
 
     evaluateTrophies(token.id as string).catch(console.error);

@@ -1,13 +1,30 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
-import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route'; // <-- Imported direct route handler
+import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route'; 
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+// --- SECURITY FIX: Changed from GET to POST to prevent CSRF and link prefetching ---
+export async function POST(req: NextRequest) {
+    // --- 1. SECURITY: API KEY VALIDATION ---
+    const authHeader = req.headers.get('authorization') || '';
+    const tokenFromBearer = authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : null;
+    const apiKeyHeader = req.headers.get('x-api-key')?.trim();
+    const apiKeyQuery = req.nextUrl.searchParams.get('apiKey')?.trim();
+
+    const providedKey = apiKeyHeader || tokenFromBearer || apiKeyQuery;
+
+    const setting = await prisma.systemSetting.findUnique({ where: { key: 'omnibus_api_key' } });
+    const validKey = setting?.value?.trim();
+
+    if (!validKey || providedKey !== validKey) {
+        Logger.log(`[CRON] Blocked unauthorized execution attempt.`, 'warn');
+        return NextResponse.json({ error: 'Unauthorized. Invalid API Key.' }, { status: 401 });
+    }
+
     try {
-        // --- 1. AUTOMATIC GARBAGE COLLECTION ---
+        // --- 2. AUTOMATIC GARBAGE COLLECTION ---
         const cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() - 7);
         
@@ -19,7 +36,7 @@ export async function GET() {
             }
         });
 
-        // --- 2. SCHEDULED JOBS EVALUATION ---
+        // --- 3. SCHEDULED JOBS EVALUATION ---
         const settings = await prisma.systemSetting.findMany({
             where: {
                 key: {
@@ -56,14 +73,12 @@ export async function GET() {
 
         for (const job of jobsToRun) {
             Logger.log(`[CRON] External heartbeat triggering job: ${job}`, 'info');
-            // --- FIX: Use internal function call instead of self-fetching HTTP ---
-            const req = new Request('http://localhost/api/admin/jobs/trigger', {
+            const reqTrigger = new Request('http://localhost/api/admin/jobs/trigger', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ job })
             });
-            await executeJobRoute(req).catch(() => {});
-            // -------------------------------------------------------------------
+            await executeJobRoute(reqTrigger).catch(() => {});
             await new Promise(r => setTimeout(r, 2000));
         }
 

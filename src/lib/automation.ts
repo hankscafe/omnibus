@@ -84,7 +84,7 @@ export async function searchAndDownload(requestId: string, name: string, year: s
                 await Importer.importRequest(requestId);
             }
         })
-        .catch(e => console.error(e));
+        .catch(e => Logger.log(e), 'error');
     } else {
       await prisma.request.update({
         where: { id: requestId },
@@ -106,7 +106,7 @@ export async function processAutomationQueue(items: any[]) {
       await searchAndDownload(item.id, item.name, item.year, item.publisher, item.isManga, item.skipIndexers);
       await new Promise(r => setTimeout(r, 5000)); 
     } catch (e) {
-      console.error(`Automation failed for ${item.name}`);
+      Logger.log(`Automation failed for ${item.name}`, 'error');
     }
   }
 }

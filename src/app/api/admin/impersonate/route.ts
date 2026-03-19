@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { cookies } from 'next/headers';
+import crypto from 'crypto';
 
 export async function POST(request: Request) {
     try {
@@ -13,14 +14,23 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
+        const adminId = (session.user as any).id;
         const { userId, action } = await request.json();
         const cookieStore = cookies();
 
         if (action === 'start') {
-            // Set a cookie that expires in 1 hour
-            cookieStore.set('omnibus_impersonate', userId, {
+            // --- SECURITY FIX: Cryptographically bind the cookie to the Admin's Session ---
+            const secret = process.env.NEXTAUTH_SECRET || 'fallback_secret';
+            const payload = `${userId}|${adminId}`;
+            
+            // Create a tamper-proof HMAC signature
+            const signature = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+            const boundCookieValue = `${payload}|${signature}`;
+
+            cookieStore.set('omnibus_impersonate', boundCookieValue, {
                 httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
+                // Enforce secure if deployed behind HTTPS, but allow HTTP for local LAN users
+                secure: process.env.NODE_ENV === 'production' || process.env.REQUIRE_SECURE_COOKIES === 'true',
                 sameSite: 'lax',
                 maxAge: 60 * 60, // 1 hour
                 path: '/'

@@ -3,6 +3,8 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
+import { ComicVineVolume, FormattedSearchResult } from '@/types'; // <-- Import strict types
+import { Logger } from '@/lib/logger';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -10,7 +12,6 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
   
-  // Extract page for pagination
   const page = parseInt(searchParams.get('page') || '1', 10);
   const limit = 20;
 
@@ -43,12 +44,12 @@ export async function GET(request: Request) {
       }
     });
 
-    // FIX: Safely check if Comicvine returned an actual array (protects against Unicode rejections)
     if (!response.data || !Array.isArray(response.data.results)) {
         return NextResponse.json({ results: [], hasMore: false });
     }
 
-    const results = response.data.results.map((vol: any) => {
+    // --- TYPING FIX: Use strict ComicVineVolume and FormattedSearchResult ---
+    const results: FormattedSearchResult[] = response.data.results.map((vol: ComicVineVolume) => {
       let desc = vol.deck;
       if (!desc && vol.description) {
          desc = vol.description.replace(/<[^>]*>?/gm, '').trim();
@@ -61,19 +62,18 @@ export async function GET(request: Request) {
         year: vol.start_year || null,
         publisher: vol.publisher?.name || 'Other',
         count: vol.count_of_issues || 0,
-        image: vol.image?.medium_url || vol.image?.small_url || vol.image?.super_url,
+        image: vol.image?.medium_url || vol.image?.small_url || vol.image?.super_url || null,
         description: desc || "No description available."
       };
     });
 
-    // Calculate if there are more pages left based on the current page
     const totalResults = response.data.number_of_total_results || 0;
     const hasMore = (page * limit) < totalResults;
 
     return NextResponse.json({ results, hasMore });
 
   } catch (error) {
-    console.error('ComicVine API Error:', error);
+    Logger.log('ComicVine API Error:', error, 'error');
     return NextResponse.json({ error: 'Failed to fetch data from ComicVine' }, { status: 500 });
   }
 }

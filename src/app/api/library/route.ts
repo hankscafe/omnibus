@@ -164,7 +164,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "Invalid action or status" }, { status: 400 });
   } catch (error: any) {
-    console.error("Bulk Processing Error:", error);
+    Logger.log("Bulk Processing Error:", error, 'error');
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
@@ -374,7 +374,7 @@ export async function GET(request: Request) {
                     }
                 }
             } catch (e) {
-                console.error("Auto-Healer Error:", e);
+                Logger.log("Auto-Healer Error:", e, 'error');
             }
         }
     }
@@ -569,7 +569,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ series: formatted, publishers: globalPublishers, hasMore: sort === 'random' ? false : skip + limit < totalCount });
 
   } catch (error: any) {
-    console.error("Library Query Error:", error);
+    Logger.log("Library Query Error:", error, 'error');
     return NextResponse.json({ error: error.message, series: [], hasMore: false }, { status: 500 });
   }
 }

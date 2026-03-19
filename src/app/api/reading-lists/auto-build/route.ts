@@ -82,7 +82,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, listId: newList.id, message: `Imported ${issuesToCreate.length} issues into ${eventData.name}!` });
 
     } catch (error: any) {
-        console.error("Auto-Build Error:", error);
+        Logger.log("Auto-Build Error:", error, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

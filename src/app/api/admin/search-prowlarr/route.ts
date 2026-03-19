@@ -12,14 +12,14 @@ export async function GET(request: Request) {
   }
 
   try {
-    console.log(`[Manual Search] Searching Prowlarr for: ${query}`);
+    Logger.log(`[Manual Search] Searching Prowlarr for: ${query}`, 'info');
     
     // CHANGED: We are now calling the correct function name 'searchComics'
     const results = await ProwlarrService.searchComics(query);
     
     return NextResponse.json({ results });
   } catch (error: any) {
-    console.error("Search API Error:", error.message);
+    Logger.log("Search API Error:", error.message, 'error');
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

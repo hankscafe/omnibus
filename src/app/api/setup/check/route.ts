@@ -25,7 +25,7 @@ export async function GET() {
         
         return NextResponse.json({ requiresSetup: !isComplete });
     } catch (e) {
-        console.error("Setup Check Error:", e);
+        Logger.log("Setup Check Error:", e, 'error');
         return NextResponse.json({ requiresSetup: true });
     }
 }

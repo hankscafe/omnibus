@@ -30,7 +30,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ results: [], nextOffset: null });
 
   } catch (error) {
-      console.error('Discovery API Error:', error);
+      Logger.log('Discovery API Error:', error, 'error');
       return NextResponse.json({ results: [], nextOffset: null }); 
   }
 }

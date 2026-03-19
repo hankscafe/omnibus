@@ -66,3 +66,6 @@ prisma/schema - BACKUP.prisma
 
 # Ignore .cache for .CBR files
 .cache/
+
+# Ignore .claude/worktree
+.claude/worktrees/

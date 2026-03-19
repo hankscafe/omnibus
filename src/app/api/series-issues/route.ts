@@ -4,8 +4,27 @@ import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { parseComicVineCredits } from '@/lib/utils';
+import { ComicVineIssue } from '@/types'; // <-- STRICT TYPE IMPORT
+import { Logger } from '@/lib/logger';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
+
+// Create a local interface for the return type to eliminate `any[]`
+interface MappedIssueResult {
+    id: number;
+    volumeId: number;
+    name: string;
+    issueNumber: string;
+    issue_number: string;
+    year: string;
+    publisher: string | null;
+    image: string | null;
+    description: string;
+    siteUrl: string;
+    writers: string[];
+    artists: string[];
+    coverArtists: string[];
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -26,10 +45,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    let allResults: any[] = [];
+    const allResults: MappedIssueResult[] = []; // TYPING FIX: Removed any[]
     let offset = 0;
-    let totalResults = 1; // Initialized to 1 so the loop starts
-    let loopCount = 0;    // Safety net to prevent infinite loops
+    let totalResults = 1; 
+    let loopCount = 0;    
 
     // 2. PAGINATION LOOP
     while (offset < totalResults && loopCount < 20) {
@@ -52,14 +71,14 @@ export async function GET(request: Request) {
         totalResults = data.number_of_total_results || 0;
       }
 
-      const pageResults = (data.results || []).map((item: any) => {
+      // TYPING FIX: Force the mapping function to strictly expect a ComicVineIssue
+      const pageResults: MappedIssueResult[] = (data.results || []).map((item: ComicVineIssue) => {
         let desc = item.deck;
         if (!desc && item.description) {
            desc = item.description.replace(/<[^>]*>?/gm, '');
            if (desc.length > 800) desc = desc.substring(0, 800) + '...';
         }
 
-        // Use the centralized metadata parser
         const { writers, artists, coverArtists } = parseComicVineCredits(item.person_credits);
 
         const dateStr = item.store_date || item.cover_date;
@@ -70,7 +89,7 @@ export async function GET(request: Request) {
           volumeId: item.volume.id,
           name: `${item.volume.name} #${item.issue_number}`,
           issueNumber: item.issue_number, 
-          issue_number: item.issue_number, // FIX: Added this explicitly so frontend matching doesn't fail
+          issue_number: item.issue_number, 
           year: year,
           publisher: item.volume?.publisher?.name || null,
           image: item.image?.medium_url || item.image?.small_url || item.image?.super_url || null,
@@ -90,7 +109,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ results: allResults });
 
   } catch (error) {
-    console.error('Series Issues API Error:', error);
+    Logger.log('Series Issues API Error:', error, 'error');
     return NextResponse.json({ results: [] }); 
   }
 }

@@ -47,7 +47,7 @@ export default function LoginPage() {
               router.push('/setup');
           }
       })
-      .catch(err => console.error("Setup check failed", err));
+      .catch(err => Logger.log("Setup check failed", err), 'error');
 
     // 2. CHECK FOR SSO PROVIDERS
     getProviders().then(prov => {

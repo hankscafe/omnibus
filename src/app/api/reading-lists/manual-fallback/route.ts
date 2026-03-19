@@ -27,7 +27,7 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ success: true, request: newRequest });
     } catch (error: any) {
-        console.error("Manual Fallback Error:", error);
+        Logger.log("Manual Fallback Error:", error, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

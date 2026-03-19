@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from './logger';
 import { parseComicVineCredits } from '@/lib/utils';
+import { ComicVineVolume, ComicVineIssue } from '@/types'; // <-- STRICT TYPE IMPORT
 
 export async function syncSeriesMetadata(cvId: number, folderPath: string) {
     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -14,14 +15,15 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
     Logger.log(`[Metadata] Fetching Volume data for CV ID: ${cvId}`, 'info');
 
-    // 1. Fetch Volume (ADDED end_year to field_list)
+    // 1. Fetch Volume
     const volRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
         params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,end_year' },
         headers: { 'User-Agent': 'Omnibus/1.0' },
         timeout: 15000
     });
 
-    const volData = volRes.data.results;
+    // TYPING FIX: Cast the untyped Axios response to our strict interface
+    const volData: ComicVineVolume = volRes.data.results;
     if (!volData) throw new Error("Volume data not found on ComicVine.");
 
     const imageUrl = volData.image?.medium_url || volData.image?.super_url;
@@ -38,10 +40,10 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
         data: {
             name: volData.name,
             publisher: volData.publisher?.name || 'Other',
-            year: parseInt(volData.start_year) || series.year,
+            year: parseInt(volData.start_year || "0") || series.year,
             description: volData.description || volData.deck || null,
             coverUrl: imageUrl,
-            status: volData.end_year ? 'Ended' : 'Ongoing' // AUTOMATED STATUS
+            status: volData.end_year ? 'Ended' : 'Ongoing' 
         }
     });
 
@@ -56,7 +58,7 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
     Logger.log(`[Metadata] Fetching Issues for Volume: ${volData.name}`, 'info');
 
-    // 2. Fetch All Issues (Bulk List for Fast UI Update)
+    // 2. Fetch All Issues
     let offset = 0;
     let totalResults = 1;
     let loopCount = 0;
@@ -74,7 +76,9 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
         const data = issueRes.data;
         if (offset === 0) totalResults = data.number_of_total_results || 0;
-        const cvIssues = data.results || [];
+        
+        // TYPING FIX: Cast the array of untyped objects to our strict ComicVineIssue interface
+        const cvIssues: ComicVineIssue[] = data.results || [];
 
         for (const cvIssue of cvIssues) {
             

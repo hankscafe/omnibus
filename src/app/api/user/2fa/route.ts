@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { encrypt2FA } from '@/lib/encryption';
+import { Logger } from '@/lib/logger';
 
 // FIX: Safely extract authenticator regardless of how Webpack nests the CommonJS export
 const otplib = require('otplib');
@@ -21,7 +23,7 @@ export async function GET(req: Request) {
 
         return NextResponse.json({ enabled: user?.twoFactorEnabled || false });
     } catch (error: any) {
-        console.error("[2FA GET Error]:", error);
+        Logger.log("[2FA GET Error]:", error, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }
@@ -70,7 +72,7 @@ export async function POST(req: Request) {
                 where: { id: userId },
                 data: { 
                     twoFactorEnabled: true, 
-                    twoFactorSecret: secret 
+                    twoFactorSecret: encrypt2FA(secret) // <-- ENCRYPT THE SECRET HERE
                 }
             });
 
@@ -92,7 +94,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 
     } catch (error: any) {
-        console.error("[2FA POST Error]:", error);
+        Logger.log("[2FA POST Error]:", error, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

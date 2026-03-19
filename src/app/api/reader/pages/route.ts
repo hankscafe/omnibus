@@ -90,7 +90,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ pages });
   } catch (error: any) {
-    console.error("Archive Read Error:", error);
+    Logger.log("Archive Read Error:", error, 'error');
     return NextResponse.json({ error: "Failed to read archive" }, { status: 500 });
   }
 }

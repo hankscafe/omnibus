@@ -30,7 +30,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, report });
 
     } catch (error: any) {
-        console.error("Report Creation Error:", error);
+        Logger.log("Report Creation Error:", error, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

@@ -3,11 +3,27 @@ import fs from 'fs';
 import path from 'path';
 
 export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
-    // Reconstruct the file path: public/avatars/filename.jpg
-    const filePath = path.join(process.cwd(), 'public', ...params.path);
+    // 1. Establish the absolute safe base directory
+    const baseDir = path.resolve(process.cwd(), 'public');
+    
+    // 2. Resolve the requested file path
+    const filePath = path.resolve(baseDir, ...params.path);
+
+    // 3. SECURITY CRITICAL: Ensure the resolved path strictly starts with the base directory.
+    // Because path.resolve() evaluates all `../` segments, if the user tries to escape 
+    // the public folder, the resulting path will no longer start with `baseDir`.
+    if (!filePath.startsWith(baseDir)) {
+        return new NextResponse("Forbidden", { status: 403 });
+    }
 
     if (!fs.existsSync(filePath)) {
         return new NextResponse("Image not found", { status: 404 });
+    }
+
+    // 4. SECURITY: Ensure the target is actually a file, not a directory
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) {
+        return new NextResponse("Forbidden", { status: 403 });
     }
 
     const fileBuffer = fs.readFileSync(filePath);

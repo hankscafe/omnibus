@@ -89,7 +89,7 @@ export default function Home() {
         });
         setRefreshSignal(Date.now()); 
     } catch (e) {
-        console.error("Failed to refresh data", e);
+        Logger.log("Failed to refresh data", e, 'error');
     } finally {
         setTimeout(() => setIsRefreshing(false), 2000); 
     }

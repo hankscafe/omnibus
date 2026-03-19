@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, message: "Metadata Refreshed!" });
 
   } catch (error: any) {
-    console.error("Refresh Error:", error.message);
+    Logger.log("Refresh Error:", error.message, 'error');
     return NextResponse.json({ error: "Failed to refresh metadata" }, { status: 500 });
   }
 }

@@ -6,23 +6,18 @@
   <em>The ultimate all-in-one, self-hosted comic book and manga app.</em>
 </p>
 
-<p align="center">
-  <a href="https://github.com/hankscafe/omnibus/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/hankscafe/omnibus/docker-publish.yml?branch=main&label=Build&logo=github" alt="Build Status">
-  </a>
-  <a href="https://github.com/hankscafe/omnibus/pkgs/container/omnibus">
-    <img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker&logoColor=white" alt="Docker Image">
-  </a>
-  <a href="https://github.com/hankscafe/omnibus/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/hankscafe/omnibus?color=green" alt="License">
-  </a>
-  <a href="https://github.com/hankscafe/omnibus/stargazers">
-    <img src="https://img.shields.io/github/stars/hankscafe/omnibus?style=flat&logo=github&color=yellow" alt="GitHub Stars">
-  </a>
-  <a href="https://discord.gg/FBnzdBZP">
-    <img src="https://img.shields.io/discord/1483588541341503500?color=5865F2&logo=discord&logoColor=white&label=Discord" alt="Discord">
-  </a>
-</p>
+<div align="center">
+
+  [![Build Status](https://img.shields.io/github/actions/workflow/status/hankscafe/omnibus/docker-publish.yml?branch=main&style=for-the-badge&logo=github&label=Build)](https://github.com/hankscafe/omnibus/actions/workflows/docker-publish.yml)
+  [![Docker Image (GHCR)](https://img.shields.io/badge/Docker-GHCR-blue?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/hankscafe/omnibus/pkgs/container/omnibus)
+  [![Docker Hub Version](https://img.shields.io/docker/v/hankscafe/omnibus.svg?style=for-the-badge&logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/hankscafe/omnibus)
+  [![Docker Pulls](https://img.shields.io/docker/pulls/hankscafe/omnibus.svg?style=for-the-badge&logo=docker)](https://hub.docker.com/r/hankscafe/omnibus)
+  [![Docker Image Size](https://img.shields.io/docker/image-size/hankscafe/omnibus/latest.svg?style=for-the-badge&logo=docker)](https://hub.docker.com/r/hankscafe/omnibus)
+  [![License](https://img.shields.io/github/license/hankscafe/omnibus?style=for-the-badge&color=green)](https://github.com/hankscafe/omnibus/blob/main/LICENSE)
+  [![GitHub Stars](https://img.shields.io/github/stars/hankscafe/omnibus?style=for-the-badge&logo=github&color=yellow)](https://github.com/hankscafe/omnibus/stargazers)
+  [![Discord](https://img.shields.io/discord/1483588541341503500?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/FBnzdBZP)
+
+</div>
 
 **Omnibus** is the ultimate all-in-one, self-hosted web application built specifically for the comic book and manga community. It seamlessly bridges the gap between discovering, requesting, downloading, managing, and reading your digital collection.
 

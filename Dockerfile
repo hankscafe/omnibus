@@ -1,4 +1,4 @@
-FROM node:20-alpine3.20 AS base
+FROM node:22-alpine AS base
 
 # ADDED: Update global npm to the latest version to patch core vulnerabilities
 RUN npm install -g npm@latest

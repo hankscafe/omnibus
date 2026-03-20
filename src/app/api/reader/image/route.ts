@@ -4,17 +4,11 @@ import path from 'path';
 import AdmZip from 'adm-zip';
 import sharp from 'sharp';
 import { prisma } from '@/lib/db'; 
-
-// @ts-ignore
-import { createExtractorFromFile } from 'node-unrar-js/esm';
 import { Logger } from '@/lib/logger';
 
 const zipCache = new Map<string, { zip: AdmZip, lastAccessed: number }>();
-
-// --- SECURITY FIX: Hard limit to prevent RAM exhaustion (OOM crashes) ---
 const MAX_CACHE_SIZE = 10; 
 
-// OPTIMIZATION: Standalone interval to prevent memory leaks from abandoned AdmZip instances
 setInterval(() => {
     const now = Date.now();
     for (const [key, data] of zipCache.entries()) {
@@ -22,38 +16,29 @@ setInterval(() => {
             zipCache.delete(key);
         }
     }
-}, 60000); // Runs every 60 seconds independently
+}, 60000); 
 
 function getZipInstance(filePath: string) {
     const now = Date.now();
     let cached = zipCache.get(filePath);
     
     if (!cached) {
-        // --- SECURITY FIX: LRU Eviction Logic ---
-        // If we hit the max capacity, find and delete the oldest accessed cache entry
         if (zipCache.size >= MAX_CACHE_SIZE) {
             let oldestKey = null;
             let oldestTime = Infinity;
-            
             for (const [key, data] of zipCache.entries()) {
                 if (data.lastAccessed < oldestTime) {
                     oldestTime = data.lastAccessed;
                     oldestKey = key;
                 }
             }
-            
-            if (oldestKey) {
-                zipCache.delete(oldestKey);
-            }
+            if (oldestKey) zipCache.delete(oldestKey);
         }
-
-        // Now safe to load the new ZIP into memory
         cached = { zip: new AdmZip(filePath), lastAccessed: now };
         zipCache.set(filePath, cached);
     } else {
         cached.lastAccessed = now;
     }
-    
     return cached.zip;
 }
 
@@ -67,85 +52,30 @@ export async function GET(request: Request) {
   }
 
   try {
-    // --- PATH TRAVERSAL FIX: Authorize against known libraries ---
     const libraries = await prisma.library.findMany();
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     const targetPath = path.normalize(filePath).toLowerCase();
 
-    const isAuthorized = authorizedRoots.some(root => targetPath.startsWith(root));
-
-    if (!isAuthorized) {
+    if (!authorizedRoots.some(root => targetPath.startsWith(root))) {
       return new NextResponse("Unauthorized path access", { status: 403 });
     }
-    // -------------------------------------------------------------
 
-    const fd = fs.openSync(filePath, 'r');
-    const magicBuffer = Buffer.alloc(4);
-    fs.readSync(fd, magicBuffer, 0, 4, 0);
-    fs.closeSync(fd);
+    const isZip = filePath.toLowerCase().match(/\.(cbz|epub|zip)$/);
+    if (!isZip) return new NextResponse("Format Not Supported (Likely awaiting CBZ conversion)", { status: 400 });
 
-    const isZipSignature = magicBuffer[0] === 0x50 && magicBuffer[1] === 0x4B;
-    const isRarSignature = magicBuffer[0] === 0x52 && magicBuffer[1] === 0x61 && magicBuffer[2] === 0x72 && magicBuffer[3] === 0x21;
-
-    const isZip = isZipSignature || (filePath.toLowerCase().match(/\.(cbz|epub|zip)$/) && !isRarSignature);
-    const isRar = isRarSignature || (filePath.toLowerCase().match(/\.(cbr|rar)$/) && !isZipSignature);
-
-    if (!isZip && !isRar) return new NextResponse("Format Not Supported", { status: 400 });
-
-    let buffer: Buffer | null = null;
-
-    if (isZip) {
-        const zipInstance = getZipInstance(filePath);
-        const zipEntry = zipInstance.getEntry(pageName) || zipInstance.getEntry(pageName.replace(/\//g, '\\'));
-        if (!zipEntry) return new NextResponse("Page Not Found", { status: 404 });
-        
-        buffer = zipEntry.getData();
-
-    } else if (isRar) {
-        let options: any = { filepath: filePath };
-        
-        try {
-            const wasmPath = path.join(process.cwd(), 'node_modules', 'node-unrar-js', 'esm', 'js', 'unrar.wasm');
-            if (fs.existsSync(wasmPath)) {
-                const wasmBuf = fs.readFileSync(wasmPath);
-                // FIXED: Properly isolate ArrayBuffer from Node.js Buffer pool
-                options.wasmBinary = wasmBuf.buffer.slice(wasmBuf.byteOffset, wasmBuf.byteOffset + wasmBuf.byteLength);
-            }
-        } catch(e) {}
-
-        let extractor = await createExtractorFromFile(options);
-        
-        const list = extractor.getFileList();
-        const headersArray = Array.from((list.fileHeaders as any) || []);
-        
-        const normalizedPageName = pageName.replace(/\\/g, '/');
-        const targetHeader = headersArray.find((h: any) => h.name.replace(/\\/g, '/') === normalizedPageName);
-
-        if (!targetHeader) return new NextResponse("Page Not Found in RAR", { status: 404 });
-
-        // Reset pointer stream by re-initializing before extracting the single matched file
-        extractor = await createExtractorFromFile(options);
-        const extracted = extractor.extract({ files: [targetHeader.name] });
-        
-        // FIXED: node-unrar-js returns a generator for files, convert to an Array first!
-        const extractedFiles = Array.from((extracted.files as any) || []);
-        let fileData = extractedFiles[0]?.extraction;
-
-        if (!fileData) {
-            extractor = await createExtractorFromFile(options);
-            const fullExtraction = extractor.extract();
-            const allFiles = Array.from((fullExtraction.files as any) || []);
-            const matchedFile = allFiles.find((f: any) => f.fileHeader.name === targetHeader.name);
-            fileData = matchedFile?.extraction;
-        }
-        
-        if (!fileData) return new NextResponse("Extraction Failed", { status: 404 });
-        
-        buffer = Buffer.from(fileData);
+    const zipInstance = getZipInstance(filePath);
+    
+    let zipEntry = zipInstance.getEntry(pageName) || zipInstance.getEntry(pageName.replace(/\//g, '\\'));
+    
+    if (!zipEntry) {
+        const getBaseName = (p: string) => p.split(/[/\\]/).pop() || p;
+        const targetFile = getBaseName(pageName);
+        zipEntry = zipInstance.getEntries().find(e => getBaseName(e.entryName) === targetFile) || null;
     }
 
-    if (!buffer) return new NextResponse("Page Not Found", { status: 404 });
-
+    if (!zipEntry) return new NextResponse("Page Not Found", { status: 404 });
+    
+    const buffer = zipEntry.getData();
     let finalBuffer = buffer;
     let contentType = 'image/jpeg';
 
@@ -156,7 +86,6 @@ export async function GET(request: Request) {
             .toBuffer();
         contentType = 'image/webp';
     } catch (imgErr) {
-        Logger.log("Sharp processing failed, serving original", imgErr, 'error');
         if (pageName.toLowerCase().endsWith('.png')) contentType = 'image/png';
         if (pageName.toLowerCase().endsWith('.webp')) contentType = 'image/webp';
     }
@@ -167,8 +96,8 @@ export async function GET(request: Request) {
         'Cache-Control': 'public, max-age=86400', 
       },
     });
-  } catch (error) {
-    Logger.log("Image Extraction Error:", error, 'error');
+  } catch (error: any) {
+    Logger.log(`Image Extraction Error: ${error.message}`, 'error');
     return new NextResponse("Server Error", { status: 500 });
   }
 }

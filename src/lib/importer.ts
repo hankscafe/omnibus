@@ -132,7 +132,6 @@ export const Importer = {
         isManga = await detectManga({ name: cleanSeriesName, publisher: { name: 'Other' }, year: detectedYear }, sourcePath);
     }
 
-    // NATIVE DB FETCH: Find the correct destination library
     const libraries = await prisma.library.findMany();
     let targetLibrary = null;
 
@@ -278,6 +277,17 @@ export const Importer = {
       }
 
       if (!moveSuccess) throw new Error("Failed to move file after multiple attempts due to network locks.");
+
+      // --- THE NEW AUTO-CONVERSION INTERCEPT ---
+      if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar')) {
+          Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');
+          const { convertCbrToCbz } = await import('./converter');
+          const convertedPath = await convertCbrToCbz(finalPath);
+          if (convertedPath) {
+              finalPath = convertedPath;
+              fileName = path.basename(finalPath);
+          }
+      }
 
       if (series?.id) {
          const issueNum = extractIssueNumber(fileName);

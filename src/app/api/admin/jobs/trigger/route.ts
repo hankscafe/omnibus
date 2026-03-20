@@ -205,7 +205,66 @@ export async function POST(request: Request) {
 
             return NextResponse.json({ success: true, message: "Database backup started in the background." });
         }
-        // ...
+        
+        if (job === 'converter') {
+            Logger.log("[Background Job] Starting CBR to CBZ Conversion Sweep...", "info");
+            await prisma.systemSetting.upsert({ where: { key: 'last_converter_sync' }, update: { value: nowStr }, create: { key: 'last_converter_sync', value: nowStr } });
+
+            (async () => {
+                const { convertCbrToCbz } = await import('@/lib/converter');
+                // Find all issues with CBR/RAR extension
+                const cbrIssues = await prisma.issue.findMany({
+                    where: {
+                        OR: [
+                            { filePath: { endsWith: '.cbr' } },
+                            { filePath: { endsWith: '.CBR' } },
+                            { filePath: { endsWith: '.rar' } },
+                            { filePath: { endsWith: '.RAR' } }
+                        ]
+                    }
+                });
+
+                if (cbrIssues.length === 0) {
+                    Logger.log("[Converter] No CBR files found in database.", "info");
+                    await prisma.jobLog.create({ data: { jobType: 'CBR_CONVERTER', status: 'COMPLETED', durationMs: Date.now() - startTime, message: "No CBR files found to convert." } });
+                    return;
+                }
+
+                let successCount = 0;
+                let failCount = 0;
+                let details = `Found ${cbrIssues.length} CBR files to convert.\n\n`;
+
+                for (const issue of cbrIssues) {
+                    if (!issue.filePath) continue;
+                    try {
+                        const newPath = await convertCbrToCbz(issue.filePath);
+                        if (newPath) {
+                            successCount++;
+                            details += `[OK] Converted: ${path.basename(issue.filePath)}\n`;
+                        } else {
+                            failCount++;
+                            details += `[FAIL] Could not convert: ${path.basename(issue.filePath)}\n`;
+                        }
+                    } catch (e: any) {
+                        failCount++;
+                        details += `[FAIL] Error converting ${path.basename(issue.filePath)}: ${e.message}\n`;
+                    }
+                }
+
+                await prisma.jobLog.create({
+                    data: {
+                        jobType: 'CBR_CONVERTER',
+                        status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
+                        durationMs: Date.now() - startTime,
+                        message: details + `\nSummary: ${successCount} Converted, ${failCount} Failed.`
+                    }
+                });
+                
+                DiscordNotifier.sendAlert('job_diagnostics', { description: `CBR Conversion Sweep Complete. Converted: ${successCount}, Failed: ${failCount}` }).catch(() => {});
+            })();
+
+            return NextResponse.json({ success: true, message: "CBR Conversion sweep started." });
+        }
 
         if (job === 'library') {
             Logger.log("[Manual Job] Starting Local Library Auto-Scan...", "info");

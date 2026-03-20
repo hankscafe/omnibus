@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
                         'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule', 'diagnostics_sync_schedule', 'backup_sync_schedule',
                         'popular_sync_schedule',
                         'last_library_sync', 'last_metadata_sync', 'last_monitor_sync', 'last_diagnostics_sync', 'last_backup_sync',
-                        'last_popular_sync'
+                        'last_popular_sync', 'lastconverter_sync'
                     ]
                 }
             }
@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
         checkJob('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync');
         checkJob('backup', 'backup_sync_schedule', 'last_backup_sync');
         checkJob('popular', 'popular_sync_schedule', 'last_popular_sync');
+        checkJob('converter', 'cbr_conversion_schedule', 'last_converter_sync');
 
         for (const job of jobsToRun) {
             Logger.log(`[CRON] External heartbeat triggering job: ${job}`, 'info');

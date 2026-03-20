@@ -176,7 +176,7 @@ A completely custom, zero-friction reading experience built natively into the br
   <strong>Reader page settings.</strong>
 </p>
 
-* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.cbr`, and `.epub` archives.
+* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.epub` archives, and will convert `.cbr` automatically to `.cbz`.
 * **Reading Directions:** One-click toggles for Left-to-Right (Standard Comics), Right-to-Left (Manga), and continuous Vertical Scrolling (Webtoons).
 * **Dynamic Page Layouts:** Single Page, Double Page, or "Double Page (No Cover)" to preserve correct spread alignments.
   * Adjust the gutter gap between 2-page spreads (Seamless, Small, Large).
@@ -309,7 +309,10 @@ services:
       # or your NAS IP (e.g., [http://192.168.1.100:3000](http://192.168.1.100:3000))
       - NEXTAUTH_URL=[http://192.168.1.100:3000](http://192.168.1.100:3000)
       # REQUIRED: Generate a random string for security
+      # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key.  !!DO NOT LOSE THIS!!
       - NEXTAUTH_SECRET=
+      # REQUIRED: Cache directory for CBR -> CBZ convertor
+      - CACHE_DIR=/cache
       # REQUIRED: Tells the app to store the database in our persistent config mount
       - DATABASE_URL=file:/config/omnibus.db
       # OPTIONAL: Tells the app what path to use for the database backups, if not used Omnibus will default to /backups
@@ -318,6 +321,8 @@ services:
     volumes:
       # REQUIRED: Persistent storage for your database, logs, and settings
       - /path/to/your/nas/config:/config
+      # REQUIRED: Maps cache directory where CBR files are temporarily extracted then converted to CBZ
+      - /path/to/your/nas/cache:/cache
       # REQUIRED: Maps backup folder for database backups (can be defined using environment variable)
       - /path/to/your/nas/backups:/backups
       # REQUIRED: Persistent storage for user avatars and banners

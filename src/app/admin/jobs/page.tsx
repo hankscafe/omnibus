@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
     Activity, RefreshCw, FileText, ExternalLink, Download, 
-    UploadCloud, TrendingUp 
+    UploadCloud, TrendingUp, FileArchive // <-- Added FileArchive Icon
 } from "lucide-react"
 
 const INTERVALS = [
@@ -28,15 +28,13 @@ export default function ScheduledJobsPage() {
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
   const [backupSyncSchedule, setBackupSyncSchedule] = useState("168") 
-  
-  // NEW: State for Popular/New Release Sync
   const [popularSyncSchedule, setPopularSyncSchedule] = useState("24")
+  const [converterSyncSchedule, setConverterSyncSchedule] = useState("24") // <-- Added State
   
   const [savingJobs, setSavingJobs] = useState(false)
   const [runningJob, setRunningJob] = useState<string | null>(null) 
   const [loading, setLoading] = useState(true)
   
-  // Restore State
   const [isRestoring, setIsRestoring] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -58,6 +56,7 @@ export default function ScheduledJobsPage() {
         const diagItem = data.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
         const backupItem = data.find((c: any) => c.key === 'backup_sync_schedule'); 
         const popularItem = data.find((c: any) => c.key === 'popular_sync_schedule'); 
+        const converterItem = data.find((c: any) => c.key === 'cbr_conversion_schedule'); // <-- Added config logic
         
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (libItem) setLibrarySyncSchedule(libItem.value);
@@ -65,6 +64,7 @@ export default function ScheduledJobsPage() {
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
         if (backupItem) setBackupSyncSchedule(backupItem.value);
         if (popularItem) setPopularSyncSchedule(popularItem.value); 
+        if (converterItem) setConverterSyncSchedule(converterItem.value);
       }
     } catch (e) {
       toast({ title: "Error", description: "Failed to load schedules.", variant: "destructive" });
@@ -73,7 +73,7 @@ export default function ScheduledJobsPage() {
     }
   };
 
-  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular') => {
+  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter') => {
       setRunningJob(job);
       toast({ title: "Job Started", description: `The ${job} process has been triggered in the background.` });
       try {
@@ -107,7 +107,8 @@ export default function ScheduledJobsPage() {
                   monitor_sync_schedule: monitorSyncSchedule,
                   diagnostics_sync_schedule: diagnosticsSyncSchedule,
                   backup_sync_schedule: backupSyncSchedule,
-                  popular_sync_schedule: popularSyncSchedule
+                  popular_sync_schedule: popularSyncSchedule,
+                  cbr_conversion_schedule: converterSyncSchedule // <-- Added to Payload
               }) 
           })
           if (res.ok) {
@@ -122,7 +123,6 @@ export default function ScheduledJobsPage() {
       }
   }
 
-  // --- RESTORE HANDLER ---
   const handleRestoreUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -184,7 +184,7 @@ export default function ScheduledJobsPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {/* DATABASE BACKUP & RESTORE CARD */}
+        {/* EXISTING CARDS */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Save className="w-5 h-5 text-primary" /> Database Backup</CardTitle>
@@ -208,24 +208,12 @@ export default function ScheduledJobsPage() {
                 </div>
                 
                 <div className="pt-2 border-t border-border">
-                    <input 
-                        type="file" 
-                        accept=".json" 
-                        ref={fileInputRef} 
-                        className="hidden" 
-                        onChange={handleRestoreUpload} 
-                    />
-                    <Button 
-                        variant="outline" 
-                        className="w-full font-bold border-primary/30 text-primary hover:bg-primary/10"
-                        disabled={isRestoring}
-                        onClick={() => fileInputRef.current?.click()}
-                    >
+                    <input type="file" accept=".json" ref={fileInputRef} className="hidden" onChange={handleRestoreUpload} />
+                    <Button variant="outline" className="w-full font-bold border-primary/30 text-primary hover:bg-primary/10" disabled={isRestoring} onClick={() => fileInputRef.current?.click()}>
                         {isRestoring ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <UploadCloud className="w-4 h-4 mr-2"/>} 
                         {isRestoring ? "Restoring..." : "Restore from JSON"}
                     </Button>
                 </div>
-
             </CardContent>
         </Card>
 
@@ -279,6 +267,25 @@ export default function ScheduledJobsPage() {
                 </Select>
                 <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('monitor')} disabled={runningJob === 'monitor'}>
                     {runningJob === 'monitor' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                </Button>
+            </CardContent>
+        </Card>
+
+        {/* --- NEW: CBR AUTO-CONVERTER CARD --- */}
+        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+            <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileArchive className="w-5 h-5 text-primary" /> CBR Auto-Converter</CardTitle>
+                <CardDescription className="text-muted-foreground">Finds legacy .cbr archives in your library and converts them to .cbz for instant loading.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <Select value={converterSyncSchedule} onValueChange={setConverterSyncSchedule}>
+                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('converter')} disabled={runningJob === 'converter'}>
+                    {runningJob === 'converter' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
                 </Button>
             </CardContent>
         </Card>

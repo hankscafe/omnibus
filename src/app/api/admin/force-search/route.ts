@@ -1,41 +1,38 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { SearchEngine } from '@/lib/search-engine';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
-    const { requestId } = await request.json();
+    // 1. Parse JSON body safely
+    const body = (await request.json()) as any;
+    const requestId = body.id || body.requestId;
 
-    const req = await prisma.request.findUnique({
+    // 2. Fetch the actual Prisma Request model
+    const dbReq = await prisma.request.findUnique({
         where: { id: requestId }
     });
 
-    if (!req) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+    if (!dbReq) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
-    // Construct Search Query
-    // e.g., "Batman 050 2016" or "Saga Vol 1"
+    // 3. Construct Search Query using the JSON body (which holds the extra fields)
     let query = "";
     
-    if (req.issueId) {
-        // Issue Search
-        // Format: "Series Name IssueNumber Year" -> "Batman 050 2016"
-        // Pad issue number to 3 digits helps matches often
-        const issueNum = req.name.match(/#(\d+)/)?.[1] || "";
+    if (body.issueId) {
+        const issueNum = body.name?.match(/#(\d+)/)?.[1] || "";
         const paddedNum = issueNum.padStart(3, '0');
-        const cleanName = req.seriesName.replace(/[^\w\s]/g, ''); // Remove special chars
+        const cleanName = body.seriesName?.replace(/[^\w\s]/g, '') || ""; 
         
-        query = `${cleanName} ${paddedNum} ${req.year}`;
+        query = `${cleanName} ${paddedNum} ${body.year}`;
     } else {
-        // Volume/Series Search
-        // Ideally we search for "Series Name Year Pack" or similar, 
-        // but for now let's just search the name and year
-        query = `${req.name} ${req.year}`;
+        query = `${body.name} ${body.year}`;
     }
 
     const result = await SearchEngine.performSmartSearch(query);
 
     if (result.success) {
-        // Update Status
         await prisma.request.update({
             where: { id: requestId },
             data: { status: 'DOWNLOADING' }
@@ -45,8 +42,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: false, error: result.message });
     }
 
-  } catch (error: any) {
-    Logger.log("Force Search Error:", error, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`Force Search Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

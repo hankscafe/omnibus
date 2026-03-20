@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
@@ -39,7 +40,6 @@ export async function POST(request: Request) {
               seriesId: sId, 
               order: nextOrder++ 
           })),
-          skipDuplicates: true // Gracefully ignores duplicates
       });
 
       return NextResponse.json({ success: true, message: `Added ${result.count} items to list.` });
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

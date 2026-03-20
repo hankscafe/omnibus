@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { cookies } from 'next/headers';
 import crypto from 'crypto';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
     try {
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
             const signature = crypto.createHmac('sha256', secret).update(payload).digest('hex');
             const boundCookieValue = `${payload}|${signature}`;
 
+            const cookieStore = await cookies();
             cookieStore.set('omnibus_impersonate', boundCookieValue, {
                 httpOnly: true,
                 // Enforce secure if deployed behind HTTPS, but allow HTTP for local LAN users
@@ -40,13 +42,14 @@ export async function POST(request: Request) {
         
         if (action === 'stop') {
             // Delete the impersonation cookie
+            const cookieStore = await cookies();
             cookieStore.delete('omnibus_impersonate');
             return NextResponse.json({ success: true, message: "Impersonation stopped. Welcome back, Admin." });
         }
 
         return NextResponse.json({ error: "Invalid action." }, { status: 400 });
 
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

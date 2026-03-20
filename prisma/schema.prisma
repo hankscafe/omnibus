@@ -148,6 +148,8 @@ model DiscordWebhook {
   url      String
   isActive Boolean @default(true)
   events   String  // JSON array string of event triggers
+  botUsername  String?  
+  botAvatarUrl String?
 }
 
 model Indexer {

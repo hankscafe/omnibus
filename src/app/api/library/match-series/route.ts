@@ -6,16 +6,17 @@ import path from 'path';
 import axios from 'axios';
 import { detectManga } from '@/lib/manga-detector';
 import { DiscordNotifier } from '@/lib/discord'; 
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
-    const { oldFolderPath, cvId, name, year, publisher } = await request.json();
+    const req = (await request.json()) as any;
+    const { oldFolderPath, cvId, name, year, publisher } = req;
 
     if (!oldFolderPath || !cvId) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // NATIVE DB FETCH: Authorize against all known libraries
     const libraries = await prisma.library.findMany();
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     const normalizedOld = path.normalize(oldFolderPath).toLowerCase();
@@ -60,7 +61,6 @@ export async function POST(request: Request) {
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
     
-    // NATIVE DB FETCH: Find correct target library
     let targetLib = isManga 
         ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
         : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
@@ -182,18 +182,18 @@ export async function POST(request: Request) {
         if (pendingRequests.length > 0) {
             const seriesIssues = await prisma.issue.findMany({ where: { series: { cvId: targetCvId } } });
             
-            // OPTIMIZATION: Collect IDs and execute in a single updateMany
             const requestsToComplete = [];
 
-            for (const req of pendingRequests) {
-                const searchStr = (req.activeDownloadName || req.title || req.name || "");
+            for (const dbReq of pendingRequests) {
+                // FIXED TYPE CASTING HERE
+                const searchStr = (dbReq.activeDownloadName || (dbReq as any).title || (dbReq as any).name || "");
                 const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
                 const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
                 if (issueNum === null) continue;
                 const matchingIssue = seriesIssues.find(i => parseFloat(i.number) === issueNum && i.filePath && i.filePath.length > 0);
 
                 if (matchingIssue) {
-                    requestsToComplete.push(req.id);
+                    requestsToComplete.push(dbReq.id);
                 }
             }
 
@@ -209,7 +209,7 @@ export async function POST(request: Request) {
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
     return NextResponse.json({ success: true, newPath: activeFolderPath, cvId: targetCvId });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

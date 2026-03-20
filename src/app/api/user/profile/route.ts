@@ -3,9 +3,11 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import fs from 'fs-extra';
 import path from 'path';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function GET(req: Request) {
-  const token = await getToken({ req });
+  const token = await getToken({ req: req as any });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
@@ -100,13 +102,14 @@ export async function GET(req: Request) {
         recentHistory, 
         trophies: mappedTrophies 
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Profile GET Error]: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
-  const token = await getToken({ req });
+  const token = await getToken({ req: req as any });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
@@ -161,7 +164,8 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: true, bannerUrl });
     }
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Profile POST Error]: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

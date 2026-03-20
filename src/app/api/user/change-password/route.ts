@@ -3,9 +3,10 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(req: Request) {
-  const token = await getToken({ req });
+  const token = await getToken({ req: req as any });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
@@ -42,7 +43,8 @@ export async function POST(req: Request) {
     Logger.log(`[Auth] User ${user.username} successfully changed their password.`, 'success');
     return NextResponse.json({ success: true, message: 'Password updated successfully.' });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Auth] Error changing password: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

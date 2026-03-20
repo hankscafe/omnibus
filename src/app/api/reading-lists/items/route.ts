@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
@@ -33,10 +34,10 @@ export async function POST(request: Request) {
 
       try {
           await prisma.readingListItem.create({
-              data: { listId, issueId, order: nextOrder }
+              data: { list: { connect: { id: listId } }, issue: { connect: { id: issueId } }, order: nextOrder, title: "" }
           });
-      } catch (error: any) {
-          if (error.code !== 'P2002') throw error; // Ignore Prisma's "Already exists in list" error
+      } catch (error: unknown) {
+          if ((error as any).code !== 'P2002') throw error; // Ignore Prisma's "Already exists in list" error
       }
 
       return NextResponse.json({ success: true, message: `Added issue to reading list.` });
@@ -50,8 +51,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -83,7 +84,7 @@ export async function PUT(request: Request) {
   
         return NextResponse.json({ success: true, message: 'List reordered successfully' });
   
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

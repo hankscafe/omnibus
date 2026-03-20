@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
+import { Logger } from '@/lib/logger';
 
 export async function GET() {
   try {
@@ -101,7 +102,7 @@ export async function GET() {
 
     return NextResponse.json({ success: true, activeDownloads: filteredDownloads });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json({ 
         success: false, 
         error: "Failed to process download clients.", 

@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { pipeline } from 'stream/promises';
 import { DiscordNotifier } from './discord';
+import { getErrorMessage } from './utils/error';
 
 async function getNetworkHeaders() {
     const customHeaders = await prisma.customHeader.findMany();
@@ -76,8 +77,8 @@ export const DownloadService = {
 
       Logger.log(`[${client.type.toUpperCase()}] SUCCESS: Added ${title}`, 'success');
       return { success: true };
-    } catch (error: any) {
-      Logger.log(`[Download Service] Failed: ${error.message}`, 'error');
+    } catch (error: unknown) {
+      Logger.log(`[Download Service] Failed: ${getErrorMessage(error)}`, 'error');
       throw error;
     }
   },
@@ -183,10 +184,10 @@ export const DownloadService = {
 
           Logger.log(`[Internal DL] Download complete. Handing off to Importer...`, 'success');
           return true;
-      } catch (error: any) {
+      } catch (error: unknown) {
           if (fs.existsSync(partFilePath)) try { fs.unlinkSync(partFilePath); } catch (e) {}
           
-          Logger.log(`[Internal DL] Download Failed: ${error.message}`, 'error');
+          Logger.log(`[Internal DL] Download Failed: ${getErrorMessage(error)}`, 'error');
           
           await prisma.request.update({
             where: { id: requestId },

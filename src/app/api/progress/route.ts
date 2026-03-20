@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +53,7 @@ export async function GET(request: Request) {
         }
 
         return NextResponse.json({ currentPage: 0, isCompleted: false });
-    } catch (error: any) {
+    } catch (error: unknown) {
         return NextResponse.json({ currentPage: 0, isCompleted: false });
     }
 }
@@ -108,7 +109,7 @@ export async function POST(request: Request) {
         evaluateTrophies(userId).catch(console.error);
 
         return NextResponse.json({ success: true });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

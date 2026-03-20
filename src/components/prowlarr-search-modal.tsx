@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/table"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Loader2, Cloud, Wifi } from "lucide-react"
+import { Logger } from "@/lib/logger"
+import { getErrorMessage } from "@/lib/utils/error"
 
 interface SearchResult {
   title: string;
@@ -89,7 +91,7 @@ export function ProwlarrSearchModal({ requestId, seriesName, seriesYear }: Props
         alert("Failed: " + data.error);
       }
     } catch (e) {
-      Logger.log(e, 'error');
+      Logger.log(getErrorMessage(e), 'error');
       alert("Error sending download request.");
     } finally {
       setDownloading(null);

@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import crypto from 'crypto';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,9 +64,10 @@ export async function GET() {
             },
         });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         // --- SECURITY FIX: Log the real error internally, return a generic message ---
-        Logger.log("[Backup API] Generation Failed:", error.message, 'error');
+        Logger.log(`[Backup API] Generation Failed: ${getErrorMessage(error)}`, 'error');
+
         return NextResponse.json({ error: "Backup generation failed. Please check the server logs." }, { status: 500 });
     }
 }

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function GET() {
     try {
@@ -83,8 +85,8 @@ export async function GET() {
             timestamp: new Date().toISOString()
         });
 
-    } catch (error: any) {
-        Logger.log("Analytics Error Details:", error, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`Analytics Error Details: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

@@ -1,6 +1,7 @@
 // src/lib/db-init.ts
 import { prisma } from './db';
 import { Logger } from './logger';
+import { getErrorMessage } from './utils/error';
 
 export async function initDatabase() {
   try {
@@ -152,7 +153,7 @@ export async function initDatabase() {
 
     Logger.log("[DB Init] Schema mapping complete.", "success");
 
-  } catch (error: any) {
-      Logger.log(`[DB Init] Failed to migrate configs: ${error.message}`, "error");
+  } catch (error: unknown) {
+      Logger.log(`[DB Init] Failed to migrate configs: ${getErrorMessage(error)}`, "error");
   }
 }

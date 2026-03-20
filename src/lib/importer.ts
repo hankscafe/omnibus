@@ -172,7 +172,7 @@ export const Importer = {
     let relFolderPath = folderPattern
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
-        .replace(/{Year}/gi, seriesYearFromMeta)
+        .replace(/{Year}/gi, seriesYearFromMeta.toString())
         .replace(/\(\s*\)/g, '') // Remove empty parens if year is missing
         .replace(/\[\s*\]/g, '') // Remove empty brackets
         .replace(/\s+/g, ' ')
@@ -229,7 +229,7 @@ export const Importer = {
     let newFileName = filePatToUse
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
-        .replace(/{Year}/gi, seriesYearFromMeta)
+        .replace(/{Year}/gi, seriesYearFromMeta.toString())
         .replace(/{Issue}/gi, formattedNum)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')

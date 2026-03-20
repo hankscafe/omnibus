@@ -3,6 +3,9 @@ import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
+import { error } from 'console';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
@@ -74,7 +77,8 @@ export async function GET(request: Request) {
                                 description: newDescription
                             }
                         }).catch(err => {
-                            Logger.log("[Issue API] Failed to save lazy-loaded metadata:", err.message, 'warn');
+                            Logger.log(`[Issue API] Failed to save lazy-loaded metadata: ${getErrorMessage(error)}`, 'error');
+
                         });
                     }
 
@@ -86,7 +90,8 @@ export async function GET(request: Request) {
                     });
                 }
             } catch (e) {
-                Logger.log("Deep fetch failed, falling back to DB data:", e, 'error');
+                Logger.log(`Deep fetch failed, falling back to DB data: ${getErrorMessage(error)}`, 'error');
+
             }
         }
     }
@@ -98,8 +103,8 @@ export async function GET(request: Request) {
         characters: parsedCharacters,
         description: issue.description
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -126,7 +131,7 @@ export async function DELETE(request: Request) {
         }
 
         return NextResponse.json({ success: true });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

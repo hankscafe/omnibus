@@ -1,5 +1,7 @@
 import { prisma } from '@/lib/db';
 import path from 'path';
+import { Logger } from '../logger';
+import { getErrorMessage } from './error';
 
 /**
  * Automatically translates a path from a Download Client to a Local Path
@@ -46,7 +48,8 @@ export async function resolveRemotePath(remotePath: string): Promise<string> {
     return remotePath;
 
   } catch (error) {
-    Logger.log("[Path Resolver] Error:", error, 'error');
+    Logger.log(`[Path Resolver] Error: ${getErrorMessage(error)}`, 'error');
+
     return remotePath;
   }
 }

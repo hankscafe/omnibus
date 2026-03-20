@@ -26,6 +26,7 @@ interface Comic {
   artists?: string[];
   coverArtists?: string[];
   characters?: string[];
+  isVolume?: boolean;
 }
 
 interface Props {

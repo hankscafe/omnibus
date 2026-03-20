@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import fs from 'fs';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.json(formattedRequests);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json([]); 
   }
 }
@@ -108,7 +109,7 @@ export async function DELETE(request: Request) {
     
     return NextResponse.json({ success: true, count: idsToDelete.length }, { status: 200 });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

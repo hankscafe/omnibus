@@ -1,6 +1,8 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 // In-memory cache to prevent DB spam and massive memory spikes
 const globalForCache = globalThis as unknown as {
@@ -20,11 +22,11 @@ export async function GET() {
     // OPTIMIZATION: Removed `{ contains: '.' }` as it causes full table scans.
     const [series, issues, requests] = await Promise.all([
         prisma.series.findMany({ 
-            where: { issues: { some: { filePath: { not: null, not: '' } } } },
+            where: { issues: { some: { filePath: { not: null } } } },
             select: { cvId: true } 
         }),
         prisma.issue.findMany({ 
-            where: { filePath: { not: null, not: '' } },
+            where: { filePath: { not: null } },
             select: { cvId: true } 
         }),
         prisma.request.findMany({ 
@@ -48,7 +50,8 @@ export async function GET() {
 
     return NextResponse.json(payload);
   } catch (error) {
-    Logger.log("Library IDs API Error:", error, 'error');
+    Logger.log(`Library IDs API Error: ${getErrorMessage(error)}`, 'error');
+
     return NextResponse.json({ series: [], issues: [], requests: [] });
   }
 }

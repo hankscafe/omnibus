@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
@@ -119,7 +120,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, filesRenamed, foldersRenamed });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

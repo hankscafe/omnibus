@@ -3,6 +3,8 @@ import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
     try {
@@ -81,8 +83,8 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ success: true, listId: newList.id, message: `Imported ${issuesToCreate.length} issues into ${eventData.name}!` });
 
-    } catch (error: any) {
-        Logger.log("Auto-Build Error:", error, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`Auto-Build Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

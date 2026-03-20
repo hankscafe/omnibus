@@ -6,6 +6,7 @@ import AdmZip from 'adm-zip';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger'; // Import the logger
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -180,8 +181,9 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 
-    } catch (error: any) {
-        Logger.log(`Diagnostics UI Job Failed: ${error.message}`, "error");
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`Diagnostics UI Job Failed: ${getErrorMessage(error)}`, 'error');
+
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

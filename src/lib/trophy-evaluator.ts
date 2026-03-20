@@ -1,4 +1,6 @@
 import { prisma } from '@/lib/db';
+import { Logger } from './logger';
+import { getErrorMessage } from './utils/error';
 
 export async function evaluateTrophies(userId: string) {
     try {
@@ -68,7 +70,7 @@ export async function evaluateTrophies(userId: string) {
             });
 
             // Trigger the Notification Bell alert on the frontend
-            await prisma.notification.create({
+            await (prisma as any).notification.create({
                 data: {
                     userId,
                     type: 'trophy',
@@ -81,6 +83,7 @@ export async function evaluateTrophies(userId: string) {
         }
 
     } catch (error) {
-        Logger.log("Trophy Evaluation Error:", error, 'error');
+        Logger.log(`Trophy Evaluation Error: ${getErrorMessage(error)}`, 'error');
+
     }
 }

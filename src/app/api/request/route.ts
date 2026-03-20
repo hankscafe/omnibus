@@ -8,6 +8,7 @@ import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { detectManga } from '@/lib/manga-detector'; 
 import { isReleasedYet } from '@/lib/utils';
 import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -174,7 +175,7 @@ export async function POST(request: NextRequest) {
       }
 
       if (initialStatus === 'PENDING') {
-        searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => Logger.log(e), 'error');
+        searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
       }
 
       evaluateTrophies(token.id as string).catch(console.error);
@@ -185,9 +186,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-  } catch (error: any) {
-    Logger.log(`[Request Error] ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Request Error] ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -241,14 +242,14 @@ export async function PATCH(request: NextRequest) {
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
       
       // Pass the extracted skipIndexers flag directly into the search queue
-      searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(e), 'error');
+      searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
     }
 
     evaluateTrophies(token.id as string).catch(console.error);
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log(`[Request API] Approval Error: ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Request API] Approval Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

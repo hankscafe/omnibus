@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { ProwlarrService } from '@/lib/prowlarr';
 import { GetComicsService } from '@/lib/getcomics';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,8 +24,8 @@ export async function GET(req: Request) {
 
         // Unified lowercase keys to match the frontend expectations
         return NextResponse.json({ prowlarr, getcomics });
-    } catch (error: any) {
-        Logger.log(`[Interactive Search] Error: ${error.message}`, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Interactive Search] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

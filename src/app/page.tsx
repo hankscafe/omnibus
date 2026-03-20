@@ -21,6 +21,8 @@ import {
   Flag
 } from "lucide-react" 
 import Link from "next/link"
+import { Logger } from "@/lib/logger"
+import { getErrorMessage } from "@/lib/utils/error"
 
 export default function Home() {
   const { data: session } = useSession()
@@ -89,7 +91,7 @@ export default function Home() {
         });
         setRefreshSignal(Date.now()); 
     } catch (e) {
-        Logger.log("Failed to refresh data", e, 'error');
+        Logger.log(`Failed to refresh data: ${getErrorMessage(e)}`, 'error');
     } finally {
         setTimeout(() => setIsRefreshing(false), 2000); 
     }

@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
 import fs from 'fs';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(request: Request) {
   try {
@@ -45,7 +46,7 @@ export async function GET(request: Request) {
     }));
 
     return NextResponse.json({ items });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

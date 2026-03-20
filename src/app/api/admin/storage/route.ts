@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function GET() {
   try {
@@ -25,8 +27,8 @@ export async function GET() {
     // If cache is entirely missing (first run), flag it so the UI can trigger a scan
     return NextResponse.json({ series: [], lastRun: null, needsScan: true });
 
-  } catch (error: any) {
-    Logger.log("Storage Cache Error:", error, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`Storage Cache Errorw: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
-export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+    // --- FIX 4: NEXT.JS 15 DYNAMIC ROUTE PARAMS ---
+    // Await the params object before accessing its properties
+    const resolvedParams = await params;
+    const pathArray = resolvedParams.path;
+
     // 1. Establish the absolute safe base directory
     const baseDir = path.resolve(process.cwd(), 'public');
     
-    // 2. Resolve the requested file path
-    const filePath = path.resolve(baseDir, ...params.path);
+    // 2. Resolve the requested file path using the awaited array
+    const filePath = path.resolve(baseDir, ...pathArray);
 
     // 3. SECURITY CRITICAL: Ensure the resolved path strictly starts with the base directory.
     // Because path.resolve() evaluates all `../` segments, if the user tries to escape 
@@ -41,7 +46,7 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
     return new NextResponse(fileBuffer, {
         headers: {
             'Content-Type': contentTypes[extension] || 'application/octet-stream',
-            'Cache-Control': 'public, max-age=31536000, immutable',
-        },
+            'Cache-Control': 'public, max-age=31536000, immutable'
+        }
     });
 }

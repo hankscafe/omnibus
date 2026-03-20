@@ -1,10 +1,22 @@
+// src/lib/discord.ts
 import axios from 'axios';
 import { prisma } from './db';
 import { Logger } from './logger';
+import { getErrorMessage } from './utils/error';
+
+interface DiscordEmbed {
+    title?: string;
+    description?: string;
+    color?: number;
+    timestamp: string;
+    footer: { text: string };
+    fields: { name: string; value: string; inline: boolean }[];
+    thumbnail?: { url: string };
+}
 
 export const DiscordNotifier = {
   async sendAlert(event: string, payload: { 
-    title: string, 
+    title?: string, 
     description?: string | null, 
     imageUrl?: string | null, 
     user?: string | null,
@@ -15,7 +27,6 @@ export const DiscordNotifier = {
     version?: string | null
   }) {
     try {
-      // NATIVE DB CALL: Fetch only active webhooks directly from the table
       const webhooks = await prisma.discordWebhook.findMany({
           where: { isActive: true }
       });
@@ -25,13 +36,14 @@ export const DiscordNotifier = {
       const activeWebhooks = webhooks.filter(w => {
           try {
               const events = JSON.parse(w.events);
-              return events.includes(event);
-          } catch(e) { return false; }
+              return Array.isArray(events) && events.includes(event);
+          } catch(e: unknown) { return false; }
       });
 
       if (activeWebhooks.length === 0) return;
 
-      let embed: any = {
+      // Type-safe Embed!
+      const embed: DiscordEmbed = {
         timestamp: new Date().toISOString(),
         footer: { text: "Omnibus" },
         fields: []
@@ -174,12 +186,18 @@ export const DiscordNotifier = {
       }
 
       for (const hook of activeWebhooks) {
-        await axios.post(hook.url, { embeds: [embed] }).catch(e => {
-            Logger.log(`[Discord] Failed to send webhook to ${hook.name}`, "error");
+        // Build payload cleanly without any
+        const discordPayload: Record<string, unknown> = { embeds: [embed] };
+        
+        if (hook.botUsername) discordPayload.username = hook.botUsername;
+        if (hook.botAvatarUrl) discordPayload.avatar_url = hook.botAvatarUrl;
+
+        await axios.post(hook.url, discordPayload).catch((e: unknown) => {
+            Logger.log(`[Discord] Failed to send webhook to ${hook.name}: ${getErrorMessage(e)}`, "error");
         });
       }
-    } catch (error) {
-      Logger.log(`[Discord] Error processing webhooks`, "error");
+    } catch (error: unknown) {
+      Logger.log(`[Discord] Error processing webhooks: ${getErrorMessage(error)}`, "error");
     }
   }
 };

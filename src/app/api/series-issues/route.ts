@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { parseComicVineCredits } from '@/lib/utils';
 import { ComicVineIssue } from '@/types'; // <-- STRICT TYPE IMPORT
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -79,7 +80,7 @@ export async function GET(request: Request) {
            if (desc.length > 800) desc = desc.substring(0, 800) + '...';
         }
 
-        const { writers, artists, coverArtists } = parseComicVineCredits(item.person_credits);
+        const { writers, artists, coverArtists } = parseComicVineCredits(item.person_credits || undefined);
 
         const dateStr = item.store_date || item.cover_date;
         const year = dateStr ? dateStr.split('-')[0] : '????';
@@ -109,7 +110,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ results: allResults });
 
   } catch (error) {
-    Logger.log('Series Issues API Error:', error, 'error');
+    Logger.log(`Series Issues API Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ results: [] }); 
   }
 }

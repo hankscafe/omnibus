@@ -1,10 +1,12 @@
+// src/lib/metadata-fetcher.ts
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from './logger';
 import { parseComicVineCredits } from '@/lib/utils';
-import { ComicVineVolume, ComicVineIssue } from '@/types'; // <-- STRICT TYPE IMPORT
+import { getErrorMessage } from './utils/error';
+import { ComicVineVolume, ComicVineIssue } from '@/types'; 
 
 export async function syncSeriesMetadata(cvId: number, folderPath: string) {
     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -15,25 +17,23 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
     Logger.log(`[Metadata] Fetching Volume data for CV ID: ${cvId}`, 'info');
 
-    // 1. Fetch Volume
-    const volRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
+    // 1. Fetch Volume - Explicitly telling Axios what shape to expect
+    const volRes = await axios.get<{ error?: string; results: ComicVineVolume }>(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
         params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,end_year' },
         headers: { 'User-Agent': 'Omnibus/1.0' },
         timeout: 15000
     });
 
-    // TYPING FIX: Cast the untyped Axios response to our strict interface
-    const volData: ComicVineVolume = volRes.data.results;
+    const volData = volRes.data.results;
     if (!volData) throw new Error("Volume data not found on ComicVine.");
 
     const imageUrl = volData.image?.medium_url || volData.image?.super_url;
 
-    // Use the centralized metadata parser for the Volume data
     const { 
         writers: volWriters, 
         artists: volArtists, 
         characters: volCharacters 
-    } = parseComicVineCredits(volData.person_credits, volData.character_credits);
+    } = parseComicVineCredits(volData.person_credits || undefined, volData.character_credits || undefined);
 
     await prisma.series.update({
         where: { id: series.id },
@@ -49,9 +49,12 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
     if (imageUrl && folderPath && fs.existsSync(folderPath)) {
         try {
-            const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+            // Tell TS we are specifically pulling an ArrayBuffer
+            const imgRes = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer' });
             await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-        } catch (e) {}
+        } catch (e: unknown) {
+            Logger.log(`[Metadata] Failed to save cover image locally: ${getErrorMessage(e)}`, 'warn');
+        }
     }
 
     await new Promise(r => setTimeout(r, 1500));
@@ -65,7 +68,8 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
     let syncedCount = 0;
 
     while (offset < totalResults && loopCount < 20) {
-        const issueRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
+        // Explicitly defining the results array shape
+        const issueRes = await axios.get<{ number_of_total_results: number; results: ComicVineIssue[] }>(`https://comicvine.gamespot.com/api/issues/`, {
             params: {
                 api_key: setting.value, format: 'json', filter: `volume:${cvId}`, sort: 'issue_number:asc', limit: 100, offset: offset,
                 field_list: 'id,name,issue_number,store_date,cover_date,image,deck,description,person_credits,character_credits'
@@ -77,17 +81,12 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
         const data = issueRes.data;
         if (offset === 0) totalResults = data.number_of_total_results || 0;
         
-        // TYPING FIX: Cast the array of untyped objects to our strict ComicVineIssue interface
-        const cvIssues: ComicVineIssue[] = data.results || [];
+        const cvIssues = data.results || [];
 
         for (const cvIssue of cvIssues) {
-            
-            // Use the centralized metadata parser for individual issues
-            const { writers, artists, characters } = parseComicVineCredits(cvIssue.person_credits, cvIssue.character_credits);
-
+            const { writers, artists, characters } = parseComicVineCredits(cvIssue.person_credits || undefined, cvIssue.character_credits || undefined);
             const issueNumStr = parseFloat(cvIssue.issue_number?.toString() || "0").toString();
 
-            // Fallback to volume creators if individual issue credits are missing
             const finalWriters = writers.length > 0 ? writers : volWriters;
             const finalArtists = artists.length > 0 ? artists : volArtists;
             const finalCharacters = characters.length > 0 ? characters : volCharacters;

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
 import { DiscordNotifier } from '@/lib/discord';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
@@ -106,8 +107,9 @@ export async function POST(request: Request) {
       message: isFirstUser ? "Admin account created successfully." : "Account created successfully. Please wait for an admin to approve your account."
     });
 
-  } catch (error: any) {
-    Logger.log("Registration Error:", error, 'error');
+  } catch (error: unknown) {
+    Logger.log(`Registration Error: ${getErrorMessage(error)}`, 'error');
+
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

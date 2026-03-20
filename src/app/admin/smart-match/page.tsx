@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft } from "lucide-react"
 import Link from "next/link"
+import { Logger } from "@/lib/logger"
+import { getErrorMessage } from "@/lib/utils/error"
 
 export default function SmartMatchPage() {
     const [unmatched, setUnmatched] = useState<any[]>([]);
@@ -22,7 +24,7 @@ export default function SmartMatchPage() {
             .then(async (res) => {
                 const data = await res.json();
                 
-                Logger.log("SMART MATCHER RESPONSE:", data, 'info');
+                Logger.log(`SMART MATCHER RESPONSE: ${JSON.stringify(data)}`, 'info');
 
                 if (!res.ok) {
                     toast({ title: "API Error", description: data.error || "Failed to fetch.", variant: "destructive" });
@@ -31,13 +33,14 @@ export default function SmartMatchPage() {
                 if (Array.isArray(data)) {
                     setUnmatched(data);
                 } else if (data && data.error) {
-                    Logger.log("Backend returned an error:", data.error, 'error');
+                    // FIXED: Using data.error instead of undefined 'error' variable
+                    Logger.log(`Backend returned an error: ${getErrorMessage(data.error)}`, 'error');
                 }
                 
                 setLoading(false);
             })
             .catch((err) => {
-                Logger.log("Fetch failed entirely:", err, 'error');
+                Logger.log(`Fetch failed entirely: ${getErrorMessage(err)}`, 'error');
                 setLoading(false);
             });
     }, []);

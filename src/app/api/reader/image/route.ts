@@ -5,6 +5,7 @@ import AdmZip from 'adm-zip';
 import sharp from 'sharp';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 const zipCache = new Map<string, { zip: AdmZip, lastAccessed: number }>();
 const MAX_CACHE_SIZE = 10; 
@@ -90,14 +91,14 @@ export async function GET(request: Request) {
         if (pageName.toLowerCase().endsWith('.webp')) contentType = 'image/webp';
     }
 
-    return new NextResponse(finalBuffer, {
+    return new NextResponse(finalBuffer as unknown as BodyInit, {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=86400', 
       },
     });
-  } catch (error: any) {
-    Logger.log(`Image Extraction Error: ${error.message}`, 'error');
+  } catch (error: unknown) {
+    Logger.log(`Image Extraction Error: ${getErrorMessage(error)}`, 'error');
     return new NextResponse("Server Error", { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
+import { Logger } from './logger';
 
 export async function parseComicInfo(filePath: string) {
     // Note: Pure Node.js cannot easily read .cbr (RAR) files without OS-level binaries.

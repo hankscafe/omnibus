@@ -2,6 +2,9 @@ import fs from 'fs-extra';
 import path from 'path';
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
+import { Logger } from './logger';
+import { getErrorMessage } from './utils/error';
+import { error } from 'console';
 
 // STEP 1: Internal Publisher Dictionary
 const MANGA_PUBLISHERS = [
@@ -98,7 +101,7 @@ export async function detectManga(
                 return true;
             }
         } catch (e) {
-            Logger.log("[Manga Engine] AniList check failed.", e, 'warn');
+            Logger.log(`[Manga Engine] AniList check failed: ${getErrorMessage(error)}`, 'error');
         }
     }
 

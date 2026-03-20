@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from './logger';
+import { getErrorMessage } from './utils/error';
 
 export const GetComicsService = {
   async search(query: string, isInteractive: boolean = false) {
@@ -140,8 +141,8 @@ export const GetComicsService = {
           if (bestLink) return { url: bestLink, isDirect };
           return { url: articleUrl, isDirect: false };
 
-      } catch (error: any) {
-          Logger.log(`[GetComics Scrape] Failed to parse deep link: ${error.message}`, 'error');
+      } catch (error: unknown) {
+          Logger.log(`[GetComics Scrape] Failed to parse deep link: ${getErrorMessage(error)}`, 'error');
           return { url: articleUrl, isDirect: false };
       }
   }

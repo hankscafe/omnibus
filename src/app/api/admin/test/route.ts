@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   let type = 'unknown';
@@ -77,7 +78,8 @@ export async function POST(request: Request) {
     if (type === 'webhook') {
       if (!config.url) return NextResponse.json({ success: false, message: 'Missing Webhook URL' });
 
-      await axios.post(config.url, {
+      // NEW: Build the payload dynamically
+      const payload: any = {
         content: null,
         embeds: [{
             title: "🔔 Omnibus Notification Test",
@@ -86,7 +88,12 @@ export async function POST(request: Request) {
             footer: { text: "Omnibus" },
             timestamp: new Date().toISOString()
         }]
-      }, { timeout: 10000 });
+      };
+
+      if (config.botUsername) payload.username = config.botUsername;
+      if (config.botAvatarUrl) payload.avatar_url = config.botAvatarUrl;
+
+      await axios.post(config.url, payload, { timeout: 10000 });
 
       return NextResponse.json({ success: true, message: 'Test notification delivered!' });
     }
@@ -136,8 +143,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: false, message: 'Unknown test type' });
 
-  } catch (error: any) {
-    const msg = error.response?.data?.message || error.message || "Connection Failed";
+  } catch (error: unknown) {
+    const msg = getErrorMessage(error) || getErrorMessage(error) || "Connection Failed";
     return NextResponse.json({ success: false, message: msg, code: "CONNECTION_ERROR" });
   }
 }

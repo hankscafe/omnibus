@@ -4,6 +4,7 @@ import path from 'path';
 import AdmZip from 'adm-zip';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -48,8 +49,8 @@ export async function GET(request: Request) {
     pages.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
     return NextResponse.json({ pages });
-  } catch (error: any) {
-    Logger.log(`Archive Read Error: ${error.message}`, 'error');
+  } catch (error: unknown) {
+    Logger.log(`Archive Read Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: "Failed to read archive" }, { status: 500 });
   }
 }

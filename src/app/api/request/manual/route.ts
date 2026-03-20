@@ -6,6 +6,7 @@ import { DownloadService } from '@/lib/download-clients';
 import { GetComicsService } from '@/lib/getcomics';
 import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { Importer } from '@/lib/importer';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -93,7 +94,7 @@ export async function POST(request: NextRequest) {
                                 await Importer.importRequest(newReq.id);
                             }
                         })
-                        .catch(e => Logger.log(e), 'error');
+                        .catch(e => Logger.log(getErrorMessage(e), 'error'));
                 } else {
                     await prisma.request.update({
                       where: { id: newReq.id },
@@ -107,8 +108,8 @@ export async function POST(request: NextRequest) {
     evaluateTrophies(token.id as string).catch(console.error);
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log(`[Manual Request Error] ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Manual Request Error] ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

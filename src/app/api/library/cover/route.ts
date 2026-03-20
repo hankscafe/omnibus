@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { prisma } from '@/lib/db';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -55,7 +57,8 @@ export async function GET(request: Request) {
     });
     
   } catch (error) {
-    Logger.log("Cover Error:", error, 'error');
+    Logger.log(`Cover Error: ${getErrorMessage(error)}`, 'error');
+
     return new Response("Error", { status: 500 });
   }
 }

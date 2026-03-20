@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
 import { DiscordNotifier } from '@/lib/discord';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -91,8 +92,8 @@ export async function DELETE(req: NextRequest) {
     });
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Failed to delete user' }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) || 'Failed to delete user' }, { status: 500 });
   }
 }
 

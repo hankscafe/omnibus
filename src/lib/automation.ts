@@ -5,6 +5,7 @@ import { ProwlarrService } from '@/lib/prowlarr';
 import { GetComicsService } from '@/lib/getcomics';
 import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
+import { getErrorMessage } from './utils/error';
 
 export async function getDownloadClient() {
   const clients = await prisma.downloadClient.findMany();
@@ -84,7 +85,7 @@ export async function searchAndDownload(requestId: string, name: string, year: s
                 await Importer.importRequest(requestId);
             }
         })
-        .catch(e => Logger.log(e), 'error');
+        .catch(e => Logger.log(getErrorMessage(e), 'error'));
     } else {
       await prisma.request.update({
         where: { id: requestId },

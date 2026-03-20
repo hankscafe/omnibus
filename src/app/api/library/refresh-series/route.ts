@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
@@ -45,8 +47,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, message: "Metadata Refreshed!" });
 
-  } catch (error: any) {
-    Logger.log("Refresh Error:", error.message, 'error');
+  } catch (error: unknown) {
+    Logger.log(`Refresh Error: ${getErrorMessage(error)}`, 'error');
+
     return NextResponse.json({ error: "Failed to refresh metadata" }, { status: 500 });
   }
 }

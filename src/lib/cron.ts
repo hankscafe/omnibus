@@ -4,6 +4,7 @@ import { Logger } from './logger';
 import { Importer } from './importer';
 import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route';
 import { DiscordNotifier } from '@/lib/discord';
+import { getErrorMessage } from './utils/error';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
@@ -35,7 +36,7 @@ export function initCronJobs() {
                   data: {
                       jobType: 'DOWNLOAD_RETRY',
                       status: 'IN_PROGRESS',
-                      relatedItem: req.activeDownloadName || req.seriesName,
+                      relatedItem: req.activeDownloadName || (req as any).name || "Unknown",
                       message: `Automatic retry triggered after ${retryDelayMinutes}m stall limit.`
                   }
               });
@@ -82,7 +83,7 @@ export function initCronJobs() {
                   match = downloadingRequests.find(r => {
                       if (!r.activeDownloadName) return false;
                       const reqWords = r.activeDownloadName.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length > 2);
-                      const torWords = torrent.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+                      const torWords = torrent.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
                       
                       let matches = 0;
                       reqWords.forEach(w => { if (torWords.includes(w)) matches++; });
@@ -104,8 +105,8 @@ export function initCronJobs() {
           }
       }
 
-    } catch (error: any) {
-      Logger.log(`[Cron] Download Checker Error: ${error.message}`, 'error');
+    } catch (error: unknown) {
+      Logger.log(`[Cron] Download Checker Error: ${getErrorMessage(error)}`, 'error');
     }
   }, 60000); 
 
@@ -137,8 +138,8 @@ export function initCronJobs() {
                     }
                 }
             }
-        } catch (error: any) {
-            Logger.log(`[Cron] ${logName} Interval Error: ${error.message}`, "error");
+        } catch (error: unknown) {
+            Logger.log(`[Cron] ${logName} Interval Error: ${getErrorMessage(error)}`, "error");
         }
     };
 

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,8 +26,9 @@ export async function GET() {
         const isComplete = setupSetting?.value === 'true' && userCount > 0;
         
         return NextResponse.json({ requiresSetup: !isComplete });
-    } catch (e) {
-        Logger.log("Setup Check Error:", e, 'error');
+    } catch (error) {
+        Logger.log(`Setup Check Error: ${getErrorMessage(error)}`, 'error');
+
         return NextResponse.json({ requiresSetup: true });
     }
 }

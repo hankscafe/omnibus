@@ -7,6 +7,7 @@ import crypto from 'crypto';
 
 // @ts-ignore
 import { createExtractorFromFile } from 'node-unrar-js/esm';
+import { getErrorMessage } from './utils/error';
 
 export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
     if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar)$/)) return null;
@@ -98,8 +99,8 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         Logger.log(`[Converter] Success: Flattened ${imageCount} pages into ${path.basename(cbzPath)}`, 'success');
         return cbzPath;
 
-    } catch (error: any) {
-        Logger.log(`[Converter] Failed to convert ${path.basename(cbrPath)}: ${error.message}`, 'error');
+    } catch (error: unknown) {
+        Logger.log(`[Converter] Failed to convert ${path.basename(cbrPath)}: ${getErrorMessage(error)}`, 'error');
         return null;
     } finally {
         // ALWAYS clean up the temporary directory to prevent bloat on the mapped volume

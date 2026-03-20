@@ -12,6 +12,7 @@ import { isReleasedYet } from '@/lib/utils';
 import crypto from 'crypto';
 import { searchAndDownload } from '@/lib/automation';
 import packageJson from '../../../../../../package.json';
+import { getErrorMessage } from '@/lib/utils/error';
 
 const execAsync = promisify(exec);
 
@@ -457,7 +458,7 @@ export async function POST(request: Request) {
                                     });
                                     
                                     searchAndDownload(alreadyReq.id, searchName, issueYear, seriesPublisher, isManga)
-                                        .catch(e => Logger.log("Monitor Automation Error:", e), 'error');
+                                        .catch(e => Logger.log(`Monitor Automation Error: ${getErrorMessage(e)}`, 'error'));
                                         
                                     unreleasedUpgraded++;
                                 }
@@ -482,7 +483,7 @@ export async function POST(request: Request) {
 
                                 if (isReleased) {
                                     searchAndDownload(newReq.id, searchName, issueYear, seriesPublisher, isManga)
-                                        .catch(e => Logger.log("Monitor Automation Error:", e), 'error');
+                                        .catch(e => Logger.log(`Monitor Automation Error: ${getErrorMessage(e)}`, 'error'));
                                     newIssuesFound++;
                                 }
                             }
@@ -720,8 +721,8 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ error: "Invalid job specified" }, { status: 400 });
 
-    } catch (error: any) {
-        Logger.log(`[Manual Job] Fatal Error: ${error.message}`, "error");
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Manual Job] Fatal Error: ${getErrorMessage(error)}`, "error");
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

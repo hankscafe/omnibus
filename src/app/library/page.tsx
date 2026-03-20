@@ -165,7 +165,7 @@ function LibraryContent() {
     try {
       const res = await fetch('/api/library/collections', { cache: 'no-store' });
       if (res.ok) setCollections(await res.json());
-    } catch (e) { Logger.log(e, 'error'); }
+    } catch (e) { console.log(e); }
   }, []);
 
   const fetchLibraryData = useCallback(async (pageNum = 1, append = false, forceRefresh = false, currentLimit = 24) => {
@@ -208,7 +208,7 @@ function LibraryContent() {
         if (data.series) {
             setSeries(prev => {
                 if (!append) return data.series;
-                const existingIds = new Set(prev.map(s => s.id || s.path));
+                const existingIds = new Set(prev.map((s: any) => s.id || s.path));
                 const newItems = data.series.filter((s: any) => !existingIds.has(s.id || s.path));
                 return [...prev, ...newItems];
             });
@@ -715,7 +715,7 @@ function LibraryContent() {
                       </div>
 
                       {/* Hover Overlay (Hidden on Mobile, Visible on Desktop Hover) */}
-                        <div className={`absolute inset-0 bg-black/80 transition-opacity flex-col items-center justify-center gap-1.5 p-3 z-20 ${isSelectionMode ? 'hidden' : 'hidden sm:flex opacity-0 group-hover:opacity-100'}`}>
+                        <div className={`absolute inset-0 bg-black/80 transition-opacity flex-col items-center justify-center gap-1.5 p-3 z-20 pointer-events-none group-hover:pointer-events-auto ${isSelectionMode ? 'hidden' : 'hidden md:flex opacity-0 group-hover:opacity-100'}`}>
                         <Button 
                             variant="default" 
                             size="sm" 

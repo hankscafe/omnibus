@@ -13,6 +13,8 @@ import { Loader2, LogIn, ShieldCheck, Fingerprint, UserPlus, AlertTriangle, Chec
 import Image from "next/image"
 import { OmnibusLogo } from "@/components/omnibus-logo"
 import packageJson from "../../../package.json" // <-- Added import
+import { Logger } from "@/lib/logger"
+import { getErrorMessage } from "@/lib/utils/error"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -47,7 +49,7 @@ export default function LoginPage() {
               router.push('/setup');
           }
       })
-      .catch(err => Logger.log("Setup check failed", err), 'error');
+      .catch(err => Logger.log(`Setup check failed: ${getErrorMessage(err)}`, 'error'));
 
     // 2. CHECK FOR SSO PROVIDERS
     getProviders().then(prov => {

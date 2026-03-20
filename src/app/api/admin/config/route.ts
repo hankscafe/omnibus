@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(request: Request) {
   const authOptions = await getAuthOptions();
@@ -133,8 +134,9 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log("Settings Save Error:", error.message, 'error');
+  } catch (error: unknown) {
+    Logger.log(`Settings Save Error: ${getErrorMessage(error)}`, 'error');
+
     // --- SECURITY FIX: Replaced error.message with a generic string ---
     return NextResponse.json({ error: "Failed to save configuration. Please check the server logs." }, { status: 500 });
   }

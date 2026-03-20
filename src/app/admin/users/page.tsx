@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
+import { getErrorMessage } from "@/lib/utils/error"
 
 export default function AdminUsersPage() {
   useEffect(() => {
@@ -68,8 +69,8 @@ export default function AdminUsersPage() {
         toast({ title: "User Updated", description: "Changes saved successfully." })
         setUsers(prev => prev.map(u => u.id === id ? { ...u, [field]: value } : u))
       } else throw new Error("Update failed")
-    } catch (error: any) {
-      toast({ title: "Update Failed", description: error.message, variant: "destructive" })
+    } catch (error: unknown) {
+      toast({ title: "Update Failed", description: getErrorMessage(error), variant: "destructive" })
     } finally {
       setUpdating(null)
     }
@@ -86,8 +87,8 @@ export default function AdminUsersPage() {
           if (res.ok) {
               window.location.href = '/'; 
           } else throw new Error("Failed to start impersonation");
-      } catch (error: any) {
-          toast({ title: "Error", description: error.message, variant: "destructive" });
+      } catch (error: unknown) {
+          toast({ title: "Error", description: getErrorMessage(error), variant: "destructive" });
       }
   }
 
@@ -106,8 +107,8 @@ export default function AdminUsersPage() {
             setUsers(prev => prev.filter(u => u.id !== userToDelete.id));
             setDeleteConfirmOpen(false);
         } else throw new Error("Failed to delete user");
-    } catch (error: any) {
-        toast({ title: "Delete Failed", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+        toast({ title: "Delete Failed", description: getErrorMessage(error), variant: "destructive" });
     } finally {
         setIsDeleting(false);
         setUserToDelete(null);
@@ -134,8 +135,8 @@ export default function AdminUsersPage() {
             setUsers(prev => prev.map(u => u.id === userToReset.id ? { ...u, twoFactorEnabled: false } : u));
             setReset2faConfirmOpen(false);
         } else throw new Error("Failed to reset 2FA");
-    } catch (error: any) {
-        toast({ title: "Reset Failed", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+        toast({ title: "Reset Failed", description: getErrorMessage(error), variant: "destructive" });
     } finally {
         setIsResetting2fa(false);
         setUserToReset(null);
@@ -156,8 +157,8 @@ export default function AdminUsersPage() {
               setNewUser({ username: '', email: '', password: '', role: 'USER', isApproved: true, autoApproveRequests: false, canDownload: false });
               fetchUsers();
           } else throw new Error("Failed to create user");
-      } catch (error: any) {
-          toast({ title: "Creation Failed", description: error.message, variant: "destructive" });
+      } catch (error: unknown) {
+          toast({ title: "Creation Failed", description: getErrorMessage(error), variant: "destructive" });
       } finally { setIsCreating(false); }
   }
 

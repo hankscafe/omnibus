@@ -7,9 +7,9 @@ import path from 'path';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { detectManga } from '@/lib/manga-detector';
-
-// --- NEW IMPORT ---
 import { parseComicInfo } from '@/lib/metadata-extractor';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 // --- POST HANDLER FOR BULK ACTIONS ---
 export async function POST(request: Request) {
@@ -22,7 +22,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { seriesIds, action, status } = await request.json();
+    // Explicitly typing the parsed body
+    const req = (await request.json()) as any;
+    const { seriesIds, action, status } = req;
 
     if (action === 'bulk-progress') {
       const issues = await prisma.issue.findMany({
@@ -163,9 +165,9 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ error: "Invalid action or status" }, { status: 400 });
-  } catch (error: any) {
-    Logger.log("Bulk Processing Error:", error, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`Bulk Processing Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -271,18 +273,14 @@ export async function GET(request: Request) {
                             const firstArchive = bookFiles.find(f => f.toLowerCase().endsWith('.cbz') || f.toLowerCase().endsWith('.zip') || f.toLowerCase().endsWith('.cbr'));
                             const firstArchivePath = firstArchive ? path.join(dir, firstArchive) : null;
 
-                            // --- NEW LOGIC: Check internal ComicInfo.xml metadata FIRST ---
                             let embeddedMeta = null;
                             if (firstArchivePath) {
                                 embeddedMeta = await parseComicInfo(firstArchivePath);
                             }
 
-                            // Use embedded meta if it exists, otherwise fall back to folder guessing
                             let cleanedName = embeddedMeta?.series || folderName.replace(/\s\(\d{4}\)$/, "").trim() || "Unknown Series";
                             let year = embeddedMeta?.year || parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0");
                             let publisher = embeddedMeta?.publisher || (relative.split(path.sep).length > 1 ? relative.split(path.sep)[0] : "Other");
-                            
-                            // If the embedded XML contains an exact ComicVine ID, save it immediately!
                             let cvId = embeddedMeta?.cvId || -Math.abs(Math.floor(Math.random() * 1000000000));
 
                             const isMangaDetect = embeddedMeta?.isManga || libIsManga || await detectManga(
@@ -325,7 +323,7 @@ export async function GET(request: Request) {
                 });
 
                 if (pendingRequests.length > 0) {
-                    const reqCvIds = [...new Set(pendingRequests.map(r => r.cvId || (r as any).volumeId).filter(Boolean).map(id => parseInt(id.toString())))];
+                    const reqCvIds = [...new Set(pendingRequests.map(r => (r as any).cvId || (r as any).volumeId).filter(Boolean).map(id => parseInt(id.toString())))];
                     
                     const allRelevantIssues = await prisma.issue.findMany({
                         where: { series: { cvId: { in: reqCvIds } } },
@@ -342,11 +340,12 @@ export async function GET(request: Request) {
 
                     const requestsToComplete = [];
 
-                    for (const req of pendingRequests) {
-                        const reqCvId = req.cvId || (req as any).volumeId;
+                    for (const dbReq of pendingRequests) {
+                        // FIXED CASTING HERE
+                        const reqCvId = (dbReq as any).cvId || (dbReq as any).volumeId;
                         if (!reqCvId) continue;
 
-                        const searchStr = (req.activeDownloadName || req.title || req.name || "").toLowerCase().trim();
+                        const searchStr = (dbReq.activeDownloadName || (dbReq as any).title || (dbReq as any).name || "").toLowerCase().trim();
                         const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
                         const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
 
@@ -362,7 +361,7 @@ export async function GET(request: Request) {
                         });
 
                         if (matchingIssue) {
-                            requestsToComplete.push(req.id);
+                            requestsToComplete.push(dbReq.id);
                         }
                     }
 
@@ -373,14 +372,15 @@ export async function GET(request: Request) {
                         });
                     }
                 }
-            } catch (e) {
-                Logger.log("Auto-Healer Error:", e, 'error');
+            } catch (e: unknown) {
+                Logger.log(`Auto-Healer Error: ${getErrorMessage(e)}`, 'error');
             }
         }
     }
 
     let where: any = { AND: [] };
     
+    // ... [Filters remain exactly the same] ...
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });
     if (publisherFilter !== 'ALL') where.AND.push({ publisher: publisherFilter });
@@ -462,7 +462,7 @@ export async function GET(request: Request) {
         }
 
         totalCount = filteredIds.length;
-        if (sort === 'random' && totalCount > limit) skip = Math.floor(Math.random() * (totalCount - limit));
+        if ((sort as string) === 'random' && totalCount > limit) skip = Math.floor(Math.random() * (totalCount - limit));
         const paginatedIds = filteredIds.slice(skip, skip + limit);
 
         const dbSeriesUnsorted = await prisma.series.findMany({
@@ -481,7 +481,7 @@ export async function GET(request: Request) {
             }
         });
 
-        if (sort === 'random') {
+        if ((sort as string) === 'random') {
             dbSeries = dbSeriesUnsorted.sort(() => Math.random() - 0.5);
         } else {
             for (const id of paginatedIds) {
@@ -568,8 +568,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ series: formatted, publishers: globalPublishers, hasMore: sort === 'random' ? false : skip + limit < totalCount });
 
-  } catch (error: any) {
-    Logger.log("Library Query Error:", error, 'error');
-    return NextResponse.json({ error: error.message, series: [], hasMore: false }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`Library Query Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error), series: [], hasMore: false }, { status: 500 });
   }
 }

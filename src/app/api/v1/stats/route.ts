@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { DownloadService } from '@/lib/download-clients';
 import packageJson from '../../../../../package.json';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -111,8 +112,8 @@ export async function GET(req: NextRequest) {
         activeDownloads: activeDownloads.length, queue: activeDownloads 
       }
     });
-  } catch (error: any) {
-    Logger.log(`[Stats API] Server Error: ${error.message}`, 'error');
+  } catch (error: unknown) {
+    Logger.log(`[Stats API] Server Error: ${getErrorMessage(error)}`, 'error');
     // --- SECURITY FIX: Removed 'details: error.message' ---
     return NextResponse.json({ error: 'Internal Server Error. Please check the server logs.' }, { status: 500 });
   }

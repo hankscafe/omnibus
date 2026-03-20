@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { syncSeriesMetadata } from '@/lib/metadata-fetcher';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
@@ -10,8 +12,9 @@ export async function POST(request: Request) {
     await syncSeriesMetadata(parseInt(cvId), folderPath);
     
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log("Refresh Metadata Failed:", error, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`Refresh Metadata Failed: ${getErrorMessage(error)}`, 'error');
+
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

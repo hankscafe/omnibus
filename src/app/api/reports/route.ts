@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
     try {
@@ -29,8 +31,9 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ success: true, report });
 
-    } catch (error: any) {
-        Logger.log("Report Creation Error:", error, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`Report Creation Error: ${getErrorMessage(error)}`, 'error');
+
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

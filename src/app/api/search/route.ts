@@ -5,6 +5,7 @@ import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { ComicVineVolume, FormattedSearchResult } from '@/types'; // <-- Import strict types
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -73,7 +74,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ results, hasMore });
 
   } catch (error) {
-    Logger.log('ComicVine API Error:', error, 'error');
+    Logger.log(`ComicVine API Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: 'Failed to fetch data from ComicVine' }, { status: 500 });
   }
 }

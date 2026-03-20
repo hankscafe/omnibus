@@ -1,6 +1,8 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET() {
     try {
@@ -35,8 +37,9 @@ export async function GET() {
         });
 
         return NextResponse.json({ items: formatted });
-    } catch (error: any) {
-        Logger.log("Recent Library API Error:", error, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`Recent Library API Error: ${getErrorMessage(error)}`, 'error');
+
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

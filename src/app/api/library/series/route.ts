@@ -7,6 +7,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { DiscordNotifier } from '@/lib/discord';
+import { getErrorMessage } from '@/lib/utils/error';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
@@ -237,7 +238,7 @@ export async function GET(request: Request) {
       downloadedIssues, missingIssues
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json({ error: "Failed to scan folder" }, { status: 500 });
   }
 }
@@ -281,7 +282,7 @@ export async function DELETE(request: Request) {
         }
 
         return NextResponse.json({ success: true });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

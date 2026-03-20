@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import crypto from 'crypto';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
     try {
@@ -99,8 +100,8 @@ export async function POST(request: Request) {
         Logger.log("[Restore] Database restoration completed successfully.", "success");
         return NextResponse.json({ success: true });
 
-    } catch (error: any) {
-        Logger.log(`[Restore] Failed: ${error.message}`, "error");
-        return NextResponse.json({ error: "Restore failed: " + error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Restore] Failed: ${getErrorMessage(error)}`, "error");
+        return NextResponse.json({ error: "Restore failed: " + getErrorMessage(error) }, { status: 500 });
     }
 }

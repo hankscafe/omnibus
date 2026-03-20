@@ -19,6 +19,8 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
+import { Logger } from "@/lib/logger"
+import { getErrorMessage } from "@/lib/utils/error"
 
 function ReadingListsContent() {
   const { data: session } = useSession()
@@ -185,7 +187,7 @@ function ReadingListsContent() {
                   if (data.volumeId) volumeId = data.volumeId;
                   if (data.year) year = data.year;
               }
-          } catch (e) { Logger.log("Lookup failed", e, 'error'); }
+          } catch (e) { Logger.log(`Lookup failed: ${getErrorMessage(e)}`, 'error'); }
 
           const standardRes = await fetch('/api/request', {
               method: 'POST',
@@ -226,7 +228,7 @@ function ReadingListsContent() {
           });
           return true;
           
-      } catch (error: any) {
+      } catch (error: unknown) {
           return false;
       } finally {
           setRequestingIds(prev => {
@@ -344,7 +346,7 @@ function ReadingListsContent() {
                                   <div className="min-w-0 pr-2">
                                       <div className="flex items-center gap-2">
                                           <h3 className={`font-bold truncate text-sm ${activeListId === list.id ? 'text-primary' : 'text-foreground'}`}>{list.name}</h3>
-                                          {!list.userId && <Globe className="w-3 h-3 text-emerald-500 shrink-0" title="Global List" />}
+                                          {!list.userId && <span title="Global List"><Globe className="w-3 h-3 text-emerald-500 shrink-0" /></span>}
                                       </div>
                                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">{list.items.length} Issues</p>
                                   </div>

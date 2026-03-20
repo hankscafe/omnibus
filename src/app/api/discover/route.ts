@@ -1,6 +1,8 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db'; 
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(request: Request) {
   try {
@@ -30,7 +32,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ results: [], nextOffset: null });
 
   } catch (error) {
-      Logger.log('Discovery API Error:', error, 'error');
+      Logger.log(`Discovery API Error: ${getErrorMessage(error)}`, 'error');
+
       return NextResponse.json({ results: [], nextOffset: null }); 
   }
 }

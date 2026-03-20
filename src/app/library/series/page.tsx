@@ -20,6 +20,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Logger } from "@/lib/logger"
+import { getErrorMessage } from "@/lib/utils/error"
 
 function SeriesDetailSkeleton() {
   return (
@@ -151,7 +153,7 @@ function SeriesContent() {
             const current = data.downloadedIssues.find((i: any) => !i.isRead && i.readProgress < 100) || data.downloadedIssues[0];
             setActiveIssue(current);
         })
-        .catch(e => { Logger.log("Scan Failed:", e.message, 'error'); })
+        .catch(e => { Logger.log(`Scan Failed: ${e.message}`, 'error'); })
         .finally(() => setLoading(false));
   }, [folderPath]);
 
@@ -206,7 +208,7 @@ function SeriesContent() {
               }, 1500);
           }
       } catch (e) {
-          Logger.log(e, 'error');
+          Logger.log(getErrorMessage(e), 'error');
       } finally {
           setIsRefreshingMetadata(false);
       }
@@ -275,7 +277,7 @@ function SeriesContent() {
               return true;
           }
           return false;
-      } catch (error: any) {
+      } catch (error: unknown) {
           return false;
       } finally {
           setRequestingIds(prev => {

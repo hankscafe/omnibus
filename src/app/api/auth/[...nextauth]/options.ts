@@ -317,7 +317,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             }
         }
 
-        return token;
+        return token as any;
       },
       
       async session({ session, token }) {

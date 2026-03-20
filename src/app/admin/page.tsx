@@ -16,6 +16,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { AdminRequestManagement } from "@/components/admin-request-management"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
+import { getErrorMessage } from "@/lib/utils/error"
 
 // Skeleton for individual Stat Cards
 function StatSkeleton() {
@@ -272,7 +273,7 @@ export default function AdminPage() {
             setRequests(prev => prev.filter(r => r.id !== requestToDelete.id));
             setDeleteConfirmOpen(false);
         } else throw new Error("Failed to delete");
-    } catch (error: any) { toast({ title: "Error", description: error.message, variant: "destructive" }); } 
+    } catch (error: unknown) { toast({ title: "Error", description: getErrorMessage(error), variant: "destructive" }); } 
     finally { setIsDeleting(false); setRequestToDelete(null); }
   }
 

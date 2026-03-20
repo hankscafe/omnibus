@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';
 import { revalidatePath, revalidateTag } from 'next/cache';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
@@ -115,7 +116,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, newPath: activePath });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

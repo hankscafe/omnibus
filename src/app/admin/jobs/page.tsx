@@ -11,6 +11,7 @@ import {
     Activity, RefreshCw, FileText, ExternalLink, Download, 
     UploadCloud, TrendingUp, FileArchive // <-- Added FileArchive Icon
 } from "lucide-react"
+import { getErrorMessage } from "@/lib/utils/error"
 
 const INTERVALS = [
     { label: "Disabled (Manual Only)", value: "0" },
@@ -147,8 +148,8 @@ export default function ScheduledJobsPage() {
           } else {
               throw new Error(data.error || "Failed to restore");
           }
-      } catch (error: any) {
-          toast({ title: "Restore Failed", description: error.message, variant: "destructive" });
+      } catch (error: unknown) {
+          toast({ title: "Restore Failed", description: getErrorMessage(error), variant: "destructive" });
       } finally {
           setIsRestoring(false);
           if (fileInputRef.current) fileInputRef.current.value = ''; 

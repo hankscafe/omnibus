@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { encrypt2FA } from '@/lib/encryption';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 // FIX: Safely extract authenticator regardless of how Webpack nests the CommonJS export
 const otplib = require('otplib');
@@ -22,9 +23,9 @@ export async function GET(req: Request) {
         });
 
         return NextResponse.json({ enabled: user?.twoFactorEnabled || false });
-    } catch (error: any) {
-        Logger.log("[2FA GET Error]:", error, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[2FA GET Error]: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
 
@@ -93,8 +94,9 @@ export async function POST(req: Request) {
 
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 
-    } catch (error: any) {
-        Logger.log("[2FA POST Error]:", error, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[2FA POST Error]: ${getErrorMessage(error)}`, 'error');
+
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

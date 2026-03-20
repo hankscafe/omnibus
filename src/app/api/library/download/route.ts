@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { prisma } from '@/lib/db';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -46,8 +48,9 @@ export async function GET(request: Request) {
         }
     });
 
-  } catch (error: any) {
-    Logger.log("Download Error:", error, 'error');
+  } catch (error: unknown) {
+    Logger.log(`Download Error: ${getErrorMessage(error)}`, 'error');
+
     return new Response("Failed to download file", { status: 500 });
   }
 }

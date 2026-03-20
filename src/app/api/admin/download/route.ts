@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { DownloadService } from '@/lib/download-clients';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(req: Request) {
   try {
@@ -13,9 +15,11 @@ export async function POST(req: Request) {
 
     if (protocol === 'torrent') {
       // Pass the infoHash if we have it
+      // @ts-ignore
       downloadHash = await DownloadService.addMagnet(guid, infoHash);
     } 
     else if (protocol === 'usenet') {
+      // @ts-ignore
       downloadHash = await DownloadService.addNzb(guid, title);
     }
 
@@ -31,7 +35,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
 
   } catch (error) {
-    Logger.log("Download Error:", error, 'error');
+    Logger.log(`Download Error: ${getErrorMessage(error)}`, 'error');
+
     return NextResponse.json({ error: 'Failed to send to client' }, { status: 500 });
   }
 }

@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { BookOpen, Image as ImageIcon, X, ArrowRight } from "lucide-react"; 
 import { Button } from "@/components/ui/button";
 import Link from "next/link"; 
+import { Logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/utils/error";
 
 function DynamicCover({ seriesCvId, issueNumber, fallbackUrl, altName }: { seriesCvId: number | null, issueNumber: string, fallbackUrl: string, altName: string }) {
     const [cover, setCover] = useState<string | null>(fallbackUrl);
@@ -37,7 +39,7 @@ function DynamicCover({ seriesCvId, issueNumber, fallbackUrl, altName }: { serie
                         extractCover(issuesArray);
                     }
                 })
-                .catch((err) => Logger.log(`Fetch failed for CV ID ${seriesCvId}:`, err), 'error');
+                .catch((err) => Logger.log(`Fetch failed for CV ID ${seriesCvId}: ${getErrorMessage(err)}`, 'error'));
         }
     }, [seriesCvId, issueNumber]);
 
@@ -75,7 +77,8 @@ export function ContinueReading() {
               body: JSON.stringify({ progressId })
           });
       } catch (err) {
-          Logger.log("Failed to mark unread:", err, 'error');
+          Logger.log(`Failed to mark unread: ${getErrorMessage(err)}`, 'error');
+
       }
   };
 

@@ -42,6 +42,8 @@ interface WebhookConfig {
     url: string;
     events: string[];
     isActive: boolean;
+    botUsername?: string;
+    botAvatarUrl?: string;
 }
 
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
@@ -259,7 +261,8 @@ export default function SettingsPage() {
     } else {
       setEditingWebhook({
         id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
-        name: "", url: "", events: [], isActive: true
+        name: "", url: "", events: [], isActive: true,
+        botUsername: "", botAvatarUrl: "" // Add default empty strings
       })
     }
     setWebhookModalOpen(true)
@@ -1178,6 +1181,29 @@ export default function SettingsPage() {
                   </Button>
                 </div>
               </div>
+
+              {/* --- NEW: CUSTOM USERNAME AND AVATAR INPUTS --- */}
+              <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label className="text-xs font-bold uppercase text-muted-foreground">Bot Username (Optional)</Label>
+                    <Input 
+                      placeholder="e.g. Omnibus Bot" 
+                      value={editingWebhook.botUsername || ""} 
+                      onChange={e => setEditingWebhook({ ...editingWebhook, botUsername: e.target.value })}
+                      className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" 
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label className="text-xs font-bold uppercase text-muted-foreground">Avatar URL (Optional)</Label>
+                    <Input 
+                      placeholder="https://..." 
+                      value={editingWebhook.botAvatarUrl || ""} 
+                      onChange={e => setEditingWebhook({ ...editingWebhook, botAvatarUrl: e.target.value })}
+                      className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" 
+                    />
+                  </div>
+              </div>
+              {/* ------------------------------------------------ */}
 
               <div className="space-y-3 pt-4 border-t border-border">
                 <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>

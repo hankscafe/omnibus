@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Importer } from '@/lib/importer';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,8 +39,8 @@ export async function POST(request: Request) {
       }, { status: 500 });
     }
 
-  } catch (error: any) {
-    Logger.log(`[Admin API] Manual Import CRASHED: ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Admin API] Manual Import CRASHED: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

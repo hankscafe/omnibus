@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import { useSession } from "next-auth/react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 
 // --- Helper Component: Individual Activity Card ---
-function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (status: string) => JSX.Element }) {
+function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (status: string) => React.ReactNode }) {
   const [desc, setDesc] = useState<string | null>(null)
   const [loadingDesc, setLoadingDesc] = useState(false)
   const [showDesc, setShowDesc] = useState(false)

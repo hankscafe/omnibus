@@ -3,9 +3,11 @@ import axios from 'axios';
 import { prisma } from './db';
 import { Logger } from './logger';
 import { getCustomHeaders } from './utils/headers';
+import { getErrorMessage } from './utils/error';
+import { ProwlarrSearchResult } from '@/types';
 
 export const ProwlarrService = {
-  async searchComics(query: string, isInteractive: boolean = false) {
+  async searchComics(query: string, isInteractive: boolean = false): Promise<ProwlarrSearchResult[]> {
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
@@ -25,20 +27,17 @@ export const ProwlarrService = {
         searchCategories = categoriesStr.split(',').map((c: string) => c.trim()).filter(Boolean);
     }
 
-    // NATIVE DB FETCH: Pull configured indexers directly from the database table
-    let configuredIndexers: any[] = [];
+    let configuredIndexers: { id: number | string }[] = [];
     try {
         configuredIndexers = await prisma.indexer.findMany();
-    } catch (e) {
-        Logger.log(`[Prowlarr] Failed to fetch indexers from database`, 'warn');
+    } catch (e: unknown) {
+        Logger.log(`[Prowlarr] Failed to fetch indexers from database: ${getErrorMessage(e)}`, 'warn');
     }
 
     const params = new URLSearchParams();
     params.append('query', cleanQuery);
     params.append('type', 'search');
     
-    // THE FIX: apikey URL parameter removed here!
-
     searchCategories.forEach(cat => {
         params.append('categories', cat);
     });
@@ -49,22 +48,20 @@ export const ProwlarrService = {
         });
     }
 
-    // NATIVE DB FETCH: Grab your Cloudflare Access headers!
     const customHeaders = await getCustomHeaders();
     
-    // SECURE AUTH: The API key is passed securely in the hidden HTTP headers
-    const reqHeaders: any = { 
+    // Explicit Record type for headers
+    const reqHeaders: Record<string, string> = { 
         'X-Api-Key': config.prowlarr_key,
         ...customHeaders
     };
 
     try {
       const url = `${config.prowlarr_url.replace(/\/$/, '')}/api/v1/search?${params.toString()}`;
-      
-      // Update logger so it no longer needs the REDACTED string replacement since the URL is clean
       Logger.log(`[Prowlarr] Searching: ${url}`, 'info');
 
-      const { data } = await axios.get(url, {
+      // Strictly typing the expected generic response array
+      const { data } = await axios.get<unknown[] | string | Record<string, unknown>>(url, {
           headers: reqHeaders, 
           timeout: 30000 
       });
@@ -80,26 +77,29 @@ export const ProwlarrService = {
           return [];
       }
 
-      return data
-        .filter((item: any) => {
+      // Assert array is an array of objects to map through
+      const rawData = data as Record<string, unknown>[];
+
+      return rawData
+        .filter((item) => {
             if (isInteractive) return true;
-            const title = (item.title || "").toLowerCase();
+            const title = (String(item.title || "")).toLowerCase();
             return requiredWords.every(w => title.includes(w));
         })
-        .map((item: any) => ({
-          title: item.title,
-          downloadUrl: item.downloadUrl || item.magnetUrl, 
-          size: item.size,
-          indexer: item.indexer,
-          protocol: item.protocol || 'torrent',
-          seeders: item.seeders || 0,
-          leechers: item.leechers || 0,
-          guid: item.guid,
-          infoHash: item.infoHash,
-          publishDate: item.publishDate
+        .map((item): ProwlarrSearchResult => ({
+          guid: String(item.guid || ""),
+          title: String(item.title || ""),
+          size: Number(item.size || 0),
+          indexer: String(item.indexer || ""),
+          seeders: Number(item.seeders || 0),
+          peers: Number(item.leechers || item.peers || 0),
+          infoUrl: String(item.infoUrl || ""),
+          downloadUrl: String(item.downloadUrl || item.magnetUrl || ""),
+          protocol: item.protocol === 'torrent' ? 'torrent' : 'usenet',
+          publishDate: item.publishDate ? String(item.publishDate) : undefined
         }));
-    } catch (error: any) {
-      Logger.log(`[Prowlarr] Search Error: ${error.message}`, 'error');
+    } catch (error: unknown) {
+      Logger.log(`[Prowlarr] Search Error: ${getErrorMessage(error)}`, 'error');
       return [];
     }
   }

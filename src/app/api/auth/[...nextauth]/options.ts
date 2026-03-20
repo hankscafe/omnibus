@@ -21,7 +21,12 @@ if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === defaultSecre
     Logger.log(" Omnibus is shutting down to protect your data. Please update and restart.", 'error');
     Logger.log("=========================================================================\n", 'error');
     
-    process.exit(1); 
+  // FIX: Do not crash the Node process if we are inside a CI/CD pipeline or Docker build phase
+    const isBuildPhase = process.env.npm_lifecycle_event === 'build' || process.env.CI === 'true';
+    
+    if (!isBuildPhase) {
+        process.exit(1); 
+    }
 }
 
 // --- SECURITY: IN-MEMORY RATE LIMITER ---

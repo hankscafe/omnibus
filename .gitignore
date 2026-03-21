@@ -72,3 +72,6 @@ prisma/schema - BACKUP.prisma
 
 # Ignore tmp directory in dev environment
 tmp/
+
+# Ignore /config
+config/

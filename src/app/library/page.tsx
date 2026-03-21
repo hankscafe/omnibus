@@ -1,15 +1,15 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef, Suspense } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useSession } from "next-auth/react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { 
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
-  CheckSquare, Square, Eye, EyeOff, Library, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  AlertTriangle, Dices, Clock, X
+  CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
+  Dices, Clock, X
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -39,23 +39,40 @@ function LibrarySkeleton({ count = 24 }: { count?: number }) {
   );
 }
 
-function LibraryContent() {
-  if (typeof document !== 'undefined') document.title = "Omnibus - Library";
-
+export default function LibraryPage() {
   const { data: session } = useSession()
   const router = useRouter()
-  const searchParams = useSearchParams() 
+  const { toast } = useToast()
+
+  // Use refs for stable toast callbacks
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+
   const [series, setSeries] = useState<any[]>([])
-  
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [pageSize, setPageSize] = useState<number>(24);
-  const [isInitialized, setIsInitialized] = useState(false);
   
+  // Initialize state lazily to prevent mount re-renders
+  const [pageSize, setPageSize] = useState<number>(() => {
+      if (typeof window !== 'undefined') {
+          const saved = localStorage.getItem('omnibus-library-pagesize');
+          if (saved) return parseInt(saved);
+      }
+      return 24;
+  });
+
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
+      if (typeof window !== 'undefined') {
+          const saved = localStorage.getItem('omnibus-library-view');
+          if (saved === 'grid' || saved === 'list') return saved as 'grid' | 'list';
+      }
+      return 'grid';
+  });
+
   const [editing, setEditing] = useState<any>(null)
   const [updating, setUpdating] = useState(false)
   const [copied, setCopied] = useState(false);
@@ -67,14 +84,11 @@ function LibraryContent() {
   const [uniquePublishers, setUniquePublishers] = useState<string[]>([])
   const [libraryFilter, setLibraryFilter] = useState<'ALL' | 'COMICS' | 'MANGA' | 'UNMATCHED'>('ALL') 
   const [sortOption, setSortOption] = useState("alpha_asc")
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   
-  // Advanced State Filters
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false) 
   const [monitoredFilter, setMonitoredFilter] = useState(false)
   const [eraFilter, setEraFilter] = useState("ALL")
   const [readStatus, setReadStatus] = useState("ALL")
-  
   const [randomTrigger, setRandomTrigger] = useState(0)
 
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -101,21 +115,119 @@ function LibraryContent() {
 
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
-  const { toast } = useToast()
   const isAdmin = (session?.user as any)?.role === 'ADMIN'
 
-  useEffect(() => {
-    const savedView = localStorage.getItem('omnibus-library-view') as 'grid' | 'list'
-    if (savedView === 'grid' || savedView === 'list') setViewMode(savedView)
-    const savedSize = localStorage.getItem('omnibus-library-pagesize')
-    if (savedSize) setPageSize(parseInt(savedSize))
-    setIsInitialized(true)
-  }, [])
+  // --- STABLE FILTER TRACKING ---
+  const filtersRef = useRef({
+      search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
+      sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
+      read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
+  });
 
   useEffect(() => {
+      filtersRef.current = {
+          search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
+          sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
+          read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
+      };
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, monitoredFilter, eraFilter, readStatus, activeCollection, pageSize, randomTrigger]);
+
+  useEffect(() => {
+      document.title = "Omnibus - Library";
       const timer = setTimeout(() => setDebouncedSearch(searchQuery), 500);
       return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // --- STABLE DATA FETCHING ENGINE ---
+  const loadLibraryData = useCallback(async (pageNum: number, isRefreshScan: boolean, appendResults: boolean) => {
+      if (isRefreshScan) setIsRefreshing(true);
+      else if (pageNum === 1) setLoading(true);
+      else setLoadingMore(true);
+
+      const f = filtersRef.current;
+      const params = new URLSearchParams();
+      params.append('page', pageNum.toString());
+      params.append('limit', f.limit.toString());
+      
+      if (isRefreshScan) params.append('refresh', 'true');
+      if (f.search.trim()) { params.append('q', f.search.trim()); params.append('type', f.type); }
+      if (f.library !== 'ALL' && f.library !== 'UNMATCHED') params.append('library', f.library);
+      if (f.library === 'UNMATCHED') params.append('unmatched', 'true');
+      if (f.pub !== 'ALL') params.append('publisher', f.pub);
+      if (f.sort) params.append('sort', f.sort);
+      if (f.favs) params.append('favorites', 'true');
+      if (f.monitored) params.append('monitored', 'true');
+      if (f.era !== 'ALL') params.append('era', f.era);
+      if (f.read !== 'ALL') params.append('readStatus', f.read);
+      if (f.col !== 'ALL') params.append('collection', f.col);
+      if (f.sort === 'random') params.append('_t', Date.now().toString());
+
+      try {
+          const res = await fetch(`/api/library?${params.toString()}`, { cache: 'no-store' });
+          const data = await res.json();
+          
+          if (!res.ok && data.error) {
+              toastRef.current({ title: "Scan Aborted", description: data.error, variant: "destructive" });
+              return;
+          }
+
+          if (data.series) {
+              setSeries(prev => {
+                  if (!appendResults) return data.series;
+                  const existingIds = new Set(prev.map((s: any) => s.id || s.path));
+                  const newItems = data.series.filter((s: any) => !existingIds.has(s.id || s.path));
+                  return [...prev, ...newItems];
+              });
+              setHasMore(data.hasMore);
+          }
+          if (data.publishers) {
+              setUniquePublishers(data.publishers);
+          }
+      } catch (e: any) {
+          toastRef.current({ title: "Error", description: "Failed to fetch library data.", variant: "destructive" });
+      } finally { 
+          setLoading(false); 
+          setLoadingMore(false); 
+          setIsRefreshing(false); 
+      }
+  }, []);
+
+  const fetchCollections = useCallback(async () => {
+    try {
+      const res = await fetch('/api/library/collections', { cache: 'no-store' });
+      if (res.ok) setCollections(await res.json());
+    } catch (e) {}
+  }, []);
+
+  const isFirstRender = useRef(true);
+
+  // --- 1. MOUNT INITIALIZATION ---
+  useEffect(() => {
+      fetchCollections();
+      
+      let isRefetch = false;
+      if (typeof window !== 'undefined') {
+          const params = new URLSearchParams(window.location.search);
+          if (params.get('refetch') === 'true') {
+              isRefetch = true;
+              const newUrl = new URL(window.location.href);
+              newUrl.searchParams.delete('refetch');
+              window.history.replaceState({}, '', newUrl.toString());
+          }
+      }
+      
+      loadLibraryData(1, isRefetch, false);
+      isFirstRender.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // --- 2. FILTER CHANGES ---
+  useEffect(() => { 
+      if (isFirstRender.current) return;
+      setPage(1); 
+      loadLibraryData(1, false, false); 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger, pageSize])
 
   const toggleViewMode = (mode: 'grid' | 'list') => {
       setViewMode(mode)
@@ -125,11 +237,10 @@ function LibraryContent() {
   const handlePageSizeChange = (val: string) => {
       const newSize = parseInt(val);
       setPageSize(newSize);
-      setPage(1);
       localStorage.setItem('omnibus-library-pagesize', val);
   }
 
-  const handleNavigate = (e: React.MouseEvent, path: string, id: string) => {
+  const handleNavigate = (e: React.MouseEvent | React.KeyboardEvent, path: string, id: string) => {
       e.preventDefault();
       e.stopPropagation();
       setNavigatingTo(id);
@@ -143,8 +254,6 @@ function LibraryContent() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL";
-
   const handleResetFilters = () => {
       setSearchQuery("");
       setSearchType("ALL");
@@ -156,120 +265,35 @@ function LibraryContent() {
       setEraFilter("ALL");
       setReadStatus("ALL");
       setActiveCollection("ALL");
-      setPage(1);
       window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  const fetchCollections = useCallback(async () => {
-    try {
-      const res = await fetch('/api/library/collections', { cache: 'no-store' });
-      if (res.ok) setCollections(await res.json());
-      else throw new Error("Failed to fetch collections");
-    } catch (e) { 
-        toast({ title: "Error", description: "Failed to load reading lists.", variant: "destructive" });
-    }
-  }, [toast]);
-
-  const fetchLibraryData = useCallback(async (pageNum = 1, append = false, forceRefresh = false, currentLimit = 24) => {
-    if (forceRefresh) setIsRefreshing(true);
-    else if (pageNum === 1) setLoading(true);
-    else setLoadingMore(true);
-
-    try {
-        const params = new URLSearchParams();
-        params.append('page', pageNum.toString());
-        params.append('limit', currentLimit.toString());
-        
-        if (forceRefresh) params.append('refresh', 'true');
-        if (debouncedSearch.trim()) { 
-            params.append('q', debouncedSearch.trim()); 
-            params.append('type', searchType); 
-        }
-        
-        if (libraryFilter !== 'ALL' && libraryFilter !== 'UNMATCHED') params.append('library', libraryFilter);
-        if (libraryFilter === 'UNMATCHED') params.append('unmatched', 'true');
-        if (publisherFilter !== 'ALL') params.append('publisher', publisherFilter);
-        if (sortOption) params.append('sort', sortOption);
-        if (showFavoritesOnly) params.append('favorites', 'true');
-        if (monitoredFilter) params.append('monitored', 'true');
-        if (eraFilter !== 'ALL') params.append('era', eraFilter);
-        if (readStatus !== 'ALL') params.append('readStatus', readStatus);
-        if (activeCollection !== 'ALL') params.append('collection', activeCollection);
-
-        if (sortOption === 'random') params.append('_t', Date.now().toString());
-
-        const res = await fetch(`/api/library?${params.toString()}`, { cache: 'no-store' });
-        const data = await res.json();
-        
-        if (!res.ok && data.error) {
-            toast({ title: "Scan Aborted", description: data.error, variant: "destructive" });
-            return;
-        }
-
-        if (data.series) {
-            setSeries(prev => {
-                if (!append) return data.series;
-                const existingIds = new Set(prev.map((s: any) => s.id || s.path));
-                const newItems = data.series.filter((s: any) => !existingIds.has(s.id || s.path));
-                return [...prev, ...newItems];
-            });
-            setHasMore(data.hasMore);
-        }
-        if (data.publishers) {
-            setUniquePublishers(data.publishers);
-        }
-    } catch (e: any) {
-        toast({ title: "Error", description: "Failed to fetch library data.", variant: "destructive" });
-    } finally { setLoading(false); setLoadingMore(false); setIsRefreshing(false); }
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger, toast]);
-
-  const refetchTrigger = searchParams.get('refetch');
-
-  useEffect(() => { 
-      if (!isInitialized) return;
-      
-      const forceRefresh = !!refetchTrigger;
-      setPage(1); 
-      fetchLibraryData(1, false, forceRefresh, pageSize); 
-      
-      if (collections.length === 0) fetchCollections(); 
-
-      if (forceRefresh) {
-          const newUrl = new URL(window.location.href);
-          newUrl.searchParams.delete('refetch');
-          window.history.replaceState({}, '', newUrl.toString());
-      }
-  }, [fetchLibraryData, isInitialized, refetchTrigger, pageSize, fetchCollections])
-
   const handleRefresh = () => {
       setPage(1);
-      fetchLibraryData(1, false, true, pageSize);
-      toast({ title: "Scanning Disk", description: "Checking folders for new comics..." });
+      loadLibraryData(1, true, false);
+      toastRef.current({ title: "Scanning Disk", description: "Checking folders for new comics..." });
   }
 
   const observer = useRef<IntersectionObserver | null>(null);
-
   const lastElementRef = useCallback((node: HTMLDivElement | null) => {
       if (loading || loadingMore) return; 
-      
       if (observer.current) observer.current.disconnect();
       
       observer.current = new IntersectionObserver(entries => {
           if (entries[0].isIntersecting && hasMore) {
               setPage(prevPage => {
                   const nextPage = prevPage + 1;
-                  fetchLibraryData(nextPage, true, false, pageSize);
+                  loadLibraryData(nextPage, false, true);
                   return nextPage;
               });
           }
       }, { rootMargin: "400px" }); 
       
       if (node) observer.current.observe(node);
-  }, [hasMore, fetchLibraryData, pageSize, loading, loadingMore]); 
+  }, [hasMore, loading, loadingMore, loadLibraryData]); 
 
   const toggleFavorite = async (seriesId: string, currentStatus: boolean) => {
       if (!seriesId) return;
-      
       setSeries(prev => prev.map(s => s.id === seriesId ? { ...s, isFavorite: !currentStatus } : s));
       
       try { 
@@ -277,7 +301,7 @@ function LibraryContent() {
           if (!res.ok) throw new Error("Failed to favorite");
       } catch (e) {
           setSeries(prev => prev.map(s => s.id === seriesId ? { ...s, isFavorite: currentStatus } : s));
-          toast({ title: "Error", description: "Failed to update favorite status.", variant: "destructive" });
+          toastRef.current({ title: "Error", description: "Failed to update favorite status.", variant: "destructive" });
       }
   };
 
@@ -294,11 +318,11 @@ function LibraryContent() {
           if (!colId) throw new Error("No collection selected");
           const res2 = await fetch('/api/library/collections/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collectionId: colId, seriesId: targetSeries.id, action: 'add' }) });
           if (res2.ok) {
-              toast({ title: "Success", description: "Series added to list." });
+              toastRef.current({ title: "Success", description: "Series added to list." });
               setTargetSeries(null); setNewCollectionName(""); setSelectedCollectionId(""); fetchCollections(); 
           } else throw new Error("Failed to add to list");
       } catch (e) { 
-          toast({ variant: "destructive", title: "Error", description: "Could not add to list." }); 
+          toastRef.current({ variant: "destructive", title: "Error", description: "Could not add to list." }); 
       } finally { setAddingToList(false); }
   }
 
@@ -320,13 +344,13 @@ function LibraryContent() {
           });
           
           if (res2.ok) {
-              toast({ title: "Mass Tagging Complete", description: `Added ${selectedSeries.size} series to your list.` });
+              toastRef.current({ title: "Mass Tagging Complete", description: `Added ${selectedSeries.size} series to your list.` });
               setBulkListModalOpen(false); setNewCollectionName(""); setSelectedCollectionId("");
               setSelectedSeries(new Set()); setIsSelectionMode(false);
               fetchCollections(); 
           } else throw new Error("Failed to add to list");
       } catch (e) { 
-          toast({ variant: "destructive", title: "Error", description: "Could not add to list." }); 
+          toastRef.current({ variant: "destructive", title: "Error", description: "Could not add to list." }); 
       } finally { setAddingToList(false); }
   }
 
@@ -334,12 +358,12 @@ function LibraryContent() {
       try {
           const res = await fetch('/api/library/collections/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collectionId: activeCollection, seriesId, action: 'remove' }) });
           if (res.ok) { 
-              toast({ title: "Removed", description: "Series removed from list." }); 
+              toastRef.current({ title: "Removed", description: "Series removed from list." }); 
               fetchCollections(); 
-              fetchLibraryData(1, false, true, pageSize); 
+              loadLibraryData(1, false, false); 
           } else throw new Error("Failed to remove");
       } catch (e) { 
-          toast({ title: "Error", description: "Failed to remove from list.", variant: "destructive" });
+          toastRef.current({ title: "Error", description: "Failed to remove from list.", variant: "destructive" });
       }
   }
 
@@ -348,14 +372,14 @@ function LibraryContent() {
       try {
           const res = await fetch(`/api/library/collections?id=${collectionToDelete}`, { method: 'DELETE' });
           if (res.ok) {
-              toast({ title: "List Deleted" });
+              toastRef.current({ title: "List Deleted" });
               if (activeCollection === collectionToDelete) setActiveCollection("ALL");
               fetchCollections();
           } else {
-              toast({ title: "Error", description: "Could not delete list.", variant: "destructive" });
+              toastRef.current({ title: "Error", description: "Could not delete list.", variant: "destructive" });
           }
       } catch (e) { 
-          toast({ title: "Error", variant: "destructive" }); 
+          toastRef.current({ title: "Error", variant: "destructive" }); 
       } finally {
           setCollectionToDelete(null);
       }
@@ -366,7 +390,7 @@ function LibraryContent() {
       navigator.clipboard.writeText(editing.path);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      toast({ title: "Path Copied" });
+      toastRef.current({ title: "Path Copied" });
     }
   };
 
@@ -383,18 +407,18 @@ function LibraryContent() {
         })
       });
       if (res.ok) {
-        toast({ title: "Success!", description: "Series info updated." });
+        toastRef.current({ title: "Success!", description: "Series info updated." });
         setEditing(null);
         setPage(1);
-        fetchLibraryData(1, false, true, pageSize);
+        loadLibraryData(1, false, false);
       } else {
-        const err = await res.json(); toast({ title: "Update Failed", description: err.error || "Unknown error", variant: "destructive" });
+        const err = await res.json(); toastRef.current({ title: "Update Failed", description: err.error || "Unknown error", variant: "destructive" });
       }
-    } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); } finally { setUpdating(false) }
+    } catch (e: any) { toastRef.current({ title: "Error", description: e.message, variant: "destructive" }); } finally { setUpdating(false) }
   }
 
   const initiateRefreshMetadata = (cvId: number, folderPath: string) => {
-    if (!cvId) { toast({ title: "Missing ID", description: "This folder isn't linked to a ComicVine ID. Use 'Edit Info' to add one." }); return; }
+    if (!cvId) { toastRef.current({ title: "Missing ID", description: "This folder isn't linked to a ComicVine ID. Use 'Edit Info' to add one." }); return; }
     setRefreshTarget({ cvId, path: folderPath }); setConfirmOpen(true);
   }
 
@@ -404,11 +428,11 @@ function LibraryContent() {
     try {
       const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: refreshTarget.cvId, folderPath: refreshTarget.path }) });
       if (res.ok) { 
-          toast({ title: "Success", description: "Metadata and cover art refreshed!" }); 
-          setPage(1); fetchLibraryData(1, false, true, pageSize); 
+          toastRef.current({ title: "Success", description: "Metadata and cover art refreshed!" }); 
+          setPage(1); loadLibraryData(1, false, false); 
       } else throw new Error("Failed to refresh");
     } catch (e) {
-        toast({ title: "Error", description: "Failed to refresh metadata.", variant: "destructive" });
+        toastRef.current({ title: "Error", description: "Failed to refresh metadata.", variant: "destructive" });
     } finally { setLoading(false); setRefreshTarget(null); }
   }
 
@@ -432,11 +456,11 @@ function LibraryContent() {
         const res = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seriesIds: Array.from(selectedSeries), status, action: 'bulk-progress' }) });
         if (res.ok) {
             const isRead = status === 'READ';
-            toast({ title: "Bulk Update Success", description: `Marked ${selectedSeries.size} series as ${isRead ? 'read' : 'unread'}.` });
+            toastRef.current({ title: "Bulk Update Success", description: `Marked ${selectedSeries.size} series as ${isRead ? 'read' : 'unread'}.` });
             setSeries(prev => prev.map(s => selectedSeries.has(s.id) ? { ...s, unreadCount: isRead ? 0 : s.count, progressPercentage: isRead ? 100 : 0 } : s));
             setSelectedSeries(new Set()); setIsSelectionMode(false);
         } else throw new Error("Failed");
-    } catch (e) { toast({ title: "Update Failed", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
+    } catch (e) { toastRef.current({ title: "Update Failed", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
   const handleBulkAdvanced = async (action: string, status: string) => {
@@ -444,22 +468,22 @@ function LibraryContent() {
       try {
           const res = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seriesIds: Array.from(selectedSeries), action, status }) });
           if (res.ok) {
-              toast({ title: "Bulk Update Complete" }); 
+              toastRef.current({ title: "Bulk Update Complete" }); 
               if (action === 'bulk-remove-list') fetchCollections();
               setPage(1);
-              fetchLibraryData(1, false, true, pageSize); 
+              loadLibraryData(1, false, false); 
               setSelectedSeries(new Set()); 
               setIsSelectionMode(false);
           } else {
-              const data = await res.json(); toast({ title: "Update Failed", description: data.error, variant: "destructive" });
+              const data = await res.json(); toastRef.current({ title: "Update Failed", description: data.error, variant: "destructive" });
           }
-      } catch (e) { toast({ title: "Error", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
+      } catch (e) { toastRef.current({ title: "Error", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
   const handleBulkRefresh = async () => {
       const seriesList = series.filter(s => selectedSeries.has(s.id));
       setIsBulkProcessing(true);
-      toast({ title: "Starting Metadata Refresh", description: `Queued ${seriesList.length} series. Please keep this page open.` });
+      toastRef.current({ title: "Starting Metadata Refresh", description: `Queued ${seriesList.length} series. Please keep this page open.` });
       
       let successCount = 0;
       let failCount = 0;
@@ -476,9 +500,9 @@ function LibraryContent() {
           if (i < seriesList.length - 1) await new Promise(r => setTimeout(r, 2000));
       }
       
-      toast({ title: "Refresh Complete", description: `Successfully refreshed ${successCount} series. ${failCount > 0 ? `Failed: ${failCount}` : ''}` });
+      toastRef.current({ title: "Refresh Complete", description: `Successfully refreshed ${successCount} series. ${failCount > 0 ? `Failed: ${failCount}` : ''}` });
       setPage(1);
-      fetchLibraryData(1, false, true, pageSize); setIsBulkProcessing(false); setSelectedSeries(new Set()); setIsSelectionMode(false);
+      loadLibraryData(1, false, false); setIsBulkProcessing(false); setSelectedSeries(new Set()); setIsSelectionMode(false);
   }
 
   const handleBulkRename = async () => {
@@ -491,12 +515,12 @@ function LibraryContent() {
           });
           if (res.ok) {
               const data = await res.json();
-              toast({ title: "Renaming Complete", description: `Successfully renamed ${data.filesRenamed} files across ${data.foldersRenamed > 0 ? data.foldersRenamed : 'selected'} folders.` });
-              setRenameModalOpen(false); setSelectedSeries(new Set()); setIsSelectionMode(false); setPage(1); fetchLibraryData(1, false, true, pageSize);
+              toastRef.current({ title: "Renaming Complete", description: `Successfully renamed ${data.filesRenamed} files across ${data.foldersRenamed > 0 ? data.foldersRenamed : 'selected'} folders.` });
+              setRenameModalOpen(false); setSelectedSeries(new Set()); setIsSelectionMode(false); setPage(1); loadLibraryData(1, false, false);
           } else {
-              const data = await res.json(); toast({ title: "Renaming Failed", description: data.error, variant: "destructive" });
+              const data = await res.json(); toastRef.current({ title: "Renaming Failed", description: data.error, variant: "destructive" });
           }
-      } catch (e) { toast({ title: "Error", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
+      } catch (e) { toastRef.current({ title: "Error", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
   const handleBulkDelete = async () => {
@@ -504,11 +528,13 @@ function LibraryContent() {
       try {
           const res = await fetch('/api/library/series', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seriesIds: Array.from(selectedSeries), deleteFiles: bulkDeleteFiles }) });
           if (!res.ok) throw new Error("Failed to delete selected series.");
-          toast({ title: "Series Deleted", description: `Successfully removed ${selectedSeries.size} series.` });
+          toastRef.current({ title: "Series Deleted", description: `Successfully removed ${selectedSeries.size} series.` });
           setSeries(prev => prev.filter(s => !selectedSeries.has(s.id)));
           setSelectedSeries(new Set()); setIsSelectionMode(false); setBulkDeleteModalOpen(false);
-      } catch (e: any) { toast({ title: "Delete Failed", description: e.message, variant: "destructive" }); } finally { setIsBulkProcessing(false); }
+      } catch (e: any) { toastRef.current({ title: "Delete Failed", description: e.message, variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
+
+  const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL";
 
   return (
     <div className="container mx-auto py-10 px-6 relative transition-colors duration-300">
@@ -579,7 +605,6 @@ function LibraryContent() {
                           <div className="flex items-center gap-2 truncate"><List className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Show 24" /></div>
                       </SelectTrigger>
                       <SelectContent className="bg-popover border-border">
-                          {/* FIX 5b: Standardize to grid-friendly multiples */}
                           <SelectItem value="12">Show 12</SelectItem>
                           <SelectItem value="24">Show 24</SelectItem>
                           <SelectItem value="48">Show 48</SelectItem>
@@ -686,7 +711,7 @@ function LibraryContent() {
           </div>
       </div>
 
-      {loading ? (
+      {loading && page === 1 ? (
         <LibrarySkeleton count={pageSize} />
       ) : series.length === 0 ? (
         <div className="text-center py-20 text-muted-foreground border-2 border-dashed rounded-lg border-border bg-muted/30">
@@ -705,13 +730,12 @@ function LibraryContent() {
                   <Card className={`aspect-[2/3] overflow-hidden shadow-sm transition-all p-0 relative flex flex-col ${isSelectionMode ? (isSelected ? 'border-4 border-primary scale-95' : 'border-2 border-border cursor-pointer') : 'border-border group-hover:shadow-md cursor-pointer bg-background'}`}>
                       {isSelectionMode && item.id && (<div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">{isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-white/80" />}</div>)}
                       
-                      {/* --- FIX 5c: Semantic Role and Keyboard Handler --- */}
                       <div 
                           role="button"
                           tabIndex={0}
                           aria-label={`Open ${item.name}`}
                           className="relative flex-1 bg-muted flex items-center justify-center overflow-hidden focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
-                          onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); else toggleSeriesSelection(item.id); }}
+                          onClick={(e) => { if (!isSelectionMode) handleNavigate(e as any, item.path, navId); else toggleSeriesSelection(item.id); }}
                           onKeyDown={(e) => {
                               if (e.key === 'Enter' || e.key === ' ') {
                                   e.preventDefault();
@@ -754,7 +778,7 @@ function LibraryContent() {
                             variant="default" 
                             size="sm" 
                             className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 min-w-0 px-2" 
-                            onClick={(e) => handleNavigate(e, item.path, navId)}
+                            onClick={(e) => handleNavigate(e as any, item.path, navId)}
                         >
                             {navigatingTo === navId ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 mr-1.5 shrink-0" />} 
                             <span className="truncate">{navigatingTo === navId ? "Loading..." : "Read Series"}</span>
@@ -799,7 +823,7 @@ function LibraryContent() {
                       className="px-0.5 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-sm" 
                       role="button"
                       tabIndex={0}
-                      onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); }}
+                      onClick={(e) => { if (!isSelectionMode) handleNavigate(e as any, item.path, navId); }}
                       onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault();
@@ -838,13 +862,12 @@ function LibraryContent() {
                         {isSelectionMode && (<td className="px-4 py-3 text-center">{isSelected ? <CheckSquare className="w-6 h-6 text-primary mx-auto" /> : <Square className="w-6 h-6 text-muted-foreground mx-auto" />}</td>)}
                         
                         <td className="px-4 py-2">
-                            {/* --- FIX 5c: Semantic Role and Keyboard Handler --- */}
                             <div 
                                 className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                                 role="button"
                                 tabIndex={0}
                                 aria-label={`Open ${item.name}`}
-                                onClick={(e) => { if(!isSelectionMode) handleNavigate(e, item.path, navId); }}
+                                onClick={(e) => { if(!isSelectionMode) handleNavigate(e as any, item.path, navId); }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' || e.key === ' ') {
                                         e.preventDefault();
@@ -869,7 +892,7 @@ function LibraryContent() {
                             <div className="flex items-center gap-2">
                                 {isSelectionMode ? (<span>{item.name}</span>) : (
                                     <button 
-                                        onClick={(e) => handleNavigate(e, item.path, navId)} 
+                                        onClick={(e) => handleNavigate(e as any, item.path, navId)} 
                                         className="hover:text-primary transition-colors text-left font-bold flex items-center gap-2 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-sm"
                                     >
                                         {item.name}
@@ -900,7 +923,7 @@ function LibraryContent() {
                                         size="icon" 
                                         className="h-10 w-10 sm:h-8 sm:w-8 hover:text-primary hover:bg-primary/10"
                                         title="Read Series"
-                                        onClick={(e) => handleNavigate(e, item.path, navId)}
+                                        onClick={(e) => handleNavigate(e as any, item.path, navId)}
                                     > 
                                         {navigatingTo === navId ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin text-primary" /> : <BookOpen className="w-5 h-5 sm:w-4 sm:h-4" />}
                                     </Button>
@@ -1149,14 +1172,5 @@ function LibraryContent() {
           confirmText="Delete List" 
       />
     </div>
-  )
-}
-
-// Add this at the absolute bottom of app/library/page.tsx
-export default function LibraryPage() {
-  return (
-    <Suspense fallback={<LibrarySkeleton />}>
-      <LibraryContent />
-    </Suspense>
   )
 }

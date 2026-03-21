@@ -128,7 +128,6 @@ export async function POST(request: NextRequest) {
               status: issueStatus,
               activeDownloadName: searchName,
               imageUrl: issueImage,
-              // Inject a temporary flag if pending approval
               downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null 
             }
           });
@@ -143,7 +142,10 @@ export async function POST(request: NextRequest) {
         processAutomationQueue(createdRequests);
       }
 
-      evaluateTrophies(token.id as string).catch(console.error);
+      // --- SECURITY FIX 2b: Use centralized logger ---
+      evaluateTrophies(token.id as string).catch(err => {
+          Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
+      });
 
       return NextResponse.json({ 
         success: true, 
@@ -158,7 +160,6 @@ export async function POST(request: NextRequest) {
           status: initialStatus,
           activeDownloadName: name,
           imageUrl: image,
-          // Inject a temporary flag if pending approval
           downloadLink: skipIndexers && initialStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
         }
       });
@@ -178,7 +179,10 @@ export async function POST(request: NextRequest) {
         searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
       }
 
-      evaluateTrophies(token.id as string).catch(console.error);
+      // --- SECURITY FIX 2b: Use centralized logger ---
+      evaluateTrophies(token.id as string).catch(err => {
+          Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
+      });
 
       return NextResponse.json({ 
         success: true, 
@@ -186,9 +190,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-  } catch (error: unknown) {
-    Logger.log(`[Request Error] ${getErrorMessage(error)}`, 'error');
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+  } catch (error: any) {
+    Logger.log(`[Request Error] ${error.message}`, 'error');
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
@@ -205,7 +209,6 @@ export async function PATCH(request: NextRequest) {
     const reqRecord = await prisma.request.findUnique({ where: { id } });
     if (!reqRecord) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
 
-    // Check if the temporary GetComics flag was attached during the original request
     const skipIndexers = reqRecord.downloadLink === 'DIRECT_GETCOMICS';
 
     await prisma.request.update({
@@ -241,15 +244,17 @@ export async function PATCH(request: NextRequest) {
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
       
-      // Pass the extracted skipIndexers flag directly into the search queue
       searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
     }
 
-    evaluateTrophies(token.id as string).catch(console.error);
+    // --- SECURITY FIX 2b: Use centralized logger ---
+    evaluateTrophies(token.id as string).catch(err => {
+        Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
+    });
 
     return NextResponse.json({ success: true });
-  } catch (error: unknown) {
-    Logger.log(`[Request API] Approval Error: ${getErrorMessage(error)}`, 'error');
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+  } catch (error: any) {
+    Logger.log(`[Request API] Approval Error: ${error.message}`, 'error');
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

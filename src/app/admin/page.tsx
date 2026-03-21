@@ -138,22 +138,40 @@ export default function AdminPage() {
     } finally { setDownloadsLoading(false); }
   };
 
+  const fetchUpdates = () => {
+      fetch('/api/admin/update-check').then(res => res.json()).then(setUpdateData).catch(() => {});
+  };
+
   const fetchAll = () => {
       fetchStats();
       fetchRequests();
       fetchDownloads();
-      fetch('/api/admin/update-check').then(res => res.json()).then(setUpdateData).catch(() => {});
+      fetchUpdates();
   };
+
+  // --- FIX 6b: Extract intervals into proper constants ---
+  const ADMIN_DASHBOARD_POLL_INTERVAL_MS = 15 * 1000; // 15 seconds
+  const ADMIN_ALERT_POLL_INTERVAL_MS = 300 * 1000; // 5 minutes
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(() => {
+    
+    // Poll internal database and download clients every 15s
+    const dashboardInterval = setInterval(() => {
         fetchStats();
         fetchRequests();
         fetchDownloads();
-        fetch('/api/admin/update-check').then(res => res.json()).then(setUpdateData).catch(() => {});
-    }, 15000);
-    return () => clearInterval(interval);
+    }, ADMIN_DASHBOARD_POLL_INTERVAL_MS);
+
+    // Poll external GitHub API for updates every 5m to avoid rate limits
+    const alertInterval = setInterval(() => {
+        fetchUpdates();
+    }, ADMIN_ALERT_POLL_INTERVAL_MS);
+
+    return () => {
+        clearInterval(dashboardInterval);
+        clearInterval(alertInterval);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

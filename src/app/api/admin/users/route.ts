@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
 import { DiscordNotifier } from '@/lib/discord';
-import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -20,7 +20,8 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json(users);
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch users' }, { status: 500 });
+    Logger.log(`[Users API] Fetch Error: ${(error as Error).message}`, 'error');
+    return NextResponse.json({ error: 'Failed to fetch users. Check server logs.' }, { status: 500 });
   }
 }
 
@@ -35,7 +36,6 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: "You cannot remove your own Admin privileges." }, { status: 400 });
     }
 
-    // Grab the old state to check for transition
     const oldUser = await prisma.user.findUnique({ where: { id } });
 
     let updateData: any = {};
@@ -54,7 +54,6 @@ export async function PATCH(req: NextRequest) {
       data: updateData
     });
 
-    // TRIGGER DISCORD NOTIFICATION
     if (isApproved === true && oldUser && !oldUser.isApproved) {
         DiscordNotifier.sendAlert('account_approved', {
             user: updatedUser.username,
@@ -64,11 +63,11 @@ export async function PATCH(req: NextRequest) {
 
     return NextResponse.json({ success: true, user: updatedUser });
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to update user' }, { status: 500 });
+    Logger.log(`[Users API] Update Error: ${(error as Error).message}`, 'error');
+    return NextResponse.json({ error: 'Failed to update user. Check server logs.' }, { status: 500 });
   }
 }
 
-// Delete User endpoint
 export async function DELETE(req: NextRequest) {
   const token = await getToken({ req });
   if (token?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -92,12 +91,13 @@ export async function DELETE(req: NextRequest) {
     });
 
     return NextResponse.json({ success: true });
-  } catch (error: unknown) {
-    return NextResponse.json({ error: getErrorMessage(error) || 'Failed to delete user' }, { status: 500 });
+  } catch (error: any) {
+    // --- SECURITY FIX 1b: Log real error, hide from client ---
+    Logger.log(`[Users API] Delete Error: ${error.message}`, 'error');
+    return NextResponse.json({ error: 'Failed to delete user. Check server logs.' }, { status: 500 });
   }
 }
 
-// Create User endpoint
 export async function POST(req: NextRequest) {
   const token = await getToken({ req });
   if (token?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -141,6 +141,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(safeUser);
 
   } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 500 });
+      // --- SECURITY FIX 1b: Log real error, hide from client ---
+      Logger.log(`[Users API] Create Error: ${e.message}`, 'error');
+      return NextResponse.json({ error: "Failed to create user. Please check server logs." }, { status: 500 });
   }
 }

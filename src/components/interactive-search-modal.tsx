@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-// Added DialogHeader to the import here!
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -29,7 +28,6 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   
-  // New State for Monitor Prompt
   const [monitorPrompt, setMonitorPrompt] = useState<{ result: any, source: 'prowlarr' | 'getcomics' } | null>(null)
   
   const { toast } = useToast()
@@ -62,7 +60,6 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
     }
   }
 
-  // Intercept download action to show monitor prompt if it's a volume search
   const initiateManualRequest = (searchResult: any, source: 'prowlarr' | 'getcomics' | 'flag_admin') => {
       if (source !== 'flag_admin' && comicData.type === 'volume') {
           setMonitorPrompt({ result: searchResult, source: source as 'prowlarr' | 'getcomics' });
@@ -119,7 +116,8 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   return (
     <>
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-6xl w-[95%] max-h-[90vh] md:max-h-[85vh] rounded-xl flex flex-col p-0 bg-background border-border overflow-hidden transition-colors duration-300">
+      {/* --- FIX 5a: Standard Dialog Size --- */}
+      <DialogContent className="sm:max-w-4xl max-h-[85vh] w-[95%] rounded-xl flex flex-col p-0 bg-background border-border overflow-hidden transition-colors duration-300">
         <DialogTitle className="sr-only">Interactive Search</DialogTitle>
         <DialogDescription className="sr-only">Manually select a release from Indexers or GetComics.</DialogDescription>
 

@@ -19,22 +19,19 @@ import {
 } from "@/components/ui/table"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Loader2, Cloud, Wifi } from "lucide-react"
-import { Logger } from "@/lib/logger"
-import { getErrorMessage } from "@/lib/utils/error"
 
 interface SearchResult {
   title: string;
   size: number;
   indexer: string;
   guid: string;
-  infoHash?: string; // Add this new optional field
+  infoHash?: string; 
   seeders: number;
   leechers: number;
   publishDate: string;
   protocol: string;
 }
 
-// 1. Define that we expect a requestId
 interface Props {
   requestId: string; 
   seriesName: string;
@@ -76,22 +73,22 @@ export function ProwlarrSearchModal({ requestId, seriesName, seriesYear }: Props
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-  requestId: requestId,
-  guid: release.guid,
-  infoHash: release.infoHash, // Pass it along
-  title: release.title,
-  protocol: release.protocol
-})
+          requestId: requestId,
+          guid: release.guid,
+          infoHash: release.infoHash, 
+          title: release.title,
+          protocol: release.protocol
+        })
       });
 
       const data = await res.json();
       if (data.success) {
-        setOpen(false); // 3. Close silently on success (dashboard will update)
+        setOpen(false); 
       } else {
         alert("Failed: " + data.error);
       }
     } catch (e) {
-      Logger.log(getErrorMessage(e), 'error');
+      console.error(e);
       alert("Error sending download request.");
     } finally {
       setDownloading(null);
@@ -112,7 +109,8 @@ export function ProwlarrSearchModal({ requestId, seriesName, seriesYear }: Props
         <Button variant="outline" size="sm">Search Prowlarr</Button>
       </DialogTrigger>
       
-      <DialogContent className="sm:max-w-[90vw] h-[80vh] flex flex-col p-0 gap-0">
+      {/* --- FIX 5a: Standard Dialog Size --- */}
+      <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col p-0 gap-0">
         <div className="p-6 border-b shrink-0 bg-white z-20">
           <DialogHeader>
             <DialogTitle>Search Results: {seriesName}</DialogTitle>

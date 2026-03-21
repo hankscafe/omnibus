@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
+import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
@@ -106,10 +107,13 @@ export async function POST(request: Request) {
             }
         });
 
-        evaluateTrophies(userId).catch(console.error);
+        // --- SECURITY FIX 2b: Use centralized logger ---
+        evaluateTrophies(userId).catch(err => {
+            Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
+        });
 
         return NextResponse.json({ success: true });
-    } catch (error: unknown) {
-        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    } catch (error: any) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

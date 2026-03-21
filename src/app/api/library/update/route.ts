@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';
 import { revalidatePath, revalidateTag } from 'next/cache';
+import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
@@ -12,7 +13,6 @@ export async function POST(request: Request) {
     const parsedIsManga = isManga === true || isManga === 'true' || isManga === 'on' || isManga === 1;
     const parsedMonitored = monitored === true || monitored === 'true' || monitored === 'on' || monitored === 1;
 
-    // NATIVE DB FETCH: Find the best target library
     const libraries = await prisma.library.findMany();
     let targetLib = parsedIsManga 
         ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
@@ -33,7 +33,6 @@ export async function POST(request: Request) {
     const safeSeries = sanitize(name || "Unknown Series");
     const safeYear = year ? year.toString() : "";
     
-    // --- NEW: DYNAMIC TAG REPLACEMENT ---
     let relFolderPath = folderPattern
         .replace(/{Publisher}/gi, safePublisher)
         .replace(/{Series}/gi, safeSeries)
@@ -93,7 +92,12 @@ export async function POST(request: Request) {
                     }));
                 }
             }
-            if (pathUpdates.length > 0) await prisma.$transaction(pathUpdates).catch(() => {});
+            // --- SECURITY FIX 2a: Log path updates transaction failures safely ---
+            if (pathUpdates.length > 0) {
+                await prisma.$transaction(pathUpdates).catch((err) => {
+                    Logger.log(`Path updates transaction failed: ${getErrorMessage(err)}`, 'error');
+                });
+            }
         }
 
     } else if (parsedCvId) {
@@ -116,7 +120,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, newPath: activePath });
 
-  } catch (error: unknown) {
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

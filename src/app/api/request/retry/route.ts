@@ -83,6 +83,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Direct download link lost. Please delete and re-request this comic." }, { status: 400 });
         
     } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        // --- SECURITY FIX 1b: Log real error, hide from client ---
+        Logger.log(`[Retry API] Error: ${e.message}`, 'error');
+        return NextResponse.json({ error: "Failed to retry request. Please check server logs." }, { status: 500 });
     }
 }

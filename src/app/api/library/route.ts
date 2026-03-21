@@ -22,7 +22,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Explicitly typing the parsed body
     const req = (await request.json()) as any;
     const { seriesIds, action, status } = req;
 
@@ -149,7 +148,12 @@ export async function POST(request: Request) {
             }
         }
 
-        if (dbUpdates.length > 0) await prisma.$transaction(dbUpdates).catch(()=>{});
+        // --- SECURITY FIX 2a: Log bulk update failures safely ---
+        if (dbUpdates.length > 0) {
+            await prisma.$transaction(dbUpdates).catch((err) => {
+                Logger.log(`Bulk manga update transaction failed: ${getErrorMessage(err)}`, 'error');
+            });
+        }
 
         return NextResponse.json({ success: true, message: `Moved ${seriesIds.length} series.` });
     }

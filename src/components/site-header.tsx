@@ -7,7 +7,7 @@ import { useTheme } from "next-themes"
 import { Button } from "@/components/ui/button"
 import { 
   ShieldAlert, LogOut, User as UserIcon, Sun, Moon, Key, Loader2, 
-  Bell, Check, Image as ImageIcon, Trophy, Wrench, Menu
+  Bell, Image as ImageIcon, Trophy, Wrench, Menu
 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -30,9 +30,11 @@ function NotificationBell() {
     } catch (e) { console.error("Notification fetch failed", e) }
   }
 
+  const NOTIFICATION_POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
+
   useEffect(() => {
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 60000) 
+    const interval = setInterval(fetchNotifications, NOTIFICATION_POLL_INTERVAL_MS) 
     return () => clearInterval(interval)
   }, [])
 

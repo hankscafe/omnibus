@@ -7,6 +7,7 @@ import axios from 'axios';
 import { detectManga } from '@/lib/manga-detector';
 import { DiscordNotifier } from '@/lib/discord'; 
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger'; // <-- Added Logger
 
 export async function POST(request: Request) {
   try {
@@ -50,7 +51,9 @@ export async function POST(request: Request) {
             imageUrl = vol.image?.medium_url || vol.image?.super_url;
             if (vol.end_year) status = 'Ended'; 
         }
-    } catch(e) { }
+    } catch(e: unknown) { 
+        Logger.log(`[Match Series] ComicVine fetch failed or timed out: ${getErrorMessage(e)}`, 'warn');
+    }
 
     if (!realName) realName = path.basename(oldFolderPath).replace(/\s\(\d{4}\)$/, "").trim(); 
     if (!realPublisher) realPublisher = 'Other';
@@ -77,10 +80,13 @@ export async function POST(request: Request) {
 
     const targetCvId = parseInt(cvId);
     
+    // --- FIX 4a: Don't silently fail database queries ---
     await prisma.series.updateMany({
         where: { cvId: targetCvId },
         data: { cvId: -Math.abs(Math.floor(Math.random() * 1000000000)) }
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+        Logger.log(`[Match Series] Failed to reset old cvId: ${getErrorMessage(err)}`, 'warn');
+    });
 
     let existingRecord = await prisma.series.findFirst({
         where: { OR: [ { folderPath: oldFolderPath }, { folderPath: newFolderPath } ] }
@@ -109,7 +115,7 @@ export async function POST(request: Request) {
 
     DiscordNotifier.sendAlert('metadata_match', { 
         title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 
-    }).catch(() => {});
+    }).catch(() => {}); // Intentional Fire & Forget
 
     let activeFolderPath = oldFolderPath;
     if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
@@ -118,7 +124,11 @@ export async function POST(request: Request) {
             for (const file of files) {
                 await fs.promises.rename(path.join(oldFolderPath, file), path.join(newFolderPath, file));
             }
-            try { await fs.promises.rmdir(oldFolderPath); } catch(e) {}
+            try { 
+                await fs.promises.rmdir(oldFolderPath); 
+            } catch(e: unknown) {
+                Logger.log(`[Match Series] Failed to remove old empty folder: ${getErrorMessage(e)}`, 'warn');
+            }
         } else {
             await fs.promises.rename(oldFolderPath, newFolderPath);
         }
@@ -164,15 +174,24 @@ export async function POST(request: Request) {
                 }
             }
         }
-        if (pathUpdates.length > 0) await prisma.$transaction(pathUpdates).catch(() => {});
+        // --- FIX 4a: Don't silently fail database transactions ---
+        if (pathUpdates.length > 0) {
+            await prisma.$transaction(pathUpdates).catch((err: unknown) => {
+                Logger.log(`[Match Series] Path updates transaction failed: ${getErrorMessage(err)}`, 'error');
+            });
+        }
 
         if (imageUrl) {
             try {
                 const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 3000, headers: { 'User-Agent': 'Omnibus/1.0' } });
                 await fs.promises.writeFile(path.join(activeFolderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-            } catch(e) {}
+            } catch(e: unknown) {
+                Logger.log(`[Match Series] Failed to download cover image: ${getErrorMessage(e)}`, 'warn');
+            }
         }
-    } catch (err) { }
+    } catch (err: unknown) { 
+        Logger.log(`[Match Series] File operations block failed: ${getErrorMessage(err)}`, 'error');
+    }
 
     try {
         const pendingRequests = await prisma.request.findMany({
@@ -185,7 +204,6 @@ export async function POST(request: Request) {
             const requestsToComplete = [];
 
             for (const dbReq of pendingRequests) {
-                // FIXED TYPE CASTING HERE
                 const searchStr = (dbReq.activeDownloadName || (dbReq as any).title || (dbReq as any).name || "");
                 const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
                 const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
@@ -204,7 +222,9 @@ export async function POST(request: Request) {
                 });
             }
         }
-    } catch (e) { }
+    } catch (e: unknown) { 
+        Logger.log(`[Match Series] Pending requests update failed: ${getErrorMessage(e)}`, 'error');
+    }
     
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
     return NextResponse.json({ success: true, newPath: activeFolderPath, cvId: targetCvId });

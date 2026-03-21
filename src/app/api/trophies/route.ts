@@ -4,13 +4,20 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import fs from 'fs-extra';
 import path from 'path';
+import { Logger } from '@/lib/logger';
 
 export async function GET() {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    const trophies = await prisma.trophy.findMany({ orderBy: { targetValue: 'asc' } });
-    return NextResponse.json(trophies);
+    
+    try {
+        const trophies = await prisma.trophy.findMany({ orderBy: { targetValue: 'asc' } });
+        return NextResponse.json(trophies);
+    } catch (e: any) {
+        Logger.log(`[Trophies API] Fetch Error: ${e.message}`, 'error');
+        return NextResponse.json({ error: "Failed to fetch trophies." }, { status: 500 });
+    }
 }
 
 export async function POST(req: Request) {
@@ -44,7 +51,9 @@ export async function POST(req: Request) {
             return NextResponse.json(created);
         }
     } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        // --- SECURITY FIX 1b: Log real error, hide from client ---
+        Logger.log(`[Trophies API] Create/Update Error: ${e.message}`, 'error');
+        return NextResponse.json({ error: "Failed to save trophy. Please check server logs." }, { status: 500 });
     }
 }
 
@@ -52,8 +61,14 @@ export async function DELETE(req: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    const { searchParams } = new URL(req.url);
-    const id = searchParams.get('id');
-    if (id) await prisma.trophy.delete({ where: { id } });
-    return NextResponse.json({ success: true });
+    
+    try {
+        const { searchParams } = new URL(req.url);
+        const id = searchParams.get('id');
+        if (id) await prisma.trophy.delete({ where: { id } });
+        return NextResponse.json({ success: true });
+    } catch (e: any) {
+        Logger.log(`[Trophies API] Delete Error: ${e.message}`, 'error');
+        return NextResponse.json({ error: "Failed to delete trophy." }, { status: 500 });
+    }
 }

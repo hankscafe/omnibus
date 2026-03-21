@@ -4,7 +4,7 @@ import axios from 'axios';
 import { Logger } from '@/lib/logger'; 
 import fs from 'fs-extra';
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process'; // <-- Changed from exec
 import { promisify } from 'util';
 import { DiscordNotifier } from '@/lib/discord';
 
@@ -14,7 +14,8 @@ import { searchAndDownload } from '@/lib/automation';
 import packageJson from '../../../../../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 
-const execAsync = promisify(exec);
+// --- SECURITY FIX 1a: Use execFile to prevent shell injection ---
+const execFileAsync = promisify(execFile);
 
 // --- NEW: Helper function to strictly check if a version is newer ---
 function isNewerVersion(latest: string, current: string): boolean {
@@ -59,7 +60,8 @@ async function getFolderSize(folderPath: string): Promise<number> {
 
         if (process.platform !== 'win32') {
             try {
-                const { stdout } = await execAsync(`du -sb "${folderPath}"`);
+                // --- SECURITY FIX 1a: Pass arguments as an array to safely bypass the shell ---
+                const { stdout } = await execFileAsync('du', ['-sb', folderPath]);
                 const match = stdout.match(/^(\d+)/);
                 if (match) return parseInt(match[1], 10);
             } catch (duError) {

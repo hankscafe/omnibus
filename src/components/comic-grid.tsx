@@ -87,8 +87,6 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
     localStorage.setItem(`omnibus-grid-limit-${type}`, val);
   };
 
-  // FIX: Fetch library IDs only once on mount, or when forced to refresh. 
-  // Prevents massive DB/Network spam on grid navigation.
   useEffect(() => {
     fetch('/api/library/ids')
       .then(res => res.json())
@@ -264,16 +262,34 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
           {comics.map((comic) => {
             const status = comic.issueNumber ? getIssueStatus(comic.id, comic.volumeId, comic.name) : getVolumeStatus(comic.volumeId, comic.name.split(' #')[0]);
             return (
-            <div key={comic.id} className="group relative aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-105 transition-all cursor-pointer border border-border" onClick={() => setSelectedComic(comic)}>
+            // --- FIX 5c (Revised): Semantic Div Button to avoid nesting errors ---
+            <div 
+                key={comic.id}
+                role="button"
+                tabIndex={0}
+                className="text-left w-full group relative aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-105 transition-all cursor-pointer border border-border focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none" 
+                onClick={() => setSelectedComic(comic)}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelectedComic(comic);
+                    }
+                }}
+                aria-label={`View details for ${comic.name}`}
+            >
                 <img src={comic.image} alt={comic.name} loading="lazy" className="object-cover w-full h-full" />
                 {status === 'LIBRARY' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 shadow-lg z-30"><CheckCircle2 className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
                 {status === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 shadow-lg z-30" title="Requested"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
                 {status === 'PENDING_APPROVAL' && (<div className="absolute top-2 right-2 bg-yellow-500 text-white rounded-full p-1 shadow-lg z-30" title="Pending Admin Approval"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
                 
-                {/* Title gradient always visible on mobile, hidden on desktop until hover */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 pb-4 text-center gap-1 z-20 pointer-events-none">
                     <h3 className="text-white font-bold text-xs sm:text-sm line-clamp-2 leading-tight">{comic.name}</h3>
                     <p className="text-white/80 text-[10px] sm:text-xs">{comic.year}</p>
+                </div>
+                
+                {/* The "Details" button that is visible on hover (Only rendering if we aren't displaying the name directly on mobile) */}
+                <div className="absolute inset-0 hidden sm:flex bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center z-20 pointer-events-none">
+                  <Button size="sm" className="font-bold shadow-lg bg-primary hover:bg-primary/90 text-primary-foreground pointer-events-auto" tabIndex={-1}>Details</Button>
                 </div>
             </div>
           )})}
@@ -418,9 +434,12 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                         {relatedIssues.map(issue => {
                                             const relIssueStatus = getIssueStatus(issue.id, selectedComic.volumeId, issue.name);
                                             return (
+                                            // --- FIX 5c (Revised): Semantic Div Button to avoid nesting errors ---
                                             <div 
                                                 key={issue.id} 
-                                                className="w-[110px] sm:w-[130px] shrink-0 group/issue cursor-pointer relative"
+                                                role="button"
+                                                tabIndex={0}
+                                                className="w-[110px] sm:w-[130px] shrink-0 group/issue cursor-pointer relative text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-md"
                                                 onClick={() => {
                                                     setSelectedComic({
                                                         ...issue,
@@ -433,6 +452,22 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                         characters: undefined
                                                     } as Comic);
                                                 }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault();
+                                                        setSelectedComic({
+                                                            ...issue,
+                                                            volumeId: selectedComic.volumeId,
+                                                            publisher: selectedComic.publisher,
+                                                            issueNumber: issue.issueNumber,
+                                                            description: undefined,
+                                                            writers: undefined,
+                                                            artists: undefined,
+                                                            characters: undefined
+                                                        } as Comic);
+                                                    }
+                                                }}
+                                                aria-label={`View details for ${issue.name}`}
                                               >
                                                 <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
                                                     <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
@@ -452,6 +487,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                                     handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher);
                                                                 }}
                                                                 title="Standard Request"
+                                                                tabIndex={-1}
                                                             >
                                                                 {requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
                                                             </Button>
@@ -465,6 +501,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                                     handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher, false, 'getcomics');
                                                                 }}
                                                                 title="Direct from GetComics"
+                                                                tabIndex={-1}
                                                             >
                                                                 {requestingTarget === `iss-${issue.name}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Globe className="w-4 h-4"/>}
                                                             </Button>

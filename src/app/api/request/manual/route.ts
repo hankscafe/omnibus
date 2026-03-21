@@ -29,11 +29,10 @@ export async function POST(request: NextRequest) {
         initialStatus = 'MANUAL_DDL';
     }
 
-    // If requesting a volume and monitoring is enabled, ensure the series exists in the DB
     if (type === 'volume' && monitored) {
         const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
         const safePubFolder = (publisher || "Other").replace(/[<>:"/\\|?*]/g, '').trim();
-        const libraryTypeFolder = 'Comics'; // Default to Comics
+        const libraryTypeFolder = 'Comics';
 
         await prisma.series.upsert({
             where: { cvId: parseInt(cvId) },
@@ -105,11 +104,14 @@ export async function POST(request: NextRequest) {
         }
     }
 
-    evaluateTrophies(token.id as string).catch(console.error);
+    // --- SECURITY FIX 2b: Use centralized logger ---
+    evaluateTrophies(token.id as string).catch(err => {
+        Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
+    });
 
     return NextResponse.json({ success: true });
-  } catch (error: unknown) {
-    Logger.log(`[Manual Request Error] ${getErrorMessage(error)}`, 'error');
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+  } catch (error: any) {
+    Logger.log(`[Manual Request Error] ${error.message}`, 'error');
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

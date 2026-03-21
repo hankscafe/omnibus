@@ -26,9 +26,9 @@ export function AdminRequestManagement() {
   // Sorting
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'createdAt', direction: 'desc' })
 
-  // Pagination
+  // --- FIX 5b: Standardize to 24 items per page ---
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(25)
+  const [pageSize, setPageSize] = useState(24)
 
   // Bulk & Single Deletion Actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -66,9 +66,11 @@ export function AdminRequestManagement() {
     }
   }
 
+  const REQUEST_POLL_INTERVAL_MS = 15 * 1000; // 15 seconds
+
   useEffect(() => {
     fetchRequests()
-    const interval = setInterval(fetchRequests, 15000)
+    const interval = setInterval(fetchRequests, REQUEST_POLL_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [])
 
@@ -463,10 +465,11 @@ export function AdminRequestManagement() {
             <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(Number(v)); setCurrentPage(1); }}>
               <SelectTrigger className="h-10 sm:h-8 w-[80px] sm:w-[70px] bg-background border-border font-medium"><SelectValue placeholder={pageSize} /></SelectTrigger>
               <SelectContent className="bg-popover border-border">
-                <SelectItem value="10" className="focus:bg-primary/10 focus:text-primary">10</SelectItem>
-                <SelectItem value="25" className="focus:bg-primary/10 focus:text-primary">25</SelectItem>
-                <SelectItem value="50" className="focus:bg-primary/10 focus:text-primary">50</SelectItem>
-                <SelectItem value="100" className="focus:bg-primary/10 focus:text-primary">100</SelectItem>
+                {/* FIX 5b: Standardize Page Size Options */}
+                <SelectItem value="12" className="cursor-pointer focus:bg-primary/10 focus:text-primary">12</SelectItem>
+                <SelectItem value="24" className="cursor-pointer focus:bg-primary/10 focus:text-primary">24</SelectItem>
+                <SelectItem value="48" className="cursor-pointer focus:bg-primary/10 focus:text-primary">48</SelectItem>
+                <SelectItem value="96" className="cursor-pointer focus:bg-primary/10 focus:text-primary">96</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -489,7 +492,6 @@ export function AdminRequestManagement() {
             <div className="p-10 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
           ) : selectedComicDetails && (
             <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-6 p-2 sm:p-0">
-               {/* FIX: ADDED sm:self-start TO STOP VERTICAL STRETCHING */}
                <div className="aspect-[2/3] w-3/4 sm:w-full mx-auto rounded-lg overflow-hidden border border-border shadow-md bg-muted sm:self-start">
                   <img src={selectedComicDetails.image} alt="Cover" className="w-full h-full object-cover" />
                </div>
@@ -510,7 +512,6 @@ export function AdminRequestManagement() {
         </DialogContent>
       </Dialog>
 
-      {/* Unified Deletion Confirmation (Bulk or Single) */}
       <ConfirmationDialog 
         isOpen={confirmOpen}
         onClose={() => setConfirmOpen(false)}

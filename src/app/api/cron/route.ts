@@ -6,9 +6,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
-// --- SECURITY FIX: Changed from GET to POST to prevent CSRF and link prefetching ---
 export async function POST(req: NextRequest) {
-    // --- 1. SECURITY: API KEY VALIDATION ---
     const authHeader = req.headers.get('authorization') || '';
     const tokenFromBearer = authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : null;
     const apiKeyHeader = req.headers.get('x-api-key')?.trim();
@@ -25,7 +23,6 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        // --- 2. AUTOMATIC GARBAGE COLLECTION ---
         const cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() - 7);
         
@@ -37,7 +34,6 @@ export async function POST(req: NextRequest) {
             }
         });
 
-        // --- 3. SCHEDULED JOBS EVALUATION ---
         const settings = await prisma.systemSetting.findMany({
             where: {
                 key: {
@@ -80,12 +76,15 @@ export async function POST(req: NextRequest) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ job })
             });
-            await executeJobRoute(reqTrigger).catch(() => {});
+            // --- SECURITY FIX 2a: Log full job execution failures ---
+            await executeJobRoute(reqTrigger).catch((err) => {
+                Logger.log(`[CRON] Job ${job} execution failed: ${getErrorMessage(err)}`, 'error');
+            });
             await new Promise(r => setTimeout(r, 2000));
         }
 
         return NextResponse.json({ success: true, jobsTriggered: jobsToRun, logsPurged: true });
-    } catch (error: unknown) {
-        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    } catch (error: any) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

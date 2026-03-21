@@ -75,7 +75,6 @@ function LibraryContent() {
   const [eraFilter, setEraFilter] = useState("ALL")
   const [readStatus, setReadStatus] = useState("ALL")
   
-  // FIX: Isolated trigger to force fresh random shuffles
   const [randomTrigger, setRandomTrigger] = useState(0)
 
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -140,7 +139,7 @@ function LibraryContent() {
 
   const handleSurpriseMe = () => {
       setSortOption("random");
-      setRandomTrigger(prev => prev + 1); // Forces an instant refresh!
+      setRandomTrigger(prev => prev + 1); 
       window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -165,8 +164,11 @@ function LibraryContent() {
     try {
       const res = await fetch('/api/library/collections', { cache: 'no-store' });
       if (res.ok) setCollections(await res.json());
-    } catch (e) { console.log(e); }
-  }, []);
+      else throw new Error("Failed to fetch collections");
+    } catch (e) { 
+        toast({ title: "Error", description: "Failed to load reading lists.", variant: "destructive" });
+    }
+  }, [toast]);
 
   const fetchLibraryData = useCallback(async (pageNum = 1, append = false, forceRefresh = false, currentLimit = 24) => {
     if (forceRefresh) setIsRefreshing(true);
@@ -194,7 +196,6 @@ function LibraryContent() {
         if (readStatus !== 'ALL') params.append('readStatus', readStatus);
         if (activeCollection !== 'ALL') params.append('collection', activeCollection);
 
-        // Bust cache when randomizing
         if (sortOption === 'random') params.append('_t', Date.now().toString());
 
         const res = await fetch(`/api/library?${params.toString()}`, { cache: 'no-store' });
@@ -217,8 +218,10 @@ function LibraryContent() {
         if (data.publishers) {
             setUniquePublishers(data.publishers);
         }
-    } catch (e) {} finally { setLoading(false); setLoadingMore(false); setIsRefreshing(false); }
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger]);
+    } catch (e: any) {
+        toast({ title: "Error", description: "Failed to fetch library data.", variant: "destructive" });
+    } finally { setLoading(false); setLoadingMore(false); setIsRefreshing(false); }
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger, toast]);
 
   const refetchTrigger = searchParams.get('refetch');
 
@@ -226,8 +229,6 @@ function LibraryContent() {
       if (!isInitialized) return;
       
       const forceRefresh = !!refetchTrigger;
-      
-      // FIX: Force React to reset to page 1 AND trigger fetch simultaneously
       setPage(1); 
       fetchLibraryData(1, false, forceRefresh, pageSize); 
       
@@ -268,8 +269,16 @@ function LibraryContent() {
 
   const toggleFavorite = async (seriesId: string, currentStatus: boolean) => {
       if (!seriesId) return;
+      
       setSeries(prev => prev.map(s => s.id === seriesId ? { ...s, isFavorite: !currentStatus } : s));
-      try { await fetch('/api/library/favorite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seriesId }) }); } catch (e) { }
+      
+      try { 
+          const res = await fetch('/api/library/favorite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seriesId }) }); 
+          if (!res.ok) throw new Error("Failed to favorite");
+      } catch (e) {
+          setSeries(prev => prev.map(s => s.id === seriesId ? { ...s, isFavorite: currentStatus } : s));
+          toast({ title: "Error", description: "Failed to update favorite status.", variant: "destructive" });
+      }
   };
 
   const submitAddToCollection = async () => {
@@ -287,8 +296,10 @@ function LibraryContent() {
           if (res2.ok) {
               toast({ title: "Success", description: "Series added to list." });
               setTargetSeries(null); setNewCollectionName(""); setSelectedCollectionId(""); fetchCollections(); 
-          }
-      } catch (e) { toast({ variant: "destructive", title: "Error", description: "Could not add to list." }); } finally { setAddingToList(false); }
+          } else throw new Error("Failed to add to list");
+      } catch (e) { 
+          toast({ variant: "destructive", title: "Error", description: "Could not add to list." }); 
+      } finally { setAddingToList(false); }
   }
 
   const submitBulkAddToCollection = async () => {
@@ -313,15 +324,23 @@ function LibraryContent() {
               setBulkListModalOpen(false); setNewCollectionName(""); setSelectedCollectionId("");
               setSelectedSeries(new Set()); setIsSelectionMode(false);
               fetchCollections(); 
-          }
-      } catch (e) { toast({ variant: "destructive", title: "Error", description: "Could not add to list." }); } finally { setAddingToList(false); }
+          } else throw new Error("Failed to add to list");
+      } catch (e) { 
+          toast({ variant: "destructive", title: "Error", description: "Could not add to list." }); 
+      } finally { setAddingToList(false); }
   }
 
   const handleRemoveFromCollection = async (seriesId: string) => {
       try {
           const res = await fetch('/api/library/collections/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collectionId: activeCollection, seriesId, action: 'remove' }) });
-          if (res.ok) { toast({ title: "Removed", description: "Series removed from list." }); fetchCollections(); fetchLibraryData(1, false, true, pageSize); }
-      } catch (e) { }
+          if (res.ok) { 
+              toast({ title: "Removed", description: "Series removed from list." }); 
+              fetchCollections(); 
+              fetchLibraryData(1, false, true, pageSize); 
+          } else throw new Error("Failed to remove");
+      } catch (e) { 
+          toast({ title: "Error", description: "Failed to remove from list.", variant: "destructive" });
+      }
   }
 
   const handleDeleteCollection = async () => {
@@ -384,7 +403,12 @@ function LibraryContent() {
     setLoading(true); setConfirmOpen(false);
     try {
       const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: refreshTarget.cvId, folderPath: refreshTarget.path }) });
-      if (res.ok) { toast({ title: "Success", description: "Metadata and cover art refreshed!" }); setPage(1); fetchLibraryData(1, false, true, pageSize); }
+      if (res.ok) { 
+          toast({ title: "Success", description: "Metadata and cover art refreshed!" }); 
+          setPage(1); fetchLibraryData(1, false, true, pageSize); 
+      } else throw new Error("Failed to refresh");
+    } catch (e) {
+        toast({ title: "Error", description: "Failed to refresh metadata.", variant: "destructive" });
     } finally { setLoading(false); setRefreshTarget(null); }
   }
 
@@ -411,7 +435,7 @@ function LibraryContent() {
             toast({ title: "Bulk Update Success", description: `Marked ${selectedSeries.size} series as ${isRead ? 'read' : 'unread'}.` });
             setSeries(prev => prev.map(s => selectedSeries.has(s.id) ? { ...s, unreadCount: isRead ? 0 : s.count, progressPercentage: isRead ? 100 : 0 } : s));
             setSelectedSeries(new Set()); setIsSelectionMode(false);
-        }
+        } else throw new Error("Failed");
     } catch (e) { toast({ title: "Update Failed", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
@@ -438,17 +462,21 @@ function LibraryContent() {
       toast({ title: "Starting Metadata Refresh", description: `Queued ${seriesList.length} series. Please keep this page open.` });
       
       let successCount = 0;
+      let failCount = 0;
       for (let i = 0; i < seriesList.length; i++) {
           const s = seriesList[i];
           if (!s.cvId) continue; 
           try {
-              await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: s.cvId, folderPath: s.path }) });
-              successCount++;
-          } catch(e) {}
+              const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: s.cvId, folderPath: s.path }) });
+              if (res.ok) successCount++;
+              else failCount++;
+          } catch(e) {
+              failCount++;
+          }
           if (i < seriesList.length - 1) await new Promise(r => setTimeout(r, 2000));
       }
       
-      toast({ title: "Refresh Complete", description: `Successfully refreshed ${successCount} series.` });
+      toast({ title: "Refresh Complete", description: `Successfully refreshed ${successCount} series. ${failCount > 0 ? `Failed: ${failCount}` : ''}` });
       setPage(1);
       fetchLibraryData(1, false, true, pageSize); setIsBulkProcessing(false); setSelectedSeries(new Set()); setIsSelectionMode(false);
   }
@@ -551,11 +579,11 @@ function LibraryContent() {
                           <div className="flex items-center gap-2 truncate"><List className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Show 24" /></div>
                       </SelectTrigger>
                       <SelectContent className="bg-popover border-border">
-                          <SelectItem value="16">Show 16</SelectItem>
+                          {/* FIX 5b: Standardize to grid-friendly multiples */}
+                          <SelectItem value="12">Show 12</SelectItem>
                           <SelectItem value="24">Show 24</SelectItem>
-                          <SelectItem value="32">Show 32</SelectItem>
                           <SelectItem value="48">Show 48</SelectItem>
-                          <SelectItem value="64">Show 64</SelectItem>
+                          <SelectItem value="96">Show 96</SelectItem>
                       </SelectContent>
                   </Select>
                   
@@ -648,7 +676,6 @@ function LibraryContent() {
                   </SelectContent>
               </Select>
 
-                {/* NEW: Clear Filters Button (Only visible when a filter is active) */}
                   {hasActiveFilters && (
                       <Button variant="ghost" className="h-10 sm:h-9 text-muted-foreground hover:text-foreground px-3 flex-1 sm:flex-none" onClick={handleResetFilters}>
                           <X className="w-4 h-4 sm:mr-2" />
@@ -674,20 +701,29 @@ function LibraryContent() {
               const isSelected = selectedSeries.has(item.id);
               const navId = item.id || item.path;
               return (
-                <div key={item.id || item.path} className="group flex flex-col space-y-2 relative" onClick={(e) => { 
-                    if (isSelectionMode && item.id) toggleSeriesSelection(item.id); 
-                }}>
+                <div key={item.id || item.path} className="group flex flex-col space-y-2 relative">
                   <Card className={`aspect-[2/3] overflow-hidden shadow-sm transition-all p-0 relative flex flex-col ${isSelectionMode ? (isSelected ? 'border-4 border-primary scale-95' : 'border-2 border-border cursor-pointer') : 'border-border group-hover:shadow-md cursor-pointer bg-background'}`}>
                       {isSelectionMode && item.id && (<div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">{isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-white/80" />}</div>)}
+                      
+                      {/* --- FIX 5c: Semantic Role and Keyboard Handler --- */}
                       <div 
-                          className="relative flex-1 bg-muted flex items-center justify-center overflow-hidden"
-                          onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); }}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open ${item.name}`}
+                          className="relative flex-1 bg-muted flex items-center justify-center overflow-hidden focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                          onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); else toggleSeriesSelection(item.id); }}
+                          onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  if (!isSelectionMode) handleNavigate(e as any, item.path, navId); else toggleSeriesSelection(item.id);
+                              }
+                          }}
                       >
                           <ImageIcon className="w-8 h-8 text-muted-foreground/30 absolute z-0" />
                           {item.cover && (
                               <img 
                                 src={item.cover} 
-                                alt="Cover" 
+                                alt={item.name || "Comic Cover"} 
                                 loading="lazy" 
                                 className={`object-cover w-full h-full relative z-10 transition-opacity ${isCompleted ? 'opacity-60' : ''}`} 
                                 onError={(e) => { e.currentTarget.style.display = 'none'; }} 
@@ -703,7 +739,6 @@ function LibraryContent() {
                                   <Badge className="text-[9px] px-1.5 h-4 bg-black/70 hover:bg-black/70 border-0 text-white font-mono shadow-sm backdrop-blur-sm" title="Total Issues">{item.count} {item.count === 1 ? 'Issue' : 'Issues'}</Badge>
                               </div>
                           )}
-                          {/* Heart always visible slightly on mobile, fully visible on hover */}
                           {!isSelectionMode && (
                               <div className="absolute top-1.5 right-1.5 z-30">
                                   <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`h-8 w-8 sm:h-6 sm:w-6 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center transition-all ${item.isFavorite ? 'text-primary opacity-100' : 'text-white/70 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-primary'}`}>
@@ -714,7 +749,6 @@ function LibraryContent() {
                           {progress > 0 && !isCompleted && (<div className="absolute bottom-0 left-0 right-0 h-2.5 bg-black/80 z-10 border-t border-black/40"><div className="h-full bg-primary transition-all duration-500 shadow-sm shadow-primary/50" style={{ width: `${progress}%` }} /></div>)}
                       </div>
 
-                      {/* Hover Overlay (Hidden on Mobile, Visible on Desktop Hover) */}
                         <div className={`absolute inset-0 bg-black/80 transition-opacity flex-col items-center justify-center gap-1.5 p-3 z-20 pointer-events-none group-hover:pointer-events-auto ${isSelectionMode ? 'hidden' : 'hidden md:flex opacity-0 group-hover:opacity-100'}`}>
                         <Button 
                             variant="default" 
@@ -761,7 +795,18 @@ function LibraryContent() {
                         )}
                       </div>
                   </Card>
-                  <div className="px-0.5" onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); }}>
+                  <div 
+                      className="px-0.5 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-sm" 
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); }}
+                      onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              if (!isSelectionMode) handleNavigate(e as any, item.path, navId);
+                          }
+                      }}
+                  >
                       <div className="flex items-start justify-between gap-1 cursor-pointer hover:underline">
                           <h3 className={`text-[12px] sm:text-[11px] font-bold truncate leading-tight ${isCompleted ? 'text-muted-foreground' : 'text-foreground'}`} title={item.name}>{item.name}</h3>
                       </div>
@@ -785,15 +830,33 @@ function LibraryContent() {
                   const isSelected = selectedSeries.has(item.id);
                   const navId = item.id || item.path;
                   return (
-                    <tr key={item.id || item.path} className={`transition-colors group ${isSelectionMode ? 'cursor-pointer hover:bg-muted ' + (isSelected ? 'bg-primary/10' : '') : 'hover:bg-muted/50'}`} onClick={() => isSelectionMode && item.id && toggleSeriesSelection(item.id)}>
+                    <tr 
+                        key={item.id || item.path} 
+                        className={`transition-colors group ${isSelectionMode ? 'cursor-pointer hover:bg-muted ' + (isSelected ? 'bg-primary/10' : '') : 'hover:bg-muted/50'}`} 
+                        onClick={() => isSelectionMode && item.id && toggleSeriesSelection(item.id)}
+                    >
                         {isSelectionMode && (<td className="px-4 py-3 text-center">{isSelected ? <CheckSquare className="w-6 h-6 text-primary mx-auto" /> : <Square className="w-6 h-6 text-muted-foreground mx-auto" />}</td>)}
-                        <td className="px-4 py-2 cursor-pointer" onClick={(e) => { if(!isSelectionMode) handleNavigate(e, item.path, navId); }}>
-                            <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative">
+                        
+                        <td className="px-4 py-2">
+                            {/* --- FIX 5c: Semantic Role and Keyboard Handler --- */}
+                            <div 
+                                className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Open ${item.name}`}
+                                onClick={(e) => { if(!isSelectionMode) handleNavigate(e, item.path, navId); }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        if (!isSelectionMode) handleNavigate(e as any, item.path, navId);
+                                    }
+                                }}
+                            >
                                 <ImageIcon className="w-4 h-4 text-muted-foreground/50 absolute z-0" />
                                 {item.cover && (
                                     <img 
                                       src={item.cover} 
-                                      alt="Cover" 
+                                      alt={item.name || "Comic Cover"} 
                                       loading="lazy" 
                                       className={`w-full h-full object-cover relative z-10 transition-opacity ${isCompleted ? 'opacity-60' : ''}`} 
                                       onError={(e) => { e.currentTarget.style.display = 'none'; }}
@@ -807,7 +870,7 @@ function LibraryContent() {
                                 {isSelectionMode ? (<span>{item.name}</span>) : (
                                     <button 
                                         onClick={(e) => handleNavigate(e, item.path, navId)} 
-                                        className="hover:text-primary transition-colors text-left font-bold flex items-center gap-2"
+                                        className="hover:text-primary transition-colors text-left font-bold flex items-center gap-2 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-sm"
                                     >
                                         {item.name}
                                         {navigatingTo === navId && <Loader2 className="w-3 h-3 animate-spin text-primary" />}

@@ -293,6 +293,8 @@ services:
       - DATABASE_URL=file:/config/omnibus.db
       # OPTIONAL: Tells the app what path to use for the database backups, if not used Omnibus will default to /backups
       - OMNIBUS_BACKUP_DIR=/backups
+      # REQUIRED: Tells the app where to store log files
+      - LOG_PATH=/logs
 
     volumes:
       # REQUIRED: Persistent storage for your database, logs, and settings
@@ -301,6 +303,8 @@ services:
       - /path/to/your/nas/cache:/cache
       # REQUIRED: Maps backup folder for database backups (can be defined using environment variable)
       - /path/to/your/nas/backups:/backups
+      # REQUIRED: Maps logs folder for persistent logging
+      - /path/to/yoru/nas/logs:/logs
       # REQUIRED: Persistent storage for user avatars and banners
       - /path/to/your/nas/avatars:/app/public/avatars
       - /path/to/your/nas/banners:/app/public/banners
@@ -337,3 +341,4 @@ Omnibus stands on the shoulders of giants. This project was heavily inspired by 
 
 ## Contributors
 - **Gemini** - AI Technical Collaborator & Project Advisor
+- **Claude (Anthropic)** - For extensive AI assistance with code review, debugging, and refactoring.

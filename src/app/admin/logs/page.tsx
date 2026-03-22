@@ -14,7 +14,7 @@ import {
     ArrowLeft, Trash2, Terminal, History, Loader2, Download, Eye, 
     Clock, AlertTriangle, CheckCircle2, ShieldAlert, Database, 
     RefreshCw, Activity, Search, CalendarMinus,
-    ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
+    ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileText
 } from "lucide-react"
 import Link from "next/link"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
@@ -78,7 +78,7 @@ export default function LogsPage() {
       await fetch('/api/admin/logs', { method: 'DELETE' });
       await fetchLiveLogs();
       setClearLiveConfirmOpen(false);
-      toast({ title: "Terminal Cleared" });
+      toast({ title: "System Logs Cleared" });
     } finally { setIsClearing(false); }
   }
 
@@ -161,18 +161,26 @@ export default function LogsPage() {
       </div>
 
       <Tabs defaultValue="live" className="w-full">
-        <TabsList className="grid w-full max-w-md grid-cols-2 bg-muted border border-border p-1">
-            <TabsTrigger value="live" className="flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary"><Terminal className="w-4 h-4"/> Live Terminal</TabsTrigger>
-            <TabsTrigger value="history" className="flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary" onClick={fetchJobLogs}><History className="w-4 h-4"/> Job History</TabsTrigger>
+        {/* --- ALIGNMENT FIX: Swapped to a Flex container with h-auto and padding --- */}
+        <TabsList className="flex w-full max-w-md bg-muted border border-border p-1 h-auto rounded-lg">
+            <TabsTrigger value="live" className="flex-1 h-auto py-2 flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary font-bold"><Terminal className="w-4 h-4"/> Live Terminal</TabsTrigger>
+            <TabsTrigger value="history" className="flex-1 h-auto py-2 flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary font-bold" onClick={fetchJobLogs}><History className="w-4 h-4"/> Job History</TabsTrigger>
         </TabsList>
 
         {/* --- LIVE TERMINAL TAB --- */}
         <TabsContent value="live" className="space-y-4 mt-6 animate-in fade-in slide-in-from-bottom-2">
-            <div className="flex justify-between items-end">
-                <p className="text-sm text-muted-foreground">Real-time output from the backend server.</p>
-                <Button variant="outline" size="sm" onClick={() => setClearLiveConfirmOpen(true)} className="border-border hover:bg-muted font-bold">
-                    <Trash2 className="w-4 h-4 mr-2" /> Clear Terminal
-                </Button>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
+                <p className="text-sm text-muted-foreground">Real-time output and persistent logs from the backend server.</p>
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                    <Button variant="outline" size="sm" asChild className="border-border hover:bg-muted font-bold flex-1 sm:flex-none">
+                        <a href="/api/admin/logs/download" download>
+                            <Download className="w-4 h-4 mr-2" /> Download Log
+                        </a>
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setClearLiveConfirmOpen(true)} className="border-border hover:bg-muted text-red-500 hover:text-red-600 font-bold flex-1 sm:flex-none">
+                        <Trash2 className="w-4 h-4 mr-2" /> Clear Logs
+                    </Button>
+                </div>
             </div>
             
             {/* Custom structure to avoid Shadcn Card top-padding stripe issue */}
@@ -396,9 +404,9 @@ export default function LogsPage() {
         onClose={() => setClearLiveConfirmOpen(false)}
         onConfirm={handleClearLive}
         isLoading={isClearing}
-        title="Clear Live Terminal?"
-        description="Are you sure you want to permanently delete all real-time terminal output? This cannot be undone."
-        confirmText="Clear Terminal"
+        title="Clear System Logs?"
+        description="Are you sure you want to permanently delete all real-time terminal output and wipe the physical omnibus.log file? This cannot be undone."
+        confirmText="Clear Logs"
       />
 
       <ConfirmationDialog 

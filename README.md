@@ -328,7 +328,7 @@ services:
       # REQUIRED: Maps backup folder for database backups (can be defined using environment variable)
       - /path/to/your/nas/backups:/backups
       # REQUIRED: Maps logs folder for persistent logging
-      - /path/to/yoru/nas/logs:/logs
+      - /path/to/your/nas/logs:/logs
       # REQUIRED: Persistent storage for user avatars and banners
       - /path/to/your/nas/avatars:/app/public/avatars
       - /path/to/your/nas/banners:/app/public/banners

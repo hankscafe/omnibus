@@ -1,3 +1,4 @@
+// src/app/admin/settings/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -8,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
-  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint
+  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -17,6 +18,7 @@ import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
+import { useSession } from "next-auth/react"
 
 // --- Types ---
 interface LibraryConfig { id: string; name: string; path: string; isManga: boolean; isDefault: boolean; }
@@ -70,9 +72,11 @@ const DISCORD_EVENTS = [
 ];
 
 export default function SettingsPage() {
+  const { data: session } = useSession()
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState("comicvine")
   
   const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean, text: string } | null }>({
     comicvine: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null
@@ -82,13 +86,23 @@ export default function SettingsPage() {
   const [availableIndexers, setAvailableIndexers] = useState<any[]>([])
   const [hasRefreshed, setHasRefreshed] = useState(false)
 
-  // DB Array States (No more JSON.parse!)
+  // DB Array States
   const [configuredLibraries, setConfiguredLibraries] = useState<LibraryConfig[]>([])
   const [configuredIndexers, setConfiguredIndexers] = useState<IndexerConfig[]>([])
   const [configuredClients, setConfiguredClients] = useState<ClientConfig[]>([])
   const [configuredWebhooks, setConfiguredWebhooks] = useState<WebhookConfig[]>([])
   const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([])
   const [customAcronyms, setCustomAcronyms] = useState<AcronymConfig[]>([]) 
+  
+  // API Keys / Users States
+  const [apiKeys, setApiKeys] = useState<any[]>([])
+  const [users, setUsers] = useState<any[]>([])
+  const [newKeyName, setNewKeyName] = useState("")
+  const [newKeyUserId, setNewKeyUserId] = useState("")
+  const [newKeyExpiration, setNewKeyExpiration] = useState("0")
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null)
+  const [generateError, setGenerateError] = useState<string | null>(null)
+  const [isGeneratingKey, setIsGeneratingKey] = useState(false)
 
   const [indexerModalOpen, setIndexerModalOpen] = useState(false)
   const [editingIndexer, setEditingIndexer] = useState<IndexerConfig>({ 
@@ -107,14 +121,13 @@ export default function SettingsPage() {
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", cv_api_key: "",
     remote_path_mapping: "", local_path_mapping: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
-    omnibus_api_key: "", download_retry_delay: "5", 
+    download_retry_delay: "5", 
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
     folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: ""
   })
 
   useEffect(() => {
     fetch('/api/admin/config').then(res => res.json()).then(data => {
-        // Map Native Database Tables
         setConfiguredLibraries(data.libraries || []);
         setConfiguredClients(data.downloadClients || []);
         setConfiguredWebhooks(data.discordWebhooks || []);
@@ -139,11 +152,13 @@ export default function SettingsPage() {
             ]);
         }
 
-        // Map Key-Value Flat Settings
         const newConfig: any = { ...config };
         if (Array.isArray(data.settings)) {
             data.settings.forEach((item: any) => { 
-                newConfig[item.key] = item.value;
+                // Exclude legacy api key from flat config mapping to avoid confusion
+                if (item.key !== 'omnibus_api_key') {
+                    newConfig[item.key] = item.value;
+                }
             });
         }
 
@@ -151,8 +166,30 @@ export default function SettingsPage() {
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
         setConfig(newConfig);
     })
+
+    // Fetch Users & API Keys
+    fetch('/api/admin/users').then(res => res.json()).then(data => {
+        if (Array.isArray(data)) setUsers(data);
+    });
+    fetch('/api/admin/api-keys').then(res => res.json()).then(data => {
+        if (Array.isArray(data)) setApiKeys(data);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+      if (session?.user?.id && !newKeyUserId && users.length > 0) {
+          setNewKeyUserId((session.user as any).id);
+      }
+  }, [session, users, newKeyUserId]);
+
+  const handleTabChange = (val: string) => {
+      setActiveTab(val);
+      if (val !== 'api') {
+          setGeneratedKey(null);
+          setGenerateError(null);
+      }
+  };
 
   const handleSave = async () => {
     setLoading(true);
@@ -188,21 +225,6 @@ export default function SettingsPage() {
         if (lib.isManga === isMangaType) return { ...lib, isDefault: lib.id === id };
         return lib;
     }));
-  }
-
-  const generateApiKey = () => {
-      const array = new Uint8Array(24);
-      window.crypto.getRandomValues(array);
-      const key = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-      setConfig({ ...config, omnibus_api_key: key });
-      toast({ title: "Key Generated", description: "Click 'Save All Changes' to apply the new API Key." });
-  }
-
-  const copyApiKey = () => {
-      if (config.omnibus_api_key) {
-          navigator.clipboard.writeText(config.omnibus_api_key);
-          toast({ title: "Copied!", description: "API Key copied to clipboard." });
-      }
   }
 
   const applyRecommendedFilters = () => {
@@ -262,7 +284,7 @@ export default function SettingsPage() {
       setEditingWebhook({
         id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
         name: "", url: "", events: [], isActive: true,
-        botUsername: "", botAvatarUrl: "" // Add default empty strings
+        botUsername: "", botAvatarUrl: "" 
       })
     }
     setWebhookModalOpen(true)
@@ -386,6 +408,55 @@ export default function SettingsPage() {
   const updateHeader = (i: number, f: 'key' | 'value', v: string) => { const h = [...customHeaders]; (h[i] as any)[f] = v; setCustomHeaders(h); }
   const removeHeader = (id: string) => setCustomHeaders(customHeaders.filter(c => c.id !== id))
 
+  // --- API Key Handlers ---
+  const handleGenerateKey = async () => {
+      setIsGeneratingKey(true);
+      setGeneratedKey(null);
+      setGenerateError(null);
+      try {
+          const res = await fetch('/api/admin/api-keys', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  name: newKeyName,
+                  userId: newKeyUserId || (session?.user as any)?.id,
+                  expiresInDays: parseInt(newKeyExpiration)
+              })
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+              setGeneratedKey(data.rawKey);
+              setApiKeys([data.apiKey, ...apiKeys]);
+              setNewKeyName("");
+          } else {
+              setGenerateError(data.error || "Failed to generate key");
+          }
+      } catch (e: any) {
+          setGenerateError(e.message);
+      } finally {
+          setIsGeneratingKey(false);
+      }
+  }
+
+  const handleRevokeKey = async (id: string) => {
+      try {
+          const res = await fetch(`/api/admin/api-keys?id=${id}`, { method: 'DELETE' });
+          if (res.ok) {
+              setApiKeys(prev => prev.filter(k => k.id !== id));
+              toast({ title: "API Key Revoked" });
+          } else {
+              toast({ title: "Error", description: "Failed to revoke key.", variant: "destructive" });
+          }
+      } catch (e) {
+          toast({ title: "Error", variant: "destructive" });
+      }
+  }
+
+  const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      toast({ title: "Copied!", description: "API Key copied to clipboard." });
+  }
+
   const StatusBox = ({ result }: { result: { success: boolean, text: string } | null }) => {
     if (!result) return null;
     const isFailure = !result.success || result.text.includes('❌') || result.text.includes('Error') || result.text.includes('Not Found') || result.text.toLowerCase().includes('failed');
@@ -409,7 +480,7 @@ export default function SettingsPage() {
         <Button onClick={handleSave} disabled={loading} size="lg" className="w-full sm:w-auto h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground"><Save className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />Save All Changes</Button>
       </div>
 
-      <Tabs defaultValue="comicvine" className="w-full space-y-6">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full space-y-6">
         
         <TabsList className="flex w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] h-auto bg-muted border border-border gap-1 p-1 justify-start lg:justify-center">
           <TabsTrigger value="comicvine" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">ComicVine</TabsTrigger>
@@ -419,7 +490,7 @@ export default function SettingsPage() {
           <TabsTrigger value="network" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Network</TabsTrigger>
           <TabsTrigger value="filters" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Filters</TabsTrigger>
           <TabsTrigger value="alerts" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Alerts</TabsTrigger>
-          <TabsTrigger value="api" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">API</TabsTrigger>
+          <TabsTrigger value="api" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">API Keys</TabsTrigger>
           <TabsTrigger value="sso" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">SSO</TabsTrigger>
         </TabsList>
 
@@ -544,7 +615,7 @@ export default function SettingsPage() {
                                         <span className="font-bold text-lg sm:text-base text-foreground">{client.name}</span>
                                         <Badge variant="secondary" className={client.protocol === 'Torrent' ? "bg-primary/10 text-primary hover:bg-primary/20" : "bg-green-100 text-green-700 hover:bg-green-200"}>{client.protocol}</Badge>
                                         {isAdded ? (
-                                            <Badge className="bg-green-600 text-white border-0 py-1.5 w-full flex justify-center"><CheckCircle className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5"/> Configured</Badge>
+                                            <Badge className="bg-green-600 text-white border-0 py-1.5 w-full flex justify-center"><CheckCircle2 className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5"/> Configured</Badge>
                                         ) : (
                                             <Button variant="outline" size="sm" className="w-full h-10 sm:h-8 font-bold border-border bg-background hover:bg-muted text-foreground"><Plus className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5"/> Add</Button>
                                         )}
@@ -647,11 +718,10 @@ export default function SettingsPage() {
 
                     <div className="border-t border-border my-4" />
                     <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('paths')} disabled={!!testing}>
-                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
+                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
                     </Button>
                     <StatusBox result={testResults.paths} />
 
-                    {/* --- NEW: MEDIA NAMING CONVENTIONS --- */}
                     <div className="grid gap-4 pt-6 border-t border-border">
                         <div>
                             <h3 className="text-lg font-bold text-foreground">Media Naming Conventions</h3>
@@ -1096,39 +1166,116 @@ export default function SettingsPage() {
 
         {/* 8. API KEYS */}
         <TabsContent value="api">
-            <Card className="shadow-sm border-border bg-background">
+            <Card className="shadow-sm border-border bg-background mb-6">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-foreground"><Webhook className="w-5 h-5 text-primary" /> External API Integrations</CardTitle>
-                    <CardDescription className="text-muted-foreground">Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.</CardDescription>
+                    <CardDescription className="text-muted-foreground">Generate API keys to allow external applications (like Discord Bots or Homepage Dashboards) to fetch stats and interact with Omnibus securely.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="grid gap-2">
-                        <Label className="text-foreground font-semibold">Omnibus API Key</Label>
-                        <div className="flex gap-2">
-                            <Input 
-                                type="text" 
-                                readOnly
-                                value={config.omnibus_api_key || ""} 
-                                placeholder="No key generated. Click 'Generate New Key' below." 
-                                className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-muted-foreground" 
-                            />
-                            <Button variant="outline" size="icon" className="h-12 w-12 sm:h-10 sm:w-10 shrink-0 border-border hover:bg-muted text-foreground transition-colors" onClick={copyApiKey} disabled={!config.omnibus_api_key}>
-                                <Copy className="w-5 h-5 sm:w-4 sm:h-4 text-primary" />
-                            </Button>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="grid gap-2">
+                            <Label>Key Name</Label>
+                            <Input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="e.g., Homepage Dashboard" className="bg-muted/20 border-border h-10" />
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
-                            Pass this key in the header of your external requests as <code className="bg-muted px-1 rounded border border-border">X-Api-Key</code>.
-                        </p>
+                        <div className="grid gap-2">
+                            <Label>Acts As (User)</Label>
+                            <Select value={newKeyUserId} onValueChange={setNewKeyUserId}>
+                                <SelectTrigger className="h-10 bg-muted/20 border-border"><SelectValue placeholder="Select user" /></SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    {users.map(u => <SelectItem key={u.id} value={u.id}>{u.username}</SelectItem>)}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid gap-2">
+                            <Label>Expiration</Label>
+                            <Select value={newKeyExpiration} onValueChange={setNewKeyExpiration}>
+                                <SelectTrigger className="h-10 bg-muted/20 border-border"><SelectValue /></SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    <SelectItem value="0">Never</SelectItem>
+                                    <SelectItem value="7">7 Days</SelectItem>
+                                    <SelectItem value="30">30 Days</SelectItem>
+                                    <SelectItem value="90">90 Days</SelectItem>
+                                    <SelectItem value="365">1 Year</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
                     </div>
                     
-                    <div className="border-t border-border my-4" />
-                    
-                    <div className="flex flex-col sm:flex-row justify-between gap-4">
-                        <Button variant="secondary" onClick={generateApiKey} className="h-12 sm:h-10 font-bold w-full sm:w-auto bg-muted hover:bg-muted/80 text-foreground transition-all">
-                            <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Generate New Key
-                        </Button>
-                        
-                        <Button variant="outline" asChild className="h-12 sm:h-10 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground transition-all">
+                    <Button onClick={handleGenerateKey} disabled={!newKeyName || isGeneratingKey} className="font-bold h-10 bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm">
+                        {isGeneratingKey ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Plus className="w-4 h-4 mr-2" />} Generate New Key
+                    </Button>
+
+                    {generatedKey && (
+                        <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 mt-4 animate-in fade-in slide-in-from-top-2">
+                            <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><X className="w-4 h-4"/></button>
+                            <p className="font-bold flex items-center gap-2"><CheckCircle2 className="w-5 h-5"/> Token created successfully! Copy it now — it won't be shown again.</p>
+                            <div className="flex gap-2 items-center mt-2">
+                                <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800">{generatedKey}</code>
+                                <Button variant="secondary" onClick={() => copyToClipboard(generatedKey)} className="shrink-0"><Copy className="w-4 h-4 mr-2" /> Copy</Button>
+                            </div>
+                        </div>
+                    )}
+                    {generateError && (
+                        <div className="bg-red-50 border border-red-200 text-red-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 mt-4">
+                            <button onClick={() => setGenerateError(null)} className="absolute top-2 right-2 hover:bg-red-200 dark:hover:bg-red-800 p-1 rounded"><X className="w-4 h-4"/></button>
+                            <p className="font-bold flex items-center gap-2"><AlertCircle className="w-5 h-5"/> Failed to create token</p>
+                            <p className="text-sm">{generateError}</p>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-border bg-background">
+                <CardHeader>
+                    <CardTitle className="text-lg">Active API Keys</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <div className="overflow-x-auto rounded-lg border border-border">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-muted/50 border-b border-border text-muted-foreground font-medium uppercase text-xs tracking-wider">
+                                <tr>
+                                    <th className="px-4 py-3">Name</th>
+                                    <th className="px-4 py-3">Token</th>
+                                    <th className="px-4 py-3">Acts As</th>
+                                    <th className="px-4 py-3">Role</th>
+                                    <th className="px-4 py-3">Created By</th>
+                                    <th className="px-4 py-3">Last Used</th>
+                                    <th className="px-4 py-3">Expiration</th>
+                                    <th className="px-4 py-3 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                                {apiKeys.length === 0 ? (
+                                    <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground italic">No API keys generated yet.</td></tr>
+                                ) : (
+                                    apiKeys.map(key => (
+                                        <tr key={key.id} className="hover:bg-muted/30 transition-colors">
+                                            <td className="px-4 py-3 font-bold text-foreground">{key.name}</td>
+                                            <td className="px-4 py-3 font-mono text-muted-foreground">{key.prefix}</td>
+                                            <td className="px-4 py-3 text-foreground font-medium">{key.user?.username || "Unknown"}</td>
+                                            <td className="px-4 py-3">
+                                                <Badge variant="secondary" className="text-[10px] uppercase tracking-wider bg-muted text-muted-foreground border-border">{key.user?.role || "USER"}</Badge>
+                                            </td>
+                                            <td className="px-4 py-3 text-muted-foreground">{key.createdBy?.username || "Unknown"}</td>
+                                            <td className="px-4 py-3 text-muted-foreground">{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : 'Never'}</td>
+                                            <td className="px-4 py-3 text-muted-foreground">
+                                                {key.expiresAt ? (
+                                                    new Date(key.expiresAt) < new Date() ? <span className="text-red-500 font-bold">Expired</span> : new Date(key.expiresAt).toLocaleDateString()
+                                                ) : 'Never'}
+                                            </td>
+                                            <td className="px-4 py-3 text-right">
+                                                <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => handleRevokeKey(key.id)}>
+                                                    Revoke
+                                                </Button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="flex justify-between items-center mt-4">
+                        <Button variant="outline" asChild className="h-10 border-border hover:bg-muted text-foreground transition-all">
                             <Link href="/admin/api-guide">
                                 View API Documentation
                             </Link>

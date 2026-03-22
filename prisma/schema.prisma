@@ -32,7 +32,27 @@ model User {
   twoFactorEnabled Boolean @default(false)
   twoFactorSecret  String?
 
-  sessionVersion   Int     @default(0) 
+  sessionVersion   Int     @default(0)
+
+  apiKeys             ApiKey[]  @relation("ApiKeysActsAs")
+  createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  name        String
+  keyHash     String    @unique
+  prefix      String
+  
+  userId      String
+  user        User      @relation("ApiKeysActsAs", fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdById String
+  createdBy   User      @relation("ApiKeysCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
 }
 
 model Request {

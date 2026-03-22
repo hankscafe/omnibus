@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { useSession } from "next-auth/react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { 
@@ -24,27 +24,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 function LibrarySkeleton({ count = 24 }: { count?: number }) {
   return (
-    <>
-      <title>Omnibus - Library</title>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10">
-        {[...Array(count)].map((_, i) => (
-          <div key={i} className="space-y-2">
-            <div className="aspect-[2/3] rounded-xl bg-muted animate-pulse" />
-            <div className="h-3 w-3/4 bg-muted animate-pulse rounded" />
-            <div className="h-2 w-1/2 bg-muted animate-pulse rounded" />
-          </div>
-        ))}
-      </div>
-    </>
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10">
+      {[...Array(count)].map((_, i) => (
+        <div key={i} className="space-y-2">
+          <div className="aspect-[2/3] rounded-xl bg-muted animate-pulse" />
+          <div className="h-3 w-3/4 bg-muted animate-pulse rounded" />
+          <div className="h-2 w-1/2 bg-muted animate-pulse rounded" />
+        </div>
+      ))}
+    </div>
   );
 }
 
-export default function LibraryPage() {
+function LibraryContent() {
   const { data: session } = useSession()
   const router = useRouter()
+  const searchParams = useSearchParams() 
   const { toast } = useToast()
 
-  // Use refs for stable toast callbacks
   const toastRef = useRef(toast);
   toastRef.current = toast;
 
@@ -56,22 +53,9 @@ export default function LibraryPage() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   
-  // Initialize state lazily to prevent mount re-renders
-  const [pageSize, setPageSize] = useState<number>(() => {
-      if (typeof window !== 'undefined') {
-          const saved = localStorage.getItem('omnibus-library-pagesize');
-          if (saved) return parseInt(saved);
-      }
-      return 24;
-  });
-
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
-      if (typeof window !== 'undefined') {
-          const saved = localStorage.getItem('omnibus-library-view');
-          if (saved === 'grid' || saved === 'list') return saved as 'grid' | 'list';
-      }
-      return 'grid';
-  });
+  // Safe SSR default
+  const [pageSize, setPageSize] = useState<number>(24);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const [editing, setEditing] = useState<any>(null)
   const [updating, setUpdating] = useState(false)
@@ -207,6 +191,15 @@ export default function LibraryPage() {
       
       let isRefetch = false;
       if (typeof window !== 'undefined') {
+          const savedView = localStorage.getItem('omnibus-library-view');
+          if (savedView === 'grid' || savedView === 'list') setViewMode(savedView);
+          
+          const savedSize = localStorage.getItem('omnibus-library-pagesize');
+          if (savedSize) {
+              setPageSize(parseInt(savedSize));
+              filtersRef.current.limit = parseInt(savedSize);
+          }
+
           const params = new URLSearchParams(window.location.search);
           if (params.get('refetch') === 'true') {
               isRefetch = true;
@@ -217,11 +210,15 @@ export default function LibraryPage() {
       }
       
       loadLibraryData(1, isRefetch, false);
-      isFirstRender.current = false;
+      
+      setTimeout(() => {
+          isFirstRender.current = false;
+      }, 100);
+      
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- 2. FILTER CHANGES ---
+  // --- 2. FILTER CHANGES (STRICTLY BOUND) ---
   useEffect(() => { 
       if (isFirstRender.current) return;
       setPage(1); 
@@ -538,7 +535,6 @@ export default function LibraryPage() {
 
   return (
     <div className="container mx-auto py-10 px-6 relative transition-colors duration-300">
-      <title>Omnibus - Library</title>
       
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <h1 className="text-3xl font-bold flex items-center gap-2 text-foreground">Library</h1>
@@ -1172,5 +1168,13 @@ export default function LibraryPage() {
           confirmText="Delete List" 
       />
     </div>
+  )
+}
+
+export default function LibraryPage() {
+  return (
+    <Suspense fallback={<LibrarySkeleton />}>
+      <LibraryContent />
+    </Suspense>
   )
 }

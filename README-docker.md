@@ -89,12 +89,6 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
   <strong>Series window when clicking issue/series from the discover sections.</strong>
 </p>
 
-<p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/request_2.png?raw=true" width="500" alt="Series request and monitor" />
-  <br>
-  <strong>Users can choose to monitor the series when they are making a request so future releases to a series will be automatically downloaded.</strong>
-</p>
-
 * **Responsive Design:** A beautifully styled, mobile-first interface that provides a frictionless login experience whether you are on a smartphone, tablet, or desktop monitor.
 * **"Jump Back In" Shelf:** A dynamically updated carousel that tracks your exact page in ongoing issues. Jump back into the action with a single click.
 * **Recently Added" Section:** A dynamically updated carousel that shows the 7 most recent series addtions to the library with the ability to jump directly to that series page.
@@ -213,12 +207,6 @@ A personalized space for each user on your server to manage their identity, trac
   <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/profile_2.png?raw=true" width="500" alt="User profile page" />
   <br>
   <strong>Users profile page reading progress cards.</strong>
-</p>
-
-<p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/profile_3.png?raw=true" width="500" alt="User profile page" />
-  <br>
-  <strong>Users profile page showing recent request history.</strong>
 </p>
 
 <p align="center">

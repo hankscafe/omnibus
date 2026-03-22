@@ -15,8 +15,9 @@ export const ProwlarrService = {
 
     const cleanQuery = query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
     const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue'];
+    
+    // FIX: Do not slice the array. We need ALL words to verify the title and issue number.
     const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => !stopWords.includes(w) && w.length > 0);
-    const requiredWords = queryWords.slice(0, Math.min(2, queryWords.length)); 
 
     const categoriesStr = config.prowlarr_categories;
     let searchCategories: string[] = [];
@@ -50,7 +51,6 @@ export const ProwlarrService = {
 
     const customHeaders = await getCustomHeaders();
     
-    // Explicit Record type for headers
     const reqHeaders: Record<string, string> = { 
         'X-Api-Key': config.prowlarr_key,
         ...customHeaders
@@ -60,7 +60,6 @@ export const ProwlarrService = {
       const url = `${config.prowlarr_url.replace(/\/$/, '')}/api/v1/search?${params.toString()}`;
       Logger.log(`[Prowlarr] Searching: ${url}`, 'info');
 
-      // Strictly typing the expected generic response array
       const { data } = await axios.get<unknown[] | string | Record<string, unknown>>(url, {
           headers: reqHeaders, 
           timeout: 30000 
@@ -77,14 +76,27 @@ export const ProwlarrService = {
           return [];
       }
 
-      // Assert array is an array of objects to map through
       const rawData = data as Record<string, unknown>[];
 
       return rawData
         .filter((item) => {
             if (isInteractive) return true;
-            const title = (String(item.title || "")).toLowerCase();
-            return requiredWords.every(w => title.includes(w));
+            const titleLower = (String(item.title || "")).toLowerCase();
+            
+            // FIX: Implement strict word boundaries so "2" doesn't falsely match "2015"
+            let isRelevant = true;
+            for (let w of queryWords) {
+                if (/^\d+$/.test(w)) {
+                    const num = parseInt(w, 10);
+                    // Matches #2, issue 2, 02, 002 safely
+                    const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${num}\\b`, 'i');
+                    if (!numRegex.test(titleLower)) { isRelevant = false; break; }
+                } else {
+                    const wordRegex = new RegExp(`\\b${w}\\b`, 'i');
+                    if (!wordRegex.test(titleLower)) { isRelevant = false; break; }
+                }
+            }
+            return isRelevant;
         })
         .map((item): ProwlarrSearchResult => ({
           guid: String(item.guid || ""),

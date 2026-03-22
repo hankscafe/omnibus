@@ -1,25 +1,19 @@
+// src/app/api/cron/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route'; 
 import { getErrorMessage } from '@/lib/utils/error';
+import { validateApiKey } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-    const authHeader = req.headers.get('authorization') || '';
-    const tokenFromBearer = authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : null;
-    const apiKeyHeader = req.headers.get('x-api-key')?.trim();
-    const apiKeyQuery = req.nextUrl.searchParams.get('apiKey')?.trim();
+    const authResult = await validateApiKey(req);
 
-    const providedKey = apiKeyHeader || tokenFromBearer || apiKeyQuery;
-
-    const setting = await prisma.systemSetting.findUnique({ where: { key: 'omnibus_api_key' } });
-    const validKey = setting?.value?.trim();
-
-    if (!validKey || providedKey !== validKey) {
-        Logger.log(`[CRON] Blocked unauthorized execution attempt.`, 'warn');
-        return NextResponse.json({ error: 'Unauthorized. Invalid API Key.' }, { status: 401 });
+    if (!authResult.valid) {
+        Logger.log(`[CRON] Blocked unauthorized execution attempt. ${authResult.error || ''}`, 'warn');
+        return NextResponse.json({ error: authResult.error || 'Unauthorized. Invalid API Key.' }, { status: 401 });
     }
 
     try {
@@ -76,7 +70,6 @@ export async function POST(req: NextRequest) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ job })
             });
-            // --- SECURITY FIX 2a: Log full job execution failures ---
             await executeJobRoute(reqTrigger).catch((err) => {
                 Logger.log(`[CRON] Job ${job} execution failed: ${getErrorMessage(err)}`, 'error');
             });

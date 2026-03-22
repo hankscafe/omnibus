@@ -1,9 +1,11 @@
+// src/app/api/v1/stats/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { DownloadService } from '@/lib/download-clients';
 import packageJson from '../../../../../package.json';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { validateApiKey } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,20 +46,12 @@ function isNewerVersion(latest: string, current: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get('authorization') || '';
-  const tokenFromBearer = authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : null;
-  const apiKeyHeader = req.headers.get('x-api-key')?.trim();
-  const apiKeyQuery = req.nextUrl.searchParams.get('apiKey')?.trim();
+  // Use the new centralized API Auth
+  const authResult = await validateApiKey(req);
 
-  const providedKey = apiKeyHeader || tokenFromBearer || apiKeyQuery;
-
-  const setting = await prisma.systemSetting.findUnique({ where: { key: 'omnibus_api_key' } });
-  const validKey = setting?.value?.trim();
-
-  if (!validKey || providedKey !== validKey) {
-    // SECURITY FIX: Replaced the logging of plaintext keys with a safe, generic warning
-    Logger.log(`[Stats API] Auth Failed! An invalid API key was provided.`, 'warn');
-    return NextResponse.json({ error: 'Unauthorized. Invalid API Key.' }, { status: 401 });
+  if (!authResult.valid) {
+    Logger.log(`[Stats API] Auth Failed! ${authResult.error || 'Invalid API Key.'}`, 'warn');
+    return NextResponse.json({ error: authResult.error || 'Unauthorized. Invalid API Key.' }, { status: 401 });
   }
 
   try {
@@ -80,7 +74,6 @@ export async function GET(req: NextRequest) {
         systemHealthy = false;
     }
 
-    // FIX: Retrieve version securely via Webpack
     const currentVersion = packageJson.version || "1.0.0";
     let updateAvailable = false;
     let latestVersion = currentVersion;
@@ -114,7 +107,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (error: unknown) {
     Logger.log(`[Stats API] Server Error: ${getErrorMessage(error)}`, 'error');
-    // --- SECURITY FIX: Removed 'details: error.message' ---
     return NextResponse.json({ error: 'Internal Server Error. Please check the server logs.' }, { status: 500 });
   }
 }

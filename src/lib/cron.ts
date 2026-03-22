@@ -78,17 +78,40 @@ export function initCronJobs() {
               // 2. Exact fallback match on active download name
               if (!match) match = downloadingRequests.find(r => r.activeDownloadName === torrent.name);
               
-              // 3. FIX: Smart Fuzzy Match (Compare significant words)
+              // 3. FIX: Extremely Strict Fuzzy Match
               if (!match) {
                   match = downloadingRequests.find(r => {
                       if (!r.activeDownloadName) return false;
-                      const reqWords = r.activeDownloadName.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length > 2);
-                      const torWords = torrent.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
                       
+                      const reqNameLower = r.activeDownloadName.toLowerCase();
+                      const torNameLower = torrent.name.toLowerCase();
+
+                      // A. Extract issue number from request
+                      const reqNumMatch = reqNameLower.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
+                      const reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+
+                      // B. If request has an issue number, torrent MUST contain it
+                      if (reqNum !== null) {
+                          const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${reqNum}\\b`, 'i');
+                          if (!numRegex.test(torNameLower)) {
+                              return false; // Issue number mismatch, instantly reject
+                          }
+                      }
+
+                      // C. Compare significant title words
+                      let cleanReqName = reqNameLower;
+                      if (reqNumMatch) cleanReqName = cleanReqName.replace(reqNumMatch[0], ''); 
+                      
+                      const reqWords = cleanReqName.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                      const torWords = torNameLower.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                      
+                      if (reqWords.length === 0) return false;
+
                       let matches = 0;
-                      reqWords.forEach(w => { if (torWords.includes(w)) matches++; });
-                      // Return true if at least 3 significant words match, OR all of them match
-                      return matches >= 3 || (reqWords.length > 0 && matches === reqWords.length);
+                      reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
+                      
+                      // D. Require high overlap of the text string
+                      return (matches / reqWords.length) >= 0.8;
                   });
               }
               

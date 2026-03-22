@@ -308,14 +308,31 @@ const mappedRequests = requests.map(req => {
           if (!match && req.activeDownloadName) {
               match = torrents.find((d: any) => d.name === req.activeDownloadName);
           }
-          // FIX: Smart Fuzzy Match for UI updates
+          // FIX: Strict Smart Fuzzy Match for UI updates
           if (!match && req.activeDownloadName) {
               match = torrents.find((d: any) => {
-                  const reqWords = req.activeDownloadName.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
-                  const torWords = d.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                  const reqNameLower = req.activeDownloadName.toLowerCase();
+                  const torNameLower = d.name.toLowerCase();
+
+                  const reqNumMatch = reqNameLower.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
+                  const reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+
+                  if (reqNum !== null) {
+                      const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${reqNum}\\b`, 'i');
+                      if (!numRegex.test(torNameLower)) return false;
+                  }
+
+                  let cleanReqName = reqNameLower;
+                  if (reqNumMatch) cleanReqName = cleanReqName.replace(reqNumMatch[0], '');
+                  
+                  const reqWords = cleanReqName.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                  const torWords = torNameLower.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                  
+                  if (reqWords.length === 0) return false;
                   let matches = 0;
                   reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
-                  return matches >= 3 || (reqWords.length > 0 && matches === reqWords.length);
+                  
+                  return (matches / reqWords.length) >= 0.8;
               });
           }
 

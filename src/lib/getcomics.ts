@@ -23,7 +23,8 @@ export const GetComicsService = {
         let retries = 2;
         while (retries > 0) {
             try {
-                const results = await this.performSearch(q, isInteractive);
+                // FIX: Pass both the simplified query 'q' AND the strict original 'query'
+                const results = await this.performSearch(q, query, isInteractive);
                 if (results.length > 0) return results;
                 break; 
             } catch (e: any) { 
@@ -37,7 +38,8 @@ export const GetComicsService = {
     return [];
   },
 
-  async performSearch(safeQuery: string, isInteractive: boolean = false) {
+  // FIX: Accept the original query to enforce mathematical extraction
+  async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false) {
     const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
     
     const { data } = await axios.get(url, {
@@ -48,7 +50,16 @@ export const GetComicsService = {
     const $ = cheerio.load(data);
     const results: any[] = [];
     
-    const queryWords = safeQuery.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(' ').filter(w => w.trim().length > 0);
+    const cleanOriginal = originalQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
+    const queryWords = cleanOriginal.toLowerCase().split(' ').filter(w => w.trim().length > 0);
+
+    // Extract expected number from the original query to prevent hijacking
+    let reqNumMatch = cleanOriginal.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+    let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+    if (reqNum === null) {
+        const fallbacks = [...cleanOriginal.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+        if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+    }
 
     $('article, .post').each((i, el) => {
       const titleEl = $(el).find('h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a').first();
@@ -62,14 +73,41 @@ export const GetComicsService = {
 
       // INTERACTIVE BYPASS: If interactive, show all results. If automated, use strict filtering.
       if (!isInteractive) {
-          for (let w of queryWords) {
-              if (/^\d+$/.test(w)) {
-                  const num = parseInt(w);
-                  const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${num}\\b`, 'i');
-                  if (!numRegex.test(titleLower)) { isRelevant = false; break; }
-              } else {
-                  const wordRegex = new RegExp(`\\b${w}\\b`, 'i');
-                  if (!wordRegex.test(titleLower)) { isRelevant = false; break; }
+          
+          // STRICT FILTER 1: Reject Omnibuses for Single Issue Searches
+          const isLookingForOmnibus = queryWords.includes('omnibus') || queryWords.includes('tpb') || queryWords.includes('compendium') || queryWords.includes('absolute') || queryWords.includes('collection');
+          if (reqNum !== null && !isLookingForOmnibus) {
+              if (titleLower.includes('omnibus') || titleLower.includes('tpb') || titleLower.includes('compendium') || titleLower.includes('absolute') || titleLower.includes('collection')) {
+                  isRelevant = false;
+              }
+          }
+
+          if (isRelevant) {
+              // STRICT FILTER 2: Direct Mathematical Number Comparison
+              let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+              let torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+              let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+              if (torNum === null) {
+                  const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                  if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+              }
+
+              if (reqNum !== null) {
+                  if (torNum !== null && torNum !== reqNum) isRelevant = false;
+                  if (torNum === null) {
+                      const numRegex = new RegExp(`(?:^|[^a-zA-Z0-9])0*${reqNum}(?:[^a-zA-Z0-9]|$)`, 'i');
+                      if (!numRegex.test(titleLower)) isRelevant = false; 
+                  }
+              }
+          }
+
+          // STRICT FILTER 3: Check standard text words
+          if (isRelevant) {
+              for (let w of queryWords) {
+                  if (!/^\d+$/.test(w) && !titleLower.includes(w)) {
+                      isRelevant = false;
+                      break;
+                  }
               }
           }
       }
@@ -108,7 +146,6 @@ export const GetComicsService = {
 
           $('a').each((i, el) => {
               const text = $(el).text().toLowerCase();
-              // RESTORED: The crucial titleAttr check that prevents grabbing ad links
               const titleAttr = ($(el).attr('title') || "").toLowerCase();
               const href = $(el).attr('href') || "";
               
@@ -119,7 +156,6 @@ export const GetComicsService = {
               const decoded = decodeLink(href);
               if (!decoded) return;
 
-              // RESTORED: The 'download now' keyword check
               const isMainServer = 
                   text.includes('main server') || titleAttr.includes('main server') || 
                   text.includes('download now') || titleAttr.includes('download now') ||

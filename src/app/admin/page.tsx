@@ -308,18 +308,32 @@ const mappedRequests = requests.map(req => {
           if (!match && req.activeDownloadName) {
               match = torrents.find((d: any) => d.name === req.activeDownloadName);
           }
-          // FIX: Strict Smart Fuzzy Match for UI updates
+          // FIX: Mathematical Matcher for UI
           if (!match && req.activeDownloadName) {
               match = torrents.find((d: any) => {
                   const reqNameLower = req.activeDownloadName.toLowerCase();
                   const torNameLower = d.name.toLowerCase();
 
-                  const reqNumMatch = reqNameLower.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
-                  const reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+                  let cleanReq = reqNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
+                  const reqNumMatch = cleanReq.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                  let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
 
-                  if (reqNum !== null) {
-                      const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${reqNum}\\b`, 'i');
-                      if (!numRegex.test(torNameLower)) return false;
+                  if (reqNum === null) {
+                      const fallbacks = [...cleanReq.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                      if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+                  }
+
+                  let cleanTor = torNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+                  const torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                  let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+
+                  if (torNum === null) {
+                      const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                      if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+                  }
+
+                  if (reqNum !== null && torNum !== null) {
+                      if (reqNum !== torNum) return false; 
                   }
 
                   let cleanReqName = reqNameLower;

@@ -15,8 +15,6 @@ export const ProwlarrService = {
 
     const cleanQuery = query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
     const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue'];
-    
-    // FIX: Do not slice the array. We need ALL words to verify the title and issue number.
     const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => !stopWords.includes(w) && w.length > 0);
 
     const categoriesStr = config.prowlarr_categories;
@@ -65,38 +63,54 @@ export const ProwlarrService = {
           timeout: 30000 
       });
 
-      if (!Array.isArray(data)) {
-          let preview = "";
-          if (typeof data === 'string') {
-              preview = data.substring(0, 200).replace(/\n/g, ''); 
-          } else {
-              preview = JSON.stringify(data).substring(0, 200);
-          }
-          Logger.log(`[Prowlarr] Unexpected response format. Received payload: ${preview}`, 'error');
-          return [];
-      }
+      if (!Array.isArray(data)) return [];
 
       const rawData = data as Record<string, unknown>[];
+
+      // Extract expected number from the query to prevent hijacking
+      let reqNumMatch = cleanQuery.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+      let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+      if (reqNum === null) {
+          const fallbacks = [...cleanQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+          if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+      }
 
       return rawData
         .filter((item) => {
             if (isInteractive) return true;
             const titleLower = (String(item.title || "")).toLowerCase();
             
-            // FIX: Implement strict word boundaries so "2" doesn't falsely match "2015"
-            let isRelevant = true;
-            for (let w of queryWords) {
-                if (/^\d+$/.test(w)) {
-                    const num = parseInt(w, 10);
-                    // Matches #2, issue 2, 02, 002 safely
-                    const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${num}\\b`, 'i');
-                    if (!numRegex.test(titleLower)) { isRelevant = false; break; }
-                } else {
-                    const wordRegex = new RegExp(`\\b${w}\\b`, 'i');
-                    if (!wordRegex.test(titleLower)) { isRelevant = false; break; }
+            // STRICT FILTER 1: Reject Omnibuses for Single Issue Searches
+            const isLookingForOmnibus = queryWords.includes('omnibus') || queryWords.includes('tpb') || queryWords.includes('compendium') || queryWords.includes('absolute') || queryWords.includes('collection');
+            if (reqNum !== null && !isLookingForOmnibus) {
+                if (titleLower.includes('omnibus') || titleLower.includes('tpb') || titleLower.includes('compendium') || titleLower.includes('absolute') || titleLower.includes('collection')) {
+                    return false;
                 }
             }
-            return isRelevant;
+
+            // STRICT FILTER 2: Direct Number Comparison
+            let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+            let torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+            let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+            if (torNum === null) {
+                const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+            }
+
+            if (reqNum !== null) {
+                if (torNum !== null && torNum !== reqNum) return false;
+                if (torNum === null) {
+                    const numRegex = new RegExp(`(?:^|[^a-zA-Z0-9])0*${reqNum}(?:[^a-zA-Z0-9]|$)`, 'i');
+                    if (!numRegex.test(titleLower)) return false; 
+                }
+            }
+
+            // STRICT FILTER 3: Check standard text words
+            for (let w of queryWords) {
+                if (!/^\d+$/.test(w) && !titleLower.includes(w)) return false;
+            }
+
+            return true;
         })
         .map((item): ProwlarrSearchResult => ({
           guid: String(item.guid || ""),

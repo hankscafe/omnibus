@@ -17,9 +17,9 @@ const safeParse = (str: string | null) => {
 
 function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
-    clean = clean.replace(/\[\d{4}\]/g, '').replace(/\(\d{4}\)/g, ''); 
+    clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
     
-    const explicitMatch = clean.match(/(?:#|issue\s*|vol(?:ume)?\s*|v\s*|ch(?:apter)?\s*)0*(\d+(?:\.\d+)?)/i);
+    const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
     
     const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];

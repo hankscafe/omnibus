@@ -441,8 +441,16 @@ export async function POST(request: Request) {
                             
                             const alreadyReq = existingRequestsForVolume.find(r => {
                                 if (r.activeDownloadName === searchName) return true;
-                                const match = (r.activeDownloadName || "").match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
-                                if (match && parseFloat(match[1]) === cvNum) return true;
+                                
+                                // Clean the string using the same rules as the Importer
+                                let clean = (r.activeDownloadName || "").replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
+                                
+                                const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                                if (explicitMatch && parseFloat(explicitMatch[1]) === cvNum) return true;
+                                
+                                const fallbackMatches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                                if (fallbackMatches.length > 0 && parseFloat(fallbackMatches[fallbackMatches.length - 1][1]) === cvNum) return true;
+
                                 return false;
                             });
 

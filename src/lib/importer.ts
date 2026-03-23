@@ -15,9 +15,10 @@ function sanitize(str: string) {
 
 function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
-    clean = clean.replace(/\[\d{4}\]/g, '').replace(/\(\d{4}\)/g, ''); 
+    // Strip out (YYYY-YYYY) or [YYYY] year ranges before checking for issue numbers
+    clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
     
-    const explicitMatch = clean.match(/(?:#|issue\s*|vol(?:ume)?\s*|v\s*|ch(?:apter)?\s*)0*(\d+(?:\.\d+)?)/i);
+    const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
     
     const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
@@ -88,6 +89,31 @@ export const Importer = {
       return false;
     }
 
+    // --- FIX: EXTRACT ARCHIVE FROM FOLDER ---
+    // If the download client unpacked it into a folder, dive in and find the actual comic file
+    let actualSourceFile = sourcePath;
+    if (fs.statSync(sourcePath).isDirectory()) {
+        const files = await fs.promises.readdir(sourcePath);
+        let largestFile = "";
+        let largestSize = 0;
+        for (const f of files) {
+            if (f.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
+                const stat = fs.statSync(path.join(sourcePath, f));
+                if (stat.size > largestSize) {
+                    largestSize = stat.size;
+                    largestFile = path.join(sourcePath, f);
+                }
+            }
+        }
+        if (largestFile) {
+            actualSourceFile = largestFile;
+            Logger.log(`[Importer] Extracted archive from folder: ${path.basename(actualSourceFile)}`, "info");
+        } else {
+            Logger.log(`[Importer] No valid comic archive found inside folder: ${sourcePath}`, "error");
+            return false;
+        }
+    }
+
     // --- 2. FETCH OR CREATE SERIES METADATA ---
     let series = await prisma.series.findFirst({ where: { cvId: parseInt(req.volumeId) } });
     
@@ -129,7 +155,7 @@ export const Importer = {
     } else {
         const seriesYearMatch = (req.activeDownloadName || path.basename(sourcePath)).match(/\((\d{4})\)/);
         const detectedYear = seriesYearMatch ? parseInt(seriesYearMatch[1]) : 0;
-        isManga = await detectManga({ name: cleanSeriesName, publisher: { name: 'Other' }, year: detectedYear }, sourcePath);
+        isManga = await detectManga({ name: cleanSeriesName, publisher: { name: 'Other' }, year: detectedYear }, actualSourceFile);
     }
 
     const libraries = await prisma.library.findMany();
@@ -173,8 +199,8 @@ export const Importer = {
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
-        .replace(/\(\s*\)/g, '') // Remove empty parens if year is missing
-        .replace(/\[\s*\]/g, '') // Remove empty brackets
+        .replace(/\(\s*\)/g, '') 
+        .replace(/\[\s*\]/g, '') 
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -217,7 +243,7 @@ export const Importer = {
         destFolder = idealDestFolder;
     }
 
-    const rawFileName = path.basename(sourcePath);
+    const rawFileName = path.basename(actualSourceFile);
     const ext = path.extname(rawFileName);
     const extractedNum = extractIssueNumber(rawFileName);
     
@@ -251,17 +277,17 @@ export const Importer = {
       let moveSuccess = false;
       for (let attempt = 1; attempt <= 5; attempt++) {
           try {
-              if (!fs.existsSync(sourcePath)) {
-                  Logger.log(`[Importer] Source file vanished before move: ${sourcePath}`, "error");
+              if (!fs.existsSync(actualSourceFile)) {
+                  Logger.log(`[Importer] Source file vanished before move: ${actualSourceFile}`, "error");
                   break; 
               }
 
               if (isFromClient || trackingHash) {
-                  Logger.log(`[Importer] Copying Torrent to Library (Preserving Seed): ${sourcePath} -> ${finalPath}`, "info");
-                  await fs.copy(sourcePath, finalPath, { overwrite: true });
+                  Logger.log(`[Importer] Copying Torrent to Library (Preserving Seed): ${actualSourceFile} -> ${finalPath}`, "info");
+                  await fs.copy(actualSourceFile, finalPath, { overwrite: true });
               } else {
-                  Logger.log(`[Importer] Moving DDL to Library: ${sourcePath} -> ${finalPath}`, "info");
-                  await fs.move(sourcePath, finalPath, { overwrite: true });
+                  Logger.log(`[Importer] Moving DDL to Library: ${actualSourceFile} -> ${finalPath}`, "info");
+                  await fs.move(actualSourceFile, finalPath, { overwrite: true });
               }
               
               moveSuccess = true;
@@ -278,7 +304,7 @@ export const Importer = {
 
       if (!moveSuccess) throw new Error("Failed to move file after multiple attempts due to network locks.");
 
-      // --- THE NEW AUTO-CONVERSION INTERCEPT ---
+      // --- AUTO-CONVERSION INTERCEPT ---
       if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar')) {
           Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');
           const { convertCbrToCbz } = await import('./converter');

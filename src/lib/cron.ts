@@ -78,7 +78,7 @@ export function initCronJobs() {
               // 2. Exact fallback match on active download name
               if (!match) match = downloadingRequests.find(r => r.activeDownloadName === torrent.name);
               
-              // 3. FIX: Extremely Strict Fuzzy Match
+              // 3. Mathematical Matcher (Prevents Hijacking)
               if (!match) {
                   match = downloadingRequests.find(r => {
                       if (!r.activeDownloadName) return false;
@@ -86,19 +86,32 @@ export function initCronJobs() {
                       const reqNameLower = r.activeDownloadName.toLowerCase();
                       const torNameLower = torrent.name.toLowerCase();
 
-                      // A. Extract issue number from request
-                      const reqNumMatch = reqNameLower.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
-                      const reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+                      // A. Extract issue number from Request
+                      let cleanReq = reqNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
+                      const reqNumMatch = cleanReq.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                      let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
 
-                      // B. If request has an issue number, torrent MUST contain it
-                      if (reqNum !== null) {
-                          const numRegex = new RegExp(`(?:#|\\bissue\\s*|\\bvol(?:ume)?\\s*|\\b0*)${reqNum}\\b`, 'i');
-                          if (!numRegex.test(torNameLower)) {
-                              return false; // Issue number mismatch, instantly reject
-                          }
+                      if (reqNum === null) {
+                          const fallbacks = [...cleanReq.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                          if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
                       }
 
-                      // C. Compare significant title words
+                      // B. Extract issue number from Torrent Name
+                      let cleanTor = torNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+                      const torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                      let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+
+                      if (torNum === null) {
+                          const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                          if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+                      }
+
+                      // C. Compare the exact numbers
+                      if (reqNum !== null && torNum !== null) {
+                          if (reqNum !== torNum) return false; // Instantly block hijacking
+                      }
+
+                      // D. Compare significant title words
                       let cleanReqName = reqNameLower;
                       if (reqNumMatch) cleanReqName = cleanReqName.replace(reqNumMatch[0], ''); 
                       
@@ -110,7 +123,6 @@ export function initCronJobs() {
                       let matches = 0;
                       reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
                       
-                      // D. Require high overlap of the text string
                       return (matches / reqWords.length) >= 0.8;
                   });
               }
@@ -118,6 +130,10 @@ export function initCronJobs() {
               if (match) {
                   Logger.log(`[Cron] Client download completed: ${torrent.name}. Triggering importer...`, 'info');
                   
+                  // Instantly pop it out of the array to prevent sequential double-matching loops
+                  const index = downloadingRequests.findIndex(r => r.id === match!.id);
+                  if (index > -1) downloadingRequests.splice(index, 1);
+
                   await prisma.request.update({
                       where: { id: match.id },
                       data: { activeDownloadName: torrent.name, downloadLink: torrent.id }

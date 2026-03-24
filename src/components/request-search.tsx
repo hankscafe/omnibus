@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon } from "lucide-react"
+import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } from "@/components/ui/dialog"
@@ -37,7 +37,7 @@ interface Issue {
   characters?: string[];
 }
 
-type StatusType = 'LIBRARY' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
+type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
 
 export function RequestSearch() {
   const [open, setOpen] = useState(false)
@@ -56,6 +56,7 @@ export function RequestSearch() {
   const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
   
   const [ownedSeries, setOwnedSeries] = useState<Set<number>>(new Set())
+  const [monitoredSeries, setMonitoredSeries] = useState<Set<number>>(new Set())
   const [ownedIssues, setOwnedIssues] = useState<Set<number>>(new Set())
   const [activeRequests, setActiveRequests] = useState<any[]>([])
 
@@ -67,6 +68,7 @@ export function RequestSearch() {
       .then(data => { 
           if (data) {
               setOwnedSeries(new Set(data.series || []));
+              setMonitoredSeries(new Set(data.monitored || []));
               setOwnedIssues(new Set(data.issues || []));
               setActiveRequests(data.requests || []);
           }
@@ -75,25 +77,25 @@ export function RequestSearch() {
   }, [open]);
 
   const getVolumeStatus = (volumeId: number, name: string): StatusType => {
-      if (ownedSeries.has(volumeId)) return 'LIBRARY';
+      if (ownedSeries.has(volumeId)) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
       if (requestedVolumes.has(volumeId)) return 'REQUESTED';
       
       const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
-          if (allCompleted) return 'LIBRARY';
+          if (allCompleted) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
           if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
       }
       return null;
   }
 
   const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
-      if (ownedIssues.has(issueId)) return 'LIBRARY';
+      if (ownedIssues.has(issueId)) return 'ISSUE_OWNED';
       if (requestedIssues.has(issueName)) return 'REQUESTED';
 
       const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
       if (req) {
-          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'LIBRARY';
+          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
           if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
           return 'REQUESTED';
       }
@@ -244,9 +246,14 @@ export function RequestSearch() {
                     <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleSelectSearchResult(item)}>
                       <div className="relative aspect-[2/3] w-full rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
                         <img src={item.image} alt={item.name} className="absolute inset-0 w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" />
-                        {volStatus === 'LIBRARY' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 z-10 shadow-md"><CheckCircle2 className="w-4 h-4" /></div>)}
+                        
+                        {volStatus === 'LIBRARY_MONITORED' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 z-10 shadow-md" title="Monitored"><Activity className="w-4 h-4" /></div>)}
+                        {volStatus === 'LIBRARY_UNMONITORED' && (<div className="absolute top-2 right-2 bg-blue-500 text-white rounded-full p-1 z-10 shadow-md" title="In Library"><Library className="w-4 h-4" /></div>)}
+                        {volStatus === 'ISSUE_OWNED' && (<div className="absolute top-2 right-2 bg-emerald-500 text-white rounded-full p-1 z-10 shadow-md" title="In Library"><FileCheck className="w-4 h-4" /></div>)}
+
                         {volStatus === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 z-10 shadow-md" title="Requested"><Clock className="w-4 h-4" /></div>)}
                         {volStatus === 'PENDING_APPROVAL' && (<div className="absolute top-2 right-2 bg-yellow-500 text-white rounded-full p-1 z-10 shadow-md" title="Pending Admin Approval"><Clock className="w-4 h-4" /></div>)}
+                        
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-20">
                           <Button size="sm" className="font-bold shadow-lg bg-primary hover:bg-primary/90 text-primary-foreground">Details</Button>
                         </div>
@@ -283,6 +290,9 @@ export function RequestSearch() {
                               const issueTargetName = selectedItem.isVolume ? `${selectedItem.name.split(' #')[0]} #1` : selectedItem.name;
                               const volStatus = getVolumeStatus(selectedItem.volumeId, selectedItem.name.split(' #')[0]);
                               const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, issueTargetName);
+                              
+                              const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';
+                              const isIssueOwned = issueStatus === 'ISSUE_OWNED';
                               const overallStatus = selectedItem.isVolume ? volStatus : issueStatus;
 
                               return (
@@ -296,20 +306,20 @@ export function RequestSearch() {
                                     ) : (
                                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
                                             <Button 
-                                                className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold px-1 whitespace-normal ${volStatus === 'LIBRARY' ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
+                                                className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold px-1 whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
                                                 variant="default" 
                                                 onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: undefined })} 
                                                 disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
                                             >
                                                 {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : (
-                                                    volStatus === 'LIBRARY' ? <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
+                                                    isVolOwned ? <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
                                                 )}
                                             </Button>
                                             <Button 
                                                 className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-1 border-0 whitespace-normal" 
                                                 onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: 'getcomics' })} 
                                                 disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
-                                                title={volStatus === 'LIBRARY' ? "Force missing issues from GetComics" : "Force direct download from GetComics"}
+                                                title={isVolOwned ? "Force missing issues from GetComics" : "Force direct download from GetComics"}
                                             >
                                                 {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
                                             </Button>
@@ -317,9 +327,9 @@ export function RequestSearch() {
                                     )}
                                     
                                     {/* ISSUE BUTTONS */}
-                                    {issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || issueStatus === 'LIBRARY' ? (
+                                    {issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || isIssueOwned ? (
                                         <Button className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal`} variant="outline" disabled>
-                                            {issueStatus === 'LIBRARY' && <><CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" /> <span className="leading-tight">In Library</span></>}
+                                            {isIssueOwned && <><FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">In Library</span></>}
                                             {issueStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>}
                                             {issueStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
                                         </Button>
@@ -349,12 +359,14 @@ export function RequestSearch() {
                                       variant="outline" 
                                       className="w-full gap-1.5 border-dashed shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" 
                                       onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? selectedItem.name.split(' #')[0] : selectedItem.name, type: selectedItem.isVolume ? 'issue' : 'volume' })}
-                                      disabled={overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
+                                      disabled={(!selectedItem.isVolume && isIssueOwned) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                     >
                                         {overallStatus === 'PENDING_APPROVAL' ? (
                                             <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>
                                         ) : overallStatus === 'REQUESTED' ? (
                                             <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>
+                                        ) : (!selectedItem.isVolume && isIssueOwned) ? (
+                                            <><FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">In Library</span></>
                                         ) : (
                                             <><Search className="w-4 h-4 text-primary shrink-0" /> <span className="leading-tight">Interactive Search</span></>
                                         )}
@@ -455,7 +467,7 @@ export function RequestSearch() {
 
                                                   {relIssueStatus === 'REQUESTED' && (<div className="absolute top-1 left-1 bg-orange-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">REQUESTED</div>)}
                                                   {relIssueStatus === 'PENDING_APPROVAL' && (<div className="absolute top-1 left-1 bg-yellow-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20" title="Pending Admin Approval">PENDING</div>)}
-                                                  {relIssueStatus === 'LIBRARY' && (<div className="absolute top-1 left-1 bg-green-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">OWNED</div>)}
+                                                  {relIssueStatus === 'ISSUE_OWNED' && (<div className="absolute top-1 left-1 bg-emerald-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">IN LIBRARY</div>)}
                                               </div>
                                           </div>
                                       )})}

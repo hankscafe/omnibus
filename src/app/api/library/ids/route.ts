@@ -23,7 +23,7 @@ export async function GET() {
     const [series, issues, requests] = await Promise.all([
         prisma.series.findMany({ 
             where: { issues: { some: { filePath: { not: null } } } },
-            select: { cvId: true } 
+            select: { cvId: true, monitored: true } // <-- ADDED: monitored selection
         }),
         prisma.issue.findMany({ 
             where: { filePath: { not: null } },
@@ -36,6 +36,7 @@ export async function GET() {
 
     const payload = {
         series: series.map(s => s.cvId),
+        monitored: series.filter(s => s.monitored).map(s => s.cvId), // <-- ADDED: filter and map monitored series
         issues: issues.map(i => i.cvId),
         requests: requests.map(r => ({ 
             volumeId: parseInt(r.volumeId), 
@@ -52,6 +53,7 @@ export async function GET() {
   } catch (error) {
     Logger.log(`Library IDs API Error: ${getErrorMessage(error)}`, 'error');
 
-    return NextResponse.json({ series: [], issues: [], requests: [] });
+    // <-- ADDED: empty monitored array fallback
+    return NextResponse.json({ series: [], monitored: [], issues: [], requests: [] }); 
   }
 }

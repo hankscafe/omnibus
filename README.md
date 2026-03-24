@@ -100,6 +100,15 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 * **Recently Added" Section:** A dynamically updated carousel that shows the 7 most recent series addtions to the library with the ability to jump directly to that series page.
 * **Discovery Feed:** Browse auto-updating "New Releases" and "Popular Issues" pulled directly from the ComicVine API and cached for performance.
 * **Interactive Search:** Search the ComicVine database for any series or issue. View covers, publishers, and issue counts to ensure you are requesting exactly what you want.
+* **Color-Coded Badges:** Omnibus uses a color-coded badge system on the Discover and Search grids to let you know exactly what is in your library and what the automated downloader is doing.
+  * Series & Volume Badges:
+    * 🟢 Monitored (Green with Activity/Pulse Icon): You own at least one issue of this series, AND Omnibus is actively monitoring it. Any newly released issues will be automatically downloaded in the background.
+    * 🔵 In Library (Blue with Library/Books Icon): You own at least one issue of this series, but it is currently unmonitored. Omnibus will not automatically download new issues, but you can still manually request missing ones.
+  * Individual Issue Badges:
+    * 🟢 In Library (Emerald Green with File-Check Icon): The physical file for this specific issue has been successfully downloaded and is sitting on your hard drive ready to read.
+  * Request Pipeline Badges:
+    * 🟠 Requested (Orange with Clock Icon): You have requested this item. Omnibus has added it to the queue and is actively searching for a valid download source.
+    * 🟡 Pending Approval (Yellow with Clock Icon): You have requested this item, but your server requires an Admin to manually approve the request before the search begins.
 * **Smart Requests & Automation:** Send requests directly to your download queue. Omnibus searches your connected indexers (Prowlarr) and gracefully falls back to direct downloads (GetComics) if torrents/usenet fail.
 * **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
 * **Unreleased Badges:** When a request is made Omnibus will check ComicVine for the issues release date and if it is not released it will tag it as UNRELEASED.  As the Monitor Series job runs it will also check items tagged as UNRELEASED and update it as available once it is availalbe, allowing future issues to be automatically downloaded.

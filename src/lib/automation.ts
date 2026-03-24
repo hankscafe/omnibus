@@ -14,7 +14,7 @@ export async function getDownloadClient() {
 
 export async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
   const acronyms = await getCustomAcronyms();
-  const queries = generateSearchQueries(name, year, acronyms);
+  const queries = generateSearchQueries(name, year, acronyms, isManga); // <-- Passed isManga
   
   Logger.log(`[Automation] Generated ${queries.length} search variations for: ${name}`, 'info');
   
@@ -24,7 +24,7 @@ export async function searchAndDownload(requestId: string, name: string, year: s
   if (!skipIndexers) {
       for (const query of queries) {
           Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
-          const prowlarrResults = await ProwlarrService.searchComics(query);
+          const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga); // <-- Passed isManga
           healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
           if (healthyResults.length > 0) {
               successfulQuery = query;
@@ -57,7 +57,7 @@ export async function searchAndDownload(requestId: string, name: string, year: s
   let getComicsResults: any[] = [];
   for (const query of queries) {
       Logger.log(`[Automation] Searching GetComics: "${query}"`, 'info');
-      getComicsResults = await GetComicsService.search(query);
+      getComicsResults = await GetComicsService.search(query, false, isManga); // <-- Passed isManga
       if (getComicsResults.length > 0) {
           successfulQuery = query;
           break;

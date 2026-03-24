@@ -23,28 +23,45 @@ export async function getCustomAcronyms(): Promise<Record<string, string>> {
     return Object.keys(acMap).length > 0 ? acMap : defaults;
 }
 
-export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>): string[] {
+export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false): string[] {
     const queries = new Set<string>();
 
     // 1. Base Name: Strip issue hash, but LEAVE apostrophes for exact match attempts on Prowlarr
     const baseName = name.replace(/[#]/g, '').trim();
 
+    // --- NEW: MANGA SPECIFIC VARIATIONS ---
+    // If it's manga, and the name has a number at the end, generate explicit Vol/Ch variations
+    if (isManga) {
+        const numMatch = name.match(/#?(\d+(?:\.\d+)?)$/);
+        if (numMatch) {
+            const pureName = name.replace(/#?(\d+(?:\.\d+)?)$/, '').trim();
+            const volVariation = `${pureName} Vol ${numMatch[1]}`.trim();
+            const vVariation = `${pureName} v${numMatch[1]}`.trim();
+            const chVariation = `${pureName} Ch ${numMatch[1]}`.trim();
+            
+            if (year) {
+                queries.add(`${volVariation} ${year}`);
+                queries.add(`${vVariation} ${year}`);
+            }
+            queries.add(volVariation);
+            queries.add(vVariation);
+            queries.add(chVariation);
+        }
+    }
+
     if (year) queries.add(`${baseName} ${year}`.trim());
     queries.add(baseName);
 
     // 2. THE POSSESSIVE STRIPPER (Crucial for WordPress / GetComics)
-    // Converts "Devil's" -> "Devil" (Because "Devils" will fail against "Devil’s" in WP Search)
     const noPossessive = baseName.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
 
     // 3. BROAD ALPHANUMERIC CLEAN
-    // Converts "Daredevil/Punisher: The Devil Trigger" -> "Daredevil Punisher The Devil Trigger"
     const broadClean = noPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     
     if (year) queries.add(`${broadClean} ${year}`.trim());
     queries.add(broadClean);
 
     // 4. THE GETCOMICS DASH SPECIAL
-    // Converts "Daredevil/Punisher" -> "Daredevil - Punisher"
     if (baseName.match(/[\/:\&]/)) {
         const dashed = baseName.replace(/[\/:\&]/g, ' - ').replace(/\s+/g, ' ').trim();
         if (year) queries.add(`${dashed} ${year}`.trim());
@@ -55,7 +72,7 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         queries.add(dashedNoPossessive);
     }
 
-    // 5. Common Acronyms (e.g. TMNT -> Teenage Mutant Ninja Turtles)
+    // 5. Common Acronyms
     let expanded = broadClean;
     for (const [ac, full] of Object.entries(acronyms)) {
         const regex = new RegExp(`\\b${ac}\\b`, 'gi');
@@ -69,7 +86,7 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         queries.add(expanded);
     }
 
-    // 6. Subtitle extraction (e.g. "TMNT: The Last Ronin" -> "The Last Ronin")
+    // 6. Subtitle extraction
     if (name.includes(':')) {
         const parts = name.split(':');
         const subtitle = parts.slice(1).join(' ').replace(/[#]/g, '').trim();
@@ -97,11 +114,9 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
 
 // =========================================================================
 // 2. ADMIN FORCE-SEARCH ENGINE
-// Used exclusively by the Admin "Force Search" button for manual overrides
 // =========================================================================
 
 export const SearchEngine = {
-
     async performSmartSearch(query: string) {
         const settings = await prisma.systemSetting.findMany();
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -110,9 +125,7 @@ export const SearchEngine = {
             throw new Error("Prowlarr not configured");
         }
 
-        // NATIVE DB FETCH: Indexers
         const indexerConfigs = await prisma.indexer.findMany();
-
         const customHeaders = await getCustomHeaders();
         const cleanUrl = config.prowlarr_url.replace(/\/$/, "");
 
@@ -151,17 +164,12 @@ export const SearchEngine = {
 
         try {
             const downloadLink = bestMatch.magnetUrl || bestMatch.downloadUrl;
-            
-            if (!downloadLink) {
-                 return { success: false, message: "Best match had no download link" };
-            }
+            if (!downloadLink) return { success: false, message: "Best match had no download link" };
 
-            // NATIVE DB FETCH: Clients
             const clients = await prisma.downloadClient.findMany();
             if (clients.length === 0) return { success: false, message: "No download client configured." };
-            const client = clients[0]; // Find the first client (or however you plan to select defaults)
+            const client = clients[0]; 
 
-            // Add the download to the new mapped DB Client format
             await DownloadService.addDownload(client, downloadLink, bestMatch.title, bestMatch._seedTime || 0, 0);
 
             return { success: true, release: bestMatch.title, indexer: bestMatch.indexer };

@@ -4,7 +4,8 @@ import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
 
 export const GetComicsService = {
-  async search(query: string, isInteractive: boolean = false) {
+  // --- ADDED: isManga parameter ---
+  async search(query: string, isInteractive: boolean = false, isManga: boolean = false) {
     const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
     const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
     
@@ -23,8 +24,7 @@ export const GetComicsService = {
         let retries = 2;
         while (retries > 0) {
             try {
-                // FIX: Pass both the simplified query 'q' AND the strict original 'query'
-                const results = await this.performSearch(q, query, isInteractive);
+                const results = await this.performSearch(q, query, isInteractive, isManga); // <-- Pass down
                 if (results.length > 0) return results;
                 break; 
             } catch (e: any) { 
@@ -38,8 +38,7 @@ export const GetComicsService = {
     return [];
   },
 
-  // FIX: Accept the original query to enforce mathematical extraction
-  async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false) {
+  async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false) {
     const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
     
     const { data } = await axios.get(url, {
@@ -53,11 +52,11 @@ export const GetComicsService = {
     const cleanOriginal = originalQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
     const queryWords = cleanOriginal.toLowerCase().split(' ').filter(w => w.trim().length > 0);
 
-    // Extract expected number from the original query to prevent hijacking
     let reqNumMatch = cleanOriginal.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
     if (reqNum === null) {
-        const fallbacks = [...cleanOriginal.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+        let noYearQuery = cleanOriginal.replace(/\b(19|20)\d{2}\b/g, '');
+        const fallbacks = [...noYearQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
         if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
     }
 
@@ -71,13 +70,15 @@ export const GetComicsService = {
       const titleLower = title.toLowerCase();
       let isRelevant = true;
 
-      // INTERACTIVE BYPASS: If interactive, show all results. If automated, use strict filtering.
       if (!isInteractive) {
           
           // STRICT FILTER 1: Reject Omnibuses for Single Issue Searches
-          const isLookingForOmnibus = queryWords.includes('omnibus') || queryWords.includes('tpb') || queryWords.includes('compendium') || queryWords.includes('absolute') || queryWords.includes('collection');
+          const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
+          if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
+
+          const isLookingForOmnibus = queryWords.some(w => tpbTerms.includes(w));
           if (reqNum !== null && !isLookingForOmnibus) {
-              if (titleLower.includes('omnibus') || titleLower.includes('tpb') || titleLower.includes('compendium') || titleLower.includes('absolute') || titleLower.includes('collection')) {
+              if (tpbTerms.some(term => titleLower.includes(term))) {
                   isRelevant = false;
               }
           }
@@ -85,18 +86,24 @@ export const GetComicsService = {
           if (isRelevant) {
               // STRICT FILTER 2: Direct Mathematical Number Comparison
               let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-              let torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+              
+              let strippedForNumbers = cleanTor;
+              if (!isManga) {
+                  strippedForNumbers = strippedForNumbers.replace(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
+                  strippedForNumbers = strippedForNumbers.replace(/(?:book\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
+              }
+
+              let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
               let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
               if (torNum === null) {
-                  const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                  const fallbacks = [...strippedForNumbers.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
                   if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
               }
 
               if (reqNum !== null) {
                   if (torNum !== null && torNum !== reqNum) isRelevant = false;
                   if (torNum === null) {
-                      const numRegex = new RegExp(`(?:^|[^a-zA-Z0-9])0*${reqNum}(?:[^a-zA-Z0-9]|$)`, 'i');
-                      if (!numRegex.test(titleLower)) isRelevant = false; 
+                      isRelevant = false; 
                   }
               }
           }

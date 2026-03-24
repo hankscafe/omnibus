@@ -39,7 +39,7 @@ export async function GET() {
 
                 const authRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, loginParams, {
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
-                    timeout: 10000 
+                    timeout: 15000 
                 });
 
                 if (authRes.data !== 'Ok.') throw new Error("qBittorrent Authentication Failed");
@@ -49,7 +49,7 @@ export async function GET() {
                 const { data: torrents } = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
                     params: { filter: 'all' }, 
                     headers: { ...headers, Cookie: cookie },
-                    timeout: 10000
+                    timeout: 15000
                 });
 
                 const validTorrents = torrents.filter((t: any) => isAllowedCategory(t.category));
@@ -68,7 +68,7 @@ export async function GET() {
                 const res = await axios.get(`${cleanUrl}/api`, {
                     params: { mode: 'queue', apikey: client.apiKey, output: 'json' },
                     headers,
-                    timeout: 10000
+                    timeout: 15000
                 });
 
                 if (res.data?.queue?.slots) {
@@ -86,6 +86,26 @@ export async function GET() {
                     throw new Error("SABnzbd returned invalid data");
                 }
             }
+            else if (client.type === 'deluge') {
+                const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers, timeout: 15000 });
+                const cookie = authRes.headers['set-cookie'];
+                const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size"], {}], id: 2 }, { headers: { ...headers, Cookie: cookie }, timeout: 15000 });
+                if (listRes.data.result?.torrents) {
+                    const torrents = listRes.data.result.torrents;
+                    allDownloads.push(...Object.keys(torrents).map(hash => ({
+                        id: hash, name: torrents[hash].name, progress: torrents[hash].progress.toFixed(1),
+                        status: torrents[hash].state, clientName: client.name, size: (torrents[hash].total_size / 1024 / 1024).toFixed(2) + " MB"
+                    })));
+                }
+            }
+            else if (client.type === 'nzbget') {
+                const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
+                const listRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "listgroups", params: [] }, { headers: { ...headers, Authorization: `Basic ${auth}` }, timeout: 15000 });
+                if (Array.isArray(listRes.data.result)) {
+                    const validGroups = listRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
+                    allDownloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
+                }
+            }
         } catch (e: any) {
             Logger.log(`[Active Downloads] ${client.name} failed to respond or timed out. Skipping.`, 'warn');
             continue; 
@@ -98,7 +118,14 @@ export async function GET() {
         try { ignoredIds = JSON.parse(ignoredSetting.value); } catch (e) {}
     }
 
-    const filteredDownloads = allDownloads.filter(d => !ignoredIds.includes(d.id));
+    // NEW: Fetch pending requests to un-ignore them visually
+    const pendingRequests = await prisma.request.findMany({
+        where: { status: { in: ['DOWNLOADING', 'STALLED'] } },
+        select: { downloadLink: true }
+    });
+    const linkedHashes = pendingRequests.map(r => r.downloadLink).filter(Boolean);
+
+    const filteredDownloads = allDownloads.filter(d => !ignoredIds.includes(d.id) || linkedHashes.includes(d.id));
 
     return NextResponse.json({ success: true, activeDownloads: filteredDownloads });
 

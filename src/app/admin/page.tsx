@@ -317,39 +317,44 @@ const mappedRequests = requests.map(req => {
                   const reqNameLower = req.activeDownloadName.toLowerCase();
                   const torNameLower = d.name.toLowerCase();
 
-                  let cleanReq = reqNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-                  const reqNumMatch = cleanReq.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                  let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+                  const extractNum = (str: string) => {
+                      const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+                      const chMatch = clean.match(/(?:ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                      if (chMatch) return parseFloat(chMatch[1]);
+                      const issueMatch = clean.match(/(?:#|issue\s*#?)\s*0*(\d+(?:\.\d+)?)/i);
+                      if (issueMatch) return parseFloat(issueMatch[1]);
+                      const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                      if (volMatch) return parseFloat(volMatch[1]);
+                      const fallbacks = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                      if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
+                      return null;
+                  };
 
-                  if (reqNum === null) {
-                      const fallbacks = [...cleanReq.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-                      if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-                  }
-
-                  let cleanTor = torNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-                  const torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                  let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
-
-                  if (torNum === null) {
-                      const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-                      if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-                  }
+                  const reqNum = extractNum(reqNameLower);
+                  const torNum = extractNum(torNameLower);
 
                   if (reqNum !== null && torNum !== null) {
                       if (reqNum !== torNum) return false; 
+                  } else if (reqNum !== null && torNum === null) {
+                      if (reqNum !== 1) return false; // Strict block: if torrent has no numbers, it can only be issue 1.
                   }
 
-                  let cleanReqName = reqNameLower;
-                  if (reqNumMatch) cleanReqName = cleanReqName.replace(reqNumMatch[0], '');
+                  let cleanReqName = reqNameLower.replace(/[0-9]/g, '');
+                  let cleanTorName = torNameLower.replace(/[0-9]/g, '');
                   
-                  const reqWords = cleanReqName.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
-                  const torWords = torNameLower.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                  // Junk words filter prevents false positive hijacks
+                  const junkWords = ['eng', 'cbz', 'cbr', 'cb7', 'zip', 'rar', 'webrip', 'digital', 'vol', 'volume', 'ch', 'chapter', 'issue', 'tpb', 'rip', 'the', 'and', 'of', 'by', 'gn'];
                   
-                  if (reqWords.length === 0) return false;
+                  const reqWords = cleanReqName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
+                  const torWords = cleanTorName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
+                  
+                  if (reqWords.length === 0 || torWords.length === 0) return false;
+
                   let matches = 0;
                   reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
                   
-                  return (matches / reqWords.length) >= 0.8;
+                  const minLength = Math.min(reqWords.length, torWords.length);
+                  return (matches / minLength) >= 0.5;
               });
           }
 

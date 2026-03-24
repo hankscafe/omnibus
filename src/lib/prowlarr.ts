@@ -1,4 +1,3 @@
-// src/lib/prowlarr.ts
 import axios from 'axios';
 import { prisma } from './db';
 import { Logger } from './logger';
@@ -7,7 +6,8 @@ import { getErrorMessage } from './utils/error';
 import { ProwlarrSearchResult } from '@/types';
 
 export const ProwlarrService = {
-  async searchComics(query: string, isInteractive: boolean = false): Promise<ProwlarrSearchResult[]> {
+  // --- ADDED: isManga parameter to differentiate strict filtering rules ---
+  async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false): Promise<ProwlarrSearchResult[]> {
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
@@ -48,7 +48,6 @@ export const ProwlarrService = {
     }
 
     const customHeaders = await getCustomHeaders();
-    
     const reqHeaders: Record<string, string> = { 
         'X-Api-Key': config.prowlarr_key,
         ...customHeaders
@@ -71,7 +70,8 @@ export const ProwlarrService = {
       let reqNumMatch = cleanQuery.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
       let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
       if (reqNum === null) {
-          const fallbacks = [...cleanQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+          let noYearQuery = cleanQuery.replace(/\b(19|20)\d{2}\b/g, '');
+          const fallbacks = [...noYearQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
           if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
       }
 
@@ -81,27 +81,42 @@ export const ProwlarrService = {
             const titleLower = (String(item.title || "")).toLowerCase();
             
             // STRICT FILTER 1: Reject Omnibuses for Single Issue Searches
-            const isLookingForOmnibus = queryWords.includes('omnibus') || queryWords.includes('tpb') || queryWords.includes('compendium') || queryWords.includes('absolute') || queryWords.includes('collection');
+            const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
+            if (!isManga) {
+                // If it is NOT a manga, explicitly add "vol", "volume", and "book" as banned words IF they weren't in the original query
+                tpbTerms.push('vol ', 'volume ', 'book ');
+            }
+
+            const isLookingForOmnibus = queryWords.some(w => tpbTerms.includes(w));
             if (reqNum !== null && !isLookingForOmnibus) {
-                if (titleLower.includes('omnibus') || titleLower.includes('tpb') || titleLower.includes('compendium') || titleLower.includes('absolute') || titleLower.includes('collection')) {
+                if (tpbTerms.some(term => titleLower.includes(term))) {
                     return false;
                 }
             }
 
             // STRICT FILTER 2: Direct Number Comparison
             let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-            let torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+            
+            // If it's a Western Comic, aggressively strip out "Vol. X" and "Book X" strings before checking the numbers.
+            // This prevents "Moon Knight Vol. 2" from pretending to be "Moon Knight #2"
+            let strippedForNumbers = cleanTor;
+            if (!isManga) {
+                strippedForNumbers = strippedForNumbers.replace(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
+                strippedForNumbers = strippedForNumbers.replace(/(?:book\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
+            }
+
+            let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
             let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+            
             if (torNum === null) {
-                const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                const fallbacks = [...strippedForNumbers.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
                 if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
             }
 
             if (reqNum !== null) {
                 if (torNum !== null && torNum !== reqNum) return false;
                 if (torNum === null) {
-                    const numRegex = new RegExp(`(?:^|[^a-zA-Z0-9])0*${reqNum}(?:[^a-zA-Z0-9]|$)`, 'i');
-                    if (!numRegex.test(titleLower)) return false; 
+                    return false; // Safely reject it if stripping Vol. left it with NO numbers
                 }
             }
 
@@ -112,18 +127,28 @@ export const ProwlarrService = {
 
             return true;
         })
-        .map((item): ProwlarrSearchResult => ({
-          guid: String(item.guid || ""),
-          title: String(item.title || ""),
-          size: Number(item.size || 0),
-          indexer: String(item.indexer || ""),
-          seeders: Number(item.seeders || 0),
-          peers: Number(item.leechers || item.peers || 0),
-          infoUrl: String(item.infoUrl || ""),
-          downloadUrl: String(item.downloadUrl || item.magnetUrl || ""),
-          protocol: item.protocol === 'torrent' ? 'torrent' : 'usenet',
-          publishDate: item.publishDate ? String(item.publishDate) : undefined
-        }));
+        .map((item): ProwlarrSearchResult => {
+          // Extract the exact infoHash from the magnet URL if Prowlarr hid it
+          let parsedHash = item.infoHash ? String(item.infoHash) : undefined;
+          if (!parsedHash && item.magnetUrl) {
+              const match = String(item.magnetUrl).match(/urn:btih:([a-zA-Z0-9]+)/i);
+              if (match) parsedHash = match[1].toLowerCase();
+          }
+
+          return {
+            guid: String(item.guid || ""),
+            title: String(item.title || ""),
+            size: Number(item.size || 0),
+            indexer: String(item.indexer || ""),
+            seeders: Number(item.seeders || 0),
+            peers: Number(item.leechers || item.peers || 0),
+            infoUrl: String(item.infoUrl || ""),
+            downloadUrl: String(item.downloadUrl || item.magnetUrl || ""),
+            protocol: item.protocol === 'torrent' ? 'torrent' : 'usenet',
+            publishDate: item.publishDate ? String(item.publishDate) : undefined,
+            infoHash: parsedHash
+          };
+        });
     } catch (error: unknown) {
       Logger.log(`[Prowlarr] Search Error: ${getErrorMessage(error)}`, 'error');
       return [];

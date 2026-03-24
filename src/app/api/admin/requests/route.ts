@@ -34,8 +34,13 @@ export async function GET(request: Request) {
       let issueNumberStr = "";
       
       if (req.activeDownloadName) {
-          const match = req.activeDownloadName.match(/#(\d+)/) || req.activeDownloadName.match(/Issue\s*0*(\d+)/i) || req.activeDownloadName.match(/\s0*(\d{1,3})\s/);
-          if (match && match[1]) issueNumberStr = ` Issue #${match[1].padStart(3, '0')}`;
+          const match = req.activeDownloadName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+          if (match && match[1]) {
+              issueNumberStr = ` Issue #${match[1].padStart(3, '0')}`;
+          } else {
+              const fallback = req.activeDownloadName.replace(/\b(19|20)\d{2}\b/g, '').match(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/);
+              if (fallback && fallback[1]) issueNumberStr = ` Issue #${fallback[1].padStart(3, '0')}`;
+          }
       }
 
       if (series) {

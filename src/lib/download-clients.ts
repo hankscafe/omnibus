@@ -235,7 +235,7 @@ export const DownloadService = {
         if (client.type === 'qbit') {
           const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
             new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
-            { headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 5000 }
+            { headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
           );
           const cookie = loginRes.headers['set-cookie'];
           
@@ -243,7 +243,7 @@ export const DownloadService = {
           const listRes = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
             params: { filter: 'all' },
             headers: { Cookie: cookie, ...baseHeaders },
-            timeout: 5000
+            timeout: 15000
           });
 
           if (Array.isArray(listRes.data)) {
@@ -255,9 +255,9 @@ export const DownloadService = {
           }
         }
         else if (client.type === 'deluge') {
-            const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers: baseHeaders });
+            const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers: baseHeaders, timeout: 15000 });
             const cookie = authRes.headers['set-cookie'];
-            const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size"], {}], id: 2 }, { headers: { ...baseHeaders, Cookie: cookie } });
+            const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size"], {}], id: 2 }, { headers: { ...baseHeaders, Cookie: cookie }, timeout: 15000 });
             if (listRes.data.result?.torrents) {
                 const torrents = listRes.data.result.torrents;
                 // Deluge labels require plugin, bypassing filter for Deluge
@@ -268,7 +268,7 @@ export const DownloadService = {
             }
         }
         else if (client.type === 'sab') {
-            const queueRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'queue', apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 5000 });
+            const queueRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'queue', apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 15000 });
             if (queueRes.data.queue?.slots) {
                 const validSlots = queueRes.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
                 allDownloads.push(...validSlots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
@@ -276,7 +276,7 @@ export const DownloadService = {
         }
         else if (client.type === 'nzbget') {
             const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
-            const listRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "listgroups", params: [] }, { headers: { ...baseHeaders, Authorization: `Basic ${auth}` } });
+            const listRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "listgroups", params: [] }, { headers: { ...baseHeaders, Authorization: `Basic ${auth}` }, timeout: 15000 });
             if (Array.isArray(listRes.data.result)) {
                 const validGroups = listRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
                 allDownloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));

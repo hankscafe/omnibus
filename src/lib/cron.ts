@@ -62,16 +62,15 @@ export function initCronJobs() {
         }
       }
 
-      // --- B. Auto-Import Completed Torrents / Usenet ---
+      // --- B. Auto-Link and Auto-Import Torrents / Usenet ---
       const activeDownloads = await DownloadService.getAllActiveDownloads();
-      const completedTorrents = activeDownloads.filter((t: any) => parseFloat(t.progress) >= 100);
 
-      if (completedTorrents.length > 0) {
+      if (activeDownloads.length > 0) {
           const downloadingRequests = await prisma.request.findMany({
               where: { status: 'DOWNLOADING' }
           });
 
-          for (const torrent of completedTorrents) {
+          for (const torrent of activeDownloads) {
               // 1. Strict match on tracking hash/guid
               let match = downloadingRequests.find(r => r.downloadLink && r.downloadLink.toLowerCase() === torrent.id.toLowerCase());
               
@@ -86,60 +85,66 @@ export function initCronJobs() {
                       const reqNameLower = r.activeDownloadName.toLowerCase();
                       const torNameLower = torrent.name.toLowerCase();
 
-                      // A. Extract issue number from Request
-                      let cleanReq = reqNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-                      const reqNumMatch = cleanReq.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                      let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+                      const extractNum = (str: string) => {
+                          const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+                          const chMatch = clean.match(/(?:ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                          if (chMatch) return parseFloat(chMatch[1]);
+                          const issueMatch = clean.match(/(?:#|issue\s*#?)\s*0*(\d+(?:\.\d+)?)/i);
+                          if (issueMatch) return parseFloat(issueMatch[1]);
+                          const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                          if (volMatch) return parseFloat(volMatch[1]);
+                          const fallbacks = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                          if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
+                          return null;
+                      };
 
-                      if (reqNum === null) {
-                          const fallbacks = [...cleanReq.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-                          if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-                      }
+                      const reqNum = extractNum(reqNameLower);
+                      const torNum = extractNum(torNameLower);
 
-                      // B. Extract issue number from Torrent Name
-                      let cleanTor = torNameLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-                      const torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                      let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
-
-                      if (torNum === null) {
-                          const fallbacks = [...cleanTor.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-                          if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-                      }
-
-                      // C. Compare the exact numbers
                       if (reqNum !== null && torNum !== null) {
-                          if (reqNum !== torNum) return false; // Instantly block hijacking
+                          if (reqNum !== torNum) return false; 
+                      } else if (reqNum !== null && torNum === null) {
+                          if (reqNum !== 1) return false; // Strict block: if torrent has no numbers, it can only be issue 1.
                       }
 
-                      // D. Compare significant title words
-                      let cleanReqName = reqNameLower;
-                      if (reqNumMatch) cleanReqName = cleanReqName.replace(reqNumMatch[0], ''); 
+                      let cleanReqName = reqNameLower.replace(/[0-9]/g, '');
+                      let cleanTorName = torNameLower.replace(/[0-9]/g, '');
                       
-                      const reqWords = cleanReqName.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
-                      const torWords = torNameLower.replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+                      const junkWords = ['eng', 'cbz', 'cbr', 'cb7', 'zip', 'rar', 'webrip', 'digital', 'vol', 'volume', 'ch', 'chapter', 'issue', 'tpb', 'rip', 'the', 'and', 'of', 'by', 'gn'];
                       
-                      if (reqWords.length === 0) return false;
+                      const reqWords = cleanReqName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
+                      const torWords = cleanTorName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
+                      
+                      if (reqWords.length === 0 || torWords.length === 0) return false;
 
                       let matches = 0;
                       reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
                       
-                      return (matches / reqWords.length) >= 0.8;
+                      const minLength = Math.min(reqWords.length, torWords.length);
+                      return (matches / minLength) >= 0.5;
                   });
               }
               
               if (match) {
-                  Logger.log(`[Cron] Client download completed: ${torrent.name}. Triggering importer...`, 'info');
-                  
-                  // Instantly pop it out of the array to prevent sequential double-matching loops
-                  const index = downloadingRequests.findIndex(r => r.id === match!.id);
-                  if (index > -1) downloadingRequests.splice(index, 1);
+                  // Link the hash early if it was missing so the UI can track progress
+                  if (match.downloadLink !== torrent.id || match.activeDownloadName !== torrent.name) {
+                      await prisma.request.update({
+                          where: { id: match.id },
+                          data: { activeDownloadName: torrent.name, downloadLink: torrent.id }
+                      });
+                      match.downloadLink = torrent.id;
+                      match.activeDownloadName = torrent.name;
+                  }
 
-                  await prisma.request.update({
-                      where: { id: match.id },
-                      data: { activeDownloadName: torrent.name, downloadLink: torrent.id }
-                  });
+                  // Auto-Import if 100% complete
+                  if (parseFloat(torrent.progress) >= 100) {
+                      Logger.log(`[Cron] Client download completed: ${torrent.name}. Triggering importer...`, 'info');
+                      
+                      const index = downloadingRequests.findIndex(r => r.id === match!.id);
+                      if (index > -1) downloadingRequests.splice(index, 1);
 
-                  await Importer.importRequest(match.id);
+                      await Importer.importRequest(match.id);
+                  }
               }
           }
       }

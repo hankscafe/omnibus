@@ -84,9 +84,53 @@ export const Importer = {
 
     await new Promise(r => setTimeout(r, 1000));
 
+    // --- NEW: SMART EXTENSION FALLBACK ---
+    // If the download client didn't include the .cbz extension in the torrent name,
+    // we dynamically append it here so we can successfully find the physical file on disk.
     if (!fs.existsSync(sourcePath)) {
+        const extensions = ['.cbz', '.cbr', '.zip', '.rar', '.cb7', '.epub'];
+        for (const ext of extensions) {
+            if (fs.existsSync(sourcePath + ext)) {
+                sourcePath = sourcePath + ext;
+                break;
+            }
+        }
+    }
+
+    if (!fs.existsSync(sourcePath)) {
+      // Check if the root download directory exists to verify the NAS/Drive is actually online
+      const parentDir = path.dirname(sourcePath);
+      const isDriveOnline = fs.existsSync(parentDir) || fs.existsSync(downloadRoot);
+
       Logger.log(`[Importer] Source file not found at: ${sourcePath}. Check Path Mappings!`, "error");
+      
+      // Prevent Infinite Cron Loops:
+      // If the drive is online but the file is missing, count the failures.
+      // After 20 cycles (20 minutes), mark it as STALLED to kill the loop.
+      if (isDriveOnline) {
+          const currentRetries = req.retryCount || 0;
+          if (currentRetries > 20) { 
+              Logger.log(`[Importer] Source file permanently missing for 20+ cycles. Marking request as STALLED.`, "warn");
+              await prisma.request.update({
+                  where: { id: req.id },
+                  data: { status: 'STALLED' }
+              });
+          } else {
+              await prisma.request.update({
+                  where: { id: req.id },
+                  data: { retryCount: currentRetries + 1 }
+              });
+          }
+      }
       return false;
+    }
+
+    // Reset retry count upon successfully locating the file
+    if ((req.retryCount || 0) > 0) {
+        await prisma.request.update({
+            where: { id: req.id },
+            data: { retryCount: 0 }
+        });
     }
 
     // --- FIX: EXTRACT ARCHIVE FROM FOLDER ---

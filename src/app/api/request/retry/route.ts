@@ -20,10 +20,12 @@ export async function POST(request: Request) {
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
         let year = "";
+        let isManga = false; // <-- ADDED
         if (req.volumeId) {
             const series = await prisma.series.findUnique({ where: { cvId: parseInt(req.volumeId) } });
             if (series) {
                 year = series.year.toString();
+                isManga = series.isManga; // <-- Fetched
             }
         }
 
@@ -48,11 +50,12 @@ export async function POST(request: Request) {
         Logger.log(`[Retry] No link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
         
         const acronyms = await getCustomAcronyms();
-        const queries = generateSearchQueries(req.activeDownloadName || "", year, acronyms);
+        // Passed isManga down
+        const queries = generateSearchQueries(req.activeDownloadName || "", year, acronyms, isManga); 
         let results: any[] = [];
         
         for (const q of queries) {
-            results = await GetComicsService.search(q);
+            results = await GetComicsService.search(q, false, isManga); // Passed isManga down
             if (results.length > 0) break;
         }
         
@@ -83,7 +86,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Direct download link lost. Please delete and re-request this comic." }, { status: 400 });
         
     } catch (e: any) {
-        // --- SECURITY FIX 1b: Log real error, hide from client ---
         Logger.log(`[Retry API] Error: ${e.message}`, 'error');
         return NextResponse.json({ error: "Failed to retry request. Please check server logs." }, { status: 500 });
     }

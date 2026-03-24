@@ -74,6 +74,7 @@ export interface ProwlarrSearchResult {
     downloadUrl: string;
     protocol: 'torrent' | 'usenet';
     publishDate?: string;
+    infoHash?: string;
 }
 
 // --- DISCORD WEBHOOK TYPES ---

@@ -19,7 +19,7 @@
 
 Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omnibus is lightweight, performant, and responsive across all devices.
 
-**For full documentation, screenshots, and deep-dive feature breakdowns, please visit the [Official Omnibus GitHub Repository](https://www.google.com/search?q=https://github.com/hankscafe/omnibus).**
+**For full documentation, screenshots, and deep-dive feature breakdowns, please visit the [Official Omnibus GitHub Repository](https://github.com/hankscafe/omnibus).**
 
 ## Core Features
 
@@ -93,5 +93,5 @@ services:
 
 If you run into issues, have suggestions, or want to contribute, please join the community:
 
-  * [**Report a Bug / Request a Feature**](https://www.google.com/search?q=https://github.com/hankscafe/omnibus/issues)
+  * [**Report a Bug / Request a Feature**](https://github.com/hankscafe/omnibus/issues)
   * [**Join the Discord**](https://discord.gg/FBnzdBZP)

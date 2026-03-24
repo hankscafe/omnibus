@@ -139,7 +139,10 @@ export default function AdminPage() {
   };
 
   const fetchUpdates = () => {
-      fetch('/api/admin/update-check').then(res => res.json()).then(setUpdateData).catch(() => {});
+      fetch(`/api/admin/update-check?_t=${Date.now()}`, { cache: 'no-store' })
+        .then(res => res.json())
+        .then(setUpdateData)
+        .catch(() => {});
   };
 
   const fetchAll = () => {

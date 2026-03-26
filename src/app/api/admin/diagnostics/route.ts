@@ -44,9 +44,11 @@ export async function POST(request: Request) {
                 .filter(s => !s.folderPath || !fs.existsSync(s.folderPath))
                 .map(s => ({ id: s.id, type: 'SERIES', name: s.name, path: s.folderPath || 'Missing Path' }));
             
+            // FIX: Only flag issues as ghosts if they actually have a file path assigned but the file is missing from disk.
+            // This safely ignores un-downloaded metadata stubs.
             const ghostIssues = issues
-                .filter(i => !i.filePath || !fs.existsSync(i.filePath))
-                .map(i => ({ id: i.id, type: 'ISSUE', name: `${i.series?.name} #${i.number}`, path: i.filePath || 'Missing Path' }));
+                .filter(i => i.filePath && i.filePath.trim().length > 0 && !fs.existsSync(i.filePath))
+                .map(i => ({ id: i.id, type: 'ISSUE', name: `${i.series?.name} #${i.number}`, path: i.filePath }));
 
             const totalGhosts = ghostSeries.length + ghostIssues.length;
 

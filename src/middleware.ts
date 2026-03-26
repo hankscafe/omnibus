@@ -20,7 +20,8 @@ export async function middleware(req: NextRequest) {
         '/api/setup/check',   // Used to determine if the wizard should show
         '/api/cron',          // Hit by external uptime monitors
         '/api/v1/stats',      // Validates its own custom x-api-key
-        '/api/uploads'        // Serves public avatars and banners
+        '/api/uploads',       // Serves public avatars and banners
+        '/api/opds'           // Serves uploaded files but checks for valid keys in the route handler
     ];
     
     const isPublicApi = publicApiRoutes.some(route => pathname.startsWith(route));

@@ -9,7 +9,7 @@ import {
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X
+  Dices, Clock, X, DownloadCloud
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -564,7 +564,7 @@ function LibraryContent() {
       {/* --- ADVANCED TOOLBAR (DOUBLE STACKED) --- */}
       <div className="flex flex-col gap-4 mb-8 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
           
-          {/* TOP ROW: Search & Favorites & Surprise Me & View Options */}
+          {/* TOP ROW: Search & View Options */}
           <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full">
               <div className="relative flex flex-col sm:flex-row flex-1 w-full gap-2">
                   <Select value={searchType} onValueChange={setSearchType}>
@@ -585,17 +585,6 @@ function LibraryContent() {
                   </div>
               </div>
               <div className="flex flex-row flex-wrap w-full lg:w-auto gap-3 items-center justify-between lg:justify-end">
-                  
-                  <Button variant={showFavoritesOnly ? "default" : "outline"} className={`h-10 sm:h-9 font-bold shadow-sm flex-1 sm:flex-none ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
-                      <Heart className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''} sm:mr-2`} />
-                      <span className="hidden sm:inline-block">Favorites</span>
-                  </Button>
-                  
-                  <Button variant="outline" className="h-10 sm:h-9 shadow-sm bg-blue-600 hover:bg-blue-700 text-white border-0 px-3 flex-1 sm:flex-none" onClick={handleSurpriseMe}>
-                      <Dices className="w-4 h-4 sm:mr-2" />
-                      <span className="hidden sm:inline font-bold">Surprise Me</span>
-                  </Button>
-                  
                   <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
                       <SelectTrigger className="flex-1 lg:w-[130px] lg:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
                           <div className="flex items-center gap-2 truncate"><List className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Show 24" /></div>
@@ -621,15 +610,25 @@ function LibraryContent() {
 
           {/* BOTTOM ROW: Filters & Toggles */}
           <div className="flex flex-col sm:flex-row flex-wrap gap-3 items-center w-full">
-              {/* Quick Admin Toggles */}
-              {isAdmin && (
-                  <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 max-w-full">
+              {/* Quick Action Toggles */}
+              <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 max-w-full">
+                  <Button variant={showFavoritesOnly ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
+                      <Heart className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''} sm:mr-2`} />
+                      <span className="hidden sm:inline-block">Favorites</span>
+                  </Button>
+                  
+                  <Button variant="outline" className="shrink-0 h-10 sm:h-9 shadow-sm bg-blue-600 hover:bg-blue-700 text-white border-0 px-3" onClick={handleSurpriseMe}>
+                      <Dices className="w-4 h-4 sm:mr-2" />
+                      <span className="hidden sm:inline font-bold">Surprise Me</span>
+                  </Button>
+
+                  {isAdmin && (
                       <Button variant={monitoredFilter ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${monitoredFilter ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setMonitoredFilter(!monitoredFilter)}>
                           <Activity className={`w-4 h-4 sm:mr-2`} />
                           <span className="hidden sm:inline-block">Monitored</span>
                       </Button>
-                  </div>
-              )}
+                  )}
+              </div>
 
               {/* Collections & Dropdown Filters */}
               <div className="flex items-center gap-1 w-full sm:w-auto flex-1 sm:flex-none">
@@ -697,12 +696,12 @@ function LibraryContent() {
                   </SelectContent>
               </Select>
 
-                  {hasActiveFilters && (
-                      <Button variant="ghost" className="h-10 sm:h-9 text-muted-foreground hover:text-foreground px-3 flex-1 sm:flex-none" onClick={handleResetFilters}>
-                          <X className="w-4 h-4 sm:mr-2" />
-                          <span className="hidden sm:inline font-bold">Clear Filters</span>
-                      </Button>
-                  )}
+              {hasActiveFilters && (
+                  <Button variant="ghost" className="h-10 sm:h-9 text-muted-foreground hover:text-foreground px-3 flex-1 sm:flex-none" onClick={handleResetFilters}>
+                      <X className="w-4 h-4 sm:mr-2" />
+                      <span className="hidden sm:inline font-bold">Clear Filters</span>
+                  </Button>
+              )}
 
           </div>
       </div>
@@ -1167,6 +1166,7 @@ function LibraryContent() {
           description="Are you sure you want to delete this reading list? This will NOT delete the actual comics inside it." 
           confirmText="Delete List" 
       />
+
     </div>
   )
 }

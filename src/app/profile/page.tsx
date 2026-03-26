@@ -13,7 +13,7 @@ import Link from "next/link"
 import { useColorTheme } from "@/components/ThemeProvider"
 import { 
   User as UserIcon, Upload, Loader2, ListOrdered, CheckCircle2, 
-  Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut
+  Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Webhook, Copy, Plus, Smartphone
 } from "lucide-react"
 
 // --- Helper Component: Individual Activity Card ---
@@ -135,6 +135,13 @@ export default function ProfilePage() {
   const [isProcessingSecurity, setIsProcessingSecurity] = useState(false)
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" })
 
+  // User API Keys State
+  const [apiKeys, setApiKeys] = useState<any[]>([])
+  const [manageKeysModalOpen, setManageKeysModalOpen] = useState(false)
+  const [newKeyName, setNewKeyName] = useState("")
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null)
+  const [isGeneratingKey, setIsGeneratingKey] = useState(false)
+
   // History Pagination
   const [historyPage, setHistoryPage] = useState(0)
   const historyItemsPerPage = 6;
@@ -165,6 +172,10 @@ export default function ProfilePage() {
         const tfaData = await tfaRes.json()
         setIs2FAEnabled(tfaData.enabled)
       }
+
+      const keysRes = await fetch('/api/user/api-keys')
+      if (keysRes.ok) setApiKeys(await keysRes.json())
+
     } catch (e) {
       toast({ title: "Error", description: "Failed to load profile data.", variant: "destructive" })
     } finally {
@@ -286,6 +297,39 @@ export default function ProfilePage() {
       } catch (e: any) {
           toast({ title: "Error", description: e.message, variant: "destructive" });
       } finally { setIsProcessingSecurity(false); }
+  }
+
+  const handleGenerateKey = async () => {
+      setIsGeneratingKey(true);
+      setGeneratedKey(null);
+      try {
+          const res = await fetch('/api/user/api-keys', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: newKeyName || 'Mobile Reader App' })
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+              setGeneratedKey(data.rawKey);
+              setApiKeys([data.apiKey, ...apiKeys]);
+              setNewKeyName("");
+          } else {
+              toast({ title: "Error", description: data.error, variant: "destructive" });
+          }
+      } finally { setIsGeneratingKey(false); }
+  }
+
+  const handleRevokeKey = async (id: string) => {
+      const res = await fetch(`/api/user/api-keys?id=${id}`, { method: 'DELETE' });
+      if (res.ok) {
+          setApiKeys(prev => prev.filter(k => k.id !== id));
+          toast({ title: "Key Revoked" });
+      }
+  }
+
+  const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      toast({ title: "Copied!", description: "API Key copied to clipboard." });
   }
 
   // --- Avatar/Banner Handlers ---
@@ -422,7 +466,7 @@ export default function ProfilePage() {
                 <ShieldCheck className="w-4 h-4" /> Account Security
             </h3>
             
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* CARD 1: 2FA */}
                 <Card className={`shadow-sm border-2 flex flex-col ${is2FAEnabled ? 'border-green-200 bg-green-50/20 dark:border-green-900/40 dark:bg-green-900/10' : ''}`}>
                     <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
@@ -471,6 +515,21 @@ export default function ProfilePage() {
                         </div>
                         <Button variant="outline" className="w-full text-orange-600 border-orange-200 hover:bg-orange-50 dark:border-orange-900/50 dark:hover:bg-orange-900/30" onClick={() => setRevokeModalOpen(true)}>
                             Revoke Sessions
+                        </Button>
+                    </CardContent>
+                </Card>
+
+                {/* CARD 4: EXTERNAL APPS (OPDS) */}
+                <Card className="shadow-sm flex flex-col">
+                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                        <div className="space-y-1 flex-1">
+                            <h4 className="font-bold text-lg flex items-center gap-2 mb-2">
+                                <Smartphone className="w-4 h-4 text-purple-500" /> External Apps
+                            </h4>
+                            <p className="text-xs text-muted-foreground">Generate API keys to sync your library in apps like Panels, Mihon, and Paperback via OPDS.</p>
+                        </div>
+                        <Button variant="outline" className="w-full border-purple-200 text-purple-600 hover:bg-purple-50 dark:border-purple-900/50 dark:hover:bg-purple-900/30" onClick={() => setManageKeysModalOpen(true)}>
+                            Manage API Keys
                         </Button>
                     </CardContent>
                 </Card>
@@ -810,6 +869,77 @@ export default function ProfilePage() {
                       {isProcessingSecurity ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Yes, Sign Out Everywhere"}
                   </Button>
               </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
+      {/* MANAGE API KEYS MODAL */}
+      <Dialog open={manageKeysModalOpen} onOpenChange={(open) => {
+          setManageKeysModalOpen(open);
+          if (!open) setGeneratedKey(null);
+      }}>
+          <DialogContent className="sm:max-w-2xl w-[95%] rounded-xl overflow-hidden flex flex-col max-h-[90vh]">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2"><Smartphone className="w-5 h-5 text-primary" /> External App Access (OPDS)</DialogTitle>
+                  <DialogDescription>
+                      Create a personal API key to log into external reading apps. Use your Omnibus username and paste the generated API key as your password.
+                  </DialogDescription>
+              </DialogHeader>
+              
+              <div className="space-y-6 py-4 overflow-y-auto pr-2">
+                  <div className="flex flex-col sm:flex-row sm:items-end gap-3 w-full">
+                      <div className="grid gap-2 flex-1 w-full min-w-0">
+                          <Label>App Name / Device</Label>
+                          <Input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="e.g., Panels on iPad" className="bg-muted border-border w-full" />
+                      </div>
+                      <Button onClick={handleGenerateKey} disabled={!newKeyName || isGeneratingKey} className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground h-10 w-full sm:w-auto shrink-0">
+                          {isGeneratingKey ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Plus className="w-4 h-4 mr-2" />} Generate Key
+                      </Button>
+                  </div>
+
+                  {generatedKey && (
+                      <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 animate-in fade-in slide-in-from-top-2 w-full">
+                          <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><XCircle className="w-4 h-4"/></button>
+                          <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won't be shown again.</span></p>
+                          <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2 w-full">
+                              <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800 text-[11px] sm:text-xs select-all w-full min-w-0 break-all">
+                                  {generatedKey}
+                              </code>
+                              <Button variant="secondary" onClick={() => copyToClipboard(generatedKey)} className="shrink-0 w-full sm:w-auto h-9 sm:h-auto"><Copy className="w-4 h-4 mr-2" /> Copy</Button>
+                          </div>
+                      </div>
+                  )}
+
+                  <div className="border border-border rounded-lg overflow-x-auto w-full">
+                      <table className="w-full text-sm text-left min-w-[500px]">
+                          <thead className="bg-muted border-b border-border text-muted-foreground uppercase text-xs">
+                              <tr>
+                                  <th className="px-4 py-3">Device / App</th>
+                                  <th className="px-4 py-3">Created</th>
+                                  <th className="px-4 py-3">Last Used</th>
+                                  <th className="px-4 py-3 text-right">Actions</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                              {apiKeys.length === 0 ? (
+                                  <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground italic">You haven't generated any access keys.</td></tr>
+                              ) : (
+                                  apiKeys.map(key => (
+                                      <tr key={key.id} className="hover:bg-muted/30">
+                                          <td className="px-4 py-3 font-bold truncate max-w-[200px]">{key.name}</td>
+                                          <td className="px-4 py-3 text-muted-foreground">{new Date(key.createdAt).toLocaleDateString()}</td>
+                                          <td className="px-4 py-3 text-muted-foreground">{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString() : 'Never'}</td>
+                                          <td className="px-4 py-3 text-right">
+                                              <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => handleRevokeKey(key.id)}>
+                                                  Revoke
+                                              </Button>
+                                          </td>
+                                      </tr>
+                                  ))
+                              )}
+                          </tbody>
+                      </table>
+                  </div>
+              </div>
           </DialogContent>
       </Dialog>
 

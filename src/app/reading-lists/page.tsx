@@ -46,6 +46,27 @@ function ReadingListsContent() {
   const [autoBuildGlobal, setAutoBuildGlobal] = useState(false) 
   const [isAutoBuilding, setIsAutoBuilding] = useState(false)
 
+  // CSV Import Modal
+  const [csvModalOpen, setCsvModalOpen] = useState(false)
+  const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [csvListName, setCsvListName] = useState("")
+  const [csvIsGlobal, setCsvIsGlobal] = useState(false)
+  const [isImportingCsv, setIsImportingCsv] = useState(false)
+
+  // AniList Import Modal
+  const [aniListModalOpen, setAniListModalOpen] = useState(false);
+  const [aniListUsername, setAniListUsername] = useState("");
+  const [aniListIsGlobal, setAniListIsGlobal] = useState(false);
+  const [aniListRequestMissing, setAniListRequestMissing] = useState(false);
+  const [isImportingAniList, setIsImportingAniList] = useState(false);
+
+  // MAL Import Modal
+  const [malModalOpen, setMalModalOpen] = useState(false);
+  const [malUsername, setMalUsername] = useState("");
+  const [malIsGlobal, setMalIsGlobal] = useState(false);
+  const [malRequestMissing, setMalRequestMissing] = useState(false);
+  const [isImportingMal, setIsImportingMal] = useState(false);
+
   // Deletion Modal
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -137,6 +158,95 @@ function ReadingListsContent() {
           toast({ title: "Auto-Build Failed", description: e.message, variant: "destructive" });
       } finally {
           setIsAutoBuilding(false);
+      }
+  }
+
+  const handleCsvImport = async () => {
+      if (!csvFile || !csvListName.trim()) return;
+      setIsImportingCsv(true);
+      
+      const formData = new FormData();
+      formData.append('file', csvFile);
+      formData.append('name', csvListName);
+      formData.append('isGlobal', csvIsGlobal.toString());
+
+      try {
+          const res = await fetch('/api/reading-lists/import-csv', {
+              method: 'POST',
+              body: formData
+          });
+          const data = await res.json();
+          
+          if (res.ok) {
+              toast({ title: "Import Complete!", description: data.message });
+              setCsvModalOpen(false);
+              setCsvFile(null);
+              setCsvListName("");
+              setCsvIsGlobal(false);
+              fetchLists(data.listId);
+          } else {
+              throw new Error(data.error);
+          }
+      } catch (e: any) {
+          toast({ title: "Import Failed", description: e.message, variant: "destructive" });
+      } finally {
+          setIsImportingCsv(false);
+      }
+  }
+
+  const handleAniListSync = async () => {
+      if (!aniListUsername.trim()) return;
+      setIsImportingAniList(true);
+      try {
+          const res = await fetch('/api/reading-lists/import-anilist', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  username: aniListUsername.trim(),
+                  requestMissing: aniListRequestMissing,
+                  isGlobal: aniListIsGlobal
+              })
+          });
+          const data = await res.json();
+          if (res.ok) {
+              toast({ title: "Sync Complete!", description: data.message });
+              setAniListModalOpen(false);
+              fetchLists();
+          } else {
+              toast({ title: "Sync Failed", description: data.error, variant: "destructive" });
+          }
+      } catch (e) {
+          toast({ title: "Error", description: "Network error during sync.", variant: "destructive" });
+      } finally {
+          setIsImportingAniList(false);
+      }
+  }
+
+  const handleMalSync = async () => {
+      if (!malUsername.trim()) return;
+      setIsImportingMal(true);
+      try {
+          const res = await fetch('/api/reading-lists/import-mal', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  username: malUsername.trim(),
+                  requestMissing: malRequestMissing,
+                  isGlobal: malIsGlobal
+              })
+          });
+          const data = await res.json();
+          if (res.ok) {
+              toast({ title: "Sync Complete!", description: data.message });
+              setMalModalOpen(false);
+              fetchLists();
+          } else {
+              toast({ title: "Sync Failed", description: data.error, variant: "destructive" });
+          }
+      } catch (e) {
+          toast({ title: "Error", description: "Network error during sync.", variant: "destructive" });
+      } finally {
+          setIsImportingMal(false);
       }
   }
 
@@ -318,10 +428,21 @@ function ReadingListsContent() {
                   <Button className="w-full font-bold shadow-md bg-primary hover:bg-primary/90 text-primary-foreground border-0" onClick={() => setAutoBuildModalOpen(true)}>
                       <Sparkles className="w-4 h-4 mr-2" /> Auto-Build Story Arc
                   </Button>
-                  <Button variant="outline" className="w-full font-bold shadow-sm border-border hover:bg-muted" onClick={() => setCreateModalOpen(true)}>
+                  <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => setCsvModalOpen(true)}>
+                      <DownloadCloud className="w-4 h-4 mr-2" /> Import from CSV
+                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10 px-2 text-xs" onClick={() => setAniListModalOpen(true)}>
+                          <DownloadCloud className="w-4 h-4 mr-2 shrink-0" /> AniList
+                      </Button>
+                      <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10 px-2 text-xs" onClick={() => setMalModalOpen(true)}>
+                          <DownloadCloud className="w-4 h-4 mr-2 shrink-0" /> MAL
+                      </Button>
+                  </div>
+                  <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => setCreateModalOpen(true)}>
                       <Plus className="w-4 h-4 mr-2" /> Create Empty List
                   </Button>
-                  <Button variant="outline" className="w-full border-border font-bold hover:bg-muted text-foreground" asChild>
+                  <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" asChild>
                       <a href="https://comicvine.gamespot.com/story-arcs/" target="_blank" rel="noopener noreferrer">
                           <ExternalLink className="w-4 h-4 mr-2" /> Lookup Arc IDs
                       </a>
@@ -373,7 +494,7 @@ function ReadingListsContent() {
                                   <Button 
                                       size="sm" 
                                       variant="outline" 
-                                      className="font-bold border-primary/30 text-primary bg-background hover:bg-primary/10"
+                                      className="font-bold border-primary/30 text-primary bg-primary/5 hover:bg-primary/10"
                                       disabled={isBulkDownloading}
                                       onClick={() => handleDownloadAllMissing(missingItems)}
                                   >
@@ -440,7 +561,7 @@ function ReadingListsContent() {
                                                                           <Check className="w-3.5 h-3.5 mr-1"/> Requested
                                                                       </Button>
                                                                   ) : (
-                                                                      <Button size="sm" variant="outline" className="h-8 font-bold text-[10px] uppercase border-border hover:bg-muted tracking-wider" onClick={() => handleRequestMissing(item, coverUrl)} disabled={isRequesting}>
+                                                                      <Button size="sm" variant="outline" className="h-8 font-bold text-[10px] uppercase tracking-wider border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => handleRequestMissing(item, coverUrl)} disabled={isRequesting}>
                                                                           {isRequesting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1"/> : <CloudDownload className="w-3.5 h-3.5 mr-1"/>} Request
                                                                       </Button>
                                                                   )}
@@ -479,7 +600,7 @@ function ReadingListsContent() {
                                                           </div>
 
                                                           <div className="flex items-center gap-2 shrink-0 pr-2">
-                                                              <Button variant="outline" size="sm" asChild className="h-8 shadow-sm border-border hover:bg-muted">
+                                                              <Button size="sm" asChild className="h-8 shadow-sm font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
                                                                   <Link href={`/reader?path=${encodeURIComponent(issue.filePath)}&series=${encodeURIComponent(series.folderPath)}`}>
                                                                       <BookOpen className="w-3.5 h-3.5 sm:mr-2" /> <span className="hidden sm:inline">Read</span>
                                                                   </Link>
@@ -592,6 +713,141 @@ function ReadingListsContent() {
                 </Button>
             </DialogFooter>
         </DialogContent>
+      </Dialog>
+
+      {/* CSV IMPORT MODAL */}
+      <Dialog open={csvModalOpen} onOpenChange={setCsvModalOpen}>
+        <DialogContent className="sm:max-w-[450px] bg-background border-border rounded-xl">
+            <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-primary">
+                    <DownloadCloud className="w-5 h-5" /> Import CSV File
+                </DialogTitle>
+                <DialogDescription>
+                    Upload a CSV export from League of Comic Geeks (or Goodreads). Omnibus will automatically match the issues to your downloaded library.
+                </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                    <Label className="font-bold">Reading List Name</Label>
+                    <Input 
+                        placeholder="e.g. My LOCG Pull List" 
+                        value={csvListName} 
+                        onChange={e => setCsvListName(e.target.value)} 
+                        className="bg-background border-border" 
+                    />
+                </div>
+                
+                <div className="grid gap-2 mt-2">
+                    <Label className="font-bold">Upload CSV File</Label>
+                    <Input 
+                        type="file" 
+                        accept=".csv" 
+                        onChange={e => setCsvFile(e.target.files?.[0] || null)} 
+                        className="bg-muted/50 border-border cursor-pointer file:text-foreground file:font-bold file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-primary/10 file:text-primary hover:file:bg-primary/20" 
+                    />
+                </div>
+
+                {isAdmin && (
+                    <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                        <Switch id="csv-global-toggle" checked={csvIsGlobal} onCheckedChange={setCsvIsGlobal} />
+                        <div className="grid gap-0.5">
+                            <Label htmlFor="csv-global-toggle" className="font-bold cursor-pointer">Make list public</Label>
+                            <p className="text-[10px] text-muted-foreground">This reading order will be available to all users.</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+            <DialogFooter>
+                <Button variant="outline" onClick={() => setCsvModalOpen(false)} disabled={isImportingCsv} className="border-border hover:bg-muted">Cancel</Button>
+                <Button onClick={handleCsvImport} disabled={isImportingCsv || !csvFile || !csvListName.trim()} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                    {isImportingCsv ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Import CSV"}
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ANILIST IMPORT MODAL */}
+      <Dialog open={aniListModalOpen} onOpenChange={setAniListModalOpen}>
+          <DialogContent className="sm:max-w-[425px] bg-background border-border rounded-xl">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-primary">
+                      <DownloadCloud className="w-5 h-5" /> Sync with AniList
+                  </DialogTitle>
+                  <DialogDescription>
+                      Omnibus will fetch your AniList profile and automatically generate Reading Lists for any manga that you have downloaded.
+                  </DialogDescription>
+              </DialogHeader>
+              <div className="py-4 space-y-4">
+                  <div className="space-y-2">
+                      <Label>AniList Username</Label>
+                      <Input placeholder="e.g. hanks_cafe" value={aniListUsername} onChange={e => setAniListUsername(e.target.value)} className="bg-muted border-border h-12" />
+                  </div>
+                  <div className="flex items-center gap-3 p-3 bg-muted border border-border rounded-lg">
+                      <Switch id="auto-req-toggle" checked={aniListRequestMissing} onCheckedChange={setAniListRequestMissing} />
+                      <div className="grid gap-0.5">
+                          <Label htmlFor="auto-req-toggle" className="font-bold cursor-pointer">Auto-Request Missing Manga</Label>
+                          <p className="text-[10px] text-muted-foreground">Omnibus will queue missing titles for download.</p>
+                      </div>
+                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                        <Switch id="anilist-global-toggle" checked={aniListIsGlobal} onCheckedChange={setAniListIsGlobal} />
+                        <div className="grid gap-0.5">
+                            <Label htmlFor="anilist-global-toggle" className="font-bold cursor-pointer">Make lists public</Label>
+                            <p className="text-[10px] text-muted-foreground">These reading orders will be available to all users.</p>
+                        </div>
+                    </div>
+                  )}
+              </div>
+              <DialogFooter>
+                  <Button variant="outline" onClick={() => setAniListModalOpen(false)} disabled={isImportingAniList} className="border-border hover:bg-muted">Cancel</Button>
+                  <Button onClick={handleAniListSync} disabled={isImportingAniList || !aniListUsername.trim()} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                      {isImportingAniList ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Sync Account
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
+      {/* MYANIMELIST IMPORT MODAL */}
+      <Dialog open={malModalOpen} onOpenChange={setMalModalOpen}>
+          <DialogContent className="sm:max-w-[425px] bg-background border-border rounded-xl">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-primary">
+                      <DownloadCloud className="w-5 h-5" /> Sync with MyAnimeList
+                  </DialogTitle>
+                  <DialogDescription>
+                      Omnibus will fetch your public MyAnimeList profile and automatically generate Reading Lists based on your reading status.
+                  </DialogDescription>
+              </DialogHeader>
+              <div className="py-4 space-y-4">
+                  <div className="space-y-2">
+                      <Label>MAL Username</Label>
+                      <Input placeholder="e.g. hanks_cafe" value={malUsername} onChange={e => setMalUsername(e.target.value)} className="bg-muted border-border h-12" />
+                  </div>
+                  <div className="flex items-center gap-3 p-3 bg-muted border border-border rounded-lg">
+                      <Switch id="mal-auto-req-toggle" checked={malRequestMissing} onCheckedChange={setMalRequestMissing} />
+                      <div className="grid gap-0.5">
+                          <Label htmlFor="mal-auto-req-toggle" className="font-bold cursor-pointer">Auto-Request Missing Manga</Label>
+                          <p className="text-[10px] text-muted-foreground">Omnibus will queue missing titles for download.</p>
+                      </div>
+                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                        <Switch id="mal-global-toggle" checked={malIsGlobal} onCheckedChange={setMalIsGlobal} />
+                        <div className="grid gap-0.5">
+                            <Label htmlFor="mal-global-toggle" className="font-bold cursor-pointer">Make lists public</Label>
+                            <p className="text-[10px] text-muted-foreground">These reading orders will be available to all users.</p>
+                        </div>
+                    </div>
+                  )}
+              </div>
+              <DialogFooter>
+                  <Button variant="outline" onClick={() => setMalModalOpen(false)} disabled={isImportingMal} className="border-border hover:bg-muted">Cancel</Button>
+                  <Button onClick={handleMalSync} disabled={isImportingMal || !malUsername.trim()} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                      {isImportingMal ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Sync Account
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
       </Dialog>
 
       <ConfirmationDialog 

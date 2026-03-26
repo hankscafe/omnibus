@@ -36,6 +36,7 @@ model User {
 
   apiKeys             ApiKey[]  @relation("ApiKeysActsAs")
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
+  opdsKeys        OpdsKey[]
 }
 
 model ApiKey {
@@ -312,4 +313,17 @@ model ReadingListItem {
   order       Int          
   
   @@unique([listId, order])
+}
+
+model OpdsKey {
+  id         String    @id @default(cuid())
+  name       String
+  keyHash    String    @unique
+  prefix     String
+  
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
 }

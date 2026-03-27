@@ -1,10 +1,10 @@
 FROM node:22-alpine AS base
 
-# ADDED: Update global npm to the latest version to patch core vulnerabilities
-# RUN npm install -g npm@latest
+# Safely update npm to the latest version to patch picomatch & brace-expansion CVEs
+RUN corepack enable && corepack prepare npm@latest --activate
 
-# Install OpenSSL for Prisma and libc-compat for Next.js
-RUN apk upgrade --no-cache && apk add --no-cache libc6-compat openssl
+# Update OS packages to patch busybox CVE, then install required Next.js/Prisma libs
+RUN apk update && apk upgrade --no-cache && apk add --no-cache libc6-compat openssl
 
 # Step 1: Install dependencies
 FROM base AS deps

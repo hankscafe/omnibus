@@ -41,6 +41,8 @@ While I know AI-assisted ("vibe-coded") projects can sometimes be met with skept
   - [Library & Metadata](#library--metadata)
   - [Series Page](#series-page)
   - [Web Reader](#web-reader)
+  - [External Readers & OPDS Support](#external-readers--opds-support)
+  - [Native e-Ink Sync (KOReader)](#native-e-ink-sync-koreader)
   - [Reading Lists](#reading-lists)
   - [User Profile & Preferences](#user-profile--preferences)
   - [Settings & Administration](#settings--administration)
@@ -168,7 +170,7 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 * **Bulk Actions:** Effortlessly manage your collection with one-click buttons to "Mark All as Read," "Refresh Metadata," or delete specific files right from the browser.
 * **Missing Issue Detection:** Visually highlights gaps in your collection (e.g., if you have issues #1 and #3, it flags #2 as missing). Click "Request Missing" to queue them all up at once.
 * **Sorting Options:** Sort issues sequentially (Issue # 1 to # 100) or reverse chronological (newest releases first) for ongoing weekly pulls.
-* **Offline Downloading:** Admins can grant users permission to download raw .cbz or .cbr files directly from the browser for offline reading in third-party apps.
+* **Offline Downloading:** Admins can grant users permission to download raw .cbz files directly from the browser for offline reading in third-party apps.
 
 ### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.
@@ -194,6 +196,37 @@ A completely custom, zero-friction reading experience built natively into the br
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
 * **Live Image Adjustments:** Adjust brightness and contrast overlays independently of your device settings for late-night reading sessions.
 
+### External Readers & OPDS Support
+Omnibus features a native OPDS 1.2 server with the **Page Streaming Extension (PSE)**, allowing you to read your server's library directly in your favorite mobile and tablet apps without downloading the entire file first.
+
+**Supported OPDS Apps:**
+* **iOS / iPadOS:** Panels, Paperback, Chunky
+* **Android:** Mihon, Tachiyomi, Moon+ Reader
+
+**How to Connect:**
+For security, external apps do not use your main account password. 
+1. Log into your Omnibus web dashboard and navigate to your **Profile**.
+2. Under **Account Security**, click **Manage API Keys**.
+3. Generate a new key for your specific device (e.g., "Panels on iPad").
+4. In your external reading app, add a new OPDS catalog:
+   * **URL:** `http://<your-omnibus-ip>:3000/api/opds`
+   * **Username:** Your Omnibus username
+   * **Password:** The API Key you just generated
+
+---
+
+### Native e-Ink Sync (KOReader)
+Omnibus acts as a master "save state" for your physical e-ink devices (Kobo, Kindle, Pocketbook). Using our custom KOReader sync endpoints, your eReader will automatically ping Omnibus every time you turn a page, and you can view your real-time progress right on your Omnibus Profile!
+
+**How to Configure KOReader:**
+1. Connect your eReader to Wi-Fi and open the top KOReader menu.
+2. Navigate to **Settings > Progress Sync > Custom sync server**.
+3. Enter your Omnibus URL: `http://<your-omnibus-ip>:3000/api/koreader`
+4. Tap **Register / Login** and use your Omnibus **Username** and an **Omnibus API Key** (generated from your Profile) as the password.
+5. **Crucial Step:** Go to **Progress Sync > Document matching method** and select **Path**. (This ensures Omnibus can perfectly map your device's progress back to your web library).
+
+---
+
 ### Reading Lists
 Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.
 
@@ -208,6 +241,9 @@ Perfect for navigating the complex web of massive comic book crossover events or
 * **Manual Drag-and-Drop:** Easily reorder issues within your lists with a simple drag-and-drop interface.
 * **Dynamic Smart Lists:** Create lists that automatically populate based on tags, characters, or publishers.
 * **Global vs Private Lists:** Admins can publish reading lists globally for all users, while users can curate private collections.
+* **AniList & MyAnimeList (MAL):** Enter your public username to fetch your Manga tracking lists (Reading, Completed, Plan to Read). Omnibus will bundle your downloaded volumes into unified reading orders.
+* **CSV Imports (LOCG / Goodreads):** Export your pull list or collection from League of Comic Geeks (LOCG) or Goodreads as a `.csv` file. Omnibus will parse the rows, fuzzy-match the series names and issue numbers to your local files, and generate a customized reading order.
+* **Auto-Request Missing:** During any import, you can toggle Omnibus to automatically push missing issues or volumes directly to your download queue!
 
 ### User Profile & Preferences
 A personalized space for each user on your server to manage their identity, track their unique reading habits, and customize their Omnibus experience to fit their workflow.

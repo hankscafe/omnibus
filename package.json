@@ -1,6 +1,6 @@
 {
   "name": "omnibus",
-  "version": "1.0.6-beta.004",
+  "version": "1.0.6-beta.005",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -59,6 +59,8 @@
     "tar": "^6.2.2",
     "minimatch": "^9.0.6",
     "cross-spawn": "^7.0.6",
-    "glob": "^10.4.3"
+    "glob": "^10.4.3",
+    "picomatch": "^4.0.4",
+    "brace-expansion": "^5.0.5"
   }
 }

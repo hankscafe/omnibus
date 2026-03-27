@@ -213,8 +213,6 @@ For security, external apps do not use your main account password.
    * **Username:** Your Omnibus username
    * **Password:** The API Key you just generated
 
----
-
 ### Native e-Ink Sync (KOReader)
 Omnibus acts as a master "save state" for your physical e-ink devices (Kobo, Kindle, Pocketbook). Using our custom KOReader sync endpoints, your eReader will automatically ping Omnibus every time you turn a page, and you can view your real-time progress right on your Omnibus Profile!
 
@@ -224,8 +222,6 @@ Omnibus acts as a master "save state" for your physical e-ink devices (Kobo, Kin
 3. Enter your Omnibus URL: `http://<your-omnibus-ip>:3000/api/koreader`
 4. Tap **Register / Login** and use your Omnibus **Username** and an **Omnibus API Key** (generated from your Profile) as the password.
 5. **Crucial Step:** Go to **Progress Sync > Document matching method** and select **Path**. (This ensures Omnibus can perfectly map your device's progress back to your web library).
-
----
 
 ### Reading Lists
 Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.

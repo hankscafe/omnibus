@@ -1,69 +1,67 @@
-FROM node:22-alpine AS base
+# --- Stage 1: Build Environment ---
+FROM node:22-alpine AS builder
 
-# Safely update npm to the latest version
+# Safely update npm to the latest version for the BUILD stage only
 RUN corepack enable && corepack prepare npm@latest --activate
 
-# Update OS and surgically pull the busybox CVE patch from the Alpine Edge repository
-RUN apk update && apk upgrade --no-cache && \
-    apk add --no-cache busybox --repository=http://dl-cdn.alpinelinux.org/alpine/edge/main && \
-    apk add --no-cache libc6-compat openssl
+# Build-time dependencies
+RUN apk update && apk add --no-cache libc6-compat openssl
 
-# Step 1: Install dependencies using your stable lockfile
-FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Step 2: Build the app
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Generate Prisma Client & Build
+# Generate Prisma Client & Build Next.js app
 RUN npx prisma generate
 RUN npm run build
 
-# ==========================================
-# THE SURGICAL NPM PATCH
-# ==========================================
+# --- SURGICAL NPM PATCH (Application Dependencies) ---
 USER root
+# Destroy deeply nested vulnerable copies inside the compiled app
+RUN find .next/standalone/node_modules -type d -name "picomatch" -exec rm -rf {} + || true
+RUN find .next/standalone/node_modules -type d -name "brace-expansion" -exec rm -rf {} + || true
 
-# 1. Hunt down and physically destroy all deeply nested, vulnerable copies
-RUN find /app/.next/standalone/node_modules -type d -name "picomatch" -exec rm -rf {} + || true
-RUN find /app/.next/standalone/node_modules -type d -name "brace-expansion" -exec rm -rf {} + || true
+# Force secure versions into the standalone folder
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 --no-save
 
-# 2. Forcefully install the secure versions at the root of the standalone folder
-RUN cd /app/.next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 --no-save
 
-# Switch back to the non-root user
-USER node
-# ==========================================
-
-# Step 3: Production image
-FROM base AS runner
+# --- Stage 2: Final Production Image ---
+FROM node:22-alpine AS runner
 WORKDIR /app
+
+# VITAL: Apply OS patches (Busybox Edge) in the final stage
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache busybox --repository=http://dl-cdn.alpinelinux.org/alpine/edge/main && \
+    apk add --no-cache libc6-compat openssl
+
+# --- THE CLEANUP CRUSHER ---
+# Omnibus runs via 'node server.js'. It does NOT need npm at runtime.
+# Deleting npm and the cache removes the vulnerabilities found in /usr/local/lib/node_modules/npm
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx \
+    /root/.npm \
+    /root/.cache
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# --- USER CONFIGURATION ---
+# Copy standalone output and assets from builder
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/prisma ./prisma
-
-# Copy the surgically patched standalone output
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 
-# Copy Prisma directly from builder
+# Copy Prisma files needed for 'db push'
 COPY --from=builder --chown=node:node /app/node_modules/prisma ./node_modules/prisma
 COPY --from=builder --chown=node:node /app/node_modules/@prisma ./node_modules/@prisma
 
-# Switch to the non-root 'node' user for runtime security
 USER node
 
 EXPOSE 3000
 ENV PORT=3000
 
-# Execute database push bypassing npx, then start the server
+# Execute database push using the node binary directly (since npx was deleted)
 CMD ["sh", "-c", "node ./node_modules/prisma/build/index.js db push --schema=/app/prisma/schema.prisma --skip-generate && node server.js"]

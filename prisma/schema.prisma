@@ -37,6 +37,8 @@ model User {
   apiKeys             ApiKey[]  @relation("ApiKeysActsAs")
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
   opdsKeys        OpdsKey[]
+
+  koreaderSyncs KoreaderSync[]
 }
 
 model ApiKey {
@@ -326,4 +328,19 @@ model OpdsKey {
 
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
+}
+
+model KoreaderSync {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document    String   // KOReader's document hash or filename
+  progress    String   // KOReader's proprietary location string
+  percentage  Float
+  device      String
+  deviceId    String
+  timestamp   Int      // Unix timestamp
+
+  @@unique([userId, document])
+  @@index([userId])
 }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react"
 import { useSession } from "next-auth/react"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -13,7 +13,10 @@ import Link from "next/link"
 import { useColorTheme } from "@/components/ThemeProvider"
 import { 
   User as UserIcon, Upload, Loader2, ListOrdered, CheckCircle2, 
-  Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Webhook, Copy, Plus, Smartphone
+  Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, 
+  Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, 
+  ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Webhook, Copy, 
+  Plus, Smartphone, TabletSmartphone, Wifi
 } from "lucide-react"
 
 // --- Helper Component: Individual Activity Card ---
@@ -105,6 +108,101 @@ const getThemeGradient = (theme: string) => {
       case 'speedster': return 'from-red-700 via-red-900 to-yellow-900';
       default: return 'from-blue-700 via-indigo-800 to-slate-900';
     }
+}
+
+// --- Helper Component: KOReader Devices Sync ---
+function KoreaderDevices() {
+    const [devices, setDevices] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchDevices = async () => {
+            try {
+                const res = await fetch('/api/profile/koreader');
+                if (res.ok) {
+                    const data = await res.json();
+                    setDevices(data);
+                }
+            } catch (e) {
+                console.error("Failed to load KOReader devices", e);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchDevices();
+    }, []);
+
+    if (loading) {
+        return <div className="animate-pulse h-32 bg-muted rounded-xl border border-border mt-6"></div>;
+    }
+
+    if (devices.length === 0) {
+        return null; // Hide the section entirely if they haven't synced an eReader yet
+    }
+
+    return (
+        <Card className="shadow-sm border-border bg-background mt-6">
+            <CardHeader className="pb-3 border-b border-border bg-muted/30">
+                <div className="flex items-center gap-2">
+                    <TabletSmartphone className="w-5 h-5 text-primary" />
+                    <CardTitle className="text-lg">Connected eReaders</CardTitle>
+                </div>
+                <CardDescription>Devices actively syncing reading progress via KOReader.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 pt-4">
+                {devices.map((device) => {
+                    // Convert KOReader's unix timestamp to a readable date
+                    const syncDate = new Date(device.lastSync * 1000);
+                    const timeAgo = Math.round((Date.now() - syncDate.getTime()) / 60000); // minutes
+                    
+                    let timeString = `${timeAgo} mins ago`;
+                    if (timeAgo > 60) timeString = `${Math.round(timeAgo / 60)} hours ago`;
+                    if (timeAgo > 1440) timeString = `${Math.round(timeAgo / 1440)} days ago`;
+                    if (timeAgo < 1) timeString = "Just now";
+
+                    return (
+                        <div key={device.deviceId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-lg border border-border bg-muted/20 hover:bg-muted/50 transition-colors">
+                            <div className="flex items-center gap-4">
+                                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20">
+                                    <TabletSmartphone className="w-5 h-5 text-primary" />
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-foreground flex items-center gap-2">
+                                        {device.deviceName}
+                                        <Badge variant="secondary" className="text-[9px] h-4 bg-green-500/10 text-green-600 border-green-500/20 uppercase tracking-wider">
+                                            <Wifi className="w-2.5 h-2.5 mr-1" /> Synced
+                                        </Badge>
+                                    </h4>
+                                    <p className="text-xs text-muted-foreground font-mono mt-0.5">ID: {device.deviceId}</p>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col sm:items-end gap-1.5 min-w-0 sm:max-w-[40%]">
+                                <div className="flex items-center gap-1.5 text-xs text-foreground truncate w-full sm:justify-end">
+                                    <BookOpen className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                    <span className="truncate font-medium">{device.lastDocument}</span>
+                                </div>
+                                <div className="flex items-center gap-2 w-full sm:justify-end">
+                                    <div className="flex-1 sm:flex-none sm:w-24 h-1.5 bg-background border border-border rounded-full overflow-hidden">
+                                        <div 
+                                            className="h-full bg-primary" 
+                                            style={{ width: `${Math.max(0, Math.min(100, device.percentage * 100))}%` }} 
+                                        />
+                                    </div>
+                                    <span className="text-[10px] font-bold text-muted-foreground w-8 text-right shrink-0">
+                                        {Math.round(device.percentage * 100)}%
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-1 text-[10px] text-muted-foreground sm:justify-end mt-0.5">
+                                    <Clock className="w-3 h-3" /> Last sync: {timeString}
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
+            </CardContent>
+        </Card>
+    );
 }
 
 export default function ProfilePage() {
@@ -560,6 +658,9 @@ export default function ProfilePage() {
                 </CardContent>
             </Card>
         </div>
+
+        {/* KOREADER SYNC SECTION */}
+        <KoreaderDevices />
 
         {/* --- CURATED READING LISTS --- */}
         <div className="space-y-3">

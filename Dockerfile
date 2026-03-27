@@ -28,6 +28,8 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 
+RUN apk update && apk upgrade --no-cache
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 

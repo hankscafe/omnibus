@@ -18,11 +18,16 @@ function extractIssueNumber(filename: string): string {
     // Strip out (YYYY-YYYY) or [YYYY] year ranges before checking for issue numbers
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
     
-    const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-    if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
+    // Updated regex to optionally capture letters like "A" or "B" at the end of the number
+    const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    if (explicitMatch) {
+        return explicitMatch[1].replace(/^0+(?=\d)/, '');
+    }
     
-    const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) return parseFloat(matches[matches.length - 1][1]).toString();
+    const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?[a-zA-Z]?)(?:[^a-zA-Z0-9]|$)/g)];
+    if (matches.length > 0) {
+        return matches[matches.length - 1][1].replace(/^0+(?=\d)/, '');
+    }
     
     return "1"; 
 }
@@ -84,9 +89,6 @@ export const Importer = {
 
     await new Promise(r => setTimeout(r, 1000));
 
-    // --- NEW: SMART EXTENSION FALLBACK ---
-    // If the download client didn't include the .cbz extension in the torrent name,
-    // we dynamically append it here so we can successfully find the physical file on disk.
     if (!fs.existsSync(sourcePath)) {
         const extensions = ['.cbz', '.cbr', '.zip', '.rar', '.cb7', '.epub'];
         for (const ext of extensions) {
@@ -98,15 +100,11 @@ export const Importer = {
     }
 
     if (!fs.existsSync(sourcePath)) {
-      // Check if the root download directory exists to verify the NAS/Drive is actually online
       const parentDir = path.dirname(sourcePath);
       const isDriveOnline = fs.existsSync(parentDir) || fs.existsSync(downloadRoot);
 
       Logger.log(`[Importer] Source file not found at: ${sourcePath}. Check Path Mappings!`, "error");
       
-      // Prevent Infinite Cron Loops:
-      // If the drive is online but the file is missing, count the failures.
-      // After 20 cycles (20 minutes), mark it as STALLED to kill the loop.
       if (isDriveOnline) {
           const currentRetries = req.retryCount || 0;
           if (currentRetries > 20) { 
@@ -125,7 +123,6 @@ export const Importer = {
       return false;
     }
 
-    // Reset retry count upon successfully locating the file
     if ((req.retryCount || 0) > 0) {
         await prisma.request.update({
             where: { id: req.id },
@@ -133,8 +130,6 @@ export const Importer = {
         });
     }
 
-    // --- FIX: EXTRACT ARCHIVE FROM FOLDER ---
-    // If the download client unpacked it into a folder, dive in and find the actual comic file
     let actualSourceFile = sourcePath;
     if (fs.statSync(sourcePath).isDirectory()) {
         const files = await fs.promises.readdir(sourcePath);
@@ -158,7 +153,6 @@ export const Importer = {
         }
     }
 
-    // --- 2. FETCH OR CREATE SERIES METADATA ---
     let series = await prisma.series.findFirst({ where: { cvId: parseInt(req.volumeId) } });
     
     if (!series && cvApiKey && req.volumeId !== "0") {
@@ -185,7 +179,6 @@ export const Importer = {
         }
     }
 
-    // --- 3. DETECT MANGA STATUS & ASSIGN MULTI-LIBRARY ROUTING ---
     let isManga = false;
     let cleanSeriesName = (req.activeDownloadName || path.basename(sourcePath))
         .replace(/\.[^/.]+$/, "") 
@@ -229,7 +222,6 @@ export const Importer = {
         Logger.log(`[Importer] Auto-routed to Manga Library: ${targetLibrary.name}`, "info");
     }
 
-    // --- NEW: DYNAMIC PATH AND FILE NAMING GENERATION ---
     const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
     const filePattern = config.file_naming_pattern || "{Series} #{Issue}";
     const mangaFilePattern = config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
@@ -238,7 +230,6 @@ export const Importer = {
     const seriesYearFromMeta = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
     const seriesNameFromMeta = series?.name || cleanSeriesName;
     
-    // Replace Folder Tags
     let relFolderPath = folderPattern
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
@@ -291,7 +282,6 @@ export const Importer = {
     const ext = path.extname(rawFileName);
     const extractedNum = extractIssueNumber(rawFileName);
     
-    // Replace File Tags
     let formattedNum = extractedNum;
     if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
     
@@ -317,7 +307,6 @@ export const Importer = {
         finalPath = path.join(destFolder, `${Date.now()}_${fileName}`);
       }
       
-      // --- 4. SAFE FILE TRANSFER ---
       let moveSuccess = false;
       for (let attempt = 1; attempt <= 5; attempt++) {
           try {
@@ -348,7 +337,6 @@ export const Importer = {
 
       if (!moveSuccess) throw new Error("Failed to move file after multiple attempts due to network locks.");
 
-      // --- AUTO-CONVERSION INTERCEPT ---
       if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar')) {
           Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');
           const { convertCbrToCbz } = await import('./converter');
@@ -362,14 +350,23 @@ export const Importer = {
       if (series?.id) {
          const issueNum = extractIssueNumber(fileName);
          
-         await prisma.issue.upsert({
-             where: { seriesId_number: { seriesId: series.id, number: issueNum } },
-             create: {
-                 seriesId: series.id, cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
-                 number: issueNum, status: 'DOWNLOADED', filePath: finalPath
-             },
-             update: { status: 'DOWNLOADED', filePath: finalPath }
+         const existingIssue = await prisma.issue.findFirst({
+             where: { seriesId: series.id, number: issueNum }
          });
+
+         if (existingIssue) {
+             await prisma.issue.update({
+                 where: { id: existingIssue.id },
+                 data: { status: 'DOWNLOADED', filePath: finalPath }
+             });
+         } else {
+             await prisma.issue.create({
+                 data: {
+                     seriesId: series.id, cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
+                     number: issueNum, status: 'DOWNLOADED', filePath: finalPath
+                 }
+             });
+         }
 
          try {
              await prisma.series.update({

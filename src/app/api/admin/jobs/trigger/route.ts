@@ -131,7 +131,6 @@ export async function POST(request: Request) {
         const startTime = Date.now();
         const nowStr = Date.now().toString();
 
-        // ... (inside POST function) ...
         if (job === 'backup') {
             Logger.log("[Background Job] Starting Database Backup...", "info");
             

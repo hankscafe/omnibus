@@ -130,8 +130,6 @@ model Issue {
 
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
-
-  @@unique([seriesId, number])  
 }
 
 model IssueReport {
@@ -171,7 +169,7 @@ model DiscordWebhook {
   url      String
   isActive Boolean @default(true)
   events   String  // JSON array string of event triggers
-  botUsername  String?  
+  botUsername  String?
   botAvatarUrl String?
 }
 
@@ -313,8 +311,6 @@ model ReadingListItem {
   cvIssueId   Int?
   title       String       
   order       Int          
-  
-  @@unique([listId, order])
 }
 
 model OpdsKey {
@@ -343,4 +339,10 @@ model KoreaderSync {
 
   @@unique([userId, document])
   @@index([userId])
+}
+
+// --- DISTRIBUTED ATOMIC LOCKS ---
+model JobLock {
+  id        String   @id
+  lockedAt  DateTime @default(now())
 }

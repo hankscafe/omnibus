@@ -2,10 +2,21 @@
 import { prisma } from './db';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
+import crypto from 'crypto';
 
 export async function initDatabase() {
   try {
     Logger.log("[DB Init] Checking for legacy JSON configurations to migrate...", "info");
+
+    // 0. Ensure Database Encryption Key Exists (NEW)
+    const dbKeyCount = await prisma.systemSetting.count({ where: { key: 'DATABASE_ENCRYPTION_KEY' } });
+    if (dbKeyCount === 0) {
+        const newKey = crypto.randomBytes(32).toString('hex');
+        await prisma.systemSetting.create({
+            data: { key: 'DATABASE_ENCRYPTION_KEY', value: newKey }
+        });
+        Logger.log("[DB Init] Generated new persistent Database Encryption Key.", "success");
+    }
 
     // 1. Migrate Libraries
     const libraryCount = await prisma.library.count();

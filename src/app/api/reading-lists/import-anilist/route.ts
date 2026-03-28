@@ -114,7 +114,8 @@ export async function POST(request: Request) {
                     data: {
                         name: listName,
                         description: `Imported from AniList user: ${username}`,
-                        userId: isGlobal && session.user.role === 'ADMIN' ? null : userId
+                        // FIX: Safely access session and user roles with optional chaining
+                        userId: isGlobal && (session?.user as any)?.role === 'ADMIN' ? null : userId
                     }
                 });
 

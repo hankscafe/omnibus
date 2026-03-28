@@ -30,20 +30,29 @@ export const Logger = {
     const color = type === 'error' ? '\x1b[31m' : type === 'success' ? '\x1b[32m' : type === 'warn' ? '\x1b[33m' : '\x1b[34m';
     console.log(`${color}[Omnibus] ${msgStr}\x1b[0m`);
 
-    try {
-        const fs = eval('require')('fs');
-        const path = eval('require')('path');
+    // Use webpackIgnore to prevent Webpack from trying to bundle Node built-ins for the client
+    Promise.all([
+        import(/* webpackIgnore: true */ 'fs'), 
+        import(/* webpackIgnore: true */ 'path')
+    ]).then(([fsRaw, pathRaw]) => {
+        // Handle CJS/ESM interop safely
+        const fs = fsRaw.default || fsRaw;
+        const path = pathRaw.default || pathRaw;
         
-        const logDir = process.env.LOG_PATH || path.join(process.cwd(), 'config', 'logs');
-        if (!fs.existsSync(logDir)) {
-            fs.mkdirSync(logDir, { recursive: true });
+        try {
+            const logDir = process.env.LOG_PATH || path.join(process.cwd(), 'config', 'logs');
+            if (!fs.existsSync(logDir)) {
+                fs.mkdirSync(logDir, { recursive: true });
+            }
+            const logFile = path.join(logDir, 'omnibus.log');
+            const logLine = `[${timestamp}] [${type.toUpperCase()}] ${msgStr}\n`;
+            fs.appendFileSync(logFile, logLine);
+        } catch (err) {
+            console.error("Failed to write to log file", err);
         }
-        const logFile = path.join(logDir, 'omnibus.log');
-        const logLine = `[${timestamp}] [${type.toUpperCase()}] ${msgStr}\n`;
-        fs.appendFileSync(logFile, logLine);
-    } catch (err) {
-        console.error("Failed to write to log file", err);
-    }
+    }).catch(() => {
+        // Ignore dynamic import errors on client or edge runtimes
+    });
   },
   
   getLogs() {
@@ -52,14 +61,20 @@ export const Logger = {
   
   clear() {
     globalForLogger.logBuffer = [];
-    try {
-        if (typeof window === 'undefined') {
-            const fs = eval('require')('fs');
-            const path = eval('require')('path');
-            const logDir = process.env.LOG_PATH || path.join(process.cwd(), 'config', 'logs');
-            const logFile = path.join(logDir, 'omnibus.log');
-            fs.writeFileSync(logFile, "");
-        }
-    } catch(e) {}
+    if (typeof window === 'undefined') {
+        Promise.all([
+            import(/* webpackIgnore: true */ 'fs'), 
+            import(/* webpackIgnore: true */ 'path')
+        ]).then(([fsRaw, pathRaw]) => {
+            const fs = fsRaw.default || fsRaw;
+            const path = pathRaw.default || pathRaw;
+            
+            try {
+                const logDir = process.env.LOG_PATH || path.join(process.cwd(), 'config', 'logs');
+                const logFile = path.join(logDir, 'omnibus.log');
+                fs.writeFileSync(logFile, "");
+            } catch(e) {}
+        }).catch(() => {});
+    }
   }
 };

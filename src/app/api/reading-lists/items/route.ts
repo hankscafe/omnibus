@@ -32,13 +32,9 @@ export async function POST(request: Request) {
       });
       const nextOrder = lastItem ? lastItem.order + 1 : 0;
 
-      try {
-          await prisma.readingListItem.create({
-              data: { list: { connect: { id: listId } }, issue: { connect: { id: issueId } }, order: nextOrder, title: "" }
-          });
-      } catch (error: unknown) {
-          if ((error as any).code !== 'P2002') throw error; // Ignore Prisma's "Already exists in list" error
-      }
+      await prisma.readingListItem.create({
+          data: { list: { connect: { id: listId } }, issue: { connect: { id: issueId } }, order: nextOrder, title: "" }
+      });
 
       return NextResponse.json({ success: true, message: `Added issue to reading list.` });
 

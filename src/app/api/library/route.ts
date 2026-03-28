@@ -331,7 +331,8 @@ export async function GET(request: Request) {
                     
                     const allRelevantIssues = await prisma.issue.findMany({
                         where: { series: { cvId: { in: reqCvIds } } },
-                        select: { filePath: true, number: true, name: true, series: { select: { cvId: true } } }
+                        // ADDED year: true so we can effectively check year conflicts
+                        select: { filePath: true, number: true, name: true, series: { select: { cvId: true, year: true } } }
                     });
 
                     const issuesByCvId = new Map();
@@ -357,6 +358,14 @@ export async function GET(request: Request) {
 
                         const matchingIssue = seriesIssues.find((i: any) => {
                             if (!i.filePath || i.filePath.length === 0) return false;
+                            
+                            // Check for year conflicts based on the folder path/file name
+                            const reqYear = i.series?.year?.toString();
+                            const fileYearMatch = i.filePath.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+                            const fileYear = fileYearMatch ? fileYearMatch[1] : null;
+                            
+                            if (reqYear && fileYear && reqYear !== fileYear) return false;
+
                             if (issueNum !== null && parseFloat(i.number) === issueNum) return true;
                             if (i.name && i.name.toLowerCase().trim() === searchStr) return true;
                             const fileName = path.basename(i.filePath).toLowerCase();

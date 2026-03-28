@@ -1,6 +1,6 @@
-// src/app/api/koreader/users/auth/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import crypto from 'crypto';
 
 export async function authenticateKoreader(request: Request) {
     const userHeader = request.headers.get('x-auth-user');
@@ -8,14 +8,30 @@ export async function authenticateKoreader(request: Request) {
 
     if (!userHeader || !keyHeader) return null;
 
+    // Hash the incoming key to match the database
+    const keyHash = crypto.createHash('sha256').update(keyHeader).digest('hex');
+
     // Authenticate using Omnibus OPDS API Keys
-    const apiKey = await prisma.apiKey.findUnique({
-        where: { key: keyHeader },
+    const opdsKey = await prisma.opdsKey.findUnique({
+        where: { keyHash },
         include: { user: true }
     });
 
-    if (apiKey && apiKey.user.username === userHeader) {
-        return apiKey.user;
+    if (opdsKey && opdsKey.user.username === userHeader) {
+        // Optional: Update last used timestamp
+        prisma.opdsKey.update({ where: { id: opdsKey.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
+        return opdsKey.user;
+    }
+
+    // Fallback: Check Admin API Keys
+    const adminKey = await prisma.apiKey.findUnique({
+        where: { keyHash },
+        include: { user: true }
+    });
+
+    if (adminKey && adminKey.user.username === userHeader) {
+        prisma.apiKey.update({ where: { id: adminKey.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
+        return adminKey.user;
     }
 
     return null;

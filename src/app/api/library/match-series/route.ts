@@ -7,7 +7,7 @@ import axios from 'axios';
 import { detectManga } from '@/lib/manga-detector';
 import { DiscordNotifier } from '@/lib/discord'; 
 import { getErrorMessage } from '@/lib/utils/error';
-import { Logger } from '@/lib/logger'; // <-- Added Logger
+import { Logger } from '@/lib/logger'; 
 
 export async function POST(request: Request) {
   try {
@@ -80,13 +80,19 @@ export async function POST(request: Request) {
 
     const targetCvId = parseInt(cvId);
     
-    // --- FIX 4a: Don't silently fail database queries ---
-    await prisma.series.updateMany({
-        where: { cvId: targetCvId },
-        data: { cvId: -Math.abs(Math.floor(Math.random() * 1000000000)) }
-    }).catch((err: unknown) => {
-        Logger.log(`[Match Series] Failed to reset old cvId: ${getErrorMessage(err)}`, 'warn');
+    // --- FIX 4a & D: Iterate through existing records to prevent Unique Constraint Collisions ---
+    const existingOldSeries = await prisma.series.findMany({
+        where: { cvId: targetCvId }
     });
+
+    for (const old of existingOldSeries) {
+        await prisma.series.update({
+            where: { id: old.id },
+            data: { cvId: -Math.abs(Math.floor(Math.random() * 1000000000)) }
+        }).catch((err: unknown) => {
+            Logger.log(`[Match Series] Failed to reset old cvId for ${old.id}: ${getErrorMessage(err)}`, 'warn');
+        });
+    }
 
     let existingRecord = await prisma.series.findFirst({
         where: { OR: [ { folderPath: oldFolderPath }, { folderPath: newFolderPath } ] }
@@ -145,11 +151,12 @@ export async function POST(request: Request) {
                 const oldName = path.basename(file, ext);
                 let issueNumStr = "";
                 
-                const explicitMatch = oldName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(\d+(?:\.\d+)?)/i);
+                // --- Variant Support Update ---
+                const explicitMatch = oldName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
                 if (explicitMatch) issueNumStr = explicitMatch[1];
                 else {
                     const cleanName = oldName.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').replace(/\s+of\s+\d+/gi, '').trim();
-                    const endMatch = cleanName.match(/(?:issue\s?|-|\s|^)(\d+(?:\.\d+)?)\s*$/i);
+                    const endMatch = cleanName.match(/(?:issue\s?|-|\s|^)0*(\d+(?:\.\d+)?[a-zA-Z]?)\s*$/i);
                     if (endMatch) issueNumStr = endMatch[1];
                 }
                 
@@ -174,7 +181,7 @@ export async function POST(request: Request) {
                 }
             }
         }
-        // --- FIX 4a: Don't silently fail database transactions ---
+        
         if (pathUpdates.length > 0) {
             await prisma.$transaction(pathUpdates).catch((err: unknown) => {
                 Logger.log(`[Match Series] Path updates transaction failed: ${getErrorMessage(err)}`, 'error');

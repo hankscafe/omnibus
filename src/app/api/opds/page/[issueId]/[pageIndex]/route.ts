@@ -42,7 +42,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
         if (ext === '.png') contentType = 'image/png';
         if (ext === '.webp') contentType = 'image/webp';
 
-        return new Response(buffer, {
+        // Fix: Cast the Node.js Buffer to BodyInit to satisfy TypeScript
+        return new Response(buffer as unknown as BodyInit, {
             headers: {
                 'Content-Type': contentType,
                 // Cache heavily since comic pages are immutable

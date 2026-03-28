@@ -115,7 +115,12 @@ export async function POST(request: Request) {
                 });
 
                 const newList = await prisma.readingList.create({
-                    data: { name: listName, description: `Imported from MyAnimeList user: ${username}`, userId: isGlobal && session.user.role === 'ADMIN' ? null : userId }
+                    data: { 
+                        name: listName, 
+                        description: `Imported from MyAnimeList user: ${username}`, 
+                        // FIX: Safely access session and user roles with optional chaining
+                        userId: isGlobal && (session?.user as any)?.role === 'ADMIN' ? null : userId 
+                    }
                 });
 
                 const allIssues = await prisma.issue.findMany({

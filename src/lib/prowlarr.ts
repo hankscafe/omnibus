@@ -75,6 +75,10 @@ export const ProwlarrService = {
           if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
       }
 
+      // EXTRACT YEAR FROM ORIGINAL QUERY
+      const reqYearMatch = cleanQuery.match(/\b(19|20)\d{2}\b/);
+      const reqYear = reqYearMatch ? reqYearMatch[1] : null;
+
       return rawData
         .filter((item) => {
             if (isInteractive) return true;
@@ -118,6 +122,14 @@ export const ProwlarrService = {
                 if (torNum === null) {
                     return false; // Safely reject it if stripping Vol. left it with NO numbers
                 }
+            }
+
+            // STRICT FILTER 2.5: Year Conflict Check
+            const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+            const torYear = torYearMatch ? torYearMatch[1] : null;
+
+            if (reqYear && torYear && reqYear !== torYear) {
+                return false;
             }
 
             // STRICT FILTER 3: Check standard text words

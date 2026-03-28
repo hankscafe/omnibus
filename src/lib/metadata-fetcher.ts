@@ -1,4 +1,3 @@
-// src/lib/metadata-fetcher.ts
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -85,33 +84,59 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
         for (const cvIssue of cvIssues) {
             const { writers, artists, characters } = parseComicVineCredits(cvIssue.person_credits || undefined, cvIssue.character_credits || undefined);
-            const issueNumStr = parseFloat(cvIssue.issue_number?.toString() || "0").toString();
+            const issueNumStr = cvIssue.issue_number?.toString() || "0";
 
             const finalWriters = writers.length > 0 ? writers : volWriters;
             const finalArtists = artists.length > 0 ? artists : volArtists;
             const finalCharacters = characters.length > 0 ? characters : volCharacters;
 
-            await prisma.issue.upsert({
-                where: { seriesId_number: { seriesId: series.id, number: issueNumStr } },
-                create: {
-                    seriesId: series.id, cvId: cvIssue.id, number: issueNumStr, name: cvIssue.name,
-                    description: cvIssue.description || cvIssue.deck || null,
-                    releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
-                    coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
-                    writers: JSON.stringify(finalWriters),
-                    artists: JSON.stringify(finalArtists),
-                    characters: JSON.stringify(finalCharacters),
-                },
-                update: {
-                    cvId: cvIssue.id, name: cvIssue.name,
-                    description: cvIssue.description || cvIssue.deck || null,
-                    releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
-                    coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
-                    writers: JSON.stringify(finalWriters),
-                    artists: JSON.stringify(finalArtists),
-                    characters: JSON.stringify(finalCharacters),
+            const existingByCvId = await prisma.issue.findUnique({ where: { cvId: cvIssue.id } });
+
+            if (existingByCvId) {
+                await prisma.issue.update({
+                    where: { id: existingByCvId.id },
+                    data: {
+                        seriesId: series.id, number: issueNumStr, name: cvIssue.name,
+                        description: cvIssue.description || cvIssue.deck || null,
+                        releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
+                        coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
+                        writers: JSON.stringify(finalWriters),
+                        artists: JSON.stringify(finalArtists),
+                        characters: JSON.stringify(finalCharacters),
+                    }
+                });
+            } else {
+                const existingByNum = await prisma.issue.findFirst({
+                    where: { seriesId: series.id, number: issueNumStr }
+                });
+
+                if (existingByNum) {
+                    await prisma.issue.update({
+                        where: { id: existingByNum.id },
+                        data: {
+                            cvId: cvIssue.id, name: cvIssue.name,
+                            description: cvIssue.description || cvIssue.deck || null,
+                            releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
+                            coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
+                            writers: JSON.stringify(finalWriters),
+                            artists: JSON.stringify(finalArtists),
+                            characters: JSON.stringify(finalCharacters),
+                        }
+                    });
+                } else {
+                    await prisma.issue.create({
+                        data: {
+                            seriesId: series.id, cvId: cvIssue.id, number: issueNumStr, name: cvIssue.name,
+                            description: cvIssue.description || cvIssue.deck || null,
+                            releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
+                            coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
+                            writers: JSON.stringify(finalWriters),
+                            artists: JSON.stringify(finalArtists),
+                            characters: JSON.stringify(finalCharacters),
+                        }
+                    });
                 }
-            });
+            }
             syncedCount++;
         }
 

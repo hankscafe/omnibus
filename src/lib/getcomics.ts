@@ -60,6 +60,10 @@ export const GetComicsService = {
         if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
     }
 
+    // EXTRACT YEAR FROM ORIGINAL QUERY
+    const reqYearMatch = cleanOriginal.match(/\b(19|20)\d{2}\b/);
+    const reqYear = reqYearMatch ? reqYearMatch[1] : null;
+
     $('article, .post').each((i, el) => {
       const titleEl = $(el).find('h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a').first();
       const title = titleEl.text().trim();
@@ -105,6 +109,16 @@ export const GetComicsService = {
                   if (torNum === null) {
                       isRelevant = false; 
                   }
+              }
+          }
+
+          // STRICT FILTER 2.5: Year Conflict Check
+          if (isRelevant) {
+              const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+              const torYear = torYearMatch ? torYearMatch[1] : null;
+
+              if (reqYear && torYear && reqYear !== torYear) {
+                  isRelevant = false;
               }
           }
 

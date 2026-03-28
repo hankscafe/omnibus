@@ -5,7 +5,6 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { error } from 'console';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
@@ -77,8 +76,8 @@ export async function GET(request: Request) {
                                 description: newDescription
                             }
                         }).catch(err => {
-                            Logger.log(`[Issue API] Failed to save lazy-loaded metadata: ${getErrorMessage(error)}`, 'error');
-
+                            // FIX: Correctly maps to 'err' context
+                            Logger.log(`[Issue API] Failed to save lazy-loaded metadata: ${getErrorMessage(err)}`, 'error');
                         });
                     }
 
@@ -90,8 +89,8 @@ export async function GET(request: Request) {
                     });
                 }
             } catch (e) {
-                Logger.log(`Deep fetch failed, falling back to DB data: ${getErrorMessage(error)}`, 'error');
-
+                // FIX: Correctly maps to 'e' context
+                Logger.log(`Deep fetch failed, falling back to DB data: ${getErrorMessage(e)}`, 'error');
             }
         }
     }

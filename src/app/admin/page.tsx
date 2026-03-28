@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -152,7 +152,6 @@ export default function AdminPage() {
       fetchUpdates();
   };
 
-  // --- FIX 6b: Extract intervals into proper constants ---
   const ADMIN_DASHBOARD_POLL_INTERVAL_MS = 15 * 1000; // 15 seconds
   const ADMIN_ALERT_POLL_INTERVAL_MS = 300 * 1000; // 5 minutes
 
@@ -333,6 +332,18 @@ const mappedRequests = requests.map(req => {
                   const reqNum = extractNum(reqNameLower);
                   const torNum = extractNum(torNameLower);
 
+                  // --- NEW YEAR CHECK ---
+                  const reqYearMatch = reqNameLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+                  const reqYear = reqYearMatch ? reqYearMatch[1] : null;
+
+                  const torYearMatch = torNameLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+                  const torYear = torYearMatch ? torYearMatch[1] : null;
+
+                  if (reqYear && torYear && reqYear !== torYear) {
+                      return false; // Reject immediately if the years conflict
+                  }
+                  // ----------------------
+
                   if (reqNum !== null && torNum !== null) {
                       if (reqNum !== torNum) return false; 
                   } else if (reqNum !== null && torNum === null) {
@@ -353,8 +364,9 @@ const mappedRequests = requests.map(req => {
                   let matches = 0;
                   reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
                   
-                  const minLength = Math.min(reqWords.length, torWords.length);
-                  return (matches / minLength) >= 0.5;
+                  // Use the longer title to calculate the ratio to prevent short titles from matching long titles
+                  const maxLength = Math.max(reqWords.length, torWords.length);
+                  return (matches / maxLength) >= 0.7; // Requires 70% of the words to match perfectly
               });
           }
 

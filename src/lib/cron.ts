@@ -8,6 +8,35 @@ import { getErrorMessage } from './utils/error';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
+// --- NEW: ATOMIC DATABASE LOCK ---
+// This guarantees that only one Node.js worker thread processes the cron cycle
+async function acquireLock(lockId: string, timeoutMs: number): Promise<boolean> {
+    const cutoff = new Date(Date.now() - timeoutMs);
+    try {
+        const existing = await prisma.jobLock.findUnique({ where: { id: lockId } });
+        if (!existing) {
+            // First time running, create the lock
+            await prisma.jobLock.create({ data: { id: lockId, lockedAt: new Date() } });
+            return true;
+        }
+
+        // Atomic conditional update: We only get the lock if it has expired
+        const result = await prisma.jobLock.updateMany({
+            where: {
+                id: lockId,
+                lockedAt: { lt: cutoff }
+            },
+            data: {
+                lockedAt: new Date()
+            }
+        });
+
+        return result.count > 0;
+    } catch (e) {
+        return false;
+    }
+}
+
 export function initCronJobs() {
   if (globalForCron._cronInitialized) return;
   globalForCron._cronInitialized = true;
@@ -15,6 +44,10 @@ export function initCronJobs() {
   Logger.log("[Cron] Initializing native background automation...", "info");
 
   setInterval(async () => {
+    // --- NEW: ACQUIRE LOCK (55s timeout ensures it unlocks right before the next minute tick) ---
+    const locked = await acquireLock('CRON_DOWNLOAD_CHECKER', 55000); 
+    if (!locked) return;
+
     try {
       const stalledRequests = await prisma.request.findMany({
         where: { status: 'STALLED', retryCount: { lt: 3 } }
@@ -70,6 +103,14 @@ export function initCronJobs() {
               where: { status: 'DOWNLOADING' }
           });
 
+          // Fetch years for these requests to enforce strict year matching
+          const reqCvIds = [...new Set(downloadingRequests.map(r => parseInt(r.volumeId)).filter(id => !isNaN(id)))];
+          const relevantSeries = await prisma.series.findMany({
+              where: { cvId: { in: reqCvIds } },
+              select: { cvId: true, year: true }
+          });
+          const seriesYearMap = new Map(relevantSeries.map(s => [s.cvId.toString(), s.year.toString()]));
+
           for (const torrent of activeDownloads) {
               // 1. Strict match on tracking hash/guid
               let match = downloadingRequests.find(r => r.downloadLink && r.downloadLink.toLowerCase() === torrent.id.toLowerCase());
@@ -101,6 +142,15 @@ export function initCronJobs() {
                       const reqNum = extractNum(reqNameLower);
                       const torNum = extractNum(torNameLower);
 
+                      // --- YEAR CHECK ---
+                      const reqYear = seriesYearMap.get(r.volumeId);
+                      const torYearMatch = torNameLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+                      const torYear = torYearMatch ? torYearMatch[1] : null;
+
+                      if (reqYear && torYear && reqYear !== torYear) {
+                          return false; // Reject immediately if the years conflict
+                      }
+
                       if (reqNum !== null && torNum !== null) {
                           if (reqNum !== torNum) return false; 
                       } else if (reqNum !== null && torNum === null) {
@@ -120,8 +170,9 @@ export function initCronJobs() {
                       let matches = 0;
                       reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
                       
-                      const minLength = Math.min(reqWords.length, torWords.length);
-                      return (matches / minLength) >= 0.5;
+                      // Use the longer title to calculate the ratio to prevent short titles from matching long titles
+                      const maxLength = Math.max(reqWords.length, torWords.length);
+                      return (matches / maxLength) >= 0.7; // Requires 70% of the words to match perfectly
                   });
               }
               
@@ -155,6 +206,10 @@ export function initCronJobs() {
   }, 60000); 
 
   setInterval(async () => {
+    // --- NEW: ACQUIRE LOCK (14.8 min timeout ensures it unlocks right before the next 15min tick) ---
+    const locked = await acquireLock('CRON_SCHEDULER', 890000); 
+    if (!locked) return;
+
     const now = Date.now();
 
     const checkAndTrigger = async (jobName: string, scheduleKey: string, lastSyncKey: string, logName: string) => {

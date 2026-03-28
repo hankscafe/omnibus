@@ -17,7 +17,9 @@ export async function GET(request: Request) {
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     const targetPath = path.normalize(filePath).toLowerCase();
 
-    const isAuthorized = authorizedRoots.some(root => targetPath.startsWith(root));
+    const isAuthorized = authorizedRoots.some(root => 
+    targetPath === root || targetPath.startsWith(root + path.sep)
+    );
 
     if (!isAuthorized) {
       return new Response("Unauthorized path access", { status: 403 });

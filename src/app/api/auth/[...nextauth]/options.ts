@@ -111,7 +111,8 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                 throw new Error("2FA_REQUIRED"); 
             }
             
-            const decryptedSecret = decrypt2FA(user.twoFactorSecret);
+            // --- UPDATED: Await the decryption now that it pulls from DB ---
+            const decryptedSecret = await decrypt2FA(user.twoFactorSecret);
 
             const isValid = typeof authenticator.verify === 'function'
                 ? authenticator.verify({ token: credentials.totpCode, secret: decryptedSecret })

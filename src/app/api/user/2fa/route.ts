@@ -6,7 +6,6 @@ import { encrypt2FA } from '@/lib/encryption';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-// FIX: Safely extract authenticator regardless of how Webpack nests the CommonJS export
 const otplib = require('otplib');
 const authenticator = otplib.authenticator || otplib.default?.authenticator || otplib;
 const QRCode = require('qrcode');
@@ -69,11 +68,14 @@ export async function POST(req: Request) {
                 return NextResponse.json({ error: "Invalid verification code. Try again." }, { status: 400 });
             }
 
+            // --- UPDATED: Await the encryption now that it pulls from DB ---
+            const encryptedSecret = await encrypt2FA(secret);
+
             await prisma.user.update({
                 where: { id: userId },
                 data: { 
                     twoFactorEnabled: true, 
-                    twoFactorSecret: encrypt2FA(secret) // <-- ENCRYPT THE SECRET HERE
+                    twoFactorSecret: encryptedSecret 
                 }
             });
 

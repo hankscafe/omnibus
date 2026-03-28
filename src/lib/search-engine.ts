@@ -94,8 +94,10 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         const subBroadClean = subNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
         
         if (subBroadClean.length > 3) {
-            if (year) queries.add(`${subBroadClean} ${year}`.trim());
-            queries.add(subBroadClean);
+            // ONLY add the subtitle query if we have a specific year to pair it with
+            if (year) {
+                queries.add(`${subBroadClean} ${year}`.trim());
+            }
             
             let subExpanded = subBroadClean;
             for (const [ac, full] of Object.entries(acronyms)) {
@@ -103,8 +105,9 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
                 subExpanded = subExpanded.replace(regex, full);
             }
             if (subExpanded.toLowerCase() !== subBroadClean.toLowerCase()) {
-                if (year) queries.add(`${subExpanded} ${year}`.trim());
-                queries.add(subExpanded);
+                if (year) {
+                    queries.add(`${subExpanded} ${year}`.trim());
+                }
             }
         }
     }

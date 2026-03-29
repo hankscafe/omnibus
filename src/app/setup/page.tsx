@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { 
     UserPlus, Database, HardDrive, Download, Search, Settings2, 
     CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw,
@@ -35,12 +36,12 @@ export default function SetupWizard() {
     username: '', email: '', password: '', confirmPassword: '',
     cv_api_key: '',
     download_path: '',
-    prowlarr_url: '', prowlarr_key: '',
+    prowlarr_url: '', prowlarr_key: '', prowlarr_categories: '7030, 8030',
     filter_enabled: false, filter_publishers: '', filter_keywords: '',
     oidc_enabled: false, oidc_issuer: '', oidc_client_id: '', oidc_client_secret: ''
   });
 
-  // Relational States (Matching Settings Page logic)
+  // Relational States
   const [libraries, setLibraries] = useState<any[]>([{ id: 'tmp_1', name: 'Standard Comics', path: '', isManga: false, isDefault: true }]);
   const [configuredClients, setConfiguredClients] = useState<any[]>([]);
   const [configuredIndexers, setConfiguredIndexers] = useState<any[]>([]);
@@ -49,7 +50,21 @@ export default function SetupWizard() {
 
   // Local helper states for modals/forms
   const [availableIndexers, setAvailableIndexers] = useState<any[]>([]);
-  const [clientForm, setClientForm] = useState({ type: 'qbit', url: '', user: '', pass: '', apiKey: '' });
+  
+  // Download Client Modal States
+  const [clientModalOpen, setClientModalOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState<any>(null);
+
+  // Indexer Modal States
+  const [indexerModalOpen, setIndexerModalOpen] = useState(false);
+  const [editingIndexer, setEditingIndexer] = useState<any>({ 
+    id: 0, name: "", priority: 25, seedTime: 0, seedRatio: 0, rss: false, protocol: "torrent" 
+  });
+
+  // Webhook Modal States
+  const [webhookModalOpen, setWebhookModalOpen] = useState(false);
+  const [editingWebhook, setEditingWebhook] = useState<any>(null);
+  const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/setup/check')
@@ -66,6 +81,13 @@ export default function SetupWizard() {
     if (testStates[key] !== undefined) {
         setTestStates(prev => ({ ...prev, [key]: 'idle' }));
     }
+  };
+
+  const updateEditingClient = (key: string, value: any) => {
+      setEditingClient((prev: any) => ({ ...prev, [key]: value }));
+      if (testStates['clients'] !== 'idle') {
+          setTestStates(prev => ({ ...prev, clients: 'idle' }));
+      }
   };
 
   const getButtonClass = (key: string) => {
@@ -125,7 +147,6 @@ export default function SetupWizard() {
               setTestStates(prev => ({ ...prev, [stateKey]: 'success' }));
               toast({ title: "Connection Successful!", description: data.message });
               
-              // Trigger Discover Sync immediately if CV is tested successfully
               if (type === 'comicvine') {
                   fetch('/api/admin/jobs/trigger', {
                       method: 'POST',
@@ -146,23 +167,32 @@ export default function SetupWizard() {
       } finally { setIsTesting(null); }
   };
 
-  const handleTestAndAddClient = async () => {
-      const success = await handleTestConnection('clients', { clientType: clientForm.type, url: clientForm.url, user: clientForm.user, pass: clientForm.pass, apiKey: clientForm.apiKey }, 'dl');
-      if (success) {
-          setConfiguredClients(prev => [...prev, {
-              id: Math.random().toString(36).substr(2, 9),
-              name: clientForm.type.toUpperCase() + " Client",
-              type: clientForm.type,
-              protocol: clientForm.type === 'sab' || clientForm.type === 'nzbget' ? 'Usenet' : 'Torrent',
-              url: clientForm.url,
-              user: clientForm.user,
-              pass: clientForm.pass,
-              apiKey: clientForm.apiKey,
-              category: "comics"
-          }]);
-          setClientForm({ type: 'qbit', url: '', user: '', pass: '', apiKey: '' });
-          setTestStates(prev => ({ ...prev, dl: 'idle' }));
-      }
+  const openClientSetup = (type: string) => {
+      const protocols: Record<string, 'Torrent' | 'Usenet'> = { qbit: 'Torrent', deluge: 'Torrent', sab: 'Usenet', nzbget: 'Usenet' };
+      const names: Record<string, string> = { qbit: 'qBittorrent', deluge: 'Deluge', sab: 'SABnzbd', nzbget: 'NZBGet' };
+      setTestStates(prev => ({ ...prev, clients: 'idle' }));
+      setEditingClient({
+          id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
+          type, name: names[type], protocol: protocols[type],
+          url: "", user: "", pass: "", apiKey: "", category: "comics",
+          remotePath: "", localPath: ""
+      });
+      setClientModalOpen(true);
+  };
+
+  const saveClientInState = () => {
+      if (!editingClient) return;
+      setConfiguredClients(prev => {
+          const filtered = prev.filter(c => c.id !== editingClient.id);
+          return [...filtered, editingClient];
+      });
+      setClientModalOpen(false);
+      toast({ title: "Client Saved" });
+  };
+
+  const deleteClient = (id: string) => {
+      setConfiguredClients(prev => prev.filter(c => c.id !== id));
+      toast({ title: "Client Removed" });
   };
 
   const handleFetchIndexers = async () => {
@@ -180,10 +210,97 @@ export default function SetupWizard() {
       }
   };
 
-  const addIndexer = (idx: any) => {
-      setConfiguredIndexers(prev => [...prev, {
-          id: idx.id, name: idx.name, priority: 25, seedTime: 0, seedRatio: 0, rss: true, protocol: idx.protocol || "torrent"
-      }]);
+  const openIndexerModal = (indexer: any, isEdit = false) => {
+    const protocol = indexer.protocol || "torrent";
+    if (isEdit) {
+        setEditingIndexer({ ...indexer, seedRatio: indexer.seedRatio || 0 });
+    } else {
+        setEditingIndexer({
+            id: indexer.id, name: indexer.name, priority: 25, seedTime: 0, seedRatio: 0, rss: true, protocol
+        });
+    }
+    setIndexerModalOpen(true);
+  };
+
+  const saveIndexerConfig = () => {
+    setConfiguredIndexers(prev => {
+        const filtered = prev.filter(i => i.id !== editingIndexer.id);
+        return [...filtered, editingIndexer];
+    });
+    setIndexerModalOpen(false);
+    toast({ title: "Indexer Saved" });
+  };
+
+  const deleteIndexer = (id: number) => {
+    setConfiguredIndexers(prev => prev.filter(i => i.id !== id));
+    toast({ title: "Indexer Removed" });
+  };
+
+  const openWebhookModal = (webhook?: any) => {
+    if (webhook) {
+      setEditingWebhook({ ...webhook });
+    } else {
+      setEditingWebhook({
+        id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
+        name: "", url: "", events: [], isActive: true,
+        botUsername: "", botAvatarUrl: "" 
+      });
+    }
+    setWebhookModalOpen(true);
+  };
+
+  const saveWebhook = () => {
+    if (!editingWebhook?.name || !editingWebhook?.url) {
+      toast({ title: "Validation Error", description: "Name and URL are required.", variant: "destructive" });
+      return;
+    }
+    setWebhooks(prev => {
+      const filtered = prev.filter(w => w.id !== editingWebhook.id);
+      return [...filtered, editingWebhook];
+    });
+    setWebhookModalOpen(false);
+    toast({ title: "Webhook Configured" });
+  };
+
+  const deleteWebhook = (id: string) => {
+    setWebhooks(prev => prev.filter(w => w.id !== id));
+    toast({ title: "Webhook Removed" });
+  };
+
+  const toggleWebhookActive = (id: string) => {
+    setWebhooks(prev => prev.map(w => w.id === id ? { ...w, isActive: !w.isActive } : w));
+  };
+
+  const toggleWebhookEvent = (eventId: string) => {
+    if (!editingWebhook) return;
+    const hasEvent = editingWebhook.events.includes(eventId);
+    setEditingWebhook({
+      ...editingWebhook,
+      events: hasEvent 
+        ? editingWebhook.events.filter((e: string) => e !== eventId) 
+        : [...editingWebhook.events, eventId]
+    });
+  };
+
+  const handleTestWebhook = async (webhook: any) => {
+    setTestingWebhookId(webhook.id);
+    try {
+      const res = await fetch('/api/admin/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'webhook', config: webhook })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Test Sent", description: "Check your Discord channel." });
+      } else {
+        toast({ title: "Test Failed", description: data.error || data.message || "Failed to reach Discord.", variant: "destructive" });
+      }
+    } catch (e) {
+      toast({ title: "Error", description: "System communication error.", variant: "destructive" });
+    } finally {
+      setTestingWebhookId(null);
+    }
   };
 
   const handleNext = async () => {
@@ -217,6 +334,7 @@ export default function SetupWizard() {
               download_path: formData.download_path,
               prowlarr_url: formData.prowlarr_url,
               prowlarr_key: formData.prowlarr_key,
+              prowlarr_categories: formData.prowlarr_categories,
               filter_enabled: formData.filter_enabled ? "true" : "false",
               filter_publishers: formData.filter_publishers,
               filter_keywords: formData.filter_keywords,
@@ -418,7 +536,7 @@ export default function SetupWizard() {
                                                     }); 
                                                     setLibraries(nl);
                                                 }}/>
-                                                <Label className="text-xs">Default Drop</Label>
+                                                <Label className="text-xs">Default for Auto-Import</Label>
                                             </div>
                                         </div>
                                         {libraries.length > 1 && (
@@ -456,7 +574,10 @@ export default function SetupWizard() {
                             {configuredClients.map((c, i) => (
                                 <div key={i} className="flex justify-between items-center bg-white dark:bg-slate-950 p-3 rounded-lg shadow-sm border dark:border-slate-800">
                                     <div><p className="font-bold text-sm">{c.name}</p><p className="text-[10px] text-muted-foreground">{c.url}</p></div>
-                                    <Button variant="ghost" size="icon" onClick={() => setConfiguredClients(prev => prev.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-red-500"/></Button>
+                                    <div className="flex gap-1 shrink-0">
+                                        <Button variant="ghost" size="icon" onClick={() => { setEditingClient(c); setTestStates(prev => ({ ...prev, clients: 'idle' })); setClientModalOpen(true); }}><Settings2 className="w-4 h-4"/></Button>
+                                        <Button variant="ghost" size="icon" onClick={() => deleteClient(c.id)}><Trash2 className="w-4 h-4 text-red-500"/></Button>
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -466,32 +587,12 @@ export default function SetupWizard() {
                         <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Add New Client</Label>
                         <div className="grid grid-cols-2 gap-4 mb-4">
                             {['qbit', 'sab', 'deluge', 'nzbget'].map(type => (
-                                <Button key={type} variant={clientForm.type === type ? 'default' : 'outline'} className="h-12 font-bold" onClick={() => setClientForm({ ...clientForm, type: type as any })}>
+                                <Button key={type} variant="outline" className="h-12 font-bold" onClick={() => openClientSetup(type)}>
                                     {configuredClients.some(c => c.type === type) && <CheckCircle2 className="w-4 h-4 text-green-400 mr-2"/>}
                                     {type.toUpperCase()}
                                 </Button>
                             ))}
                         </div>
-
-                        <div className="grid gap-2">
-                            <Input value={clientForm.url} onChange={e => { setClientForm({...clientForm, url: e.target.value}); setTestStates(prev => ({...prev, dl: 'idle'})) }} placeholder="Server URL (e.g. http://192.168.1.100:8080)" className="h-12 bg-white dark:bg-slate-950"/>
-                        </div>
-                        
-                        {clientForm.type === 'sab' || clientForm.type === 'nzbget' ? (
-                            <div className="grid gap-2">
-                                <Input value={clientForm.apiKey} onChange={e => { setClientForm({...clientForm, apiKey: e.target.value}); setTestStates(prev => ({...prev, dl: 'idle'})) }} placeholder="API Key / Password" className="h-12 bg-white dark:bg-slate-950"/>
-                            </div>
-                        ) : (
-                            <div className="grid sm:grid-cols-2 gap-4">
-                                <div className="grid gap-2"><Input value={clientForm.user} onChange={e => { setClientForm({...clientForm, user: e.target.value}); setTestStates(prev => ({...prev, dl: 'idle'})) }} placeholder="Username" className="h-12 bg-white dark:bg-slate-950"/></div>
-                                <div className="grid gap-2"><Input type="password" value={clientForm.pass} onChange={e => { setClientForm({...clientForm, pass: e.target.value}); setTestStates(prev => ({...prev, dl: 'idle'})) }} placeholder="Password" className="h-12 bg-white dark:bg-slate-950"/></div>
-                            </div>
-                        )}
-                        
-                        <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('dl')}`} disabled={!clientForm.url || isTesting === 'dl'} onClick={handleTestAndAddClient}>
-                            {isTesting === 'dl' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['dl'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
-                            {testStates['dl'] === 'success' ? "Added!" : "Test & Add Client"}
-                        </Button>
                     </div>
                 </div>
             )}
@@ -512,6 +613,11 @@ export default function SetupWizard() {
                             <Label>API Key</Label>
                             <Input value={formData.prowlarr_key} onChange={e => updateForm('prowlarr_key', e.target.value)} className="h-12 bg-white dark:bg-slate-950"/>
                         </div>
+                        <div className="grid gap-2">
+                            <Label>Search Categories (Torznab IDs)</Label>
+                            <Input value={formData.prowlarr_categories} onChange={(e) => updateForm('prowlarr_categories', e.target.value)} placeholder="e.g. 7030, 8030" className="h-12 bg-white dark:bg-slate-950"/>
+                            <p className="text-xs text-muted-foreground mt-1">Standard categories: <strong>7030</strong> (Comics), <strong>8030</strong> (Manga). Use a comma-separated list.</p>
+                        </div>
                         <Button className={`w-full h-12 font-bold mt-4 transition-colors ${getButtonClass('pr')}`} disabled={!formData.prowlarr_url || !formData.prowlarr_key || isTesting === 'pr'} onClick={handleFetchIndexers}>
                             {isTesting === 'pr' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />} 
                             {testStates['pr'] === 'success' ? "Refresh Indexers" : "Connect & Fetch Indexers"}
@@ -530,9 +636,32 @@ export default function SetupWizard() {
                                             {configuredIndexers.some(c => c.id === idx.id) ? (
                                                 <Badge className="bg-green-500 hover:bg-green-600">Added</Badge>
                                             ) : (
-                                                <Button size="sm" variant="outline" onClick={() => addIndexer(idx)}><Plus className="w-3 h-3 mr-1"/> Add</Button>
+                                                <Button size="sm" variant="outline" onClick={() => openIndexerModal(idx)}><Plus className="w-3 h-3 mr-1"/> Add</Button>
                                             )}
                                         </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {configuredIndexers.length > 0 && (
+                            <div className="pt-4 border-t dark:border-slate-800">
+                                <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold mb-3 block">Configured Indexers</Label>
+                                <div className="grid sm:grid-cols-2 gap-4">
+                                    {configuredIndexers.map(idx => (
+                                        <Card key={idx.id} className="p-4 shadow-sm dark:bg-slate-900 border-slate-200 dark:border-slate-800">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <div className="min-w-0 flex-1 pr-2">
+                                                    <p className="font-bold text-sm truncate text-foreground">{idx.name}</p>
+                                                    <Badge variant="secondary" className="text-[9px] uppercase tracking-wider mt-1">{idx.protocol || "torrent"}</Badge>
+                                                </div>
+                                                <div className="flex gap-1 shrink-0">
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openIndexerModal(idx, true)}><Settings2 className="h-4 w-4"/></Button>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500" onClick={() => deleteIndexer(idx.id)}><Trash2 className="h-4 w-4"/></Button>
+                                                </div>
+                                            </div>
+                                            <div className="text-[10px] text-muted-foreground border-t dark:border-slate-800 pt-2 uppercase tracking-tight">Priority: {idx.priority} • RSS: {idx.rss ? "Enabled" : "Disabled"}</div>
+                                        </Card>
                                     ))}
                                 </div>
                             </div>
@@ -541,7 +670,7 @@ export default function SetupWizard() {
                 </div>
             )}
 
-            {/* STEP 6: DISCORD (NEW) */}
+            {/* STEP 6: DISCORD */}
             {step === 6 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
@@ -574,7 +703,7 @@ export default function SetupWizard() {
                 </div>
             )}
 
-            {/* STEP 7: EXTRA USERS (NEW) */}
+            {/* STEP 7: EXTRA USERS */}
             {step === 7 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
@@ -626,7 +755,7 @@ export default function SetupWizard() {
                 </div>
             )}
 
-            {/* STEP 8: FINALIZE (EXTRAS) */}
+            {/* STEP 8: FINALIZE */}
             {step === 8 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
@@ -702,6 +831,102 @@ export default function SetupWizard() {
             </div>
         </Card>
       </div>
+
+      {/* DOWNLOAD CLIENT MODAL */}
+      <Dialog open={clientModalOpen} onOpenChange={setClientModalOpen}>
+          <DialogContent className="sm:max-w-[500px] w-[95%] bg-background border-border rounded-xl max-h-[90vh] overflow-y-auto shadow-2xl transition-colors duration-300">
+              <DialogHeader><DialogTitle className="text-foreground">Configure {editingClient?.name}</DialogTitle></DialogHeader>
+              {editingClient && (
+                  <div className="grid gap-4 py-4">
+                      <div className="grid gap-2">
+                          <Label className="text-foreground font-semibold">Server URL</Label>
+                          <Input value={editingClient.url} onChange={e => updateEditingClient('url', e.target.value)} placeholder="http://192.168.1.100:8080" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                      </div>
+
+                      <div className="grid gap-2">
+                          <Label className="text-foreground font-semibold">Download Category / Label</Label>
+                          <Input value={editingClient.category || ""} onChange={e => updateEditingClient('category', e.target.value)} placeholder="e.g. comics, manga" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                          <p className="text-[11px] text-muted-foreground">Comma-separated list of categories to track. New downloads use the first one. <strong className="text-orange-500">Categories MUST exist in your client!</strong></p>
+                      </div>
+
+                      <div className="border-t border-border pt-4 mt-2">
+                          <div className="flex items-center gap-2 mb-3">
+                              <FolderOpen className="w-4 h-4 text-blue-500" />
+                              <Label className="font-bold text-xs uppercase text-muted-foreground">Docker Path Mapping</Label>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div className="grid gap-2">
+                                  <Label className="text-[11px] text-muted-foreground">Remote Path (Client)</Label>
+                                  <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.remotePath || ""} onChange={e => updateEditingClient('remotePath', e.target.value)} placeholder="/downloads/comics" />
+                              </div>
+                              <div className="grid gap-2">
+                                  <Label className="text-[11px] text-muted-foreground">Local Path (Omnibus)</Label>
+                                  <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.localPath || ""} onChange={e => updateEditingClient('localPath', e.target.value)} placeholder="/data/downloads" />
+                              </div>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-2">
+                              Use this if Omnibus and the Download Client see different paths (e.g. Docker volumes).
+                          </p>
+                      </div>
+
+                      {['qbit', 'deluge', 'nzbget'].includes(editingClient.type) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 border-t border-border pt-4">
+                              <div className="grid gap-2"><Label className="text-foreground font-semibold">User</Label><Input value={editingClient.user} onChange={e => updateEditingClient('user', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                              <div className="grid gap-2"><Label className="text-foreground font-semibold">Pass</Label><Input type="password" value={editingClient.pass} onChange={e => updateEditingClient('pass', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                          </div>
+                      )}
+                      {['sab'].includes(editingClient.type) && (
+                          <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => updateEditingClient('apiKey', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                      )}
+                      <div className="border-t border-border pt-4">
+                          <Button variant="outline" className={`w-full h-12 sm:h-10 font-bold transition-colors ${getButtonClass('clients')}`} onClick={() => handleTestConnection('clients', { clientType: editingClient.type, ...editingClient }, 'clients')} disabled={isTesting === 'clients' || !editingClient.url}>
+                              {isTesting === 'clients' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2"/> : testStates['clients'] === 'success' ? <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/>} 
+                              {testStates['clients'] === 'success' ? "Connection Verified!" : "Test Connection"}
+                          </Button>
+                      </div>
+                  </div>
+              )}
+              <DialogFooter className="gap-2 sm:gap-0">
+                  <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setClientModalOpen(false)}>Cancel</Button>
+                  <Button className="h-12 sm:h-10 font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-md" onClick={saveClientInState}>Save Settings</Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
+      {/* INDEXER MODAL */}
+      <Dialog open={indexerModalOpen} onOpenChange={setIndexerModalOpen}>
+        <DialogContent className="sm:max-w-md w-[95%] bg-background border-border rounded-xl shadow-2xl transition-colors duration-300">
+            <DialogHeader><DialogTitle className="text-foreground">Configure {editingIndexer.name}</DialogTitle></DialogHeader>
+            <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                    <Label className="text-foreground font-semibold">Priority (1-25)</Label>
+                    <Input type="number" value={editingIndexer.priority} onChange={e => setEditingIndexer({...editingIndexer, priority: parseInt(e.target.value)})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">Seed Time (minutes)</Label>
+                        <Input type="number" value={editingIndexer.seedTime} onChange={e => setEditingIndexer({...editingIndexer, seedTime: parseInt(e.target.value)})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                        <p className="text-[10px] text-muted-foreground italic">0 = Client default.</p>
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">Seed Ratio</Label>
+                        <Input type="number" step="0.1" value={editingIndexer.seedRatio} onChange={e => setEditingIndexer({...editingIndexer, seedRatio: parseFloat(e.target.value)})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                        <p className="text-[10px] text-muted-foreground italic">e.g. 1.5. (0 = Client default).</p>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 bg-muted/30 p-4 rounded-lg border border-border group cursor-pointer" onClick={() => setEditingIndexer({...editingIndexer, rss: !editingIndexer.rss})}>
+                    <Switch id="rss" checked={editingIndexer.rss} onCheckedChange={c => setEditingIndexer({...editingIndexer, rss: !!c})} className="scale-110 sm:scale-100" />
+                    <Label htmlFor="rss" className="cursor-pointer font-bold ml-2 text-foreground group-hover:text-primary transition-colors">Enable RSS Monitoring</Label>
+                </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+                <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setIndexerModalOpen(false)}>Cancel</Button>
+                <Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveIndexerConfig}>Save Settings</Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -13,6 +13,7 @@ export function TitleManager() {
 
     // Map your specific routes to their proper titles
     if (pathname === "/") newTitle = "Omnibus - Home";
+    else if (pathname.startsWith("/setup")) newTitle = "Omnibus - Setup Wizard";
     else if (pathname.startsWith("/admin/smart-match")) newTitle = "Omnibus - Smart Matcher";
     else if (pathname.startsWith("/admin/settings")) newTitle = "Omnibus - Settings";
     else if (pathname.startsWith("/admin/storage")) newTitle = "Omnibus - Storage";

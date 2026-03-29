@@ -166,20 +166,7 @@ export default function SetupWizard() {
           if (data.success) {
               setTestStates(prev => ({ ...prev, [stateKey]: 'success' }));
               toast({ title: "Connection Successful!", description: data.message });
-              
-              if (type === 'comicvine') {
-                  await fetch('/api/admin/config', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ settings: { cv_api_key: payload.cv_api_key } })
-                  });
-                  
-                  fetch('/api/admin/jobs/trigger', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ job: 'popular' })
-                  }).catch(() => {});
-              }
+              // Removed the premature Discover Sync trigger from here!
               return true;
           } else {
               setTestStates(prev => ({ ...prev, [stateKey]: 'error' }));
@@ -392,6 +379,15 @@ export default function SetupWizard() {
                   }).catch(() => {});
               }
 
+              // Trigger Discover Sync HERE, after filters have been successfully saved to DB!
+              if (formData.cv_api_key) {
+                  fetch('/api/admin/jobs/trigger', {
+                      method: 'POST', 
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ job: 'popular' })
+                  }).catch(() => {});
+              }
+
               fetch('/api/admin/jobs/trigger', {
                   method: 'POST', headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ job: 'library' })
@@ -514,7 +510,7 @@ export default function SetupWizard() {
                         </div>
                         <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('cv')}`} disabled={!formData.cv_api_key || isTesting === 'cv'} onClick={() => handleTestConnection('comicvine', { cv_api_key: formData.cv_api_key }, 'cv')}>
                             {isTesting === 'cv' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['cv'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
-                            {testStates['cv'] === 'success' ? "Tested & Saved (Syncing Discover...)" : "Test & Save Connection"}
+                            {testStates['cv'] === 'success' ? "Connection Verified!" : "Test Connection"}
                         </Button>
                     </div>
                 </div>

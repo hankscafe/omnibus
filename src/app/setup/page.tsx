@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/components/ui/use-toast"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
@@ -14,11 +15,30 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { 
     UserPlus, Database, HardDrive, Download, Search, Settings2, 
     CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw,
-    Webhook, Bell, User, Zap, FolderOpen, UploadCloud
+    Webhook, Bell, User, Zap, FolderOpen, UploadCloud, Send, AlertCircle
 } from "lucide-react"
 
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
 const RECOMMENDED_KEYWORDS = "weekly young, young animal, weekly shonen, monthly shonen, gee-whiz, manga, hentai, doujinshi, shoujo, seinen, shojo, josei, gaze, lustiges taschenbuch enten-edition, les tuniques bleues, big comic superior, Creature Girls: A Hands-On Field Journal In Another World, Young King Bull, weekly playboy, big comic spirits, Young Champion Retsu, Big Comic Zōkan, Monthly Young Magazine, Comic Zenon, shonen sunday s, Chira Chiller";
+
+const DISCORD_EVENTS = [
+  { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
+  { id: "request_approved", label: "Request Approved", desc: "Includes admin username, cover image, and synopsis." },
+  { id: "comic_available", label: "Comic Available", desc: "Includes requester username, cover image, and synopsis." },
+  { id: "download_failed", label: "Comic Download Failed", desc: "Alerts when Prowlarr or the download client fails." },
+  { id: "pending_account", label: "Pending Account", desc: "Includes new user's username, email, and registration date." },
+  { id: "account_approved", label: "Account Approved", desc: "Alerts when an admin approves a new user account." },
+  { id: "system_alert", label: "System Health", desc: "Triggers for disk space warnings or critical errors." },
+  { id: "update_available", label: "System Update Available", desc: "Alerts when a new version of Omnibus is published to GitHub." },
+  { id: "library_cleanup", label: "Library Cleanup", desc: "Triggers when a series is deleted, noting if files were removed from the disk." },
+  { id: "metadata_match", label: "Metadata Matched", desc: "Alerts when a series is successfully matched to ComicVine IDs." },
+  { id: "job_db_backup", label: "Database Backup Complete", desc: "Notifies when the automated database backup finishes." },
+  { id: "job_library_scan", label: "Library Auto-Scan Complete", desc: "Notifies when the automated library scan finishes." },
+  { id: "job_metadata_sync", label: "Deep Metadata Sync Complete", desc: "Notifies when the deep metadata sync finishes processing." },
+  { id: "job_issue_monitor", label: "New Issue Monitor Complete", desc: "Notifies when the monitor successfully checks for new releases." },
+  { id: "job_discover_sync", label: "Discover Sync Complete", desc: "Notifies when the discover timeline and popular comics refresh." },
+  { id: "job_diagnostics", label: "System Diagnostics Complete", desc: "Notifies when automated system diagnostics have been run." }
+];
 
 export default function SetupWizard() {
   const router = useRouter();
@@ -147,7 +167,15 @@ export default function SetupWizard() {
               setTestStates(prev => ({ ...prev, [stateKey]: 'success' }));
               toast({ title: "Connection Successful!", description: data.message });
               
+              // Trigger Discover Sync immediately if CV is tested successfully
               if (type === 'comicvine') {
+                  // We must pre-save the API key to the DB so the background job can find it
+                  await fetch('/api/admin/config', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ settings: { cv_api_key: payload.cv_api_key } })
+                  });
+                  
                   fetch('/api/admin/jobs/trigger', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
@@ -587,7 +615,7 @@ export default function SetupWizard() {
                         <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Add New Client</Label>
                         <div className="grid grid-cols-2 gap-4 mb-4">
                             {['qbit', 'sab', 'deluge', 'nzbget'].map(type => (
-                                <Button key={type} variant="outline" className="h-12 font-bold" onClick={() => openClientSetup(type)}>
+                                <Button key={type} variant={clientForm.type === type ? 'default' : 'outline'} className="h-12 font-bold" onClick={() => openClientSetup(type)}>
                                     {configuredClients.some(c => c.type === type) && <CheckCircle2 className="w-4 h-4 text-green-400 mr-2"/>}
                                     {type.toUpperCase()}
                                 </Button>
@@ -677,26 +705,58 @@ export default function SetupWizard() {
                         <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Webhook className="w-6 h-6 text-indigo-500"/> Discord Alerts (Optional)</h2>
                         <p className="text-muted-foreground mt-1">Automatically send notifications to your server when new comics are added or requested.</p>
                     </div>
-                    <div className="space-y-4 bg-slate-50 dark:bg-slate-950 p-6 rounded-xl border dark:border-slate-800">
-                        <div className="grid gap-2">
-                            <Input placeholder="Webhook Name (e.g. Comic Alerts)" id="wh-name" className="h-12 bg-white dark:bg-slate-900"/>
-                        </div>
-                        <div className="grid gap-2">
-                            <Input placeholder="https://discord.com/api/webhooks/..." id="wh-url" className="h-12 bg-white dark:bg-slate-900 font-mono text-sm"/>
-                        </div>
-                        <Button className="w-full h-12 font-bold mt-2" onClick={() => {
-                            const n = (document.getElementById('wh-name') as HTMLInputElement).value;
-                            const u = (document.getElementById('wh-url') as HTMLInputElement).value;
-                            if (n && u) {
-                                setWebhooks([...webhooks, { id: Date.now().toString(), name: n, url: u, events: ['pending_request', 'comic_available', 'request_approved', 'download_failed'], isActive: true }]);
-                                (document.getElementById('wh-name') as HTMLInputElement).value = "";
-                                (document.getElementById('wh-url') as HTMLInputElement).value = "";
-                            }
-                        }}><Plus className="w-4 h-4 mr-2" /> Add Webhook</Button>
+
+                    <div className="space-y-4 pt-2">
+                        <Button variant="outline" className="w-full h-12 font-bold border-dashed border-2" onClick={() => openWebhookModal()}>
+                            <Plus className="w-4 h-4 mr-2" /> Add Webhook
+                        </Button>
                         
                         {webhooks.length > 0 && (
-                            <div className="pt-4 border-t dark:border-slate-800 flex flex-wrap gap-2">
-                                {webhooks.map(w => <Badge key={w.id} variant="secondary" className="px-3 py-1.5">{w.name}</Badge>)}
+                            <div className="grid gap-4 mt-4">
+                                {webhooks.map(hook => (
+                                    <div key={hook.id} className="flex flex-col border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-900/50 shadow-sm p-4 gap-3">
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                            <div className="flex flex-col gap-1 min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-bold text-lg sm:text-base text-foreground">{hook.name}</span>
+                                                    <Badge variant={hook.isActive ? "secondary" : "outline"} className={hook.isActive ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0" : "text-muted-foreground"}>
+                                                        {hook.isActive ? "Active" : "Disabled"}
+                                                    </Badge>
+                                                </div>
+                                                <p className="text-xs sm:text-[11px] font-mono text-muted-foreground truncate max-w-[300px] sm:max-w-md">
+                                                    {hook.url.replace(/https:\/\/discord\.com\/api\/webhooks\/[^\/]+\//, "https://.../")}
+                                                </p>
+                                            </div>
+                                            
+                                            <div className="flex items-center gap-2 shrink-0 border-t sm:border-0 border-slate-200 dark:border-slate-800 pt-3 sm:pt-0">
+                                                <Button 
+                                                    variant="outline" 
+                                                    size="icon" 
+                                                    className="h-10 w-10 sm:h-8 sm:w-8 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20" 
+                                                    disabled={testingWebhookId === hook.id}
+                                                    onClick={() => handleTestWebhook(hook)}
+                                                >
+                                                    {testingWebhookId === hook.id ? <Loader2 className="h-5 w-5 sm:h-4 sm:w-4 animate-spin" /> : <Send className="h-5 w-5 sm:h-4 sm:w-4" />}
+                                                </Button>
+                                                <Switch checked={hook.isActive} onCheckedChange={() => toggleWebhookActive(hook.id)} className="mx-2 scale-110 sm:scale-100" />
+                                                <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-slate-200 dark:hover:bg-slate-800 text-foreground" onClick={() => openWebhookModal(hook)}>
+                                                    <Settings2 className="h-5 w-5 sm:h-4 sm:w-4" />
+                                                </Button>
+                                                <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteWebhook(hook.id)}>
+                                                    <Trash2 className="h-5 w-5 sm:h-4 sm:w-4" />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="flex flex-wrap gap-1.5 bg-white dark:bg-slate-950 p-2 rounded-md border border-slate-200 dark:border-slate-800">
+                                            {hook.events.map((ev: string) => (
+                                                <Badge key={ev} variant="outline" className="text-[10px] uppercase tracking-tighter text-muted-foreground border-slate-200 dark:border-slate-800">
+                                                    {ev.replace(/_/g, ' ')}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </div>
@@ -879,7 +939,7 @@ export default function SetupWizard() {
                           <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => updateEditingClient('apiKey', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                       )}
                       <div className="border-t border-border pt-4">
-                          <Button variant="outline" className={`w-full h-12 sm:h-10 font-bold transition-colors ${getButtonClass('clients')}`} onClick={() => handleTestConnection('clients', { clientType: editingClient.type, ...editingClient }, 'clients')} disabled={isTesting === 'clients' || !editingClient.url}>
+                          <Button className={`w-full h-12 sm:h-10 font-bold transition-colors ${getButtonClass('clients')}`} onClick={() => handleTestConnection('clients', { clientType: editingClient.type, ...editingClient }, 'clients')} disabled={isTesting === 'clients' || !editingClient.url}>
                               {isTesting === 'clients' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2"/> : testStates['clients'] === 'success' ? <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/>} 
                               {testStates['clients'] === 'success' ? "Connection Verified!" : "Test Connection"}
                           </Button>
@@ -927,6 +987,104 @@ export default function SetupWizard() {
             </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* WEBHOOK MODAL */}
+      <Dialog open={webhookModalOpen} onOpenChange={setWebhookModalOpen}>
+        <DialogContent className="sm:max-w-md w-[95%] bg-background border-border rounded-xl shadow-2xl transition-colors duration-300">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">{editingWebhook?.name ? "Edit Webhook" : "New Webhook"}</DialogTitle>
+            <DialogDescription className="text-muted-foreground">Configure your Discord integration details and events.</DialogDescription>
+          </DialogHeader>
+          
+          {editingWebhook && (
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label className="text-xs font-bold uppercase text-muted-foreground">Webhook Name</Label>
+                <Input 
+                  placeholder="e.g. Admin Alerts" 
+                  value={editingWebhook.name} 
+                  onChange={e => setEditingWebhook({ ...editingWebhook, name: e.target.value })}
+                  className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" 
+                />
+              </div>
+              
+              <div className="grid gap-2">
+                <Label className="text-xs font-bold uppercase text-muted-foreground">Webhook URL</Label>
+                <div className="flex gap-2">
+                  <Input 
+                    placeholder="https://discord.com/api/webhooks/..." 
+                    value={editingWebhook.url} 
+                    onChange={e => setEditingWebhook({ ...editingWebhook, url: e.target.value })}
+                    className="h-12 sm:h-10 font-mono text-xs bg-muted/20 border-border flex-1 text-foreground" 
+                  />
+                  <Button 
+                    variant="secondary" 
+                    className="h-12 sm:h-10 font-bold bg-muted hover:bg-muted/80 text-foreground"
+                    disabled={!editingWebhook.url || testingWebhookId === editingWebhook.id}
+                    onClick={() => handleTestWebhook(editingWebhook)}
+                  >
+                    {testingWebhookId === editingWebhook.id ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : "Test"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label className="text-xs font-bold uppercase text-muted-foreground">Bot Username (Optional)</Label>
+                    <Input 
+                      placeholder="e.g. Omnibus Bot" 
+                      value={editingWebhook.botUsername || ""} 
+                      onChange={e => setEditingWebhook({ ...editingWebhook, botUsername: e.target.value })}
+                      className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" 
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label className="text-xs font-bold uppercase text-muted-foreground">Avatar URL (Optional)</Label>
+                    <Input 
+                      placeholder="https://..." 
+                      value={editingWebhook.botAvatarUrl || ""} 
+                      onChange={e => setEditingWebhook({ ...editingWebhook, botAvatarUrl: e.target.value })}
+                      className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" 
+                    />
+                  </div>
+              </div>
+
+              <div className="space-y-3 pt-4 border-t border-border">
+                <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
+                <div className="grid gap-2 max-h-[250px] overflow-y-auto pr-2">
+                  {DISCORD_EVENTS.map(event => (
+                    <div key={event.id} className="flex items-start space-x-3 p-2 sm:p-2 rounded hover:bg-muted/50 border border-transparent hover:border-border transition-colors group">
+                      <Checkbox 
+                        id={event.id} 
+                        checked={editingWebhook.events.includes(event.id)}
+                        onCheckedChange={() => toggleWebhookEvent(event.id)}
+                        className="mt-1 sm:mt-0 border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+                      />
+                      <div className="grid gap-1.5 leading-none">
+                        <label htmlFor={event.id} className="text-sm font-bold leading-none cursor-pointer text-foreground group-hover:text-primary transition-colors">
+                          {event.label}
+                        </label>
+                        <p className="text-[11px] text-muted-foreground leading-snug">
+                          {event.desc}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+             <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setWebhookModalOpen(false)}>Cancel</Button>
+             <Button onClick={saveWebhook} className="h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-md">
+                Save Integration
+             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   )
 }

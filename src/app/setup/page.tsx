@@ -1,7 +1,6 @@
-// src/app/setup/page.tsx
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -13,7 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { 
     UserPlus, Database, HardDrive, Download, Search, Settings2, 
-    CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw
+    CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw,
+    Webhook, Bell, User, Zap, FolderOpen, UploadCloud
 } from "lucide-react"
 
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
@@ -22,29 +22,34 @@ const RECOMMENDED_KEYWORDS = "weekly young, young animal, weekly shonen, monthly
 export default function SetupWizard() {
   const router = useRouter();
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [isTesting, setIsTesting] = useState<string | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
   const [testStates, setTestStates] = useState<Record<string, 'idle' | 'success' | 'error'>>({});
   const [adminCreated, setAdminCreated] = useState(false);
 
   const [formData, setFormData] = useState({
     username: '', email: '', password: '', confirmPassword: '',
     cv_api_key: '',
-    library_path: '', manga_library_path: '', download_path: '',
+    download_path: '',
     prowlarr_url: '', prowlarr_key: '',
     filter_enabled: false, filter_publishers: '', filter_keywords: '',
     oidc_enabled: false, oidc_issuer: '', oidc_client_id: '', oidc_client_secret: ''
   });
 
-  // Multiple Clients State
+  // Relational States (Matching Settings Page logic)
+  const [libraries, setLibraries] = useState<any[]>([{ id: 'tmp_1', name: 'Standard Comics', path: '', isManga: false, isDefault: true }]);
   const [configuredClients, setConfiguredClients] = useState<any[]>([]);
-  const [clientForm, setClientForm] = useState({ type: 'qbit', url: '', user: '', pass: '', apiKey: '' });
-
-  // Indexers State
-  const [availableIndexers, setAvailableIndexers] = useState<any[]>([]);
   const [configuredIndexers, setConfiguredIndexers] = useState<any[]>([]);
+  const [webhooks, setWebhooks] = useState<any[]>([]);
+  const [extraUsers, setExtraUsers] = useState<any[]>([]);
+
+  // Local helper states for modals/forms
+  const [availableIndexers, setAvailableIndexers] = useState<any[]>([]);
+  const [clientForm, setClientForm] = useState({ type: 'qbit', url: '', user: '', pass: '', apiKey: '' });
 
   useEffect(() => {
     fetch('/api/setup/check')
@@ -70,6 +75,42 @@ export default function SetupWizard() {
       return "bg-slate-100 hover:bg-slate-200 text-slate-900 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-white"; 
   };
 
+  const handleRestoreUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setIsRestoring(true);
+      toast({ title: "Restoring Database", description: "Decrypting and merging backup. Please wait..." });
+
+      const uploadFormData = new FormData();
+      uploadFormData.append('file', file);
+
+      try {
+          const res = await fetch('/api/admin/restore', {
+              method: 'POST',
+              body: uploadFormData
+          });
+
+          const data = await res.json();
+
+          if (res.ok) {
+              toast({ title: "Restore Complete", description: "Your server has been fully configured from backup!" });
+              router.push('/login');
+          } else {
+              throw new Error(data.error || "Failed to restore");
+          }
+      } catch (error: any) {
+          toast({ 
+              title: "Restore Failed", 
+              description: error.message || "Ensure your NEXTAUTH_SECRET matches the original server.", 
+              variant: "destructive" 
+          });
+      } finally {
+          setIsRestoring(false);
+          if (fileInputRef.current) fileInputRef.current.value = ''; 
+      }
+  };
+
   const handleTestConnection = async (type: string, payload: any, stateKey: string) => {
       setIsTesting(stateKey);
       try {
@@ -83,6 +124,15 @@ export default function SetupWizard() {
           if (data.success) {
               setTestStates(prev => ({ ...prev, [stateKey]: 'success' }));
               toast({ title: "Connection Successful!", description: data.message });
+              
+              // Trigger Discover Sync immediately if CV is tested successfully
+              if (type === 'comicvine') {
+                  fetch('/api/admin/jobs/trigger', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ job: 'popular' })
+                  }).catch(() => {});
+              }
               return true;
           } else {
               setTestStates(prev => ({ ...prev, [stateKey]: 'error' }));
@@ -93,9 +143,7 @@ export default function SetupWizard() {
           setTestStates(prev => ({ ...prev, [stateKey]: 'error' }));
           toast({ title: "Error", description: "Network error occurred.", variant: "destructive" });
           return false;
-      } finally {
-          setIsTesting(null);
-      }
+      } finally { setIsTesting(null); }
   };
 
   const handleTestAndAddClient = async () => {
@@ -160,19 +208,9 @@ export default function SetupWizard() {
       setStep(prev => prev + 1);
   };
 
-const handleFinish = async () => {
+  const handleFinish = async () => {
       setIsTesting('finish');
       
-      // Create the default libraries natively
-      const libraries = [];
-      if (formData.library_path?.trim()) {
-          libraries.push({ id: `tmp_1`, name: "Standard Comics", path: formData.library_path, isManga: false, isDefault: true });
-      }
-      if (formData.manga_library_path?.trim()) {
-          libraries.push({ id: `tmp_2`, name: "Manga", path: formData.manga_library_path, isManga: true, isDefault: true });
-      }
-
-      // Match the exact payload structure of the new Config API
       const finalPayload = {
           settings: {
               cv_api_key: formData.cv_api_key,
@@ -188,9 +226,10 @@ const handleFinish = async () => {
               oidc_client_secret: formData.oidc_client_secret,
               setup_complete: 'true' 
           },
-          libraries: libraries,
+          libraries,
           downloadClients: configuredClients,
-          indexers: configuredIndexers
+          indexers: configuredIndexers,
+          discordWebhooks: webhooks
       };
 
       try {
@@ -201,10 +240,11 @@ const handleFinish = async () => {
           });
           
           if (res.ok) {
-              if (formData.cv_api_key) {
-                  fetch('/api/admin/jobs/trigger', {
-                      method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ job: 'popular' })
+              for (const u of extraUsers) {
+                  await fetch('/api/auth/register', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(u)
                   }).catch(() => {});
               }
 
@@ -231,16 +271,18 @@ const handleFinish = async () => {
       { id: 1, title: "Admin", icon: UserPlus },
       { id: 2, title: "Metadata", icon: Database },
       { id: 3, title: "Storage", icon: HardDrive },
-      { id: 4, title: "Downloaders", icon: Download },
+      { id: 4, title: "Clients", icon: Download },
       { id: 5, title: "Indexers", icon: Search },
-      { id: 6, title: "Extras", icon: Settings2 },
+      { id: 6, title: "Discord", icon: Webhook },
+      { id: 7, title: "Users", icon: User },
+      { id: 8, title: "Finalize", icon: Settings2 },
   ];
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
       <title>Omnibus - Initial Setup</title>
       
-      <div className="max-w-3xl w-full space-y-8">
+      <div className="max-w-4xl w-full space-y-8">
         <div className="text-center space-y-2">
             <h1 className="text-4xl font-black tracking-tight text-slate-900 dark:text-white">Welcome to Omnibus.</h1>
             <p className="text-muted-foreground text-lg">Let's get your library configured and ready to read.</p>
@@ -248,31 +290,60 @@ const handleFinish = async () => {
 
         <div className="flex items-center justify-between relative px-4">
             <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1 bg-slate-200 dark:bg-slate-800 -z-10 rounded-full">
-                <div className="h-full bg-blue-500 transition-all duration-500 rounded-full" style={{ width: `${((step - 1) / 5) * 100}%` }} />
+                <div className="h-full bg-blue-500 transition-all duration-500 rounded-full" style={{ width: `${((step - 1) / 7) * 100}%` }} />
             </div>
             {steps.map(s => {
                 const Icon = s.icon;
                 const isActive = step === s.id;
                 const isPast = step > s.id;
                 return (
-                    <div key={s.id} className="flex flex-col items-center gap-2 bg-slate-50 dark:bg-slate-950 px-2">
+                    <div key={s.id} className="flex flex-col items-center gap-2 bg-slate-50 dark:bg-slate-950 px-2 hidden sm:flex">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-colors ${isActive ? 'border-blue-500 bg-blue-500 text-white shadow-lg shadow-blue-500/20' : isPast ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-500' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400'}`}>
                             {isPast ? <CheckCircle2 className="w-5 h-5" /> : <Icon className="w-5 h-5" />}
                         </div>
-                        <span className={`text-xs font-bold ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>{s.title}</span>
+                        <span className={`text-[10px] font-bold ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>{s.title}</span>
                     </div>
                 )
             })}
+            
+            {/* Mobile Step Indicator */}
+            <div className="sm:hidden flex w-full justify-center">
+                <span className="bg-blue-500 text-white px-4 py-1 rounded-full text-xs font-bold shadow-md">
+                    Step {step} of 8
+                </span>
+            </div>
         </div>
 
-        <Card className="p-8 shadow-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-2xl relative overflow-hidden">
+        <Card className="p-4 sm:p-8 shadow-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-2xl relative overflow-hidden">
             
+            {/* STEP 1: ADMIN & RESTORE */}
             {step === 1 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-                    <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><ShieldCheck className="w-6 h-6 text-blue-500"/> Create Admin Account</h2>
-                        <p className="text-muted-foreground mt-1">This will be your master key to Omnibus. Make it secure.</p>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><ShieldCheck className="text-blue-500"/> Master Account</h2>
+                            <p className="text-muted-foreground mt-1 text-sm">Create your admin account to begin manual setup.</p>
+                        </div>
+                        
+                        <div className="shrink-0">
+                            <input type="file" accept=".json" ref={fileInputRef} className="hidden" onChange={handleRestoreUpload} />
+                            <Button 
+                                variant="outline" 
+                                className="w-full sm:w-auto font-bold border-blue-200 text-blue-600 bg-blue-50 hover:bg-blue-100 dark:border-blue-900/50 dark:text-blue-400 dark:bg-blue-900/20 dark:hover:bg-blue-900/40"
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={isRestoring}
+                            >
+                                {isRestoring ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UploadCloud className="w-4 h-4 mr-2" />}
+                                Restore from Backup
+                            </Button>
+                        </div>
                     </div>
+
+                    <div className="relative">
+                        <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-200 dark:border-slate-800" /></div>
+                        <div className="relative flex justify-center text-xs uppercase"><span className="bg-white dark:bg-slate-900 px-2 text-muted-foreground">Or setup manually</span></div>
+                    </div>
+
                     <div className="space-y-4">
                         <div className="grid gap-2"><Label>Username</Label><Input value={formData.username} onChange={e => updateForm('username', e.target.value)} disabled={adminCreated} className="h-12 bg-white dark:bg-slate-950"/></div>
                         <div className="grid gap-2"><Label>Email Address</Label><Input type="email" value={formData.email} onChange={e => updateForm('email', e.target.value)} disabled={adminCreated} className="h-12 bg-white dark:bg-slate-950"/></div>
@@ -284,30 +355,32 @@ const handleFinish = async () => {
                 </div>
             )}
 
+            {/* STEP 2: COMICVINE */}
             {step === 2 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><Database className="w-6 h-6 text-green-500"/> ComicVine API</h2>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Database className="w-6 h-6 text-green-500"/> Metadata Source</h2>
                         <p className="text-muted-foreground mt-1">Omnibus uses ComicVine to automatically pull covers, synopses, and creator credits.</p>
                     </div>
                     <div className="space-y-4 bg-slate-50 dark:bg-slate-950 p-6 rounded-xl border dark:border-slate-800">
                         <div className="grid gap-2">
                             <Label>API Key <span className="text-red-500">*</span></Label>
                             <Input value={formData.cv_api_key} onChange={e => updateForm('cv_api_key', e.target.value)} placeholder="Enter your ComicVine Key..." className="h-12 bg-white dark:bg-slate-900"/>
-                            <p className="text-xs text-muted-foreground mt-1">Don't have one? Get it for free at <a href="https://comicvine.gamespot.com/api/" target="_blank" className="text-blue-500 hover:underline">comicvine.gamespot.com/api</a>.</p>
+                            <p className="text-xs text-muted-foreground mt-1">Don't have one? Get it for free at <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">comicvine.gamespot.com/api</a>.</p>
                         </div>
                         <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('cv')}`} disabled={!formData.cv_api_key || isTesting === 'cv'} onClick={() => handleTestConnection('comicvine', { cv_api_key: formData.cv_api_key }, 'cv')}>
                             {isTesting === 'cv' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['cv'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
-                            {testStates['cv'] === 'success' ? "Connection Verified!" : "Test Connection"}
+                            {testStates['cv'] === 'success' ? "Tested & Saved (Syncing Discover...)" : "Test & Save Connection"}
                         </Button>
                     </div>
                 </div>
             )}
 
+            {/* STEP 3: MULTI-LIBRARY STORAGE */}
             {step === 3 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><HardDrive className="w-6 h-6 text-purple-500"/> Map Storage Paths</h2>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><HardDrive className="w-6 h-6 text-purple-500"/> Storage Mappings</h2>
                         <p className="text-muted-foreground mt-1">Tell Omnibus where to store and organize your physical files.</p>
                     </div>
                     <div className="space-y-5">
@@ -316,14 +389,51 @@ const handleFinish = async () => {
                             <Input value={formData.download_path} onChange={e => updateForm('download_path', e.target.value)} placeholder="e.g. /downloads" className="h-12 bg-white dark:bg-slate-950"/>
                             <p className="text-[10px] text-muted-foreground">The folder where your download clients save completed files.</p>
                         </div>
-                        <div className="grid gap-2">
-                            <Label>Main Library Path</Label>
-                            <Input value={formData.library_path} onChange={e => updateForm('library_path', e.target.value)} placeholder="e.g. /data/comics" className="h-12 bg-white dark:bg-slate-950"/>
+
+                        <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold mb-3 block">Library Folders</Label>
+                            <div className="space-y-3">
+                                {libraries.map((lib, i) => (
+                                    <div key={lib.id} className="p-4 border rounded-lg bg-slate-50 dark:bg-slate-950/50 relative">
+                                        <div className="grid sm:grid-cols-2 gap-4">
+                                            <Input placeholder="Name (e.g. Standard Comics)" value={lib.name} onChange={e => {
+                                                const nl = [...libraries]; nl[i].name = e.target.value; setLibraries(nl);
+                                            }} className="bg-white dark:bg-slate-900" />
+                                            <Input placeholder="Path (e.g. /data/comics)" value={lib.path} onChange={e => {
+                                                const nl = [...libraries]; nl[i].path = e.target.value; setLibraries(nl);
+                                            }} className="bg-white dark:bg-slate-900 font-mono" />
+                                        </div>
+                                        <div className="flex items-center gap-6 mt-3">
+                                            <div className="flex items-center gap-2">
+                                                <Switch checked={lib.isManga} onCheckedChange={v => {
+                                                    const nl = [...libraries]; nl[i].isManga = v; setLibraries(nl);
+                                                }}/>
+                                                <Label className="text-xs">Manga Destination</Label>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <Switch checked={lib.isDefault} onCheckedChange={v => {
+                                                    const nl = libraries.map(l => {
+                                                        if (l.isManga === lib.isManga) return { ...l, isDefault: l.id === lib.id };
+                                                        return l;
+                                                    }); 
+                                                    setLibraries(nl);
+                                                }}/>
+                                                <Label className="text-xs">Default Drop</Label>
+                                            </div>
+                                        </div>
+                                        {libraries.length > 1 && (
+                                            <Button variant="ghost" size="icon" className="absolute top-2 right-2 text-red-500" onClick={() => setLibraries(libraries.filter(l => l.id !== lib.id))}>
+                                                <Trash2 className="w-4 h-4"/>
+                                            </Button>
+                                        )}
+                                    </div>
+                                ))}
+                                <Button variant="outline" className="w-full border-dashed" onClick={() => setLibraries([...libraries, { id: `tmp_${Date.now()}`, name: '', path: '', isManga: false, isDefault: false }])}>
+                                    <Plus className="w-4 h-4 mr-2"/> Add Another Library
+                                </Button>
+                            </div>
                         </div>
-                        <div className="grid gap-2">
-                            <Label>Manga Library Path (Optional)</Label>
-                            <Input value={formData.manga_library_path} onChange={e => updateForm('manga_library_path', e.target.value)} placeholder="e.g. /data/manga" className="h-12 bg-white dark:bg-slate-950"/>
-                        </div>
+
                         <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('paths')}`} onClick={() => handleTestConnection('paths', {}, 'paths')} disabled={isTesting === 'paths'}>
                             {isTesting === 'paths' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['paths'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
                             {testStates['paths'] === 'success' ? "Paths Verified!" : "Test Paths"}
@@ -332,10 +442,11 @@ const handleFinish = async () => {
                 </div>
             )}
 
+            {/* STEP 4: DOWNLOAD CLIENTS */}
             {step === 4 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><Download className="w-6 h-6 text-blue-500"/> Download Clients</h2>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Download className="w-6 h-6 text-blue-500"/> Download Clients</h2>
                         <p className="text-muted-foreground mt-1">Connect your torrent or usenet clients so Omnibus can send them downloads.</p>
                     </div>
 
@@ -353,17 +464,15 @@ const handleFinish = async () => {
 
                     <div className="space-y-4 pt-2">
                         <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Add New Client</Label>
-                        <div className="grid gap-2">
-                            <Select value={clientForm.type} onValueChange={v => { setClientForm({...clientForm, type: v}); setTestStates(prev => ({...prev, dl: 'idle'})) }}>
-                                <SelectTrigger className="h-12 bg-white dark:bg-slate-950"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="qbit">qBittorrent</SelectItem>
-                                    <SelectItem value="sab">SABnzbd</SelectItem>
-                                    <SelectItem value="deluge">Deluge</SelectItem>
-                                    <SelectItem value="nzbget">NZBGet</SelectItem>
-                                </SelectContent>
-                            </Select>
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                            {['qbit', 'sab', 'deluge', 'nzbget'].map(type => (
+                                <Button key={type} variant={clientForm.type === type ? 'default' : 'outline'} className="h-12 font-bold" onClick={() => setClientForm({ ...clientForm, type: type as any })}>
+                                    {configuredClients.some(c => c.type === type) && <CheckCircle2 className="w-4 h-4 text-green-400 mr-2"/>}
+                                    {type.toUpperCase()}
+                                </Button>
+                            ))}
                         </div>
+
                         <div className="grid gap-2">
                             <Input value={clientForm.url} onChange={e => { setClientForm({...clientForm, url: e.target.value}); setTestStates(prev => ({...prev, dl: 'idle'})) }} placeholder="Server URL (e.g. http://192.168.1.100:8080)" className="h-12 bg-white dark:bg-slate-950"/>
                         </div>
@@ -387,10 +496,11 @@ const handleFinish = async () => {
                 </div>
             )}
 
+            {/* STEP 5: INDEXERS */}
             {step === 5 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><Search className="w-6 h-6 text-orange-500"/> Connect Prowlarr</h2>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Search className="w-6 h-6 text-orange-500"/> Connect Prowlarr</h2>
                         <p className="text-muted-foreground mt-1">Omnibus uses Prowlarr to search across all your indexers simultaneously.</p>
                     </div>
                     <div className="space-y-4">
@@ -414,7 +524,7 @@ const handleFinish = async () => {
                                     {availableIndexers.map(idx => (
                                         <div key={idx.id} className="flex justify-between items-center p-3 bg-white dark:bg-slate-950 border dark:border-slate-800 rounded-lg shadow-sm">
                                             <div>
-                                                <span className="font-bold text-sm block">{idx.name}</span>
+                                                <span className="font-bold text-sm block text-foreground">{idx.name}</span>
                                                 <span className="text-[10px] text-muted-foreground uppercase">{idx.protocol}</span>
                                             </div>
                                             {configuredIndexers.some(c => c.id === idx.id) ? (
@@ -431,10 +541,96 @@ const handleFinish = async () => {
                 </div>
             )}
 
+            {/* STEP 6: DISCORD (NEW) */}
             {step === 6 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><Settings2 className="w-6 h-6 text-pink-500"/> Optional Extras</h2>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Webhook className="w-6 h-6 text-indigo-500"/> Discord Alerts (Optional)</h2>
+                        <p className="text-muted-foreground mt-1">Automatically send notifications to your server when new comics are added or requested.</p>
+                    </div>
+                    <div className="space-y-4 bg-slate-50 dark:bg-slate-950 p-6 rounded-xl border dark:border-slate-800">
+                        <div className="grid gap-2">
+                            <Input placeholder="Webhook Name (e.g. Comic Alerts)" id="wh-name" className="h-12 bg-white dark:bg-slate-900"/>
+                        </div>
+                        <div className="grid gap-2">
+                            <Input placeholder="https://discord.com/api/webhooks/..." id="wh-url" className="h-12 bg-white dark:bg-slate-900 font-mono text-sm"/>
+                        </div>
+                        <Button className="w-full h-12 font-bold mt-2" onClick={() => {
+                            const n = (document.getElementById('wh-name') as HTMLInputElement).value;
+                            const u = (document.getElementById('wh-url') as HTMLInputElement).value;
+                            if (n && u) {
+                                setWebhooks([...webhooks, { id: Date.now().toString(), name: n, url: u, events: ['pending_request', 'comic_available', 'request_approved', 'download_failed'], isActive: true }]);
+                                (document.getElementById('wh-name') as HTMLInputElement).value = "";
+                                (document.getElementById('wh-url') as HTMLInputElement).value = "";
+                            }
+                        }}><Plus className="w-4 h-4 mr-2" /> Add Webhook</Button>
+                        
+                        {webhooks.length > 0 && (
+                            <div className="pt-4 border-t dark:border-slate-800 flex flex-wrap gap-2">
+                                {webhooks.map(w => <Badge key={w.id} variant="secondary" className="px-3 py-1.5">{w.name}</Badge>)}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 7: EXTRA USERS (NEW) */}
+            {step === 7 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><User className="w-6 h-6 text-pink-500"/> Add Users (Optional)</h2>
+                        <p className="text-muted-foreground mt-1">Create accounts for family or friends before you launch.</p>
+                    </div>
+                    
+                    {extraUsers.length > 0 && (
+                        <div className="grid gap-2 p-4 border dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-900/50">
+                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Staged Users</Label>
+                            {extraUsers.map((u, i) => (
+                                <div key={i} className="flex justify-between items-center bg-white dark:bg-slate-950 p-3 rounded-lg shadow-sm border dark:border-slate-800">
+                                    <div>
+                                        <p className="font-bold text-sm text-foreground">{u.username}</p>
+                                        <div className="flex gap-2 mt-1">
+                                            {u.canDownload && <Badge variant="outline" className="text-[9px]">Downloader</Badge>}
+                                            {u.autoApproveRequests && <Badge variant="outline" className="text-[9px]">Auto-Approve</Badge>}
+                                        </div>
+                                    </div>
+                                    <Button variant="ghost" size="icon" onClick={() => setExtraUsers(prev => prev.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-red-500"/></Button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="space-y-4 border dark:border-slate-800 p-6 rounded-xl bg-slate-50 dark:bg-slate-950">
+                        <Input placeholder="Username" id="u-name" className="h-12 bg-white dark:bg-slate-900"/>
+                        <Input placeholder="Email" id="u-email" type="email" className="h-12 bg-white dark:bg-slate-900"/>
+                        <Input placeholder="Password" id="u-pass" type="password" className="h-12 bg-white dark:bg-slate-900"/>
+                        <div className="flex gap-6 py-2">
+                            <div className="flex items-center gap-2"><Switch id="u-dl"/><Label className="text-xs cursor-pointer">Can Download</Label></div>
+                            <div className="flex items-center gap-2"><Switch id="u-auto"/><Label className="text-xs cursor-pointer">Auto-Approve</Label></div>
+                        </div>
+                        <Button className="w-full h-12 font-bold" onClick={() => {
+                            const n = (document.getElementById('u-name') as HTMLInputElement).value;
+                            const e = (document.getElementById('u-email') as HTMLInputElement).value;
+                            const p = (document.getElementById('u-pass') as HTMLInputElement).value;
+                            const d = (document.getElementById('u-dl') as HTMLButtonElement).dataset.state === 'checked';
+                            const a = (document.getElementById('u-auto') as HTMLButtonElement).dataset.state === 'checked';
+                            if (n && e && p) {
+                                setExtraUsers([...extraUsers, { username: n, email: e, password: p, canDownload: d, autoApproveRequests: a, role: 'USER', isApproved: true }]);
+                                (document.getElementById('u-name') as HTMLInputElement).value = "";
+                                (document.getElementById('u-email') as HTMLInputElement).value = "";
+                                (document.getElementById('u-pass') as HTMLInputElement).value = "";
+                                toast({ title: "User Staged" });
+                            }
+                        }}><UserPlus className="w-4 h-4 mr-2" /> Stage User</Button>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 8: FINALIZE (EXTRAS) */}
+            {step === 8 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Settings2 className="w-6 h-6 text-teal-500"/> Optional Extras</h2>
                         <p className="text-muted-foreground mt-1">Fine-tune your setup. You can always change these later in Settings.</p>
                     </div>
                     <div className="space-y-6">
@@ -481,6 +677,12 @@ const handleFinish = async () => {
                                 </div>
                             </div>
                         )}
+
+                        <div className="text-center pt-6 space-y-4">
+                            <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto" />
+                            <h2 className="text-2xl font-bold text-foreground">Ready to Launch!</h2>
+                            <p className="text-muted-foreground">We've staged your admin account, {libraries.length} libraries, and {configuredClients.length} clients.</p>
+                        </div>
                     </div>
                 </div>
             )}
@@ -488,13 +690,13 @@ const handleFinish = async () => {
             <div className="mt-10 pt-6 border-t dark:border-slate-800 flex justify-between">
                 <Button variant="ghost" disabled={step === 1 || isTesting === 'admin'} onClick={() => setStep(s => s - 1)}>Back</Button>
                 
-                {step < 6 ? (
+                {step < 8 ? (
                     <Button onClick={handleNext} disabled={isTesting === 'admin'} className="bg-blue-600 hover:bg-blue-700 text-white w-32 font-bold">
                         {isTesting === 'admin' ? <Loader2 className="w-5 h-5 animate-spin" /> : "Next Step"} <ArrowRight className="w-4 h-4 ml-2" />
                     </Button>
                 ) : (
-                    <Button onClick={handleFinish} disabled={isTesting === 'finish'} className="bg-green-600 hover:bg-green-700 text-white w-40 font-bold text-lg h-12 shadow-lg shadow-green-500/20">
-                        {isTesting === 'finish' ? <Loader2 className="w-5 h-5 animate-spin" /> : "Finish Setup"}
+                    <Button onClick={handleFinish} disabled={isTesting === 'finish'} className="bg-green-600 hover:bg-green-700 text-white w-40 sm:w-48 font-bold text-base sm:text-lg h-12 shadow-lg shadow-green-500/20">
+                        {isTesting === 'finish' ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Play className="w-5 h-5 mr-2" />} Finish Setup
                     </Button>
                 )}
             </div>

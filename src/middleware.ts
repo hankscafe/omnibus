@@ -18,6 +18,8 @@ export async function middleware(req: NextRequest) {
     const publicApiRoutes = [
         '/api/auth',          // NextAuth handles its own security
         '/api/setup/check',   // Used to determine if the wizard should show
+        '/api/admin/test',              // ADDED: Allow connectivity tests during setup
+        '/api/admin/prowlarr/indexers', // ADDED: Allow indexer status checks during setup
         '/api/cron',          // Hit by external uptime monitors
         '/api/v1/stats',      // Validates its own custom x-api-key
         '/api/uploads',       // Serves public avatars and banners

@@ -74,4 +74,4 @@ prisma/schema - BACKUP.prisma
 tmp/
 
 # Ignore /config
-config/
+/config/

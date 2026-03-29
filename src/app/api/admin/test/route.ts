@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
 
@@ -29,7 +30,16 @@ export async function POST(request: Request) {
         } catch (e) { }
     }
 
-    // --- CLIENTS TEST (FIXED) ---
+    // --- HELPER: Resolve obfuscated keys from the DB ---
+    const getRealValue = async (key: string, providedValue: string) => {
+        if (providedValue === '********') {
+            const setting = await prisma.systemSetting.findUnique({ where: { key } });
+            return setting?.value || "";
+        }
+        return providedValue;
+    };
+
+    // --- CLIENTS TEST ---
     if (type === 'clients') {
         const { clientType, url, user, pass, apiKey } = config;
         const cleanUrl = url?.replace(/\/$/, "");
@@ -39,9 +49,14 @@ export async function POST(request: Request) {
         if (clientType === 'qbit') {
             const loginParams = new URLSearchParams();
             loginParams.append('username', user || '');
-            loginParams.append('password', pass || '');
+            
+            // Resolve real password if frontend sent the obfuscated placeholder
+            const realPass = (pass === '********') 
+                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                : pass;
 
-            // FIX: Spread standard headers first, then explicitly enforce form-urlencoded for qBit
+            loginParams.append('password', realPass || '');
+
             const qbitHeaders = { 
                 ...headers, 
                 'Content-Type': 'application/x-www-form-urlencoded' 
@@ -59,8 +74,13 @@ export async function POST(request: Request) {
             }
         } 
         else if (clientType === 'sab') {
+            // Resolve real API key if obfuscated
+            const realApiKey = (apiKey === '********')
+                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey || ""
+                : apiKey;
+
             const res = await axios.get(`${cleanUrl}/api`, {
-                params: { mode: 'version', apikey: apiKey, output: 'json' },
+                params: { mode: 'version', apikey: realApiKey, output: 'json' },
                 headers,
                 timeout: 5000
             });
@@ -78,7 +98,6 @@ export async function POST(request: Request) {
     if (type === 'webhook') {
       if (!config.url) return NextResponse.json({ success: false, message: 'Missing Webhook URL' });
 
-      // NEW: Build the payload dynamically
       const payload: any = {
         content: null,
         embeds: [{
@@ -101,7 +120,10 @@ export async function POST(request: Request) {
     // --- PROWLARR TEST ---
     if (type === 'prowlarr') {
       const url = config.prowlarr_url?.replace(/\/$/, '');
-      const key = config.prowlarr_key;
+      
+      // Resolve the real key from DB if the placeholder was sent
+      const key = await getRealValue('prowlarr_key', config.prowlarr_key);
+      
       if (!url || !key) return NextResponse.json({ success: false, message: 'Missing URL/Key' });
 
       const res = await axios.get(`${url}/api/v1/indexer`, { 
@@ -131,7 +153,9 @@ export async function POST(request: Request) {
 
     // --- COMICVINE ---
     if (type === 'comicvine') {
-      const apiKey = config.cv_api_key;
+      // Resolve the real key from DB if the placeholder was sent
+      const apiKey = await getRealValue('cv_api_key', config.cv_api_key);
+
       if (!apiKey) return NextResponse.json({ success: false, message: 'Missing API Key' });
       await axios.get(`https://comicvine.gamespot.com/api/types/`, {
         params: { api_key: apiKey, format: 'json' },
@@ -144,7 +168,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, message: 'Unknown test type' });
 
   } catch (error: unknown) {
-    const msg = getErrorMessage(error) || getErrorMessage(error) || "Connection Failed";
+    const msg = getErrorMessage(error) || "Connection Failed";
     return NextResponse.json({ success: false, message: msg, code: "CONNECTION_ERROR" });
   }
 }

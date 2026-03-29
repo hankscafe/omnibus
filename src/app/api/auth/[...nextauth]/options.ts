@@ -21,7 +21,6 @@ if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === defaultSecre
     Logger.log(" Omnibus is shutting down to protect your data. Please update and restart.", 'error');
     Logger.log("=========================================================================\n", 'error');
     
-  // FIX: Do not crash the Node process if we are inside a CI/CD pipeline or Docker build phase
     const isBuildPhase = process.env.npm_lifecycle_event === 'build' || process.env.CI === 'true';
     
     if (!isBuildPhase) {
@@ -30,7 +29,6 @@ if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === defaultSecre
 }
 
 // --- SECURITY: IN-MEMORY RATE LIMITER ---
-// Preserved across hot-reloads in dev, persistent in production memory
 const globalForRateLimit = globalThis as unknown as {
     loginAttempts: Map<string, { count: number, lockoutUntil: number }>
 };
@@ -73,7 +71,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         
         const input = credentials.username.toLowerCase();
 
-        // --- SECURITY FIX: Rate Limit Check ---
         const attemptData = loginAttempts.get(input) || { count: 0, lockoutUntil: 0 };
         if (Date.now() < attemptData.lockoutUntil) {
             const remainingMinutes = Math.ceil((attemptData.lockoutUntil - Date.now()) / 60000);
@@ -88,11 +85,10 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         
         const user = users[0];
 
-        // Helper function to handle failed attempts
         const handleFailedAttempt = () => {
             attemptData.count += 1;
             if (attemptData.count >= 5) {
-                attemptData.lockoutUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lockout
+                attemptData.lockoutUntil = Date.now() + 15 * 60 * 1000;
             }
             loginAttempts.set(input, attemptData);
             throw new Error("Invalid username or password");
@@ -111,7 +107,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                 throw new Error("2FA_REQUIRED"); 
             }
             
-            // --- UPDATED: Await the decryption now that it pulls from DB ---
             const decryptedSecret = await decrypt2FA(user.twoFactorSecret);
 
             const isValid = typeof authenticator.verify === 'function'
@@ -121,7 +116,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             if (!isValid) handleFailedAttempt();
         }
 
-        // --- SECURITY FIX: Clear failed attempts on successful login ---
         loginAttempts.delete(input);
 
         return { 
@@ -261,7 +255,8 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                     select: { sessionVersion: true }
                 });
                 
-                if (dbUser && dbUser.sessionVersion !== (token.sessionVersion || 0)) {
+                // --- FIX: Instantly expire the session if the user was deleted/database wiped ---
+                if (!dbUser || dbUser.sessionVersion !== (token.sessionVersion || 0)) {
                     return { error: "SessionExpired" };
                 }
                 

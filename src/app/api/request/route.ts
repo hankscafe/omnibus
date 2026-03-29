@@ -16,6 +16,15 @@ export async function POST(request: NextRequest) {
   const token = await getToken({ req: request });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  const userId = (token.id || token.sub) as string;
+  if (!userId) return NextResponse.json({ error: 'Invalid user token' }, { status: 401 });
+
+  // --- NEW: Safety check to prevent stale session cookies from crashing the database ---
+  const userExists = await prisma.user.findUnique({ where: { id: userId } });
+  if (!userExists) {
+      return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const { cvId, name, year, type, image, monitored, directSource } = body; 
@@ -57,6 +66,12 @@ export async function POST(request: NextRequest) {
       Logger.log(`[Request] User ${token.name} requested full Volume: ${name}`, 'info');
       
       if (monitored) {
+          const libraries = await prisma.library.findMany();
+          let targetLib = isManga 
+              ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+              : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+          if (!targetLib) targetLib = libraries[0];
+
           const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
           const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
 
@@ -68,8 +83,10 @@ export async function POST(request: NextRequest) {
                   name, 
                   year: parseInt(year) || new Date().getFullYear(), 
                   publisher: safePublisher, 
-                  folderPath: `/${libraryTypeFolder}/${safePubFolder}/${safeFolderName}`, 
-                  monitored: true 
+                  folderPath: targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName}` : `/${libraryTypeFolder}/${safePubFolder}/${safeFolderName}`, 
+                  monitored: true,
+                  isManga: isManga,
+                  libraryId: targetLib?.id 
               }
           });
           Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');
@@ -123,7 +140,7 @@ export async function POST(request: NextRequest) {
         if (!existing) {
           const newReq = await prisma.request.create({
             data: {
-              userId: token.id as string,
+              userId: userId,
               volumeId: cvId.toString(),
               status: issueStatus,
               activeDownloadName: searchName,
@@ -142,8 +159,7 @@ export async function POST(request: NextRequest) {
         processAutomationQueue(createdRequests);
       }
 
-      // --- SECURITY FIX 2b: Use centralized logger ---
-      evaluateTrophies(token.id as string).catch(err => {
+      evaluateTrophies(userId).catch(err => {
           Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
       });
 
@@ -155,7 +171,7 @@ export async function POST(request: NextRequest) {
     } else {
       const newReq = await prisma.request.create({
         data: {
-          userId: token.id as string,
+          userId: userId,
           volumeId: cvId.toString(),
           status: initialStatus,
           activeDownloadName: name,
@@ -179,8 +195,7 @@ export async function POST(request: NextRequest) {
         searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
       }
 
-      // --- SECURITY FIX 2b: Use centralized logger ---
-      evaluateTrophies(token.id as string).catch(err => {
+      evaluateTrophies(userId).catch(err => {
           Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
       });
 
@@ -199,6 +214,8 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const token = await getToken({ req: request });
   if (!token || token.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const userId = (token.id || token.sub) as string;
 
   try {
     const body = await request.json();
@@ -247,8 +264,7 @@ export async function PATCH(request: NextRequest) {
       searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
     }
 
-    // --- SECURITY FIX 2b: Use centralized logger ---
-    evaluateTrophies(token.id as string).catch(err => {
+    evaluateTrophies(userId).catch(err => {
         Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
     });
 

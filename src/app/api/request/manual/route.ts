@@ -7,12 +7,22 @@ import { GetComicsService } from '@/lib/getcomics';
 import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from '@/lib/utils/error';
+import { detectManga } from '@/lib/manga-detector';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   const token = await getToken({ req: request });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const userId = (token.id || token.sub) as string;
+  if (!userId) return NextResponse.json({ error: 'Invalid user token' }, { status: 401 });
+
+  // --- NEW: Safety check to prevent stale session cookies from crashing the database ---
+  const userExists = await prisma.user.findUnique({ where: { id: userId } });
+  if (!userExists) {
+      return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
+  }
 
   try {
     const body = await request.json();
@@ -30,9 +40,17 @@ export async function POST(request: NextRequest) {
     }
 
     if (type === 'volume' && monitored) {
+        const safePublisher = publisher || "Unknown";
+        const isManga = await detectManga({ name, publisher: { name: safePublisher }, year: parseInt(year) });
+        
+        const libraries = await prisma.library.findMany();
+        let targetLib = isManga 
+            ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+            : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+        if (!targetLib) targetLib = libraries[0];
+
         const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-        const safePubFolder = (publisher || "Other").replace(/[<>:"/\\|?*]/g, '').trim();
-        const libraryTypeFolder = 'Comics';
+        const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
 
         await prisma.series.upsert({
             where: { cvId: parseInt(cvId) },
@@ -41,16 +59,18 @@ export async function POST(request: NextRequest) {
                 cvId: parseInt(cvId), 
                 name, 
                 year: parseInt(year) || new Date().getFullYear(), 
-                publisher: publisher || "Unknown", 
-                folderPath: `/Library/${safePubFolder}/${safeFolderName}`, 
-                monitored: true 
+                publisher: safePublisher, 
+                folderPath: targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName}` : `/Comics/${safePubFolder}/${safeFolderName}`, 
+                monitored: true,
+                isManga: isManga,
+                libraryId: targetLib?.id 
             }
         });
     }
 
     const newReq = await prisma.request.create({
       data: {
-        userId: token.id as string,
+        userId: userId,
         volumeId: cvId.toString(),
         status: initialStatus,
         activeDownloadName: searchResult?.title || name,
@@ -104,8 +124,7 @@ export async function POST(request: NextRequest) {
         }
     }
 
-    // --- SECURITY FIX 2b: Use centralized logger ---
-    evaluateTrophies(token.id as string).catch(err => {
+    evaluateTrophies(userId).catch(err => {
         Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
     });
 

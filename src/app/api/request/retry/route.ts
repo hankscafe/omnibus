@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import { getToken } from 'next-auth/jwt';
 import { DownloadService } from '@/lib/download-clients';
 import { Logger } from '@/lib/logger';
 import { GetComicsService } from '@/lib/getcomics';
@@ -8,7 +9,18 @@ import { Importer } from '@/lib/importer';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+    const token = await getToken({ req: request });
+    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const userId = (token.id || token.sub) as string;
+    
+    // --- GHOST SESSION SAFEGUARD ---
+    const userExists = await prisma.user.findUnique({ where: { id: userId } });
+    if (!userExists) {
+        return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
+    }
+
     try {
         const { id } = await request.json();
         const req = await prisma.request.findUnique({ where: { id } });
@@ -20,12 +32,12 @@ export async function POST(request: Request) {
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
         let year = "";
-        let isManga = false; // <-- ADDED
+        let isManga = false; 
         if (req.volumeId) {
             const series = await prisma.series.findUnique({ where: { cvId: parseInt(req.volumeId) } });
             if (series) {
                 year = series.year.toString();
-                isManga = series.isManga; // <-- Fetched
+                isManga = series.isManga; 
             }
         }
 
@@ -50,12 +62,11 @@ export async function POST(request: Request) {
         Logger.log(`[Retry] No link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
         
         const acronyms = await getCustomAcronyms();
-        // Passed isManga down
         const queries = generateSearchQueries(req.activeDownloadName || "", year, acronyms, isManga); 
         let results: any[] = [];
         
         for (const q of queries) {
-            results = await GetComicsService.search(q, false, isManga); // Passed isManga down
+            results = await GetComicsService.search(q, false, isManga); 
             if (results.length > 0) break;
         }
         

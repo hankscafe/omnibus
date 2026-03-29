@@ -167,9 +167,7 @@ export default function SetupWizard() {
               setTestStates(prev => ({ ...prev, [stateKey]: 'success' }));
               toast({ title: "Connection Successful!", description: data.message });
               
-              // Trigger Discover Sync immediately if CV is tested successfully
               if (type === 'comicvine') {
-                  // We must pre-save the API key to the DB so the background job can find it
                   await fetch('/api/admin/config', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
@@ -615,7 +613,7 @@ export default function SetupWizard() {
                         <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Add New Client</Label>
                         <div className="grid grid-cols-2 gap-4 mb-4">
                             {['qbit', 'sab', 'deluge', 'nzbget'].map(type => (
-                                <Button key={type} variant={clientForm.type === type ? 'default' : 'outline'} className="h-12 font-bold" onClick={() => openClientSetup(type)}>
+                                <Button key={type} variant="outline" className="h-12 font-bold" onClick={() => openClientSetup(type)}>
                                     {configuredClients.some(c => c.type === type) && <CheckCircle2 className="w-4 h-4 text-green-400 mr-2"/>}
                                     {type.toUpperCase()}
                                 </Button>

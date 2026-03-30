@@ -66,8 +66,10 @@ export default function AdminUsersPage() {
         body: JSON.stringify({ id, [field]: value })
       })
       if (res.ok) {
+        const data = await res.json() // <-- Extract the JSON response
         toast({ title: "User Updated", description: "Changes saved successfully." })
-        setUsers(prev => prev.map(u => u.id === id ? { ...u, [field]: value } : u))
+        // <-- Replace the old setUsers logic with this so it absorbs all the backend permission changes -->
+        setUsers(prev => prev.map(u => u.id === id ? data.user : u))
       } else throw new Error("Update failed")
     } catch (error: unknown) {
       toast({ title: "Update Failed", description: getErrorMessage(error), variant: "destructive" })

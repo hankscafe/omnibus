@@ -43,6 +43,15 @@ export async function PATCH(req: NextRequest) {
     if (role !== undefined) updateData.role = role;
     if (autoApproveRequests !== undefined) updateData.autoApproveRequests = autoApproveRequests;
     if (canDownload !== undefined) updateData.canDownload = canDownload;
+
+    if (role !== undefined) {
+        updateData.role = role;
+        if (role === 'ADMIN') {
+            updateData.isApproved = true;
+            updateData.autoApproveRequests = true;
+            updateData.canDownload = true;
+        }
+    }
     
     if (reset2FA) {
         updateData.twoFactorEnabled = false;
@@ -124,6 +133,7 @@ export async function POST(req: NextRequest) {
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
+      const isAdmin = role === 'ADMIN';
 
       const newUser = await prisma.user.create({
           data: {

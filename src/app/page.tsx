@@ -18,7 +18,8 @@ import {
   AlertTriangle, 
   DownloadCloud,
   UserPlus,
-  Flag
+  Flag,
+  Rocket
 } from "lucide-react" 
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
@@ -29,7 +30,8 @@ export default function Home() {
   const [pendingCount, setPendingCount] = useState(0)
   const [openReportsCount, setOpenReportsCount] = useState(0)
   const [manualDownloadsCount, setManualDownloadsCount] = useState(0)
-  const [pendingUsersCount, setPendingUsersCount] = useState(0) 
+  const [pendingUsersCount, setPendingUsersCount] = useState(0)
+  const [updateData, setUpdateData] = useState<{ updateAvailable: boolean, currentVersion: string, latestVersion: string } | null>(null) 
   const isAdmin = session?.user?.role === 'ADMIN'
 
   // State to manage hard cache resets
@@ -70,6 +72,12 @@ export default function Home() {
           const pendingUsers = data.filter((u: any) => !u.isApproved)
           setPendingUsersCount(pendingUsers.length)
         }
+
+        const resUpdate = await fetch('/api/admin/update-check')
+        if (resUpdate.ok) {
+          const data = await resUpdate.json()
+          setUpdateData(data)
+        }
       } catch (e) {
         console.error("Failed to check admin alerts", e)
       }
@@ -104,6 +112,27 @@ export default function Home() {
         
         {/* Admin Notification Banners */}
         <div className="space-y-4">
+
+          {/* System Update Available (Semantic Blue) */}
+          {isAdmin && updateData?.updateAvailable && (
+            <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/50 animate-in fade-in slide-in-from-top-4">
+              <Rocket className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              <AlertTitle className="text-blue-800 dark:text-blue-300 font-bold flex items-center gap-2">
+                System Update Available
+                <Badge className="bg-blue-500 hover:bg-blue-600 text-white border-none text-[10px] h-5">
+                  v{updateData.latestVersion}
+                </Badge>
+              </AlertTitle>
+              <AlertDescription className="text-blue-700/80 dark:text-blue-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                A new version of Omnibus is available. You are currently running v{updateData.currentVersion}.
+                <Button asChild variant="outline" size="sm" className="border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/40 h-8 font-bold">
+                  <Link href="/admin/updates">
+                    View Release Notes <ArrowRight className="ml-2 h-3 w-3" />
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
           
           {/* Pending User Accounts (Semantic Teal) */}
           {isAdmin && pendingUsersCount > 0 && (

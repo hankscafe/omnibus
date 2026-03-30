@@ -8,6 +8,7 @@ import axios from 'axios';
 import { DiscordNotifier } from './discord';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
+import AdmZip from 'adm-zip';
 
 function sanitize(str: string) {
   return str.replace(/[<>:"/\\|?*]/g, '').trim();
@@ -347,6 +348,15 @@ export const Importer = {
           }
       }
 
+      // --- NEW: Calculate Page Count during the background import ---
+      let pageCount = 0;
+      if (finalPath.toLowerCase().match(/\.(cbz|zip|epub)$/i)) {
+          try {
+              const zip = new AdmZip(finalPath);
+              pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i)).length;
+          } catch(e) {}
+      }
+
       if (series?.id) {
          const issueNum = extractIssueNumber(fileName);
          
@@ -357,13 +367,13 @@ export const Importer = {
          if (existingIssue) {
              await prisma.issue.update({
                  where: { id: existingIssue.id },
-                 data: { status: 'DOWNLOADED', filePath: finalPath }
+                 data: { status: 'DOWNLOADED', filePath: finalPath, pageCount } // <-- Added pageCount
              });
          } else {
              await prisma.issue.create({
                  data: {
                      seriesId: series.id, cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
-                     number: issueNum, status: 'DOWNLOADED', filePath: finalPath
+                     number: issueNum, status: 'DOWNLOADED', filePath: finalPath, pageCount // <-- Added pageCount
                  }
              });
          }

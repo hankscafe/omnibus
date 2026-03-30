@@ -1,3 +1,4 @@
+// src/app/api/library/series/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -9,10 +10,14 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { DiscordNotifier } from '@/lib/discord';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import AdmZip from 'adm-zip';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
-    try { return JSON.parse(str); } catch { return []; }
+    try { 
+        const arr = JSON.parse(str); 
+        return Array.isArray(arr) ? arr.filter((item: string) => item !== "NONE") : [];
+    } catch { return []; }
 }
 
 function extractIssueNumber(filename: string): string {
@@ -126,7 +131,6 @@ export async function GET(request: Request) {
             }
         }
 
-        // --- SECURITY FIX 2a: Log duplicate issue cleanup failures ---
         if (idsToDelete.length > 0) {
             await prisma.issue.deleteMany({ where: { id: { in: idsToDelete } } }).catch((err) => {
                 Logger.log(`Failed to delete duplicate issues: ${getErrorMessage(err)}`, 'error');
@@ -147,18 +151,29 @@ export async function GET(request: Request) {
                 const stdNum = extractIssueNumber(file);
                 const existingIssue = dbIssueMap.get(stdNum);
 
+                // --- NEW: Calculate page count in the background ---
+                let pageCount = 0;
+                if (lowerFile.match(/\.(cbz|zip|epub)$/i)) {
+                    try {
+                        const zip = new AdmZip(fullPath);
+                        pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i)).length;
+                    } catch(e) {}
+                }
+
                 if (existingIssue) {
-                    if (existingIssue.filePath !== fullPath) {
+                    // --- AUTO-HEAL: Update if the file moved OR if it's missing the pageCount ---
+                    if (existingIssue.filePath !== fullPath || (existingIssue as any).pageCount === 0) {
                         updateOperations.push(prisma.issue.update({ 
-                            where: { id: existingIssue.id }, data: { filePath: fullPath } 
+                            where: { id: existingIssue.id }, data: { filePath: fullPath, pageCount } 
                         }));
                         existingIssue.filePath = fullPath; 
+                        (existingIssue as any).pageCount = pageCount;
                     }
                 } else {
                     if (!creatingNums.has(stdNum)) {
                         createsToFire.push({
                             seriesId: seriesRecord.id, cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
-                            number: stdNum, status: "DOWNLOADED", filePath: fullPath
+                            number: stdNum, status: "DOWNLOADED", filePath: fullPath, pageCount // <-- Added pageCount
                         });
                         creatingNums.add(stdNum); 
                     }
@@ -166,7 +181,6 @@ export async function GET(request: Request) {
             }
         }
 
-        // --- SECURITY FIX 2a: Log issue creation/update failures safely ---
         if (createsToFire.length > 0) {
             await prisma.issue.createMany({ data: createsToFire }).catch((err) => {
                 Logger.log(`Failed to create missing issues: ${getErrorMessage(err)}`, 'error');
@@ -178,7 +192,6 @@ export async function GET(request: Request) {
             }))); 
         }
 
-        // --- SECURITY FIX 2a: Log ghost issue cleanup failures ---
         await prisma.issue.deleteMany({
             where: {
                 seriesId: seriesRecord.id,
@@ -206,6 +219,8 @@ export async function GET(request: Request) {
                 writers: safeParse(issue.writers),
                 artists: safeParse(issue.artists),
                 characters: safeParse(issue.characters),
+                genres: safeParse((issue as any).genres),
+                storyArcs: safeParse((issue as any).storyArcs), // <-- THIS GETS IT TO THE UI
                 isRead: prog.isRead, readProgress: prog.readProgress
             };
 
@@ -215,8 +230,6 @@ export async function GET(request: Request) {
                 missingIssues.push(formatted);
             }
         }
-    } else {
-        // Unmatched fallback logic omitted for brevity...
     }
 
     downloadedIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
@@ -241,6 +254,7 @@ export async function GET(request: Request) {
   }
 }
 
+// ... DELETE function remains the same ...
 export async function DELETE(request: Request) {
     try {
         const authOptions = await getAuthOptions();

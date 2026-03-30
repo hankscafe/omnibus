@@ -349,6 +349,47 @@ export async function POST(request: Request) {
             return NextResponse.json({ success: true, message: "Metadata sync started in the background." });
         }
 
+        if (job === 'embed_metadata') {
+            Logger.log("[Background Job] Starting XML Metadata Embedding...", "info");
+            await prisma.systemSetting.upsert({ where: { key: 'last_embed_sync' }, update: { value: nowStr }, create: { key: 'last_embed_sync', value: nowStr } });
+
+            (async () => {
+                const { writeComicInfo } = await import('@/lib/metadata-writer');
+                
+                // Fetch issues that are downloaded and attached to a matched series
+                const issues = await prisma.issue.findMany({
+                    where: { 
+                        filePath: { endsWith: '.cbz' },
+                        series: { cvId: { gt: 0 } }
+                    }
+                });
+
+                let successCount = 0;
+                let failCount = 0;
+
+                for (const issue of issues) {
+                    const success = await writeComicInfo(issue.id);
+                    if (success) successCount++;
+                    else failCount++;
+                    
+                    // Yield to the event loop so we don't block the server
+                    await new Promise(r => setTimeout(r, 100)); 
+                }
+
+                await prisma.jobLog.create({
+                    data: {
+                        jobType: 'EMBED_METADATA',
+                        status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
+                        durationMs: Date.now() - startTime,
+                        message: `Metadata embedding complete. Updated ${successCount} files. Failed: ${failCount}.`
+                    }
+                });
+                Logger.log(`[Background Job] Metadata Embedding Complete.`, "success");
+            })();
+
+            return NextResponse.json({ success: true, message: "Metadata embedding started." });
+        }
+
         if (job === 'monitor') {
             const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
             const cvApiKey = cvKeySetting?.value;

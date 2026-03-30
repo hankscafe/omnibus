@@ -60,6 +60,8 @@ export interface ComicVineIssue {
     site_detail_url: string;
     person_credits?: ComicVineCredit[] | null;
     character_credits?: ComicVineCredit[] | null;
+    concepts?: ComicVineCredit[] | null;
+    story_arc_credits?: ComicVineCredit[] | null;
 }
 
 // --- PROWLARR / INDEXER TYPES ---

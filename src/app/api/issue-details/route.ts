@@ -36,7 +36,7 @@ export async function GET(request: Request) {
     
     // 2. Fetch the base Issue data
     const res = await axios.get(`https://comicvine.gamespot.com/api/${endpoint}/`, {
-        params: { api_key: setting.value, format: 'json', field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,site_detail_url' },
+        params: { api_key: setting.value, format: 'json', field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,site_detail_url' },
         headers: { 'User-Agent': 'Omnibus/1.0' }
     });
     
@@ -67,7 +67,7 @@ export async function GET(request: Request) {
     }
 
     // Use the centralized metadata parser
-    const { writers, artists, characters } = parseComicVineCredits(person_credits, character_credits);
+    const { writers, artists, characters, genres } = parseComicVineCredits(person_credits, character_credits, issueData.concepts || []);
 
     let displayName = issueData.name;
     if (isIssue && issueData.volume?.name) {
@@ -85,6 +85,7 @@ export async function GET(request: Request) {
       writers: writers.slice(0, 5),
       artists: artists.slice(0, 5),
       characters: characters.slice(0, 15),
+      genres: genres.slice(0, 10),
       siteUrl: issueData.site_detail_url,
       rawImage: issueData.image || null,
       person_credits,

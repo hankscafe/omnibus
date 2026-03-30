@@ -243,6 +243,7 @@ export function initCronJobs() {
     };
 
     await checkAndTrigger('metadata', 'metadata_sync_schedule', 'last_metadata_sync', 'ComicVine Metadata Sync');
+    await checkAndTrigger('embed_metadata', 'embed_metadata_schedule', 'last_embed_sync', 'Embed XML Metadata');
     await checkAndTrigger('library', 'library_sync_schedule', 'last_library_sync', 'Library Scan');
     await checkAndTrigger('monitor', 'monitor_sync_schedule', 'last_monitor_sync', 'Series Monitor Scan');
     await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');

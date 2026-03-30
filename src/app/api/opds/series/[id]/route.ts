@@ -1,8 +1,6 @@
 // src/app/api/opds/series/[id]/route.ts
 import { prisma } from '@/lib/db';
 import { validateApiKey } from '@/lib/api-auth';
-import AdmZip from 'adm-zip';
-import fs from 'fs';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,15 +50,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         const rawCover = issue.coverUrl || (series.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '');
         const finalCoverUrl = rawCover.startsWith('http') ? rawCover : (rawCover ? `${baseUrl}${rawCover}` : '');
         
-        // OPDS-PSE requires the server to tell the app exactly how many pages exist.
-        // AdmZip only reads the tiny directory header at the end of the ZIP, so this is virtually instantaneous.
-        let pageCount = 0;
-        if (issue.filePath && fs.existsSync(issue.filePath)) {
-            try {
-                const zip = new AdmZip(issue.filePath);
-                pageCount = zip.getEntries().filter(e => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i)).length;
-            } catch (e) {}
-        }
+        // --- MEMORY LEAK FIXED: Pulling directly from DB instead of loading files into RAM ---
+        const pageCount = (issue as any).pageCount || 0;
         
         // The Official OPDS-PSE Streaming Link with the URI Template
         const pseLink = `<link rel="http://vaemendis.net/opds-pse/stream" type="image/jpeg" href="${baseUrl}/api/opds/page/${issue.id}/{pageNumber}" pse:count="${pageCount}"/>`;

@@ -56,6 +56,9 @@ model ApiKey {
   lastUsedAt  DateTime?
   expiresAt   DateTime?
   createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@index([createdById])
 }
 
 model Request {
@@ -73,6 +76,10 @@ model Request {
   updatedAt          DateTime @updatedAt
 
   user               User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([volumeId])
 }
 
 // --- NEW MULTI-LIBRARY ARCHITECTURE ---
@@ -108,6 +115,8 @@ model Series {
   // Links to the new Library model
   libraryId       String?
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
+
+  @@index([libraryId])
 }
 
 model Issue {
@@ -119,6 +128,7 @@ model Issue {
   status          String   @default("WANTED") 
   filePath        String?
   downloadId      String?
+  pageCount       Int      @default(0)
 
   name            String?
   description     String?
@@ -127,9 +137,14 @@ model Issue {
   writers         String?  // Stored as JSON string
   artists         String?  // Stored as JSON string
   characters      String?  // Stored as JSON string
+  genres          String?  // Stored as JSON string
+  storyArcs       String?  // Stored as JSON string
 
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
+
+  @@index([seriesId])
+  @@index([cvId])
 }
 
 model IssueReport {
@@ -145,6 +160,10 @@ model IssueReport {
 
   series        Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([seriesId])
+  @@index([userId])
+  @@index([status])
 }
 
 // --- NEW CONFIGURATION TABLES ---
@@ -215,6 +234,8 @@ model ReadProgress {
   issue       Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@unique([userId, issueId]) 
+  @@index([userId])
+  @@index([issueId])
 }
 
 model Favorite {
@@ -227,6 +248,8 @@ model Favorite {
   series    Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
 
   @@unique([userId, seriesId])
+  @@index([userId])
+  @@index([seriesId])
 }
 
 model Collection {
@@ -238,6 +261,8 @@ model Collection {
   userId      String           
   user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   items       CollectionItem[]
+
+  @@index([userId])
 }
 
 model CollectionItem {
@@ -250,6 +275,8 @@ model CollectionItem {
   series       Series     @relation(fields: [seriesId], references: [id], onDelete: Cascade)
 
   @@unique([collectionId, seriesId]) 
+  @@index([collectionId])
+  @@index([seriesId])
 }
 
 model JobLog {
@@ -261,6 +288,9 @@ model JobLog {
   attempts    Int      @default(1)
   message     String?
   createdAt   DateTime @default(now())
+
+  @@index([jobType])
+  @@index([status])
 }
 
 model Trophy {
@@ -286,6 +316,8 @@ model UserTrophy {
   trophy      Trophy   @relation(fields: [trophyId], references: [id], onDelete: Cascade)
 
   @@unique([userId, trophyId])
+  @@index([userId])
+  @@index([trophyId])
 }
 
 model ReadingList {
@@ -298,6 +330,8 @@ model ReadingList {
   items       ReadingListItem[]
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
+
+  @@index([userId])
 }
 
 model ReadingListItem {
@@ -311,6 +345,9 @@ model ReadingListItem {
   cvIssueId   Int?
   title       String       
   order       Int          
+
+  @@index([listId])
+  @@index([issueId])
 }
 
 model OpdsKey {
@@ -324,6 +361,8 @@ model OpdsKey {
 
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
+
+  @@index([userId])
 }
 
 model KoreaderSync {

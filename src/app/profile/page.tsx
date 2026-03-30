@@ -1,3 +1,4 @@
+// src/app/profile/page.tsx
 "use client"
 
 import React, { useState, useEffect, useRef } from "react"
@@ -719,7 +720,8 @@ export default function ProfilePage() {
                     
                     <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
                         <Button variant="ghost" size="sm" className="h-8 text-xs font-bold text-muted-foreground hover:text-foreground hidden sm:flex" asChild>
-                            <Link href="/history">View Full History <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
+                            {/* FIX: Link changed to library/history */}
+                            <Link href="/library/history">View Full History <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
                         </Button>
                         <div className="flex items-center gap-2 bg-background p-1 rounded-md shadow-sm border">
                             {/* @ts-ignore */}
@@ -733,7 +735,7 @@ export default function ProfilePage() {
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {displayedHistory.map((item: any) => {
-                        const coverSource = item.coverUrl || (item.localCoverPath ? `/api/library/cover?path=${encodeURIComponent(item.localCoverPath)}` : null);
+                        const coverSource = item.coverUrl; // Simplifed since API does the fallback now
                         return (
                             <Link key={item.id} href={`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.folderPath)}`} className="block group">
                                 <Card className="shadow-sm bg-muted/50 overflow-hidden group-hover:border-primary/50 transition-colors h-full">

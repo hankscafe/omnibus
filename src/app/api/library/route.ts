@@ -1,3 +1,4 @@
+// src/app/api/library/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -148,7 +149,6 @@ export async function POST(request: Request) {
             }
         }
 
-        // --- SECURITY FIX 2a: Log bulk update failures safely ---
         if (dbUpdates.length > 0) {
             await prisma.$transaction(dbUpdates).catch((err) => {
                 Logger.log(`Bulk manga update transaction failed: ${getErrorMessage(err)}`, 'error');
@@ -175,7 +175,7 @@ export async function POST(request: Request) {
   }
 }
 
-// --- GET HANDLER (PRO SERVER-SIDE FILTERING) ---
+// --- GET HANDLER ---
 export async function GET(request: Request) {
   try {
     const authOptions = await getAuthOptions();
@@ -331,7 +331,6 @@ export async function GET(request: Request) {
                     
                     const allRelevantIssues = await prisma.issue.findMany({
                         where: { series: { cvId: { in: reqCvIds } } },
-                        // ADDED year: true so we can effectively check year conflicts
                         select: { filePath: true, number: true, name: true, series: { select: { cvId: true, year: true } } }
                     });
 
@@ -346,7 +345,6 @@ export async function GET(request: Request) {
                     const requestsToComplete = [];
 
                     for (const dbReq of pendingRequests) {
-                        // FIXED CASTING HERE
                         const reqCvId = (dbReq as any).cvId || (dbReq as any).volumeId;
                         if (!reqCvId) continue;
 
@@ -359,7 +357,6 @@ export async function GET(request: Request) {
                         const matchingIssue = seriesIssues.find((i: any) => {
                             if (!i.filePath || i.filePath.length === 0) return false;
                             
-                            // Check for year conflicts based on the folder path/file name
                             const reqYear = i.series?.year?.toString();
                             const fileYearMatch = i.filePath.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
                             const fileYear = fileYearMatch ? fileYearMatch[1] : null;
@@ -393,7 +390,6 @@ export async function GET(request: Request) {
 
     let where: any = { AND: [] };
     
-    // ... [Filters remain exactly the same] ...
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });
     if (publisherFilter !== 'ALL') where.AND.push({ publisher: publisherFilter });
@@ -423,6 +419,7 @@ export async function GET(request: Request) {
         }
     }
 
+    // Prisma string filtering happens entirely in SQL engine
     if (q) {
         if (type === 'TITLE') {
             where.AND.push({ OR: [ { name: { contains: q } }, { publisher: { contains: q } } ] });
@@ -481,9 +478,10 @@ export async function GET(request: Request) {
         const dbSeriesUnsorted = await prisma.series.findMany({
             where: { id: { in: paginatedIds } },
             include: {
+                // --- BOTTLENECK FIX: Removed writers, artists, characters from payload ---
                 issues: {
                     select: {
-                        id: true, writers: true, artists: true, characters: true,
+                        id: true,
                         readProgresses: {
                             where: { userId: userId || 'none' },
                             select: { isCompleted: true, currentPage: true, totalPages: true }
@@ -518,9 +516,10 @@ export async function GET(request: Request) {
         dbSeries = await prisma.series.findMany({
             where, skip, take: limit, orderBy,
             include: {
+                // --- BOTTLENECK FIX: Removed writers, artists, characters from payload ---
                 issues: {
                     select: {
-                        id: true, writers: true, artists: true, characters: true,
+                        id: true,
                         readProgresses: {
                             where: { userId: userId || 'none' },
                             select: { isCompleted: true, currentPage: true, totalPages: true }
@@ -539,14 +538,11 @@ export async function GET(request: Request) {
     const publishersRaw = await prisma.series.findMany({ select: { publisher: true }, distinct: ['publisher'] });
     const globalPublishers = Array.from(new Set(publishersRaw.map(p => p.publisher || 'Other'))).sort();
 
+    // --- BOTTLENECK FIX: Removed JSON.parse loop. Simply count the issues and calculate progress ---
     const formatted = dbSeries.map(s => {
         const issueCount = s.issues.length;
         let completedCount = 0;
         let totalProgressSum = 0;
-
-        const writers = new Set<string>();
-        const artists = new Set<string>();
-        const characters = new Set<string>();
 
         s.issues.forEach(issue => {
             const prog = issue.readProgresses?.[0]; 
@@ -558,10 +554,6 @@ export async function GET(request: Request) {
                     totalProgressSum += (prog.currentPage / prog.totalPages) * 100;
                 }
             }
-
-            if (issue.writers) { try { JSON.parse(issue.writers).forEach((w: string) => writers.add(w)); } catch(e){} }
-            if (issue.artists) { try { JSON.parse(issue.artists).forEach((a: string) => artists.add(a)); } catch(e){} }
-            if (issue.characters) { try { JSON.parse(issue.characters).forEach((c: string) => characters.add(c)); } catch(e){} }
         });
 
         let coverUrl = (s as any).coverUrl || null;
@@ -570,12 +562,19 @@ export async function GET(request: Request) {
         }
 
         return {
-            id: s.id, name: s.name || "Unknown Series", year: s.year, publisher: s.publisher || "Unknown",
-            path: s.folderPath, cvId: (s.cvId !== null && s.cvId > 0) ? s.cvId : null,
-            isFavorite: s.favorites.length > 0, count: issueCount, unreadCount: Math.max(0, issueCount - completedCount),
-            progressPercentage: issueCount > 0 ? Math.round(totalProgressSum / issueCount) : 0, cover: coverUrl,
-            monitored: s.monitored || false, isManga: (s as any).isManga || false,
-            writers: Array.from(writers), artists: Array.from(artists), characters: Array.from(characters)
+            id: s.id, 
+            name: s.name || "Unknown Series", 
+            year: s.year, 
+            publisher: s.publisher || "Unknown",
+            path: s.folderPath, 
+            cvId: (s.cvId !== null && s.cvId > 0) ? s.cvId : null,
+            isFavorite: s.favorites.length > 0, 
+            count: issueCount, 
+            unreadCount: Math.max(0, issueCount - completedCount),
+            progressPercentage: issueCount > 0 ? Math.round(totalProgressSum / issueCount) : 0, 
+            cover: coverUrl,
+            monitored: s.monitored || false, 
+            isManga: (s as any).isManga || false
         };
     });
 

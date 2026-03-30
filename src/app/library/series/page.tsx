@@ -11,7 +11,7 @@ import {
   Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
-  LayoutGrid, List, CheckSquare, Square, EyeOff
+  LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -95,7 +95,6 @@ function SeriesContent() {
   const [deleteIssueFile, setDeleteIssueFile] = useState(false);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
 
-  // New Selection States for Multi-Select marking
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
@@ -171,6 +170,8 @@ function SeriesContent() {
                     writers: data.writers?.length > 0 ? data.writers : prev.writers,
                     artists: data.artists?.length > 0 ? data.artists : prev.artists,
                     characters: data.characters?.length > 0 ? data.characters : prev.characters,
+                    genres: data.genres?.length > 0 ? data.genres : prev.genres,
+                    storyArcs: data.storyArcs?.length > 0 ? data.storyArcs : prev.storyArcs, 
                     description: data.description || prev.description
                 }));
             }
@@ -227,6 +228,8 @@ function SeriesContent() {
   const writers = activeIssue?.writers || [];
   const artists = activeIssue?.artists || [];
   const characters = activeIssue?.characters || [];
+  const genres = activeIssue?.genres || []; 
+  const storyArcs = activeIssue?.storyArcs || [];
   const displayDescription = activeIssue?.description || seriesInfo.description || "No synopsis available.";
   const displayCover = activeIssue?.coverUrl || seriesInfo.cover;
   const hasCreators = writers.length > 0 || artists.length > 0;
@@ -439,9 +442,6 @@ function SeriesContent() {
           
           setIsDeleting(false);
           setDeleteModalOpen(false);
-          
-          // FIX: Redirect to library with a hard refresh flag to ensure the 
-          // ghost record is purged from the UI immediately.
           router.push('/library?refetch=true');
       } catch (e: any) {
           toast({ title: "Delete Failed", description: e.message, variant: "destructive" });
@@ -508,7 +508,6 @@ function SeriesContent() {
       }
   }
 
-  // --- NEW: Toggle Single Read Status ---
   const handleToggleRead = async (issue: any, markAsRead: boolean) => {
     try {
         await fetch('/api/progress', {
@@ -538,7 +537,6 @@ function SeriesContent() {
     }
   }
 
-  // --- NEW: Bulk Progress Update ---
   const handleBulkProgress = async (markAsRead: boolean) => {
     setIsBulkProcessing(true);
     try {
@@ -759,6 +757,28 @@ function SeriesContent() {
                               <p className="text-sm italic text-muted-foreground opacity-50 py-4 text-center w-full">No character metadata found.</p>
                           )}
                       </div>
+
+                      {genres.length > 0 && (
+                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Genres & Concepts</h4>
+                              <div className="flex flex-wrap gap-1.5">
+                                  {genres.map((genre: string) => (
+                                      <Badge key={genre} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:text-foreground">{genre}</Badge>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
+
+                      {storyArcs.length > 0 && (
+                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><BookMarked className="w-4 h-4 text-primary"/> Story Arcs</h4>
+                              <div className="flex flex-wrap gap-1.5">
+                                  {storyArcs.map((arc: string) => (
+                                      <Badge key={arc} className="font-medium text-[10px] bg-primary/10 text-primary border-primary/30 hover:bg-primary/20">{arc}</Badge>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
                   </div>
               </div>
 

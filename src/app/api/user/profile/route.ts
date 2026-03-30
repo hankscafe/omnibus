@@ -1,3 +1,4 @@
+// src/app/api/user/profile/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
@@ -54,22 +55,15 @@ export async function GET(req: Request) {
         take: 24 
     });
 
-    const seriesCvIds = recentProgresses.map(rp => rp.issue?.series?.cvId?.toString()).filter(Boolean) as string[];
-    const relatedRequests = await prisma.request.findMany({
-        where: { volumeId: { in: seriesCvIds } },
-        select: { volumeId: true, imageUrl: true }
-    });
-
-    const coverMap = new Map<string, string>();
-    for (const req of relatedRequests) {
-        if (req.imageUrl) coverMap.set(req.volumeId, req.imageUrl);
-    }
-
+    // --- FIX: Use the reliable Series DB Cover instead of the Request table ---
     const recentHistory = recentProgresses.map(rp => {
         const progressPct = rp.totalPages > 0 ? Math.round((rp.currentPage / rp.totalPages) * 100) : 0;
-        const cvIdStr = rp.issue?.series?.cvId?.toString();
         const folderPath = rp.issue?.series?.folderPath;
-        const localCoverPath = folderPath ? path.join(folderPath, 'cover.jpg') : null;
+        
+        let seriesCoverUrl = (rp.issue?.series as any)?.coverUrl || null;
+        if (!seriesCoverUrl && folderPath) {
+            seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
+        }
         
         return {
             id: rp.id,
@@ -78,8 +72,7 @@ export async function GET(req: Request) {
             progress: progressPct,
             isCompleted: rp.isCompleted || progressPct >= 100,
             updatedAt: rp.updatedAt,
-            coverUrl: cvIdStr ? coverMap.get(cvIdStr) || null : null,
-            localCoverPath: localCoverPath, 
+            coverUrl: seriesCoverUrl,
             filePath: rp.issue?.filePath || "", 
             folderPath: folderPath || ""
         };
@@ -123,7 +116,6 @@ export async function POST(req: Request) {
     if (removeBanner) {
         const currentUser = await prisma.user.findUnique({ where: { id: token.id as string } });
         if (currentUser?.banner) {
-            // Updated to handle path logic with the api/uploads prefix
             const oldFileName = currentUser.banner.split('?')[0].split('/').pop();
             if (oldFileName) {
                 const oldPath = path.join(process.cwd(), 'public', 'banners', oldFileName);
@@ -143,7 +135,6 @@ export async function POST(req: Request) {
         const base64Data = avatarBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
         
-        // FIX: Prefix with api/uploads to use the static image handler
         const avatarUrl = `/api/uploads/avatars/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { avatar: avatarUrl } });
         return NextResponse.json({ success: true, avatarUrl });
@@ -158,7 +149,6 @@ export async function POST(req: Request) {
         const base64Data = bannerBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
         
-        // FIX: Prefix with api/uploads to use the static image handler
         const bannerUrl = `/api/uploads/banners/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { banner: bannerUrl } });
         return NextResponse.json({ success: true, bannerUrl });

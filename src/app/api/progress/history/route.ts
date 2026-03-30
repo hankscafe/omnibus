@@ -1,9 +1,11 @@
+// src/app/api/progress/history/route.ts
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
-import fs from 'fs';
 import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(request: Request) {
@@ -14,36 +16,39 @@ export async function GET(request: Request) {
 
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    // 1. Fetch only the necessary progress and relation data
     const history = await prisma.readProgress.findMany({
         where: { userId: userId },
         include: { issue: { include: { series: true } } },
         orderBy: { updatedAt: 'desc' }
     });
 
-    const items = await Promise.all(history.map(async (p) => {
+    // 2. BLAZING FAST MAPPING (Removed synchronous/async physical disk I/O!)
+    const items = history.map((p) => {
         const folderPath = p.issue.series.folderPath;
-        let seriesCoverUrl = null;
-        try {
-            if (fs.existsSync(folderPath)) {
-                const files = await fs.promises.readdir(folderPath);
-                const coverFile = files.find(f => ['cover.jpg', 'cover.png', 'folder.jpg'].includes(f.toLowerCase()));
-                if (coverFile) seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, coverFile))}`;
-            }
-        } catch (e) {}
+        
+        // Use DB cover URL instantly, fallback to the dynamic cover route
+        let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
+        if (!seriesCoverUrl && folderPath) {
+            seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
+        }
+
+        // Safely extract the file name if a path exists
+        const safeSeriesName = p.issue.series.name || (folderPath ? path.basename(folderPath).replace(/\s\(\d{4}\)$/, "") : "Unknown Series");
 
         return {
             id: p.id,
-            seriesName: p.issue.series.name || path.basename(folderPath),
+            seriesName: safeSeriesName,
             issueNumber: p.issue.number,
             filePath: p.issue.filePath,
             seriesPath: folderPath,
-            percentage: Math.round((p.currentPage / p.totalPages) * 100),
+            percentage: p.totalPages > 0 ? Math.round((p.currentPage / p.totalPages) * 100) : 0,
             isCompleted: p.isCompleted,
             updatedAt: p.updatedAt,
             seriesCvId: p.issue.series.cvId,
             seriesCoverUrl
         };
-    }));
+    });
 
     return NextResponse.json({ items });
   } catch (error: unknown) {

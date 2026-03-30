@@ -1,12 +1,13 @@
+// src/lib/utils.ts
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { ComicVineCredit } from "@/types" // <-- STRICT TYPE IMPORT
+import { ComicVineCredit } from "@/types" 
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-// --- NEW: Shared Release Date Checker ---
+// --- Shared Release Date Checker ---
 export function isReleasedYet(storeDate: string | null, coverDate: string | null) {
   const now = new Date();
   if (storeDate) return new Date(storeDate) <= now;
@@ -19,13 +20,19 @@ export function isReleasedYet(storeDate: string | null, coverDate: string | null
   return true; // If CV has no date, assume it's out
 }
 
-// --- NEW: Shared ComicVine Metadata Parser ---
-// TYPING FIX: Removed 'any[]' and enforced ComicVineCredit arrays
-export function parseComicVineCredits(person_credits?: ComicVineCredit[], character_credits?: ComicVineCredit[]) {
+// --- Shared ComicVine Metadata Parser ---
+export function parseComicVineCredits(
+  person_credits?: ComicVineCredit[], 
+  character_credits?: ComicVineCredit[],
+  concept_credits?: ComicVineCredit[],
+  story_arc_credits?: ComicVineCredit[]
+) {
   const writers: string[] = [];
   const artists: string[] = [];
   const coverArtists: string[] = [];
   const characters: string[] = [];
+  const genres: string[] = [];
+  const storyArcs: string[] = [];
 
   if (person_credits) {
     person_credits.forEach(p => {
@@ -42,10 +49,22 @@ export function parseComicVineCredits(person_credits?: ComicVineCredit[], charac
     });
   }
 
+  if (concept_credits) {
+    concept_credits.forEach(c => {
+      if (c.name) genres.push(c.name);
+    });
+  }
+
+  if (story_arc_credits) {
+    story_arc_credits.forEach(s => { if (s.name) storyArcs.push(s.name); });
+  }
+
   return {
     writers: [...new Set(writers)],
     artists: [...new Set(artists)],
     coverArtists: [...new Set(coverArtists)],
-    characters: [...new Set(characters)]
+    characters: [...new Set(characters)],
+    genres: [...new Set(genres)],
+    storyArcs: [...new Set(storyArcs)]
   };
 }

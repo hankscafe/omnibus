@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
     Activity, RefreshCw, FileText, ExternalLink, Download, 
-    UploadCloud, TrendingUp, FileArchive // <-- Added FileArchive Icon
+    UploadCloud, TrendingUp, FileArchive, FileJson // <-- Added FileJson Icon
 } from "lucide-react"
 import { getErrorMessage } from "@/lib/utils/error"
 
@@ -25,12 +25,13 @@ const INTERVALS = [
 
 export default function ScheduledJobsPage() {
   const [metadataSyncSchedule, setMetadataSyncSchedule] = useState("24")
+  const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0") // <-- Added State
   const [librarySyncSchedule, setLibrarySyncSchedule] = useState("12") 
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
   const [backupSyncSchedule, setBackupSyncSchedule] = useState("168") 
   const [popularSyncSchedule, setPopularSyncSchedule] = useState("24")
-  const [converterSyncSchedule, setConverterSyncSchedule] = useState("24") // <-- Added State
+  const [converterSyncSchedule, setConverterSyncSchedule] = useState("24")
   
   const [savingJobs, setSavingJobs] = useState(false)
   const [runningJob, setRunningJob] = useState<string | null>(null) 
@@ -52,14 +53,16 @@ export default function ScheduledJobsPage() {
       if (res.ok) {
         const data = await res.json();
         const metaItem = data.find((c: any) => c.key === 'metadata_sync_schedule');
+        const embedItem = data.find((c: any) => c.key === 'embed_metadata_schedule'); // <-- Fetch Config
         const libItem = data.find((c: any) => c.key === 'library_sync_schedule');
         const monitorItem = data.find((c: any) => c.key === 'monitor_sync_schedule'); 
         const diagItem = data.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
         const backupItem = data.find((c: any) => c.key === 'backup_sync_schedule'); 
         const popularItem = data.find((c: any) => c.key === 'popular_sync_schedule'); 
-        const converterItem = data.find((c: any) => c.key === 'cbr_conversion_schedule'); // <-- Added config logic
+        const converterItem = data.find((c: any) => c.key === 'cbr_conversion_schedule');
         
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
+        if (embedItem) setEmbedMetadataSchedule(embedItem.value);
         if (libItem) setLibrarySyncSchedule(libItem.value);
         if (monitorItem) setMonitorSyncSchedule(monitorItem.value);
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
@@ -74,7 +77,7 @@ export default function ScheduledJobsPage() {
     }
   };
 
-  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter') => {
+  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter' | 'embed_metadata') => {
       setRunningJob(job);
       toast({ title: "Job Started", description: `The ${job} process has been triggered in the background.` });
       try {
@@ -104,12 +107,13 @@ export default function ScheduledJobsPage() {
               headers: { 'Content-Type': 'application/json' }, 
               body: JSON.stringify({ 
                   metadata_sync_schedule: metadataSyncSchedule,
+                  embed_metadata_schedule: embedMetadataSchedule, // <-- Added to Save Payload
                   library_sync_schedule: librarySyncSchedule,
                   monitor_sync_schedule: monitorSyncSchedule,
                   diagnostics_sync_schedule: diagnosticsSyncSchedule,
                   backup_sync_schedule: backupSyncSchedule,
                   popular_sync_schedule: popularSyncSchedule,
-                  cbr_conversion_schedule: converterSyncSchedule // <-- Added to Payload
+                  cbr_conversion_schedule: converterSyncSchedule 
               }) 
           })
           if (res.ok) {
@@ -254,6 +258,25 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
+        {/* --- NEW: EMBED METADATA CARD --- */}
+        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+            <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileJson className="w-5 h-5 text-primary" /> Embed XML Metadata</CardTitle>
+                <CardDescription className="text-muted-foreground">Writes ComicInfo.xml data directly into your downloaded .cbz archives.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <Select value={embedMetadataSchedule} onValueChange={setEmbedMetadataSchedule}>
+                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('embed_metadata')} disabled={runningJob === 'embed_metadata'}>
+                    {runningJob === 'embed_metadata' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                </Button>
+            </CardContent>
+        </Card>
+
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Activity className="w-5 h-5 text-primary" /> New Issue Monitor</CardTitle>
@@ -272,7 +295,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
-        {/* --- NEW: CBR AUTO-CONVERTER CARD --- */}
+        {/* --- EXISTING: CBR AUTO-CONVERTER CARD --- */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileArchive className="w-5 h-5 text-primary" /> CBR Auto-Converter</CardTitle>

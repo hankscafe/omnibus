@@ -1,3 +1,4 @@
+// src/app/library/page.tsx
 "use client"
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react"
@@ -9,7 +10,7 @@ import {
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud
+  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -21,6 +22,28 @@ import { useToast } from "@/components/ui/use-toast"
 import { Switch } from "@/components/ui/switch"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { InteractiveSearchModal } from "@/components/interactive-search-modal"
+
+interface Comic {
+  id: string; // Prisma ID
+  cvId: number; // ComicVine ID
+  volumeId: number; 
+  name: string;
+  issueNumber?: string;
+  year: string;
+  publisher: string;
+  image: string;
+  description?: string;
+  siteUrl?: string;
+  writers?: string[];
+  artists?: string[];
+  coverArtists?: string[];
+  characters?: string[];
+  isVolume?: boolean;
+  [key: string]: any;
+}
+
+type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
 
 function LibrarySkeleton({ count = 24 }: { count?: number }) {
   return (
@@ -99,6 +122,22 @@ function LibraryContent() {
 
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
+  // Deep Details State
+  const [selectedComic, setSelectedComic] = useState<Comic | null>(null)
+  const [relatedIssues, setRelatedIssues] = useState<Comic[]>([])
+  const [loadingRelated, setLoadingRelated] = useState(false)
+  const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
+  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, directSource?: 'getcomics' } | null>(null);
+  
+  const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
+  
+  const [ownedSeries, setOwnedSeries] = useState<Set<number>>(new Set())
+  const [monitoredSeries, setMonitoredSeries] = useState<Set<number>>(new Set())
+  const [ownedIssues, setOwnedIssues] = useState<Set<number>>(new Set())
+  const [activeRequests, setActiveRequests] = useState<any[]>([])
+  const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set())
+  const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
+
   const isAdmin = (session?.user as any)?.role === 'ADMIN'
 
   // --- STABLE FILTER TRACKING ---
@@ -121,6 +160,112 @@ function LibraryContent() {
       const timer = setTimeout(() => setDebouncedSearch(searchQuery), 500);
       return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Status Checkers
+  useEffect(() => {
+    fetch('/api/library/ids')
+      .then(res => res.json())
+      .then(data => { 
+          if (data) {
+              setOwnedSeries(new Set(data.series || []));
+              setMonitoredSeries(new Set(data.monitored || []));
+              setOwnedIssues(new Set(data.issues || []));
+              setActiveRequests(data.requests || []);
+          }
+      })
+      .catch(() => {});
+  }, []);
+
+  const getVolumeStatus = (volumeId: number, name: string): StatusType => {
+      if (ownedSeries.has(volumeId)) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
+      if (requestedVolumes.has(volumeId)) return 'REQUESTED';
+      
+      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
+      if (activeReqs.length > 0) {
+          const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
+          if (allCompleted) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
+          if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
+      }
+      return null;
+  }
+
+  const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
+      if (ownedIssues.has(issueId)) return 'ISSUE_OWNED';
+      if (requestedIssues.has(issueName)) return 'REQUESTED';
+
+      const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
+      if (req) {
+          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
+          if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
+          return 'REQUESTED';
+      }
+      return null;
+  }
+
+  // --- DEEP METADATA FETCH (FIXED) ---
+  useEffect(() => {
+    // FIX: Using cvId to fetch volume details instead of the Prisma CUID
+    if (!selectedComic?.cvId) return;
+    
+    fetch(`/api/issue-details?id=${selectedComic.cvId}&type=volume&_t=${Date.now()}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && !data.error) {
+          setSelectedComic(prev => {
+            if (prev?.id !== selectedComic.id) return prev; 
+            return {
+                ...prev,
+                ...data,
+                name: prev?.name || data.name, // Keep local override if present
+                publisher: (data.publisher && data.publisher !== 'Unknown') ? data.publisher : prev?.publisher,
+                year: (data.year && data.year !== '????') ? data.year : prev?.year,
+                image: data.image || prev?.image || prev?.cover,
+                description: data.description?.trim() ? data.description : prev?.description,
+                writers: data.writers,
+                artists: data.artists,
+                characters: data.characters
+            } as Comic;
+          });
+        }
+      });
+  }, [selectedComic?.id, selectedComic?.cvId]); // Ensure both are present
+
+  useEffect(() => {
+    // Fetch related issues for the bottom of the modal
+    if (!selectedComic?.cvId) { setRelatedIssues([]); return; }
+    setLoadingRelated(true)
+    fetch(`/api/series-issues?volumeId=${selectedComic.cvId}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.results) {
+           const sorted = data.results.sort((a: any, b: any) => (parseFloat(b.issueNumber) || 0) - (parseFloat(a.issueNumber) || 0));
+           setRelatedIssues(sorted);
+        }
+      })
+      .finally(() => setLoadingRelated(false))
+  }, [selectedComic?.cvId])
+
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string) => {
+    const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
+    setRequestingTarget(targetKey);
+    try {
+      const res = await fetch('/api/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored, directSource })
+      });
+      if (res.ok) {
+          toast({ title: "Success", description: `${name} added to queue.` })
+          if (type === 'volume') {
+              setRequestedVolumes(prev => new Set(prev).add(id));
+          } else {
+              setRequestedIssues(prev => new Set(prev).add(name));
+              setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
+          }
+      }
+    } finally { setRequestingTarget(null) }
+  }
+
 
   // --- STABLE DATA FETCHING ENGINE ---
   const loadLibraryData = useCallback(async (pageNum: number, isRefreshScan: boolean, appendResults: boolean) => {

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import packageJson from '../../../../../package.json';
 
+export const dynamic = 'force-dynamic';
+
 // Helper function to properly compare SemVer strings (e.g., 1.0.0-beta.4 > 1.0.0-beta.3)
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
@@ -62,7 +64,7 @@ export async function GET() {
           'User-Agent': 'Omnibus-App',
           'Accept': 'application/vnd.github.v3+json'
         },
-        next: { revalidate: 3600 } 
+        next: { revalidate: 1800 } // Cache for 30 minutes
     });
     
     if (!res.ok) throw new Error("Failed to fetch from GitHub");

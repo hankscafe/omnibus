@@ -1,3 +1,4 @@
+// src/app/api/admin/backup/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -14,49 +15,86 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-        // NATIVE DB FETCH: Grab absolutely everything, including all the new configuration tables!
-        const [
-            users, series, issues, readProgresses, settings, requests,
-            libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
-            collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
-        ] = await Promise.all([
-            prisma.user.findMany(), prisma.series.findMany(), prisma.issue.findMany(),
-            prisma.readProgress.findMany(), prisma.systemSetting.findMany(), prisma.request.findMany(),
-            prisma.library.findMany(), prisma.downloadClient.findMany(), prisma.discordWebhook.findMany(),
-            prisma.indexer.findMany(), prisma.customHeader.findMany(), prisma.searchAcronym.findMany(),
-            prisma.collection.findMany(), prisma.collectionItem.findMany(), prisma.readingList.findMany(),
-            prisma.readingListItem.findMany(), prisma.trophy.findMany(), prisma.userTrophy.findMany(), prisma.issueReport.findMany()
-        ]);
-
-        const backupData = {
-            timestamp: new Date().toISOString(),
-            version: "2.1", // Bumped version to indicate encrypted schema
-            data: {
-                users, series, issues, readProgresses, settings, requests,
-                libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
-                collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
-            }
-        };
-
-        // --- SECURITY FIX: Encrypt the backup payload using AES-256-CBC ---
         const algorithm = 'aes-256-cbc';
         const secret = process.env.NEXTAUTH_SECRET || 'omnibus_default_encryption_key_!@#';
         const key = crypto.createHash('sha256').update(String(secret)).digest();
         const iv = crypto.randomBytes(16);
-        
         const cipher = crypto.createCipheriv(algorithm, key, iv);
-        let encrypted = cipher.update(JSON.stringify(backupData), 'utf8', 'hex');
-        encrypted += cipher.final('hex');
 
-        const finalPayload = {
-            encrypted: true,
-            iv: iv.toString('hex'),
-            data: encrypted
-        };
+        // --- THE FIX: STREAMING CIPHER ENGINE ---
+        // Instead of loading the DB into RAM, we stream chunks directly through the cipher to the client
+        const stream = new ReadableStream({
+            async start(controller) {
+                const encEncoder = new TextEncoder();
+                
+                controller.enqueue(encEncoder.encode(`{\n  "encrypted": true,\n  "version": "2.2",\n  "iv": "${iv.toString('hex')}",\n  "data": "`));
 
-        const jsonString = JSON.stringify(finalPayload, null, 2);
-        
-        return new NextResponse(jsonString, {
+                cipher.on('data', (chunk) => {
+                    controller.enqueue(encEncoder.encode(chunk.toString('hex')));
+                });
+
+                cipher.on('end', () => {
+                    controller.enqueue(encEncoder.encode(`"\n}`));
+                    controller.close();
+                });
+
+                cipher.write('{"timestamp":"' + new Date().toISOString() + '","data":{');
+
+                // Ordered safely for foreign key restoration
+                const tables = [
+                    { name: 'users', model: prisma.user },
+                    { name: 'settings', model: prisma.systemSetting },
+                    { name: 'libraries', model: prisma.library },
+                    { name: 'downloadClients', model: prisma.downloadClient },
+                    { name: 'discordWebhooks', model: prisma.discordWebhook },
+                    { name: 'indexers', model: prisma.indexer },
+                    { name: 'customHeaders', model: prisma.customHeader },
+                    { name: 'searchAcronyms', model: prisma.searchAcronym },
+                    { name: 'collections', model: prisma.collection },
+                    { name: 'readingLists', model: prisma.readingList },
+                    { name: 'trophies', model: prisma.trophy },
+                    { name: 'series', model: prisma.series },
+                    { name: 'issues', model: prisma.issue },
+                    { name: 'requests', model: prisma.request },
+                    { name: 'readProgresses', model: prisma.readProgress },
+                    { name: 'collectionItems', model: prisma.collectionItem },
+                    { name: 'readingListItems', model: prisma.readingListItem },
+                    { name: 'userTrophies', model: prisma.userTrophy },
+                    { name: 'issueReports', model: prisma.issueReport }
+                ];
+
+                let firstTable = true;
+                for (const table of tables) {
+                    if (!firstTable) cipher.write(',');
+                    firstTable = false;
+                    
+                    cipher.write(`"${table.name}":[`);
+                    
+                    let skip = 0;
+                    const take = 500; // Chunk size to keep RAM usage low
+                    let firstRow = true;
+                    
+                    while (true) {
+                        // @ts-ignore
+                        const rows = await table.model.findMany({ skip, take });
+                        if (rows.length === 0) break;
+                        
+                        for (const row of rows) {
+                            if (!firstRow) cipher.write(',');
+                            firstRow = false;
+                            cipher.write(JSON.stringify(row));
+                        }
+                        skip += take;
+                    }
+                    cipher.write(`]`);
+                }
+
+                cipher.write('}}');
+                cipher.end(); // Triggers cipher 'end' event which closes the HTTP stream
+            }
+        });
+
+        return new NextResponse(stream, {
             status: 200,
             headers: {
                 'Content-Type': 'application/json',
@@ -65,9 +103,7 @@ export async function GET() {
         });
 
     } catch (error: unknown) {
-        // --- SECURITY FIX: Log the real error internally, return a generic message ---
         Logger.log(`[Backup API] Generation Failed: ${getErrorMessage(error)}`, 'error');
-
         return NextResponse.json({ error: "Backup generation failed. Please check the server logs." }, { status: 500 });
     }
 }

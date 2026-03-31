@@ -1,3 +1,4 @@
+// src/app/api/admin/config/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -52,6 +53,13 @@ export async function GET(request: Request) {
       events: typeof w.events === 'string' ? JSON.parse(w.events) : w.events
   }));
 
+  // --- THE FIX: EXPOSE DOCKER PATHS (Updated to /cache) ---
+  const envPaths = {
+      BACKUP_PATH: process.env.BACKUP_PATH || '/backups',
+      CACHE_DIR: process.env.CACHE_DIR || '/cache',
+      LOG_PATH: process.env.LOG_PATH || '/app/config/logs'
+  };
+
   // 3. Return cleanly structured data
   return NextResponse.json({
       settings,
@@ -60,7 +68,8 @@ export async function GET(request: Request) {
       discordWebhooks: webhooks,
       indexers,
       customHeaders: headers,
-      searchAcronyms: acronyms
+      searchAcronyms: acronyms,
+      envPaths 
   });
 }
 

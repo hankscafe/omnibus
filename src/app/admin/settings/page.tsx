@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
-  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X
+  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -93,6 +93,7 @@ export default function SettingsPage() {
   const [configuredWebhooks, setConfiguredWebhooks] = useState<WebhookConfig[]>([])
   const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([])
   const [customAcronyms, setCustomAcronyms] = useState<AcronymConfig[]>([]) 
+  const [envPaths, setEnvPaths] = useState<any>({})
   
   // API Keys / Users States
   const [apiKeys, setApiKeys] = useState<any[]>([])
@@ -132,6 +133,7 @@ export default function SettingsPage() {
         setConfiguredClients(data.downloadClients || []);
         setConfiguredWebhooks(data.discordWebhooks || []);
         setConfiguredIndexers(data.indexers || []);
+        setEnvPaths(data.envPaths || {});
         
         const parsedHeaders = (data.customHeaders || []).map((h: any) => ({ ...h, id: h.id || `tmp_${Math.random()}` }));
         setCustomHeaders(parsedHeaders);
@@ -815,6 +817,32 @@ export default function SettingsPage() {
                                 </div>
                             </div>
                         </div>
+
+                        {/* --- THE FIX: DOCKER VOLUME BINDINGS UI --- */}
+                        <div className="grid gap-2 pt-6 border-t border-border mt-4">
+                            <Label className="text-foreground font-semibold text-lg flex items-center gap-2"><Database className="w-4 h-4 text-primary"/> Docker Volume Bindings (System Defaults)</Label>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+                                <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
+                                    <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Save className="w-3 h-3"/> Backup Directory</p>
+                                    <p className="font-mono text-sm font-bold text-primary">{envPaths?.BACKUP_PATH || '/backups'}</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2">Where automated database backups are saved.</p>
+                                </div>
+                                <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
+                                    <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Zap className="w-3 h-3"/> Cache & Temp Dir</p>
+                                    <p className="font-mono text-sm font-bold text-primary">{envPaths?.CACHE_DIR || '/cache'}</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2">Map this to a drive with plenty of free space for CBR to CBZ conversions.</p>
+                                </div>
+                                <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
+                                    <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><FileText className="w-3 h-3"/> Log Directory</p>
+                                    <p className="font-mono text-sm font-bold text-primary">{envPaths?.LOG_PATH || '/app/config/logs'}</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2">Where system activity logs are written.</p>
+                                </div>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground mt-2">
+                                These paths are configured via Environment Variables (<code className="text-foreground font-bold">BACKUP_PATH</code>, <code className="text-foreground font-bold">CACHE_DIR</code>, <code className="text-foreground font-bold">LOG_PATH</code>) in your Docker setup. 
+                            </p>
+                        </div>
+                        {/* ------------------------------------------- */}
                     </div>
 
                 </CardContent>
@@ -1437,7 +1465,7 @@ export default function SettingsPage() {
                     )}
                     <div className="border-t border-border pt-4">
                         <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" onClick={() => handleTest('clients', { clientType: editingClient.type, ...editingClient })} disabled={!!testing}>
-                            {testing ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
+                            {testing === 'clients' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
                         </Button>
                         <StatusBox result={testResults.clients} />
                     </div>

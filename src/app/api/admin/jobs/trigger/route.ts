@@ -1,10 +1,11 @@
+// src/app/api/admin/jobs/trigger/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { Logger } from '@/lib/logger'; 
 import fs from 'fs-extra';
 import path from 'path';
-import { execFile } from 'child_process'; // <-- Changed from exec
+import { execFile } from 'child_process'; 
 import { promisify } from 'util';
 import { DiscordNotifier } from '@/lib/discord';
 
@@ -14,10 +15,8 @@ import { searchAndDownload } from '@/lib/automation';
 import packageJson from '../../../../../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 
-// --- SECURITY FIX 1a: Use execFile to prevent shell injection ---
 const execFileAsync = promisify(execFile);
 
-// --- NEW: Helper function to strictly check if a version is newer ---
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
     const cleanCurrent = current.replace(/^v/, '');
@@ -60,13 +59,10 @@ async function getFolderSize(folderPath: string): Promise<number> {
 
         if (process.platform !== 'win32') {
             try {
-                // --- SECURITY FIX 1a: Pass arguments as an array to safely bypass the shell ---
                 const { stdout } = await execFileAsync('du', ['-sb', folderPath]);
                 const match = stdout.match(/^(\d+)/);
                 if (match) return parseInt(match[1], 10);
-            } catch (duError) {
-                // Silently fallback to Node.js calculation if 'du' is unavailable
-            }
+            } catch (duError) {}
         }
 
         const files = await fs.promises.readdir(folderPath, { withFileTypes: true });
@@ -86,7 +82,6 @@ async function getFolderSize(folderPath: string): Promise<number> {
     }
 }
 
-// --- UNIFIED STORAGE ENGINE ---
 async function runStorageScan() {
     const nowStr = Date.now().toString();
     await prisma.systemSetting.upsert({
@@ -101,7 +96,6 @@ async function runStorageScan() {
 
     const storageData: any[] = [];
     
-    // Loop sequentially to avoid EMFILE errors on massive libraries
     for (const s of seriesList) {
         const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
         
@@ -138,52 +132,89 @@ export async function POST(request: Request) {
 
             (async () => {
                 try {
-                    const [
-                        users, series, issues, readProgresses, settings, requests,
-                        libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
-                        collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
-                    ] = await Promise.all([
-                        prisma.user.findMany(), prisma.series.findMany(), prisma.issue.findMany(),
-                        prisma.readProgress.findMany(), prisma.systemSetting.findMany(), prisma.request.findMany(),
-                        prisma.library.findMany(), prisma.downloadClient.findMany(), prisma.discordWebhook.findMany(),
-                        prisma.indexer.findMany(), prisma.customHeader.findMany(), prisma.searchAcronym.findMany(),
-                        prisma.collection.findMany(), prisma.collectionItem.findMany(), prisma.readingList.findMany(),
-                        prisma.readingListItem.findMany(), prisma.trophy.findMany(), prisma.userTrophy.findMany(), prisma.issueReport.findMany()
-                    ]);
-
-                    const backupData = {
-                        timestamp: new Date().toISOString(),
-                        version: "2.1",
-                        data: { 
-                            users, series, issues, readProgresses, settings, requests,
-                            libraries, downloadClients, discordWebhooks, indexers, customHeaders, searchAcronyms,
-                            collections, collectionItems, readingLists, readingListItems, trophies, userTrophies, issueReports
-                        }
-                    };
-
-                    // --- SECURITY FIX: Encrypt background backup payload ---
                     const algorithm = 'aes-256-cbc';
                     const secret = process.env.NEXTAUTH_SECRET || 'omnibus_default_encryption_key_!@#';
                     const key = crypto.createHash('sha256').update(String(secret)).digest();
                     const iv = crypto.randomBytes(16);
                     
-                    const cipher = crypto.createCipheriv(algorithm, key, iv);
-                    let encrypted = cipher.update(JSON.stringify(backupData), 'utf8', 'hex');
-                    encrypted += cipher.final('hex');
-
-                    const finalPayload = {
-                        encrypted: true,
-                        iv: iv.toString('hex'),
-                        data: encrypted
-                    };
-
                     const backupDir = process.env.BACKUP_PATH || '/backups';
-                    
                     await fs.ensureDir(backupDir);
                     const fileName = `omnibus_backup_${Date.now()}.json`;
                     const filePath = path.join(backupDir, fileName);
-                    
-                    await fs.writeJson(filePath, finalPayload, { spaces: 2 });
+
+                    // --- THE FIX: STREAMING DIRECT TO DISK ---
+                    const writeStream = fs.createWriteStream(filePath);
+                    const cipher = crypto.createCipheriv(algorithm, key, iv);
+
+                    writeStream.write(`{\n  "encrypted": true,\n  "version": "2.2",\n  "iv": "${iv.toString('hex')}",\n  "data": "`);
+
+                    cipher.on('data', (chunk) => {
+                        writeStream.write(chunk.toString('hex'));
+                    });
+
+                    const streamFinished = new Promise<void>((resolve, reject) => {
+                        cipher.on('end', () => {
+                            writeStream.write(`"\n}`);
+                            writeStream.end();
+                        });
+                        writeStream.on('finish', resolve);
+                        writeStream.on('error', reject);
+                    });
+
+                    cipher.write('{"timestamp":"' + new Date().toISOString() + '","data":{');
+
+                    const tables = [
+                        { name: 'users', model: prisma.user },
+                        { name: 'settings', model: prisma.systemSetting },
+                        { name: 'libraries', model: prisma.library },
+                        { name: 'downloadClients', model: prisma.downloadClient },
+                        { name: 'discordWebhooks', model: prisma.discordWebhook },
+                        { name: 'indexers', model: prisma.indexer },
+                        { name: 'customHeaders', model: prisma.customHeader },
+                        { name: 'searchAcronyms', model: prisma.searchAcronym },
+                        { name: 'collections', model: prisma.collection },
+                        { name: 'readingLists', model: prisma.readingList },
+                        { name: 'trophies', model: prisma.trophy },
+                        { name: 'series', model: prisma.series },
+                        { name: 'issues', model: prisma.issue },
+                        { name: 'requests', model: prisma.request },
+                        { name: 'readProgresses', model: prisma.readProgress },
+                        { name: 'collectionItems', model: prisma.collectionItem },
+                        { name: 'readingListItems', model: prisma.readingListItem },
+                        { name: 'userTrophies', model: prisma.userTrophy },
+                        { name: 'issueReports', model: prisma.issueReport }
+                    ];
+
+                    let firstTable = true;
+                    for (const table of tables) {
+                        if (!firstTable) cipher.write(',');
+                        firstTable = false;
+                        
+                        cipher.write(`"${table.name}":[`);
+                        
+                        let skip = 0;
+                        const take = 500;
+                        let firstRow = true;
+                        
+                        while (true) {
+                            // @ts-ignore
+                            const rows = await table.model.findMany({ skip, take });
+                            if (rows.length === 0) break;
+                            
+                            for (const row of rows) {
+                                if (!firstRow) cipher.write(',');
+                                firstRow = false;
+                                cipher.write(JSON.stringify(row));
+                            }
+                            skip += take;
+                        }
+                        cipher.write(`]`);
+                    }
+
+                    cipher.write('}}');
+                    cipher.end(); // Wait for the stream to physically write to disk
+
+                    await streamFinished;
 
                     const files = await fs.readdir(backupDir);
                     const backupFiles = files.filter(f => f.startsWith('omnibus_backup_')).sort();
@@ -214,7 +245,6 @@ export async function POST(request: Request) {
 
             (async () => {
                 const { convertCbrToCbz } = await import('@/lib/converter');
-                // Find all issues with CBR/RAR extension
                 const cbrIssues = await prisma.issue.findMany({
                     where: {
                         OR: [
@@ -274,11 +304,9 @@ export async function POST(request: Request) {
             await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
             
             try {
-                // 1. Force the physical disk scan (Fast - only looks for new folders)
                 const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
                 await axios.get(`${baseUrl}/api/library?refresh=true`, { timeout: 300000 }).catch(() => {});
                 
-                // 2. SMART THROTTLE: Only run the heavy storage scan if it's been > 24 hours
                 const lastStorageRun = await prisma.systemSetting.findUnique({ where: { key: 'storage_deep_dive_last_run' } });
                 const lastRunTime = parseInt(lastStorageRun?.value || "0");
                 const hoursSinceLastRun = (Date.now() - lastRunTime) / (1000 * 60 * 60);
@@ -356,7 +384,6 @@ export async function POST(request: Request) {
             (async () => {
                 const { writeComicInfo } = await import('@/lib/metadata-writer');
                 
-                // Fetch issues that are downloaded and attached to a matched series
                 const issues = await prisma.issue.findMany({
                     where: { 
                         filePath: { endsWith: '.cbz' },
@@ -371,8 +398,6 @@ export async function POST(request: Request) {
                     const success = await writeComicInfo(issue.id);
                     if (success) successCount++;
                     else failCount++;
-                    
-                    // Yield to the event loop so we don't block the server
                     await new Promise(r => setTimeout(r, 100)); 
                 }
 
@@ -482,7 +507,6 @@ export async function POST(request: Request) {
                             const alreadyReq = existingRequestsForVolume.find(r => {
                                 if (r.activeDownloadName === searchName) return true;
                                 
-                                // Clean the string using the same rules as the Importer
                                 let clean = (r.activeDownloadName || "").replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
                                 
                                 const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
@@ -539,7 +563,6 @@ export async function POST(request: Request) {
                             }
                         }
 
-                        // OPTIMIZATION: Ensure API limits are respected before checking the next volume in the array
                         await new Promise(r => setTimeout(r, 1500));
 
                     } catch (err: any) {
@@ -616,10 +639,8 @@ export async function POST(request: Request) {
                     const lastNotified = notifiedSetting?.value || "";
 
                     if (latestVersion !== lastNotified) {
-                        // FIX: Use Webpack-bundled package version instead of environment variable
                         const currentVersion = packageJson.version || "1.0.0";
 
-                        // Strict semantic version comparison preventing false alerts
                         if (isNewerVersion(latestVersion, currentVersion)) {
                             await DiscordNotifier.sendAlert('update_available', { version: latestVersion });
                             

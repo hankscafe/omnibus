@@ -27,7 +27,7 @@ Self-hosting audiobooks, eBooks, and comic books has always presented a challeng
 
 After using [ReadMeABook](https://github.com/kikootwo/ReadMeABook), I wanted a similar solution specifically tailored for comics. Comic indexers and tracking sites can be notoriously tricky due to inconsistent naming conventions and release formats (e.g., single issues vs. volumes vs. massive character collections). Using ReadMeABook's clean aesthetic as a starting point, I used AI to help build a comic-focused equivalent. What started as a simple request tool eventually evolved into a full-fledged library manager, metadata indexer, and web reader.
 
-Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omnibus is designed to be lightweight, performant, and responsive across all your devices. Whether you are managing a massive archive of .cbz and .cbr files, hunting down missing issues of your favorite run, or just looking for a clean, distraction-free web reader, Omnibus brings your entire comic universe under one roof.
+Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omnibus is designed to be lightweight, performant, and responsive across all your devices. Whether you are managing a massive archive of .cbz files, hunting down missing issues of your favorite run, or just looking for a clean, distraction-free web reader, Omnibus brings your entire comic universe under one roof.
 
 While I know AI-assisted ("vibe-coded") projects can sometimes be met with skepticism, I genuinely enjoyed the process of watching this come together into a highly usable tool. If you run into issues, have suggestions, or want to contribute, please let me know! I gladly welcome any help or insights to make Omnibus even better.
 
@@ -99,7 +99,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 
 * **Responsive Design:** A beautifully styled, mobile-first interface that provides a frictionless login experience whether you are on a smartphone, tablet, or desktop monitor.
 * **"Jump Back In" Shelf:** A dynamically updated carousel that tracks your exact page in ongoing issues. Jump back into the action with a single click.
-* **Recently Added" Section:** A dynamically updated carousel that shows the 7 most recent series addtions to the library with the ability to jump directly to that series page.
+* **"Recently Added" Section:** A dynamically updated carousel that shows the 7 most recent series addtions to the library with the ability to jump directly to that series page.
 * **Discovery Feed:** Browse auto-updating "New Releases" and "Popular Issues" pulled directly from the ComicVine API and cached for performance.
 * **Interactive Search:** Search the ComicVine database for any series or issue. View covers, publishers, and issue counts to ensure you are requesting exactly what you want.
 * **Color-Coded Badges:** Omnibus uses a color-coded badge system on the Discover and Search grids to let you know exactly what is in your library and what the automated downloader is doing.
@@ -137,6 +137,7 @@ A meticulously organized, highly performant view of your physical files, built t
   <strong>The library page action buttons.</strong>
 </p>
 
+* **Embedded Metadata (ComicInfo.xml):** Omnibus doesn't just read metadata—it writes it. Omnibus can automatically generate and embed standard `ComicInfo.xml` files directly into your `.cbz` archives, ensuring your metadata travels with your files.
 * **Dual Megadata Engines:** Omnibus reads embedded ComicInfo.xml files inside your archives and syncs with the ComicVine API to pull high-res covers, synopses, and creator credits.
 * **Multi-Library Routing:** Map distinct folders for standard Comics and Manga. Omnibus automatically detects Manga based on publishers, AniList cross-referencing, and tags to route them to the correct directory.
 * **Automated File Standardization:** * Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
@@ -162,8 +163,8 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 </p>
 
 * **Hero Banner & Synopsis:** A premium, visually striking header displaying high-resolution cover art, publisher logos, release years, and a full story synopsis pulled directly from ComicVine.
+* **Granular Metadata:** View detailed credits including Writers, Artists, Colorists, Cover Artists, **Genres, and Story Arcs** formatted beautifully alongside character appearances.
 * **ComicVine Button:** A button that will take users directly to the series page on ComicVine.
-* **Granular Metadata:** View detailed credits including Writers, Artists, Colorists, and Cover Artists, alongside genre tags and character appearances.
 * **"Read Next" Prompts:** A smart action button that instantly opens the web reader to your exact saved page on the next unread issue in the run.
 * **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view to easily navigate massive, 100+ issue runs.
 * **Individual Progress Tracking:** Every issue displays its own distinct status (Unread, In Progress with a visual progress bar, or Read). 
@@ -273,7 +274,7 @@ A personalized space for each user on your server to manage their identity, trac
 * **UI Customization:** Set your own personal theme preferences (Dark mode, Light mode, or System default) and UI accent colors. These settings are tied to your account and persist across any device you log into.
 * **Default Reader Settings:** Save your preferred Web Reader behaviors (e.g., always default to "Fit to Width" or default to "Right-to-Left" for manga libraries) so you never have to adjust settings when starting a new book.
 * **Account Security:** Safely update your password and view or revoke active login sessions across your different devices.
-* **Personal API Keys:** *(Coming Soon)* Generate secure, user-specific API tokens to integrate your Omnibus reading progress with third-party trackers (like MyAnimeList, AniList, or custom scripts) without giving out Admin access.
+* **Personal API Keys:** Generate secure, user-specific API tokens to integrate your Omnibus reading progress with third-party trackers (like MyAnimeList, AniList, or custom scripts) without giving out Admin access.
 * **Theme Customization:** Toggle Dark/Light modes, adjust UI accent colors, and tailor the app to your visual preferences.
 
 ### Settings & Administration
@@ -291,6 +292,7 @@ Complete, granular control over your instance, your users, and your underlying a
   <strong>Admin page showing active downloads and request management sections.</strong>
 </p> 
 
+* **High-Performance Architecture:** Built to handle massive terabyte-scale libraries. Features an optimized OPDS feed, asynchronous streaming cipher engines for backups, and B-Tree indexed database lookups.
 * **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
 * **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries ComicVine, and suggests the correct metadata linkage so you can clean up messy archives in seconds.
 * **Deep Diagnostics Engine:**

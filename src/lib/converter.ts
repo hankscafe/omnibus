@@ -1,3 +1,4 @@
+// src/lib/converter.ts
 import fs from 'fs-extra';
 import path from 'path';
 import AdmZip from 'adm-zip';
@@ -14,9 +15,8 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
 
     const cbzPath = cbrPath.replace(/\.(cbr|rar)$/i, '.cbz');
     
-    // --- THE CACHE DIR IMPLEMENTATION ---
-    // Uses the CACHE_DIR environment variable if provided, otherwise falls back to a local 'tmp' folder.
-    const baseTempDir = process.env.CACHE_DIR || path.join(process.cwd(), 'tmp');
+    // --- FIX: Defaults to /cache to align with standard Docker setups ---
+    const baseTempDir = process.env.CACHE_DIR || '/cache';
     const tempDir = path.join(baseTempDir, `cbr_${crypto.randomBytes(8).toString('hex')}`);
 
     try {

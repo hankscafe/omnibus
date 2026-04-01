@@ -30,6 +30,7 @@ model User {
   issueReports        IssueReport[]
 
   bookmarks           Bookmark[]
+  reviews             Review[]
 
   twoFactorEnabled Boolean @default(false)
   twoFactorSecret  String?
@@ -113,6 +114,8 @@ model Series {
   favorites       Favorite[]
   collectionItems CollectionItem[]
   issueReports    IssueReport[]
+
+  reviews         Review[]
 
   // Links to the new Library model
   libraryId       String?
@@ -335,6 +338,8 @@ model ReadingList {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
+  shareId     String?           @unique
+
   @@index([userId])
 }
 
@@ -403,4 +408,20 @@ model Bookmark {
 
   @@unique([userId, issueId, pageIndex]) // Prevent duplicate bookmarks on the same page
   @@index([userId])
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  userId    String
+  seriesId  String
+  rating    Int      @default(0) // 1-5 stars
+  text      String?  // Optional text review
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  series    Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, seriesId]) // One review per series per user
+  @@index([seriesId])
 }

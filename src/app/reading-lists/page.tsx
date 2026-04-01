@@ -1,3 +1,4 @@
+// src/app/reading-lists/page.tsx
 "use client"
 
 import { useState, useEffect, Suspense } from "react"
@@ -15,7 +16,7 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
     BookOpen, Trash2, Plus, GripVertical, Loader2, Image as ImageIcon, 
     ArrowLeft, ListOrdered, Calendar, Minus, FolderOpen, CloudDownload,
-    Check, DownloadCloud, Sparkles, Globe, ExternalLink
+    Check, DownloadCloud, Sparkles, Globe, ExternalLink, Share2
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -248,6 +249,28 @@ function ReadingListsContent() {
       } finally {
           setIsImportingMal(false);
       }
+  }
+
+  // --- NEW: SHARE LIST HANDLER ---
+  const handleShareList = async (listId: string) => {
+    try {
+        const res = await fetch('/api/reading-lists/share', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ listId })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            const url = `${window.location.origin}/reading-lists/shared/${data.shareId}`;
+            navigator.clipboard.writeText(url);
+            toast({ title: "Link Copied!", description: "Share link copied to clipboard." });
+            fetchLists(listId); // Refresh to get the new shareId
+        } else {
+            throw new Error(data.error);
+        }
+    } catch (e) {
+        toast({ title: "Failed to generate link", variant: "destructive" });
+    }
   }
 
   const confirmDeleteList = async () => {
@@ -490,6 +513,24 @@ function ReadingListsContent() {
                               {activeList.description && <CardDescription className="mt-2 text-primary/80 max-w-2xl">{activeList.description}</CardDescription>}
                           </div>
                           <div className="flex gap-2 shrink-0">
+                              {/* --- NEW SHARE BUTTON --- */}
+                              <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  className="font-bold border-border"
+                                  onClick={() => {
+                                      if ((activeList as any).shareId) {
+                                          const url = `${window.location.origin}/reading-lists/shared/${(activeList as any).shareId}`;
+                                          navigator.clipboard.writeText(url);
+                                          toast({ title: "Link Copied!" });
+                                      } else {
+                                          handleShareList(activeList.id);
+                                      }
+                                  }}
+                              >
+                                  <Share2 className="w-4 h-4 mr-2" /> {(activeList as any).shareId ? "Copy Link" : "Share"}
+                              </Button>
+
                               {missingItems.length > 0 && (
                                   <Button 
                                       size="sm" 

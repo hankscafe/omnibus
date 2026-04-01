@@ -11,7 +11,7 @@ import {
   Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
-  LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked
+  LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -99,6 +99,12 @@ function SeriesContent() {
   const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
 
+  // --- REVIEWS STATE ---
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });
+  const [userReview, setUserReview] = useState({ rating: 0, text: "" });
+  const [submittingReview, setSubmittingReview] = useState(false);
+
   const { toast } = useToast();
 
   const isAdmin = session?.user?.role === 'ADMIN';
@@ -155,6 +161,21 @@ function SeriesContent() {
         .catch(e => { Logger.log(`Scan Failed: ${e.message}`, 'error'); })
         .finally(() => setLoading(false));
   }, [folderPath]);
+
+  // --- FETCH REVIEWS ---
+  useEffect(() => {
+      if (!seriesInfo.id) return;
+      fetch(`/api/reviews?seriesId=${seriesInfo.id}`)
+          .then(res => res.json())
+          .then(data => {
+              if (data.reviews) {
+                  setReviews(data.reviews);
+                  setCommunityRating({ avg: data.avgRating, total: data.total });
+                  const myReview = data.reviews.find((r: any) => r.userId === (session?.user as any)?.id);
+                  if (myReview) setUserReview({ rating: myReview.rating, text: myReview.text || "" });
+              }
+          });
+  }, [seriesInfo.id, session]);
 
   useEffect(() => {
     if (!activeIssue?.id) return;
@@ -572,6 +593,28 @@ function SeriesContent() {
     }
   }
 
+  // --- SUBMIT REVIEW ---
+  const submitReview = async () => {
+    setSubmittingReview(true);
+    try {
+        await fetch('/api/reviews', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seriesId: seriesInfo.id, rating: userReview.rating, text: userReview.text })
+        });
+        toast({ title: "Review Saved!" });
+        // Re-fetch reviews to update average
+        const res = await fetch(`/api/reviews?seriesId=${seriesInfo.id}`);
+        const data = await res.json();
+        setReviews(data.reviews);
+        setCommunityRating({ avg: data.avgRating, total: data.total });
+    } catch (e) {
+        toast({ title: "Failed to save review", variant: "destructive" });
+    } finally {
+        setSubmittingReview(false);
+    }
+  }
+
   const getImageUrl = (imageObj: any) => {
       if (!imageObj) return null;
       if (typeof imageObj === 'string') return imageObj;
@@ -788,6 +831,63 @@ function SeriesContent() {
                   </h4>
                   <div className="text-sm leading-relaxed bg-muted/30 p-6 rounded-2xl border border-border min-h-[120px] text-foreground shadow-sm break-words">
                       <div dangerouslySetInnerHTML={{__html: displayDescription}} />
+                  </div>
+              </div>
+
+              {/* --- COMMUNITY REVIEWS SECTION --- */}
+              <div className="space-y-6 mt-8 pt-8 border-t border-border">
+                  <div className="flex items-center justify-between">
+                      <h4 className="font-black text-xl text-foreground tracking-tight">Community Reviews</h4>
+                      {communityRating.total > 0 && (
+                          <div className="flex items-center gap-2">
+                              <Star className="w-5 h-5 fill-yellow-500 text-yellow-500" />
+                              <span className="font-bold text-lg">{communityRating.avg} / 5</span>
+                              <span className="text-sm text-muted-foreground">({communityRating.total} ratings)</span>
+                          </div>
+                      )}
+                  </div>
+
+                  {/* Review Form */}
+                  <div className="bg-muted/30 p-4 rounded-xl border border-border space-y-4">
+                      <h5 className="text-sm font-bold">Leave a Review</h5>
+                      <div className="flex gap-1">
+                          {[1, 2, 3, 4, 5].map(star => (
+                              <Star 
+                                  key={star} 
+                                  className={`w-6 h-6 cursor-pointer transition-colors ${userReview.rating >= star ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground'}`}
+                                  onClick={() => setUserReview({ ...userReview, rating: star })}
+                              />
+                          ))}
+                      </div>
+                      <Textarea 
+                          placeholder="Write your thoughts here (optional)..." 
+                          value={userReview.text}
+                          onChange={(e) => setUserReview({ ...userReview, text: e.target.value })}
+                          className="bg-background"
+                      />
+                      <Button onClick={submitReview} disabled={submittingReview || userReview.rating === 0}>
+                          {submittingReview ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Submit Review
+                      </Button>
+                  </div>
+
+                  {/* Review List */}
+                  <div className="space-y-4">
+                      {reviews.map(r => (
+                          <div key={r.id} className="p-4 border border-border rounded-lg bg-background shadow-sm">
+                              <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                      <div className="w-6 h-6 bg-primary/20 rounded-full flex items-center justify-center font-bold text-[10px] text-primary">
+                                          {r.user.username.charAt(0).toUpperCase()}
+                                      </div>
+                                      <span className="font-bold text-sm">{r.user.username}</span>
+                                  </div>
+                                  <div className="flex gap-0.5">
+                                      {[...Array(r.rating)].map((_, i) => <Star key={i} className="w-3 h-3 fill-yellow-500 text-yellow-500" />)}
+                                  </div>
+                              </div>
+                              {r.text && <p className="text-sm text-muted-foreground">{r.text}</p>}
+                          </div>
+                      ))}
                   </div>
               </div>
 

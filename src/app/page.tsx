@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react"
 import { RequestSearch } from "@/components/request-search"
 import { ComicGrid } from "@/components/comic-grid"
 import { ContinueReading } from "@/components/ContinueReading"
+import { RecommendationsShelf } from "@/components/recommendations-shelf"
 import { RecentlyAdded } from "@/components/recently-added"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +25,7 @@ import {
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
+
 
 export default function Home() {
   const { data: session } = useSession()
@@ -251,6 +253,11 @@ export default function Home() {
         {/* Jump Back In Shelf */}
         <div className="w-full relative z-10">
           <ContinueReading />
+        </div>
+
+        {/* Recommendations Shelf */}
+        <div className="w-full relative z-10">
+          <RecommendationsShelf />
         </div>
 
         {/* Recently Added Shelf */}

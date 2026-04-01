@@ -194,23 +194,40 @@ export default function SettingsPage() {
   };
 
   const handleSave = async () => {
-    setLoading(true);
+  setLoading(true);
 
-    const payload = { 
-        settings: config,
-        libraries: configuredLibraries,
-        indexers: configuredIndexers, 
-        customHeaders: customHeaders,
-        searchAcronyms: customAcronyms, 
-        downloadClients: configuredClients,
-        discordWebhooks: configuredWebhooks
-    }
-
-    try {
-      const res = await fetch('/api/admin/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-      if (res.ok) toast({ title: "Settings Saved", description: "Configuration persisted to database." })
-    } finally { setLoading(false) }
+  const payload = { 
+      settings: config,
+      libraries: configuredLibraries,
+      indexers: configuredIndexers, 
+      customHeaders: customHeaders,
+      searchAcronyms: customAcronyms, 
+      downloadClients: configuredClients,
+      discordWebhooks: configuredWebhooks
   }
+
+  try {
+    const res = await fetch('/api/admin/config', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(payload) 
+    })
+    
+    if (res.ok) {
+        toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
+        
+        // ADDED FIX: Automatically trigger the Discover Sync job in the background
+        // so the new filters are applied to the cache instantly.
+        fetch('/api/admin/jobs/trigger', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job: 'popular' })
+        }).catch(() => {});
+    }
+  } finally { 
+    setLoading(false) 
+  }
+}
 
   // --- Multi-Library Management Handlers ---
   const addLibrary = () => {

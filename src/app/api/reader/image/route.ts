@@ -47,6 +47,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const filePath = searchParams.get('path');
   const pageName = searchParams.get('page');
+  const shouldCrop = searchParams.get('crop') === 'true';
 
   if (!filePath || !pageName || !fs.existsSync(filePath)) {
     return new NextResponse("Not Found", { status: 404 });
@@ -54,10 +55,16 @@ export async function GET(request: Request) {
 
   try {
     const libraries = await prisma.library.findMany();
-    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
-    const targetPath = path.normalize(filePath).toLowerCase();
+    
+    // BULLETPROOF PATH CHECK
+    const cleanTarget = filePath.replace(/\\/g, '/').toLowerCase();
+    const isAuthorized = libraries.some(lib => {
+        let cleanRoot = lib.path.replace(/\\/g, '/').toLowerCase();
+        if (!cleanRoot.endsWith('/')) cleanRoot += '/';
+        return cleanTarget === cleanRoot || cleanTarget.startsWith(cleanRoot);
+    });
 
-    if (!authorizedRoots.some(root => targetPath.startsWith(root))) {
+    if (!isAuthorized) {
       return new NextResponse("Unauthorized path access", { status: 403 });
     }
 
@@ -81,10 +88,18 @@ export async function GET(request: Request) {
     let contentType = 'image/jpeg';
 
     try {
-        finalBuffer = await sharp(buffer)
+        let imagePipeline = sharp(buffer);
+        
+        // Auto-Margin Cropping
+        if (shouldCrop) {
+            imagePipeline = imagePipeline.trim();
+        }
+
+        finalBuffer = await imagePipeline
             .resize({ width: 1600, withoutEnlargement: true }) 
             .webp({ quality: 80 })
             .toBuffer();
+            
         contentType = 'image/webp';
     } catch (imgErr) {
         if (pageName.toLowerCase().endsWith('.png')) contentType = 'image/png';

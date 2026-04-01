@@ -29,6 +29,8 @@ model User {
   trophies            UserTrophy[]
   issueReports        IssueReport[]
 
+  bookmarks           Bookmark[]
+
   twoFactorEnabled Boolean @default(false)
   twoFactorSecret  String?
 
@@ -142,6 +144,8 @@ model Issue {
 
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
+
+  bookmarks       Bookmark[]
 
   @@index([seriesId])
   @@index([cvId])
@@ -384,4 +388,19 @@ model KoreaderSync {
 model JobLock {
   id        String   @id
   lockedAt  DateTime @default(now())
+}
+
+model Bookmark {
+  id        String   @id @default(cuid())
+  userId    String
+  issueId   String
+  pageIndex Int
+  note      String?  // Optional user notes/highlights
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, issueId, pageIndex]) // Prevent duplicate bookmarks on the same page
+  @@index([userId])
 }

@@ -18,6 +18,7 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "Omnibus",
   description: "A self-hosted comic book manager. Your Universe. Organized.",
+  manifest: "/manifest.json",
   icons: {
     icon: '/favicon.ico',
     shortcut: '/favicon.ico',

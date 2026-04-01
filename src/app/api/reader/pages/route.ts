@@ -16,12 +16,18 @@ export async function GET(request: Request) {
 
   try {
     const libraries = await prisma.library.findMany();
-    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
-    const targetPath = path.normalize(filePath).toLowerCase();
-
-    const isAuthorized = authorizedRoots.some(root => 
-    targetPath === root || targetPath.startsWith(root + path.sep)
-    );
+    
+    // BULLETPROOF PATH CHECK
+    // Converts all backslashes to forward slashes and forces lowercase for a 1:1 match
+    const cleanTarget = filePath.replace(/\\/g, '/').toLowerCase();
+    
+    const isAuthorized = libraries.some(lib => {
+        let cleanRoot = lib.path.replace(/\\/g, '/').toLowerCase();
+        // Ensure root ends with a slash so startsWith doesn't match partial folder names
+        if (!cleanRoot.endsWith('/')) cleanRoot += '/';
+        return cleanTarget === cleanRoot || cleanTarget.startsWith(cleanRoot);
+    });
+    
     if (!isAuthorized) {
       return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
     }

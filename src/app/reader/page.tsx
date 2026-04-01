@@ -4,11 +4,12 @@ import { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import localforage from "localforage"
 import { 
   ChevronLeft, ChevronRight, X, Loader2, Maximize, Minimize, BookOpen, 
   Settings as SettingsIcon, SkipBack, SkipForward, CheckCircle2,
   Paintbrush, LayoutTemplate, MonitorPlay, Zap, ZoomIn, ZoomOut, Search, AlignHorizontalSpaceAround,
-  Sun // Added for brightness/contrast icon
+  Sun, Bookmark, CloudDownload, Scissors
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -25,6 +26,7 @@ function ReaderContent() {
   const router = useRouter();
   const filePath = searchParams.get('path');
   const seriesPath = searchParams.get('series');
+  const pageParam = searchParams.get('page'); // Support linking directly to a bookmarked page
   const { toast } = useToast();
 
   const [pages, setPages] = useState<string[]>([]);
@@ -35,6 +37,14 @@ function ReaderContent() {
   
   const [isReadyToSync, setIsReadyToSync] = useState(false);
   
+  // Bookmarks State
+  const [bookmarks, setBookmarks] = useState<number[]>([]);
+
+  // PWA Offline Caching State
+  const [pageUrls, setPageUrls] = useState<Record<string, string>>({});
+  const [isCaching, setIsCaching] = useState(false);
+  const [cacheProgress, setCacheProgress] = useState(0);
+
   // UI States
   const [showUI, setShowUI] = useState(false); 
   const [hoverTop, setHoverTop] = useState(false);
@@ -67,7 +77,7 @@ function ReaderContent() {
   const [isIdle, setIsIdle] = useState(false);
   const idleTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // Settings State (Added Brightness & Contrast)
+  // Settings State (Added Brightness, Contrast & Cropping)
   const [settings, setSettings] = useState({
       readingMode: 'ltr', 
       animateTransitions: 'true', 
@@ -76,7 +86,8 @@ function ReaderContent() {
       pageLayout: 'single',
       spreadGap: 'none',
       brightness: 100,
-      contrast: 100
+      contrast: 100,
+      cropMargins: false
   });
 
   const [nextIssue, setNextIssue] = useState<{ path: string, name: string } | null>(null);
@@ -101,11 +112,16 @@ function ReaderContent() {
     Promise.all([
       fetch(`/api/reader/pages?path=${encodeURIComponent(filePath)}`).then(res => res.json()),
       fetch(`/api/progress?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.json()),
+      fetch(`/api/progress/bookmark?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.ok ? res.json() : { bookmarks: [] }),
       seriesPath ? fetch(`/api/library/series?path=${encodeURIComponent(seriesPath)}`, { headers: getAuthHeaders() }).then(res => res.json()) : Promise.resolve(null)
     ])
-      .then(([pageData, progressData, seriesData]) => {
+      .then(([pageData, progressData, bookmarkData, seriesData]) => {
         if (pageData.error) throw new Error(pageData.error);
         setPages(pageData.pages);
+        
+        if (bookmarkData.bookmarks) {
+            setBookmarks(bookmarkData.bookmarks.map((b: any) => b.pageIndex));
+        }
 
         if (seriesData && seriesData.downloadedIssues) {
             if (seriesData.isManga) setSettings(s => ({ ...s, readingMode: 'rtl' }));
@@ -120,8 +136,11 @@ function ReaderContent() {
             setNextIssue(null);
         }
 
-        // Apply progress for the specific issue we just loaded
-        if (progressData && progressData.currentPage > 0 && !progressData.isCompleted) {
+        // Apply progress or URL query param for the specific issue
+        if (pageParam && !isNaN(parseInt(pageParam))) {
+            const requestedPage = Math.min(parseInt(pageParam), pageData.pages.length - 1);
+            setCurrentIndex(requestedPage);
+        } else if (progressData && progressData.currentPage > 0 && !progressData.isCompleted) {
             const safePage = Math.min(progressData.currentPage, pageData.pages.length - 1);
             setCurrentIndex(safePage);
         } else {
@@ -133,7 +152,7 @@ function ReaderContent() {
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, [filePath, seriesPath, getAuthHeaders]);
+  }, [filePath, seriesPath, pageParam, getAuthHeaders]);
 
   // Sync Progress
   useEffect(() => {
@@ -157,19 +176,107 @@ function ReaderContent() {
     return 1;
   }, [settings.pageLayout, settings.readingMode, currentIndex]);
 
+  // PWA Offline Caching & Local URL resolution
+  const loadCachedPage = useCallback(async (pageName: string) => {
+    if (!pageName || pageUrls[pageName]) return;
+    const cacheKey = `omnibus_cache_${filePath}_${pageName}`;
+    try {
+        const cachedBlob = await localforage.getItem<Blob>(cacheKey);
+        if (cachedBlob) {
+            setPageUrls(prev => ({ ...prev, [pageName]: URL.createObjectURL(cachedBlob) }));
+        }
+    } catch (e) {}
+  }, [filePath, pageUrls]);
+
+  const getPageUrl = useCallback((pageName: string) => {
+    if (!pageName) return "";
+    if (pageUrls[pageName]) return pageUrls[pageName];
+    // Dynamic fallback to the API route with cropping setting
+    return `/api/reader/image?path=${encodeURIComponent(filePath!)}&page=${encodeURIComponent(pageName)}&crop=${settings.cropMargins}`;
+  }, [pageUrls, filePath, settings.cropMargins]);
+
   useEffect(() => {
       if (!pages.length || !filePath) return;
+      
       const preloadImage = (index: number) => {
           if (index >= pages.length) return;
-          const img = new Image();
-          img.src = `/api/reader/image?path=${encodeURIComponent(filePath)}&page=${encodeURIComponent(pages[index])}`;
+          const pageName = pages[index];
+          
+          loadCachedPage(pageName).then(() => {
+              // Preload into browser memory whether cached or live
+              const img = new Image();
+              img.src = getPageUrl(pageName);
+          });
       };
+
       const step = getStep();
       for (let i = 1; i <= 3; i++) {
           preloadImage(currentIndex + (step * i));
           if (settings.pageLayout.includes('double')) preloadImage(currentIndex + (step * i) + 1);
       }
-  }, [currentIndex, pages, filePath, getStep, settings.pageLayout]);
+  }, [currentIndex, pages, filePath, getStep, settings.pageLayout, loadCachedPage, getPageUrl]);
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+      return () => {
+          Object.values(pageUrls).forEach(url => {
+              if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+          });
+      };
+  }, [pageUrls]);
+
+  const handleMakeOffline = async () => {
+      if (isCaching || !filePath || pages.length === 0) return;
+      setIsCaching(true);
+      setCacheProgress(0);
+      let downloaded = 0;
+      
+      for (const pageName of pages) {
+          const cacheKey = `omnibus_cache_${filePath}_${pageName}`;
+          try {
+              const exists = await localforage.getItem(cacheKey);
+              if (!exists) {
+                  const res = await fetch(`/api/reader/image?path=${encodeURIComponent(filePath!)}&page=${encodeURIComponent(pageName)}&crop=${settings.cropMargins}`);
+                  if (res.ok) {
+                      const blob = await res.blob();
+                      await localforage.setItem(cacheKey, blob);
+                  }
+              }
+          } catch (e) {
+              console.error("Failed to cache page", pageName, e);
+          }
+          downloaded++;
+          setCacheProgress(Math.round((downloaded / pages.length) * 100));
+      }
+      
+      setIsCaching(false);
+      toast({ title: "Available Offline", description: "Issue has been fully downloaded to your device." });
+  };
+
+  const toggleBookmark = async () => {
+    const isBookmarked = bookmarks.includes(currentIndex);
+    const method = isBookmarked ? 'DELETE' : 'POST';
+    
+    try {
+        const res = await fetch('/api/progress/bookmark', {
+            method,
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ filePath, pageIndex: currentIndex })
+        });
+        
+        if (res.ok) {
+            if (isBookmarked) {
+                setBookmarks(prev => prev.filter(i => i !== currentIndex));
+                toast({ title: "Bookmark Removed" });
+            } else {
+                setBookmarks(prev => [...prev, currentIndex]);
+                toast({ title: "Bookmark Added", description: `Saved page ${currentIndex + 1} to your profile.` });
+            }
+        }
+    } catch (e) {
+        toast({ title: "Error", description: "Failed to update bookmark", variant: "destructive" });
+    }
+  };
 
   useEffect(() => {
     const handleMouseMove = () => {
@@ -271,18 +378,15 @@ function ReaderContent() {
   };
 
   const handleTouchEnd = () => {
-      if (zoomLevel !== 100 || settings.readingMode === 'webtoon') return; // Don't interfere with zooming or scrolling
+      if (zoomLevel !== 100 || settings.readingMode === 'webtoon') return;
 
       const deltaX = touchEndX.current - touchStartX.current;
       const deltaY = touchEndY.current - touchStartY.current;
 
-      // Ensure it's a deliberate horizontal swipe (more than 50px distance, mostly X-axis)
       if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
           if (deltaX > 0) {
-              // Swiped Right -> Go backward (or forward in RTL)
               if (settings.readingMode === 'rtl') nextPage(); else prevPage();
           } else {
-              // Swiped Left -> Go forward (or backward in RTL)
               if (settings.readingMode === 'rtl') prevPage(); else nextPage();
           }
       }
@@ -380,7 +484,7 @@ function ReaderContent() {
                 <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Close</span>
             </Button>
             
-            {/* Zoom Controls (Hidden on narrow mobile screens) */}
+            {/* Zoom Controls */}
             {settings.readingMode !== 'webtoon' && (
                 <div className="hidden md:flex items-center bg-white/10 rounded-md border border-white/20 p-0.5 ml-4">
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20" onClick={() => setZoomLevel(z => Math.max(z - 10, 50))}><ZoomOut className="w-4 h-4" /></Button>
@@ -396,7 +500,29 @@ function ReaderContent() {
           <span className="opacity-70 text-xs truncate w-full">{issueName}</span>
         </div>
         
-        <div className="flex gap-1 md:gap-2">
+        <div className="flex gap-1 md:gap-2 items-center">
+            <Button 
+                variant="ghost" 
+                className="text-white hover:bg-white/20 hidden sm:flex font-bold text-xs" 
+                onClick={handleMakeOffline} 
+                disabled={isCaching}
+                title="Download issue for offline reading"
+            >
+                {isCaching ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {cacheProgress}%</>
+                ) : (
+                    <><CloudDownload className="w-4 h-4 mr-2" /> Offline</>
+                )}
+            </Button>
+            <Button 
+                variant="ghost" 
+                size="icon" 
+                className={`text-white hover:bg-white/20 ${bookmarks.includes(currentIndex) ? 'text-yellow-400' : ''}`} 
+                onClick={toggleBookmark} 
+                title="Bookmark Page"
+            >
+                <Bookmark className={`w-5 h-5 ${bookmarks.includes(currentIndex) ? 'fill-current' : ''}`} />
+            </Button>
             <Button variant="ghost" size="icon" className={`text-white hover:bg-white/20 ${isMarkedRead ? 'text-green-500' : ''}`} onClick={toggleReadStatus} title="Mark as Read">
                 <CheckCircle2 className="w-5 h-5" />
             </Button>
@@ -415,7 +541,7 @@ function ReaderContent() {
               {pages.map(p => (
                   <img 
                       key={p} 
-                      src={`/api/reader/image?path=${encodeURIComponent(filePath!)}&page=${encodeURIComponent(p)}`} 
+                      src={getPageUrl(p)} 
                       style={settings.brightness !== 100 || settings.contrast !== 100 ? { filter: `brightness(${settings.brightness}%) contrast(${settings.contrast}%)` } : undefined}
                       className="w-full max-w-4xl h-auto block m-0 p-0" 
                       loading="lazy" 
@@ -440,11 +566,25 @@ function ReaderContent() {
                   onClick={handleClickCanvas}
               >
                   {/* Current Page */}
-                  <img key={`p1-${currentIndex}`} src={`/api/reader/image?path=${encodeURIComponent(filePath!)}&page=${encodeURIComponent(pages[currentIndex])}`} style={imgStyle} className={imgClass} alt="Page" draggable={false} />
+                  <img 
+                      key={`p1-${currentIndex}`} 
+                      src={getPageUrl(pages[currentIndex])} 
+                      style={imgStyle} 
+                      className={imgClass} 
+                      alt="Page" 
+                      draggable={false} 
+                  />
                   
                   {/* Optional Second Page */}
                   {isDouble && currentIndex + 1 < pages.length && (
-                      <img key={`p2-${currentIndex+1}`} src={`/api/reader/image?path=${encodeURIComponent(filePath!)}&page=${encodeURIComponent(pages[currentIndex + 1])}`} style={imgStyle} className={imgClass} alt="Page 2" draggable={false} />
+                      <img 
+                          key={`p2-${currentIndex+1}`} 
+                          src={getPageUrl(pages[currentIndex + 1])} 
+                          style={imgStyle} 
+                          className={imgClass} 
+                          alt="Page 2" 
+                          draggable={false} 
+                      />
                   )}
               </div>
               
@@ -479,10 +619,21 @@ function ReaderContent() {
                     {settings.readingMode === 'rtl' ? <ChevronRight className="w-8 h-8" /> : <ChevronLeft className="w-8 h-8" />}
                 </Button>
                 
-                <div className="flex flex-col flex-1 items-center gap-2 mx-2">
-                    {/* Interactive Page Jumper (Enlarged for Mobile) */}
+                <div className="flex flex-col flex-1 items-center gap-2 mx-2 relative">
+                    {/* Render Bookmarks on the scrubber timeline */}
+                    <div className="absolute w-full h-2 md:h-1.5 top-[22px] pointer-events-none z-10" style={{ direction: settings.readingMode === 'rtl' ? 'rtl' : 'ltr' }}>
+                        {bookmarks.map(b => (
+                            <div 
+                                key={b} 
+                                className="absolute h-full w-1.5 bg-yellow-400 rounded-full shadow-[0_0_4px_#facc15]" 
+                                style={{ left: `${(b / (pages.length - 1)) * 100}%`, transform: 'translateX(-50%)' }} 
+                            />
+                        ))}
+                    </div>
+
+                    {/* Interactive Page Jumper */}
                     {isJumping ? (
-                        <form onSubmit={handlePageJump} className="flex items-center gap-2 bg-black/50 p-1.5 rounded-md">
+                        <form onSubmit={handlePageJump} className="flex items-center gap-2 bg-black/50 p-1.5 rounded-md z-20">
                             <Input 
                                 autoFocus
                                 type="number" 
@@ -497,7 +648,7 @@ function ReaderContent() {
                         </form>
                     ) : (
                         <span 
-                            className="text-white text-[11px] sm:text-xs font-bold opacity-80 uppercase tracking-widest cursor-pointer hover:text-primary hover:bg-white/10 px-3 py-1 rounded transition-colors"
+                            className="text-white text-[11px] sm:text-xs font-bold opacity-80 uppercase tracking-widest cursor-pointer hover:text-primary hover:bg-white/10 px-3 py-1 rounded transition-colors z-20"
                             onClick={() => { setIsJumping(true); setJumpInput((currentIndex + 1).toString()); }}
                             title="Click to jump to page"
                         >
@@ -505,14 +656,13 @@ function ReaderContent() {
                         </span>
                     )}
 
-                    {/* Progress Slider (Thicker for thumb grabbing) */}
                     <input 
                         type="range" 
                         min={0} 
                         max={pages.length - 1} 
                         value={currentIndex} 
                         onChange={(e) => setCurrentIndex(parseInt(e.target.value))} 
-                        className="w-full h-2 md:h-1.5 bg-slate-700/50 rounded-lg appearance-none cursor-pointer accent-white hover:accent-primary transition-colors"
+                        className="w-full h-2 md:h-1.5 bg-slate-700/50 rounded-lg appearance-none cursor-pointer accent-white hover:accent-primary transition-colors relative z-0"
                         style={{ direction: settings.readingMode === 'rtl' ? 'rtl' : 'ltr' }}
                     />
                 </div>
@@ -602,6 +752,17 @@ function ReaderContent() {
                       </div>
 
                       <div className="grid grid-cols-[30px_1fr] items-center gap-3">
+                          <Scissors className="w-5 h-5 text-muted-foreground justify-self-center" />
+                          <div className="grid gap-1.5">
+                              <div className="flex items-center justify-between">
+                                  <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold cursor-pointer" htmlFor="auto-crop-toggle">Auto-Crop Margins</Label>
+                                  <Switch id="auto-crop-toggle" checked={settings.cropMargins} onCheckedChange={(v) => setSettings(s => ({...s, cropMargins: v}))} />
+                              </div>
+                              <p className="text-[10px] text-muted-foreground">Automatically removes solid white or black borders from pages to maximize screen space.</p>
+                          </div>
+                      </div>
+
+                      <div className="grid grid-cols-[30px_1fr] items-center gap-3">
                           <Paintbrush className="w-5 h-5 text-muted-foreground justify-self-center" />
                           <div className="grid gap-1.5">
                               <Label className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground font-bold">Background Color</Label>
@@ -630,7 +791,7 @@ function ReaderContent() {
                           </div>
                       </div>
 
-                      {/* --- NEW: Image Adjustments (Brightness/Contrast) --- */}
+                      {/* --- Image Adjustments (Brightness/Contrast) --- */}
                       <div className="grid grid-cols-[30px_1fr] items-start gap-3 pt-2 border-t border-border">
                           <Sun className="w-5 h-5 text-muted-foreground justify-self-center mt-1" />
                           <div className="grid gap-4">
@@ -679,7 +840,6 @@ function ReaderContent() {
   )
 }
 
-// Add this at the absolute bottom of app/reader/page.tsx
 export default function ReaderPage() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center text-white">Loading Reader...</div>}>

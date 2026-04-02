@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,6 +84,10 @@ export async function DELETE(request: Request) {
         if (!id) return NextResponse.json({ error: "Missing ID" }, { status: 400 });
 
         await prisma.apiKey.delete({ where: { id } });
+        
+        // --- AUDIT LOG ---
+        await AuditLogger.log('REVOKE_API_KEY', { keyId: id }, (session.user as any).id);
+
         return NextResponse.json({ success: true });
     } catch (error) {
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

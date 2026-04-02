@@ -7,6 +7,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
@@ -144,6 +145,11 @@ export async function DELETE(request: Request) {
             }
         }
 
+        await AuditLogger.log('DELETE_ISSUE', { 
+            issueId, 
+            deletedPhysicalFile: deleteFile ? fullPath : 'None' 
+        }, (session.user as any).id);
+        
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

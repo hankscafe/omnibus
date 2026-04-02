@@ -357,7 +357,7 @@ services:
       # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key.  !!DO NOT LOSE THIS!!
       - NEXTAUTH_SECRET=
       # REQUIRED: Connection URL for the background job queue
-      - REDIS_URL=redis://omnibus-redis:6379
+      - REDIS_URL=redis://omnibus-redis:6379/0
       # REQUIRED: Cache directory for CBR -> CBZ convertor
       - CACHE_DIR=/cache
       # REQUIRED: Tells the app to store the database in our persistent config mount

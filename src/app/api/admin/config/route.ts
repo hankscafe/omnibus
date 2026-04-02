@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 const SENSITIVE_KEYS = [
     'cv_api_key', 
@@ -80,12 +81,15 @@ export async function POST(request: Request) {
 
     // FIX: Only enforce session check if setup is already done.
     // This allows the Setup Wizard to perform the first save.
+    let userId: string | null = null;
+
     if (isSetupComplete) {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') {
             return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
         }
+        userId = (session.user as any).id;
     } else {
         // Double-check as a fallback: if setup isn't complete, ensure at least one user exists
         const userCount = await prisma.user.count();
@@ -181,6 +185,14 @@ export async function POST(request: Request) {
             await syncTable(tx.discordWebhook, parsedHooks);
         }
     });
+
+    // --- AUDIT LOG ---
+    if (isSetupComplete) {
+        await AuditLogger.log('UPDATE_SYSTEM_CONFIG', {
+            message: "System configuration and integrations updated.",
+            updatedSections: Object.keys(body).filter(k => body[k] !== undefined)
+        }, userId);
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {

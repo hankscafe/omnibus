@@ -39,6 +39,8 @@ model User {
 
   dailyReadingStats DailyReadingStat[]
 
+  auditLogs           AuditLog[]
+
   apiKeys             ApiKey[]  @relation("ApiKeysActsAs")
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
   opdsKeys        OpdsKey[]
@@ -446,4 +448,19 @@ model DailyReadingStat {
   @@unique([userId, date])
   @@index([userId])
   @@index([date])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  action      String   // e.g., "DELETE_SERIES", "UPDATE_CONFIG", "DELETE_USER"
+  details     String?  // JSON string containing what was changed/deleted
+  ipAddress   String?  // Optional: Track where the request came from
+  
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
 }

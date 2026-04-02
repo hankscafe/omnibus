@@ -4,6 +4,7 @@ import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
 import { DiscordNotifier } from '@/lib/discord';
 import { Logger } from '@/lib/logger';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -63,6 +64,11 @@ export async function PATCH(req: NextRequest) {
       data: updateData
     });
 
+    await AuditLogger.log('UPDATE_USER_PERMISSIONS', { 
+    targetUserId: id, 
+    updatedFields: updateData 
+}, token.id as string);
+
     if (isApproved === true && oldUser && !oldUser.isApproved) {
         DiscordNotifier.sendAlert('account_approved', {
             user: updatedUser.username,
@@ -98,6 +104,8 @@ export async function DELETE(req: NextRequest) {
     await prisma.user.delete({
       where: { id }
     });
+
+    await AuditLogger.log('DELETE_USER', { userId: id }, token.id as string);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

@@ -7,6 +7,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger'; // Import the logger
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,7 @@ export async function POST(request: Request) {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+        const userId = (session.user as any).id;
         const { action, payload } = await request.json();
         const startTime = Date.now();
 
@@ -185,6 +187,10 @@ export async function POST(request: Request) {
                     await prisma.issue.delete({ where: { id } });
                 }
             }
+            
+            // --- AUDIT LOG ---
+            await AuditLogger.log('DELETE_DUPLICATE_ISSUES', { issuesDeleted: idsToDelete }, userId);
+
             Logger.log(`Resolved duplicates: Deleted ${idsToDelete.length} records.`, "success");
             return NextResponse.json({ success: true });
         }
@@ -199,6 +205,10 @@ export async function POST(request: Request) {
                 await prisma.readProgress.deleteMany({ where: { issueId: { in: ids } } });
                 await prisma.issue.deleteMany({ where: { id: { in: ids } } });
             }
+            
+            // --- AUDIT LOG ---
+            await AuditLogger.log('PURGE_GHOST_RECORDS', { type, idsPurged: ids.length }, userId);
+
             Logger.log(`Purged ghost ${type} records from database.`, "success");
             return NextResponse.json({ success: true });
         }
@@ -208,6 +218,10 @@ export async function POST(request: Request) {
             for (const p of paths) {
                 if (fs.existsSync(p)) await fs.remove(p);
             }
+
+            // --- AUDIT LOG ---
+            await AuditLogger.log('DELETE_ORPHANED_FILES', { filesDeleted: paths }, userId);
+
             Logger.log(`Deleted physical orphaned files from disk.`, "success");
             return NextResponse.json({ success: true });
         }

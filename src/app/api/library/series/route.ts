@@ -10,6 +10,7 @@ import { DiscordNotifier } from '@/lib/discord';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import AdmZip from 'adm-zip';
+import { AuditLogger } from '@/lib/audit-logger';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
@@ -253,6 +254,9 @@ export async function DELETE(request: Request) {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
+        // FIX: Define userId for the AuditLogger
+        const userId = (session.user as any).id;
+
         const { seriesIds, deleteFiles, folderPath } = await request.json();
         
         if ((!seriesIds || seriesIds.length === 0) && !folderPath) {
@@ -264,6 +268,13 @@ export async function DELETE(request: Request) {
 
             await prisma.issue.deleteMany({ where: { seriesId: { in: seriesIds } } });
             await prisma.series.deleteMany({ where: { id: { in: seriesIds } } });
+
+            // --- AUDIT LOG ---
+            await AuditLogger.log('DELETE_SERIES', { 
+                seriesIds, 
+                seriesNames: seriesToDelete.map(s => s.name),
+                deletedPhysicalFiles: deleteFiles 
+            }, userId);
 
             if (deleteFiles) {
                 for (const series of seriesToDelete) {

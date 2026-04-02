@@ -5,6 +5,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function POST(request: Request) {
     try {
@@ -96,6 +97,11 @@ export async function POST(request: Request) {
             // Set a generous timeout for the transaction since large backups can take a few seconds
             timeout: 30000 
         });
+
+        // --- AUDIT LOG ---
+        await AuditLogger.log('DATABASE_RESTORE', { 
+            message: "Full database state was overwritten from a backup JSON file." 
+        }, (session.user as any).id);
 
         Logger.log("[Restore] Database restoration completed successfully.", "success");
         return NextResponse.json({ success: true });

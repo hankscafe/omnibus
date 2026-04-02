@@ -13,7 +13,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Trash2, Terminal, History, Loader2, Download, Eye, 
     Clock, AlertTriangle, CheckCircle2, ShieldAlert, Database, 
-    RefreshCw, Activity, Search, CalendarMinus,
+    RefreshCw, Activity, Search, CalendarMinus, Shield,
     ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileText
 } from "lucide-react"
 import Link from "next/link"
@@ -30,15 +30,22 @@ export default function LogsPage() {
   const [loadingJobs, setLoadingJobs] = useState(true)
   const [statusFilter, setStatusFilter] = useState("ALL")
   const [typeFilter, setTypeFilter] = useState("ALL")
+  
+  // Audit Logs State
+  const [auditLogs, setAuditLogs] = useState<any[]>([])
+  const [loadingAudit, setLoadingAudit] = useState(true)
+
   const [selectedLogDetails, setSelectedLogDetails] = useState<any>(null)
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1)
+  const [auditCurrentPage, setAuditCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState("25")
 
   // Confirmation States
   const [clearLiveConfirmOpen, setClearLiveConfirmOpen] = useState(false) 
   const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false) 
+  const [clearAuditConfirmOpen, setClearAuditConfirmOpen] = useState(false) 
   const [purgeOldConfirmOpen, setPurgeOldConfirmOpen] = useState(false) 
   const [isClearing, setIsClearing] = useState(false) 
 
@@ -46,6 +53,7 @@ export default function LogsPage() {
     document.title = "Omnibus - System Logs";
     fetchLiveLogs();
     fetchJobLogs();
+    fetchAuditLogs();
     const interval = setInterval(fetchLiveLogs, 3000);
     return () => clearInterval(interval);
   }, [])
@@ -53,6 +61,7 @@ export default function LogsPage() {
   // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
+    setAuditCurrentPage(1);
   }, [statusFilter, typeFilter, pageSize])
 
   const fetchLiveLogs = async () => {
@@ -69,6 +78,16 @@ export default function LogsPage() {
         if (res.ok) setJobLogs(await res.json())
     } catch (e) {} finally {
         setLoadingJobs(false);
+    }
+  }
+
+  const fetchAuditLogs = async () => {
+    setLoadingAudit(true);
+    try {
+        const res = await fetch('/api/admin/audit-logs')
+        if (res.ok) setAuditLogs(await res.json())
+    } catch (e) {} finally {
+        setLoadingAudit(false);
     }
   }
 
@@ -92,11 +111,23 @@ export default function LogsPage() {
     } finally { setIsClearing(false); }
   }
 
+  const handleClearAudit = async () => {
+    setIsClearing(true);
+    try {
+      await fetch('/api/admin/audit-logs', { method: 'DELETE' });
+      await fetchAuditLogs();
+      setClearAuditConfirmOpen(false);
+      toast({ title: "Audit Logs Cleared", description: "All security and action logs have been removed." });
+    } finally { setIsClearing(false); }
+  }
+
   const handlePurgeOld = async () => {
     setIsClearing(true);
     try {
       await fetch('/api/admin/job-logs?days=7', { method: 'DELETE' });
+      await fetch('/api/admin/audit-logs?days=7', { method: 'DELETE' });
       await fetchJobLogs();
+      await fetchAuditLogs();
       setPurgeOldConfirmOpen(false);
       toast({ title: "Logs Purged", description: "Logs older than 7 days have been deleted." });
     } finally { setIsClearing(false); }
@@ -125,12 +156,31 @@ export default function LogsPage() {
   }
 
   const downloadLog = (log: any) => {
-      const header = `Omnibus Log Report\nType: ${formatJobType(log.jobType)}\nStatus: ${log.status}\nDate: ${new Date(log.createdAt).toLocaleString()}\nDuration: ${formatDuration(log.durationMs)}\nRelated Item: ${log.relatedItem || 'N/A'}\n\n--- DETAILS ---\n\n`;
-      const blob = new Blob([header + (log.message || "No detailed output provided.")], { type: "text/plain" });
+      let header = "";
+      if (log.action) {
+          // It's an Audit Log
+          header = `Omnibus Audit Log\nAction: ${log.action}\nUser: ${log.user?.username || 'System'}\nIP: ${log.ipAddress || 'Unknown'}\nDate: ${new Date(log.createdAt).toLocaleString()}\n\n--- DETAILS ---\n\n`;
+      } else {
+          // It's a Job Log
+          header = `Omnibus Job Log\nType: ${formatJobType(log.jobType)}\nStatus: ${log.status}\nDate: ${new Date(log.createdAt).toLocaleString()}\nDuration: ${formatDuration(log.durationMs)}\nRelated Item: ${log.relatedItem || 'N/A'}\n\n--- DETAILS ---\n\n`;
+      }
+      
+      const payload = log.message || log.details || "No detailed output provided.";
+      
+      // Try to pretty-print JSON if it's an audit log details string
+      let formattedPayload = payload;
+      try {
+          if (log.details) {
+              const parsed = JSON.parse(log.details);
+              formattedPayload = JSON.stringify(parsed, null, 2);
+          }
+      } catch (e) {}
+
+      const blob = new Blob([header + formattedPayload], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `omnibus-${log.jobType}-${new Date(log.createdAt).getTime()}.txt`;
+      a.download = `omnibus-log-${new Date(log.createdAt).getTime()}.txt`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -147,10 +197,14 @@ export default function LogsPage() {
 
   const uniqueJobTypes = useMemo(() => Array.from(new Set(jobLogs.map(l => l.jobType))), [jobLogs]);
 
-  // Pagination Math
+  // Pagination Math - Job Logs
   const limit = parseInt(pageSize);
   const totalPages = Math.ceil(filteredJobs.length / limit) || 1;
   const paginatedJobs = filteredJobs.slice((currentPage - 1) * limit, currentPage * limit);
+
+  // Pagination Math - Audit Logs
+  const totalAuditPages = Math.ceil(auditLogs.length / limit) || 1;
+  const paginatedAuditLogs = auditLogs.slice((auditCurrentPage - 1) * limit, auditCurrentPage * limit);
 
   return (
     <div className="container mx-auto py-10 px-6 max-w-6xl space-y-6 transition-colors duration-300">
@@ -161,10 +215,10 @@ export default function LogsPage() {
       </div>
 
       <Tabs defaultValue="live" className="w-full">
-        {/* --- ALIGNMENT FIX: Swapped to a Flex container with h-auto and padding --- */}
-        <TabsList className="flex w-full max-w-md bg-muted border border-border p-1 h-auto rounded-lg">
+        <TabsList className="flex w-full max-w-2xl bg-muted border border-border p-1 h-auto rounded-lg">
             <TabsTrigger value="live" className="flex-1 h-auto py-2 flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary font-bold"><Terminal className="w-4 h-4"/> Live Terminal</TabsTrigger>
             <TabsTrigger value="history" className="flex-1 h-auto py-2 flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary font-bold" onClick={fetchJobLogs}><History className="w-4 h-4"/> Job History</TabsTrigger>
+            <TabsTrigger value="audit" className="flex-1 h-auto py-2 flex gap-2 data-[state=active]:bg-background data-[state=active]:text-primary font-bold" onClick={fetchAuditLogs}><Shield className="w-4 h-4"/> Audit Logs</TabsTrigger>
         </TabsList>
 
         {/* --- LIVE TERMINAL TAB --- */}
@@ -183,7 +237,6 @@ export default function LogsPage() {
                 </div>
             </div>
             
-            {/* Custom structure to avoid Shadcn Card top-padding stripe issue */}
             <div className="border border-border rounded-lg overflow-hidden bg-background shadow-sm transition-colors duration-300">
                 <div className="p-4 border-b border-border bg-muted/50">
                     <h3 className="font-bold text-foreground text-sm flex items-center gap-2">
@@ -345,35 +398,184 @@ export default function LogsPage() {
                 )}
             </div>
         </TabsContent>
+
+        {/* --- AUDIT LOGS TAB --- */}
+        <TabsContent value="audit" className="space-y-4 mt-6 animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-muted/50 p-4 rounded-lg border border-border">
+                <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+                    <p className="text-sm text-muted-foreground">Track destructive administrative actions to maintain accountability.</p>
+                    <Button variant="ghost" size="sm" onClick={fetchAuditLogs} className="text-primary hover:bg-primary/10 font-bold">
+                        <RefreshCw className={`w-4 h-4 mr-1 ${loadingAudit ? 'animate-spin' : ''}`} /> Refresh
+                    </Button>
+                </div>
+                
+                <div className="flex gap-2 w-full md:w-auto">
+                    <Button variant="outline" size="sm" onClick={() => setClearAuditConfirmOpen(true)} className="w-full md:w-auto border-border hover:bg-muted text-red-500 hover:text-red-600 font-bold h-10">
+                        <Trash2 className="w-4 h-4 mr-2" /> Clear Audit Logs
+                    </Button>
+                </div>
+            </div>
+
+            <div className="border border-border rounded-lg overflow-hidden bg-background shadow-sm">
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border">
+                            <tr>
+                                <th className="px-4 py-3">Date & Time</th>
+                                <th className="px-4 py-3">User</th>
+                                <th className="px-4 py-3">Action</th>
+                                <th className="px-4 py-3">Details Summary</th>
+                                <th className="px-4 py-3 text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                            {loadingAudit ? (
+                                <tr><td colSpan={5} className="text-center py-10"><Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" /></td></tr>
+                            ) : paginatedAuditLogs.length === 0 ? (
+                                <tr><td colSpan={5} className="text-center py-10 text-muted-foreground italic">No audit logs found.</td></tr>
+                            ) : (
+                                paginatedAuditLogs.map((log) => {
+                                    // Make a quick preview summary from the JSON details
+                                    let summary = log.details;
+                                    try {
+                                        const parsed = JSON.parse(log.details);
+                                        // Pick the first couple of keys or values to show
+                                        const keys = Object.keys(parsed);
+                                        if (keys.length > 0) {
+                                            if (parsed.message) summary = parsed.message;
+                                            else if (parsed.seriesNames) summary = `Series: ${parsed.seriesNames.join(', ')}`;
+                                            else summary = `Updated: ${keys.join(', ')}`;
+                                        }
+                                    } catch (e) {}
+
+                                    return (
+                                        <tr key={log.id} className="hover:bg-muted/30 transition-colors">
+                                            <td className="px-4 py-3 font-medium whitespace-nowrap text-xs text-muted-foreground">
+                                                {new Date(log.createdAt).toLocaleString()}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <Badge variant="secondary" className="font-mono text-[10px] bg-muted border-border text-foreground">
+                                                    {log.user?.username || 'System'}
+                                                </Badge>
+                                            </td>
+                                            <td className="px-4 py-3 font-semibold text-foreground">
+                                                {log.action}
+                                            </td>
+                                            <td className="px-4 py-3 text-muted-foreground truncate max-w-[250px]" title={log.details || ''}>
+                                                {summary || '-'}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="flex items-center justify-end gap-1">
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-primary hover:bg-primary/10" onClick={() => setSelectedLogDetails(log)} title="View Full Details">
+                                                        <Eye className="w-4 h-4" />
+                                                    </Button>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-foreground hover:bg-muted" onClick={() => downloadLog(log)} title="Download Details">
+                                                        <Download className="w-4 h-4" />
+                                                    </Button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* --- RESPONSIVE PAGINATION (AUDIT) --- */}
+                {auditLogs.length > 0 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between p-4 border-t border-border bg-muted/30 gap-4">
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-center sm:justify-start">
+                            <span className="text-sm text-muted-foreground">Rows per page:</span>
+                            <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(v); setAuditCurrentPage(1); }}>
+                                <SelectTrigger className="h-10 sm:h-8 w-[80px] sm:w-[70px] bg-background border-border font-medium">
+                                    <SelectValue placeholder={pageSize} />
+                                </SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    <SelectItem value="10" className="focus:bg-primary/10 focus:text-primary">10</SelectItem>
+                                    <SelectItem value="25" className="focus:bg-primary/10 focus:text-primary">25</SelectItem>
+                                    <SelectItem value="50" className="focus:bg-primary/10 focus:text-primary">50</SelectItem>
+                                    <SelectItem value="100" className="focus:bg-primary/10 focus:text-primary">100</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        
+                        <div className="flex items-center justify-center gap-1.5 w-full sm:w-auto">
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setAuditCurrentPage(1)} disabled={auditCurrentPage === 1}>
+                                <ChevronsLeft className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setAuditCurrentPage(p => Math.max(1, p - 1))} disabled={auditCurrentPage === 1}>
+                                <ChevronLeft className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                            <span className="text-sm font-bold px-3 sm:px-4 text-foreground">Pg {auditCurrentPage} of {totalAuditPages}</span>
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setAuditCurrentPage(p => Math.min(totalAuditPages, p + 1))} disabled={auditCurrentPage === totalAuditPages}>
+                                <ChevronRight className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                            <Button variant="outline" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 bg-background border-border hover:bg-muted text-foreground" onClick={() => setAuditCurrentPage(totalAuditPages)} disabled={auditCurrentPage === totalAuditPages}>
+                                <ChevronsRight className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </TabsContent>
       </Tabs>
 
-      {/* Details Modal */}
+      {/* Details Modal (Shared for both Job and Audit logs) */}
       <Dialog open={!!selectedLogDetails} onOpenChange={() => setSelectedLogDetails(null)}>
         <DialogContent className="sm:max-w-3xl bg-background border-border rounded-xl">
             <DialogHeader>
                 <DialogTitle className="flex items-center gap-2 text-foreground">
-                    {selectedLogDetails && getJobIcon(selectedLogDetails.jobType)}
-                    {selectedLogDetails ? formatJobType(selectedLogDetails.jobType) : 'Log Details'}
+                    {selectedLogDetails?.action ? (
+                        <><Shield className="w-5 h-5 text-primary" /> Audit Record: {selectedLogDetails.action}</>
+                    ) : (
+                        <>
+                            {selectedLogDetails && getJobIcon(selectedLogDetails.jobType)}
+                            {selectedLogDetails ? formatJobType(selectedLogDetails.jobType) : 'Log Details'}
+                        </>
+                    )}
                 </DialogTitle>
                 <DialogDescription className="text-muted-foreground">
-                    Executed on {selectedLogDetails ? new Date(selectedLogDetails.createdAt).toLocaleString() : ''}
+                    Recorded on {selectedLogDetails ? new Date(selectedLogDetails.createdAt).toLocaleString() : ''}
                 </DialogDescription>
             </DialogHeader>
             
             {selectedLogDetails && (
                 <div className="space-y-4">
+                    {/* Dynamic Header Box based on Log Type */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-muted/50 p-4 rounded-md border border-border">
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Status</span><span className="font-semibold text-foreground">{selectedLogDetails.status.replace(/_/g, ' ')}</span></div>
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Target</span><span className="font-semibold truncate text-foreground">{selectedLogDetails.relatedItem || 'Global'}</span></div>
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Duration</span><span className="font-mono text-foreground">{formatDuration(selectedLogDetails.durationMs)}</span></div>
-                        <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Trigger</span><span className="font-semibold text-foreground">{selectedLogDetails.durationMs > 0 ? 'Automatic/UI' : 'Heartbeat'}</span></div>
+                        {selectedLogDetails.action ? (
+                            // Audit Log Headers
+                            <>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">User</span><span className="font-semibold text-foreground">{selectedLogDetails.user?.username || 'System'}</span></div>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">IP Address</span><span className="font-semibold text-foreground">{selectedLogDetails.ipAddress || 'Unknown'}</span></div>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Action</span><span className="font-semibold text-foreground">{selectedLogDetails.action}</span></div>
+                            </>
+                        ) : (
+                            // Job Log Headers
+                            <>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Status</span><span className="font-semibold text-foreground">{selectedLogDetails.status.replace(/_/g, ' ')}</span></div>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Target</span><span className="font-semibold truncate text-foreground">{selectedLogDetails.relatedItem || 'Global'}</span></div>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Duration</span><span className="font-mono text-foreground">{formatDuration(selectedLogDetails.durationMs)}</span></div>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Trigger</span><span className="font-semibold text-foreground">{selectedLogDetails.durationMs > 0 ? 'Automatic/UI' : 'Heartbeat'}</span></div>
+                            </>
+                        )}
                     </div>
                     
                     <div className="space-y-2">
                         <Label className="uppercase text-[10px] font-black text-muted-foreground">Detailed Output Trace</Label>
                         <div className="bg-slate-950 rounded-md p-4 max-h-[400px] overflow-y-auto border border-white/10 shadow-inner">
                             <pre className="text-xs text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">
-                                {selectedLogDetails.message || "No detailed output provided for this job."}
+                                {(() => {
+                                    const payload = selectedLogDetails.message || selectedLogDetails.details || "No detailed output provided.";
+                                    try {
+                                        // Attempt to pretty print JSON if it is a JSON string (like audit details usually are)
+                                        const parsed = JSON.parse(payload);
+                                        return JSON.stringify(parsed, null, 2);
+                                    } catch (e) {
+                                        return payload;
+                                    }
+                                })()}
                             </pre>
                         </div>
                     </div>
@@ -395,7 +597,7 @@ export default function LogsPage() {
         onConfirm={handlePurgeOld}
         isLoading={isClearing}
         title="Purge Old Logs?"
-        description="This will permanently delete all historical job logs older than 7 days. This helps keep your database lean and performant."
+        description="This will permanently delete all historical job and audit logs older than 7 days. This helps keep your database lean and performant."
         confirmText="Purge Logs"
       />
 
@@ -417,6 +619,16 @@ export default function LogsPage() {
         title="Delete ALL Job History?"
         description="This will wipe ALL historical records of past automated jobs and downloads. This action cannot be undone."
         confirmText="Delete All History"
+      />
+
+      <ConfirmationDialog 
+        isOpen={clearAuditConfirmOpen}
+        onClose={() => setClearAuditConfirmOpen(false)}
+        onConfirm={handleClearAudit}
+        isLoading={isClearing}
+        title="Delete ALL Audit Logs?"
+        description="This will permanently remove the entire history of destructive actions and settings changes. This action cannot be undone."
+        confirmText="Delete Audit Logs"
       />
     </div>
   )

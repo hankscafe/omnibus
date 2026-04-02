@@ -113,12 +113,22 @@ async function runStorageScan() {
     return storageData.length;
 }
 
-// --- QUEUE SETUP ---
-const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+// 1. Create a global cache object
+const globalForMQ = globalThis as unknown as { 
+    omnibusQueue: Queue; 
+    omnibusWorker: Worker; 
+    redisConnection: IORedis;
+};
+
+// 2. Cache the Redis connection
+const connection = globalForMQ.redisConnection || new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null
 });
 
-export const omnibusQueue = new Queue('omnibus-background-jobs', { 
+if (process.env.NODE_ENV !== 'production') globalForMQ.redisConnection = connection;
+
+// 3. Cache the Queue
+export const omnibusQueue = globalForMQ.omnibusQueue || new Queue('omnibus-background-jobs', { 
     connection,
     defaultJobOptions: {
         attempts: 3,
@@ -128,8 +138,15 @@ export const omnibusQueue = new Queue('omnibus-background-jobs', {
     }
 });
 
+if (process.env.NODE_ENV !== 'production') globalForMQ.omnibusQueue = omnibusQueue;
+
 // --- BACKGROUND WORKER PROCESSOR ---
 export function initWorker() {
+    // 4. Prevent duplicate workers from spawning on Hot Reload
+    if (globalForMQ.omnibusWorker) {
+        return;
+    }
+
     Logger.log("[BullMQ] Initializing background worker thread...", "info");
 
     const worker = new Worker('omnibus-background-jobs', async (job: Job) => {
@@ -635,7 +652,16 @@ export function initWorker() {
         concurrency: 2 
     });
 
+    worker.on('completed', (job) => {
+        Logger.log(`[BullMQ] Job ${job?.id} (${job?.data.type}) completed successfully.`, "success");
+    });
+
     worker.on('failed', (job, err) => {
         Logger.log(`[BullMQ] Job ${job?.id} (${job?.data.type}) failed: ${err.message}`, "error");
     });
+
+    // 5. Cache the worker
+    if (process.env.NODE_ENV !== 'production') {
+        globalForMQ.omnibusWorker = worker;
+    }
 }

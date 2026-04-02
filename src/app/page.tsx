@@ -47,7 +47,10 @@ export default function Home() {
 
     const checkAdminAlerts = async () => {
       try {
-        const resReq = await fetch('/api/admin/requests')
+        // --- FIX: Add cache-busting timestamps to prevent stale banners ---
+        const timestamp = Date.now();
+
+        const resReq = await fetch(`/api/admin/requests?_t=${timestamp}`, { cache: 'no-store' })
         if (resReq.ok) {
           const data = await resReq.json()
           const pending = data.filter((r: any) => r.status === 'PENDING_APPROVAL')
@@ -56,21 +59,21 @@ export default function Home() {
           setManualDownloadsCount(manual.length)
         }
 
-        const resRep = await fetch('/api/admin/reports')
+        const resRep = await fetch(`/api/admin/reports?_t=${timestamp}`, { cache: 'no-store' })
         if (resRep.ok) {
           const data = await resRep.json()
           const openReports = data.filter((r: any) => r.status === 'OPEN')
           setOpenReportsCount(openReports.length)
         }
 
-        const resUsers = await fetch('/api/admin/users')
+        const resUsers = await fetch(`/api/admin/users?_t=${timestamp}`, { cache: 'no-store' })
         if (resUsers.ok) {
           const data = await resUsers.json()
           const pendingUsers = data.filter((u: any) => !u.isApproved)
           setPendingUsersCount(pendingUsers.length)
         }
 
-        const resUpdate = await fetch('/api/admin/update-check')
+        const resUpdate = await fetch(`/api/admin/update-check?_t=${timestamp}`, { cache: 'no-store' })
         if (resUpdate.ok) {
           const data = await resUpdate.json()
           setUpdateData(data)

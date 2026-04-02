@@ -1,4 +1,3 @@
-// src/app/api/progress/history/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -16,24 +15,20 @@ export async function GET(request: Request) {
 
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    // 1. Fetch only the necessary progress and relation data
     const history = await prisma.readProgress.findMany({
         where: { userId: userId },
         include: { issue: { include: { series: true } } },
         orderBy: { updatedAt: 'desc' }
     });
 
-    // 2. BLAZING FAST MAPPING (Removed synchronous/async physical disk I/O!)
     const items = history.map((p) => {
         const folderPath = p.issue.series.folderPath;
         
-        // Use DB cover URL instantly, fallback to the dynamic cover route
         let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
         if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
         }
 
-        // Safely extract the file name if a path exists
         const safeSeriesName = p.issue.series.name || (folderPath ? path.basename(folderPath).replace(/\s\(\d{4}\)$/, "") : "Unknown Series");
 
         return {
@@ -45,7 +40,7 @@ export async function GET(request: Request) {
             percentage: p.totalPages > 0 ? Math.round((p.currentPage / p.totalPages) * 100) : 0,
             isCompleted: p.isCompleted,
             updatedAt: p.updatedAt,
-            seriesCvId: p.issue.series.cvId,
+            seriesCvId: (p.issue.series.metadataSource === 'COMICVINE' && p.issue.series.metadataId) ? parseInt(p.issue.series.metadataId) : null,
             seriesCoverUrl
         };
     });

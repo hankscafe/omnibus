@@ -18,7 +18,6 @@ export async function POST(request: Request) {
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
         if (!setting?.value) return NextResponse.json({ error: "ComicVine API Key missing" }, { status: 400 });
 
-        // 1. Fetch the Event (Story Arc) from ComicVine without restricted field_lists
         const eventRes = await axios.get(`https://comicvine.gamespot.com/api/story_arc/4045-${cvEventId}/`, {
             params: { api_key: setting.value, format: 'json' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
@@ -27,7 +26,6 @@ export async function POST(request: Request) {
 
         const eventData = eventRes.data.results;
         
-        // Strict check to ensure we actually got a named event back
         if (!eventData || !eventData.name) {
             return NextResponse.json({ error: "Event not found on ComicVine. Please double-check the ID." }, { status: 404 });
         }
@@ -38,7 +36,6 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Event found, but ComicVine has no issues attached to it." }, { status: 404 });
         }
 
-        // 2. Create the Base Reading List
         const newList = await prisma.readingList.create({
             data: {
                 name: eventData.name,
@@ -48,7 +45,6 @@ export async function POST(request: Request) {
             }
         });
 
-        // 3. Map the issues and check if we already own them!
         const issuesToCreate = [];
         let orderCounter = 1;
 
@@ -56,10 +52,9 @@ export async function POST(request: Request) {
             const targetCvId = parseInt(cvIssue.id);
             
             const existingIssue = await prisma.issue.findFirst({
-                where: { cvId: targetCvId }
+                where: { metadataId: targetCvId.toString(), metadataSource: 'COMICVINE' }
             });
 
-            // Ensure we construct a readable title even if ComicVine leaves the specific issue name blank
             let issueTitle = cvIssue.name;
             if (!issueTitle && cvIssue.volume?.name) {
                 issueTitle = `${cvIssue.volume.name} #${cvIssue.issue_number || '?'}`;
@@ -76,7 +71,6 @@ export async function POST(request: Request) {
             });
         }
 
-        // 4. Bulk insert the list items
         if (issuesToCreate.length > 0) {
             await prisma.readingListItem.createMany({ data: issuesToCreate });
         }

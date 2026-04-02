@@ -18,7 +18,6 @@ export async function POST(request: NextRequest) {
   const userId = (token.id || token.sub) as string;
   if (!userId) return NextResponse.json({ error: 'Invalid user token' }, { status: 401 });
 
-  // --- NEW: Safety check to prevent stale session cookies from crashing the database ---
   const userExists = await prisma.user.findUnique({ where: { id: userId } });
   if (!userExists) {
       return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
@@ -53,10 +52,11 @@ export async function POST(request: NextRequest) {
         const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
 
         await prisma.series.upsert({
-            where: { cvId: parseInt(cvId) },
+            where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
             update: { monitored: true },
             create: { 
-                cvId: parseInt(cvId), 
+                metadataId: cvId.toString(), 
+                metadataSource: 'COMICVINE',
                 name, 
                 year: parseInt(year) || new Date().getFullYear(), 
                 publisher: safePublisher, 

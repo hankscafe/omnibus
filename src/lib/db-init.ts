@@ -6,9 +6,9 @@ import crypto from 'crypto';
 
 export async function initDatabase() {
   try {
-    Logger.log("[DB Init] Checking for legacy JSON configurations to migrate...", "info");
+    Logger.log("[DB Init] Checking for legacy configurations to migrate...", "info");
 
-    // 0. Ensure Database Encryption Key Exists (NEW)
+    // 0. Ensure Database Encryption Key Exists
     const dbKeyCount = await prisma.systemSetting.count({ where: { key: 'DATABASE_ENCRYPTION_KEY' } });
     if (dbKeyCount === 0) {
         const newKey = crypto.randomBytes(32).toString('hex');
@@ -160,6 +160,56 @@ export async function initDatabase() {
                 Logger.log(`[DB Init] Migrated Search Acronyms.`, "success");
             } catch(e) {}
         }
+    }
+
+    // --- NEW: 7. MIGRATION FOR COMICVINE IDs TO METADATA IDs ---
+    try {
+        const seriesToMigrate = await prisma.series.findMany({
+            where: { cvId: { not: null } }
+        });
+
+        if (seriesToMigrate.length > 0) {
+            for (const s of seriesToMigrate) {
+                // If it's a negative ID, it means it was a dummy/unmatched folder
+                const source = s.cvId! > 0 ? 'COMICVINE' : 'LOCAL';
+                const metaId = s.cvId! > 0 ? s.cvId!.toString() : `unmatched_${Math.abs(s.cvId!)}`;
+
+                await prisma.series.update({
+                    where: { id: s.id },
+                    data: {
+                        metadataId: metaId,
+                        metadataSource: source,
+                        cvId: null // Nulled out so it doesn't trigger again on next startup
+                    }
+                });
+            }
+            Logger.log(`[DB Init] Migrated ${seriesToMigrate.length} Series to new Metadata engine.`, "success");
+        }
+
+        const issuesToMigrate = await prisma.issue.findMany({
+            where: { cvId: { not: null } }
+        });
+
+        if (issuesToMigrate.length > 0) {
+            let issueCount = 0;
+            for (const i of issuesToMigrate) {
+                const source = i.cvId! > 0 ? 'COMICVINE' : 'LOCAL';
+                const metaId = i.cvId! > 0 ? i.cvId!.toString() : `unmatched_${Math.abs(i.cvId!)}`;
+
+                await prisma.issue.update({
+                    where: { id: i.id },
+                    data: {
+                        metadataId: metaId,
+                        metadataSource: source,
+                        cvId: null
+                    }
+                });
+                issueCount++;
+            }
+            Logger.log(`[DB Init] Migrated ${issueCount} Issues to new Metadata engine.`, "success");
+        }
+    } catch (e) {
+        Logger.log(`[DB Init] Metadata ID Migration Failed: ${getErrorMessage(e)}`, "error");
     }
 
     Logger.log("[DB Init] Schema mapping complete.", "success");

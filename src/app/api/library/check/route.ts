@@ -11,20 +11,19 @@ export async function GET(request: Request) {
 
   if (!cvIdParam) return NextResponse.json({ owned: false });
 
-  const cvId = parseInt(cvIdParam, 10);
-  if (isNaN(cvId)) return NextResponse.json({ owned: false });
-
   try {
-    // Check if the ComicVine ID exists as a Series (Volume) or an individual Issue
     const [seriesMatch, issueMatch] = await Promise.all([
-      prisma.series.findUnique({ where: { cvId } }),
-      prisma.issue.findUnique({ where: { cvId } })
+      prisma.series.findUnique({ 
+          where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvIdParam } } 
+      }),
+      prisma.issue.findFirst({ 
+          where: { metadataId: cvIdParam, metadataSource: 'COMICVINE' } 
+      })
     ]);
 
     return NextResponse.json({ owned: !!(seriesMatch || issueMatch) });
   } catch (error) {
     Logger.log(`Library check error: ${getErrorMessage(error)}`, 'error');
-
     return NextResponse.json({ owned: false });
   }
 }

@@ -26,7 +26,6 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 
-
 export default function Home() {
   const { data: session } = useSession()
   const [pendingCount, setPendingCount] = useState(0)
@@ -36,16 +35,13 @@ export default function Home() {
   const [updateData, setUpdateData] = useState<{ updateAvailable: boolean, currentVersion: string, latestVersion: string } | null>(null) 
   const isAdmin = session?.user?.role === 'ADMIN'
 
-  // State to manage hard cache resets
   const [refreshSignal, setRefreshSignal] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  // Fix title flashing
   useEffect(() => {
     document.title = "Omnibus - Home"
   }, []);
 
-  // Fetch requests, reports, and users to check for pending approvals/issues if the user is an admin
   useEffect(() => {
     if (!isAdmin) return
 
@@ -56,7 +52,6 @@ export default function Home() {
           const data = await resReq.json()
           const pending = data.filter((r: any) => r.status === 'PENDING_APPROVAL')
           setPendingCount(pending.length)
-          // Includes both System-Failed GetComics searches AND User-Flagged requests
           const manual = data.filter((r: any) => r.status === 'MANUAL_DDL')
           setManualDownloadsCount(manual.length)
         }
@@ -90,7 +85,6 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [isAdmin])
 
-  // Hard Refresh Handler
   const handleRefreshData = async () => {
     setIsRefreshing(true);
     try {
@@ -107,15 +101,20 @@ export default function Home() {
     }
   }
 
+  // FIX: Applying the Lookbehind Regex fix here to stop the compiler errors and ensure stability
+  const extractNumSafely = (clean: string) => {
+    const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+    if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
+    return null;
+  }
+
   return (
-    // FIX: Changed bg-background to bg-transparent so the layout image shows through
     <div className="bg-transparent min-h-full pb-20 transition-colors duration-300">
       <div className="container mx-auto px-6 py-12 space-y-10">
         
         {/* Admin Notification Banners */}
         <div className="space-y-4">
 
-          {/* System Update Available (Semantic Blue) */}
           {isAdmin && updateData?.updateAvailable && (
             <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/50 animate-in fade-in slide-in-from-top-4">
               <Rocket className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -136,7 +135,6 @@ export default function Home() {
             </Alert>
           )}
           
-          {/* Pending User Accounts (Semantic Teal) */}
           {isAdmin && pendingUsersCount > 0 && (
             <Alert className="bg-teal-50 border-teal-200 dark:bg-teal-950/20 dark:border-teal-900/50 animate-in fade-in slide-in-from-top-4">
               <UserPlus className="h-4 w-4 text-teal-600 dark:text-teal-400" />
@@ -157,7 +155,6 @@ export default function Home() {
             </Alert>
           )}
 
-          {/* Pending Approvals (Semantic Orange) */}
           {isAdmin && pendingCount > 0 && (
             <Alert className="bg-orange-50 border-orange-200 dark:bg-orange-950/20 dark:border-orange-900/50 animate-in fade-in slide-in-from-top-4">
               <Bell className="h-4 w-4 text-orange-600 dark:text-orange-400" />
@@ -178,7 +175,6 @@ export default function Home() {
             </Alert>
           )}
 
-          {/* Manual Downloads / Flagged Items (Dynamic Primary Theme) */}
           {isAdmin && manualDownloadsCount > 0 && (
             <Alert className="bg-primary/5 border-primary/20 animate-in fade-in slide-in-from-top-4">
               <Flag className="h-4 w-4 text-primary" />
@@ -199,7 +195,6 @@ export default function Home() {
             </Alert>
           )}
 
-          {/* Open Issues/Reports (Semantic Red) */}
           {isAdmin && openReportsCount > 0 && (
             <Alert className="bg-red-50 border-red-200 dark:bg-red-950/20 dark:border-red-900/50 animate-in fade-in slide-in-from-top-4">
               <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />

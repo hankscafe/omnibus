@@ -19,7 +19,6 @@ export async function POST(request: NextRequest) {
   const userId = (token.id || token.sub) as string;
   if (!userId) return NextResponse.json({ error: 'Invalid user token' }, { status: 401 });
 
-  // --- NEW: Safety check to prevent stale session cookies from crashing the database ---
   const userExists = await prisma.user.findUnique({ where: { id: userId } });
   if (!userExists) {
       return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
@@ -76,10 +75,11 @@ export async function POST(request: NextRequest) {
           const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
 
           await prisma.series.upsert({
-              where: { cvId: parseInt(cvId) },
+              where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
               update: { monitored: true },
               create: { 
-                  cvId: parseInt(cvId), 
+                  metadataId: cvId.toString(), 
+                  metadataSource: 'COMICVINE',
                   name, 
                   year: parseInt(year) || new Date().getFullYear(), 
                   publisher: safePublisher, 
@@ -238,8 +238,8 @@ export async function PATCH(request: NextRequest) {
       let publisher = "";
       let description = "";
       
-      if (reqRecord.volumeId) {
-         const series = await prisma.series.findFirst({ where: { cvId: parseInt(reqRecord.volumeId) } });
+      if (reqRecord.volumeId && reqRecord.volumeId !== "0") {
+         const series = await prisma.series.findFirst({ where: { metadataId: reqRecord.volumeId, metadataSource: 'COMICVINE' } });
          if (series) {
              year = series.year.toString();
              publisher = series.publisher || "Unknown";
@@ -260,6 +260,9 @@ export async function PATCH(request: NextRequest) {
       }).catch(() => {});
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
+      
+      // FIX: Proper lookbehinds used here
+      const fallbackMatches = [...searchName.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
       
       searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
     }

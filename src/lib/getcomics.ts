@@ -4,7 +4,6 @@ import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
 
 export const GetComicsService = {
-  // --- ADDED: isManga parameter ---
   async search(query: string, isInteractive: boolean = false, isManga: boolean = false) {
     const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
     const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
@@ -24,7 +23,7 @@ export const GetComicsService = {
         let retries = 2;
         while (retries > 0) {
             try {
-                const results = await this.performSearch(q, query, isInteractive, isManga); // <-- Pass down
+                const results = await this.performSearch(q, query, isInteractive, isManga); 
                 if (results.length > 0) return results;
                 break; 
             } catch (e: any) { 
@@ -56,11 +55,11 @@ export const GetComicsService = {
     let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
     if (reqNum === null) {
         let noYearQuery = cleanOriginal.replace(/\b(19|20)\d{2}\b/g, '');
-        const fallbacks = [...noYearQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+        // FIX: Lookbehind regex prevents space consumption overlap
+        const fallbacks = [...noYearQuery.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
         if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
     }
 
-    // EXTRACT YEAR FROM ORIGINAL QUERY
     const reqYearMatch = cleanOriginal.match(/\b(19|20)\d{2}\b/);
     const reqYear = reqYearMatch ? reqYearMatch[1] : null;
 
@@ -76,7 +75,6 @@ export const GetComicsService = {
 
       if (!isInteractive) {
           
-          // STRICT FILTER 1: Reject Omnibuses for Single Issue Searches
           const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
           if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
 
@@ -88,7 +86,6 @@ export const GetComicsService = {
           }
 
           if (isRelevant) {
-              // STRICT FILTER 2: Direct Mathematical Number Comparison
               let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
               
               let strippedForNumbers = cleanTor;
@@ -100,7 +97,8 @@ export const GetComicsService = {
               let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
               let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
               if (torNum === null) {
-                  const fallbacks = [...strippedForNumbers.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                  // FIX: Lookbehind regex prevents space consumption overlap
+                  const fallbacks = [...strippedForNumbers.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
                   if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
               }
 
@@ -112,7 +110,6 @@ export const GetComicsService = {
               }
           }
 
-          // STRICT FILTER 2.5: Year Conflict Check
           if (isRelevant) {
               const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
               const torYear = torYearMatch ? torYearMatch[1] : null;
@@ -122,10 +119,14 @@ export const GetComicsService = {
               }
           }
 
-          // STRICT FILTER 3: Check standard text words
+          // FIX: Improved Filter 3 to enforce titles that are 100% numerical
           if (isRelevant) {
               for (let w of queryWords) {
-                  if (!/^\d+$/.test(w) && !titleLower.includes(w)) {
+                  const isIssueNum = reqNum !== null && parseFloat(w) === reqNum;
+                  const isYear = reqYear !== null && w === reqYear;
+                  if (isIssueNum || isYear) continue;
+
+                  if (!titleLower.includes(w)) {
                       isRelevant = false;
                       break;
                   }

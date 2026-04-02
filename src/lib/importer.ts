@@ -16,16 +16,15 @@ function sanitize(str: string) {
 
 function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
-    // Strip out (YYYY-YYYY) or [YYYY] year ranges before checking for issue numbers
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
     
-    // Updated regex to optionally capture letters like "A" or "B" at the end of the number
     const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (explicitMatch) {
         return explicitMatch[1].replace(/^0+(?=\d)/, '');
     }
     
-    const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?[a-zA-Z]?)(?:[^a-zA-Z0-9]|$)/g)];
+    // FIX: Lookbehind regex
+    const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) {
         return matches[matches.length - 1][1].replace(/^0+(?=\d)/, '');
     }
@@ -48,7 +47,6 @@ export const Importer = {
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const cvApiKey = config.cv_api_key;
 
-    // --- 1. RESOLVE SOURCE PATH ---
     let sourcePath = "";
     let isFromClient = false;
     const downloadRoot = config.download_path || './downloads';
@@ -154,7 +152,10 @@ export const Importer = {
         }
     }
 
-    let series = await prisma.series.findFirst({ where: { cvId: parseInt(req.volumeId) } });
+    // --- SCHEMA FIX: Find Series via MetadataID ---
+    let series = await prisma.series.findFirst({ 
+        where: { metadataId: req.volumeId, metadataSource: 'COMICVINE' } 
+    });
     
     if (!series && cvApiKey && req.volumeId !== "0") {
         try {
@@ -167,7 +168,8 @@ export const Importer = {
             if (data) {
                 series = await prisma.series.create({
                     data: {
-                        cvId: data.id,
+                        metadataId: data.id.toString(),
+                        metadataSource: 'COMICVINE',
                         name: data.name,
                         year: parseInt(data.start_year) || 0,
                         publisher: data.publisher?.name || "Other",
@@ -298,7 +300,6 @@ export const Importer = {
         .trim();
 
     let fileName = `${sanitize(newFileName)}${ext}`;
-
     let finalPath = path.join(destFolder, fileName);
 
     try {
@@ -348,32 +349,64 @@ export const Importer = {
           }
       }
 
-      // --- NEW: Calculate Page Count during the background import ---
       let pageCount = 0;
+      let xmlMeta: any = null;
+
       if (finalPath.toLowerCase().match(/\.(cbz|zip|epub)$/i)) {
           try {
               const zip = new AdmZip(finalPath);
               pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i)).length;
+              
+              const { parseComicInfo } = await import('./metadata-extractor');
+              xmlMeta = await parseComicInfo(finalPath);
           } catch(e) {}
       }
 
       if (series?.id) {
-         const issueNum = extractIssueNumber(fileName);
+         let issueNum = extractIssueNumber(fileName);
+         if (xmlMeta?.number) issueNum = xmlMeta.number;
          
+         const writersStr = xmlMeta?.writers?.length ? JSON.stringify(xmlMeta.writers) : null;
+         const artistsStr = xmlMeta?.artists?.length ? JSON.stringify(xmlMeta.artists) : null;
+         const charsStr = xmlMeta?.characters?.length ? JSON.stringify(xmlMeta.characters) : null;
+
          const existingIssue = await prisma.issue.findFirst({
              where: { seriesId: series.id, number: issueNum }
          });
 
+         // --- SCHEMA FIX: Use metadataId/Source ---
+         const targetMetaId = xmlMeta?.cvId ? xmlMeta.cvId.toString() : `unmatched_${Math.random()}`;
+         const targetMetaSource = xmlMeta?.cvId ? 'COMICVINE' : 'LOCAL';
+
          if (existingIssue) {
              await prisma.issue.update({
                  where: { id: existingIssue.id },
-                 data: { status: 'DOWNLOADED', filePath: finalPath, pageCount } // <-- Added pageCount
+                 data: { 
+                     status: 'DOWNLOADED', 
+                     filePath: finalPath, 
+                     pageCount,
+                     name: existingIssue.name || xmlMeta?.title || null,
+                     description: existingIssue.description || xmlMeta?.summary || null,
+                     writers: existingIssue.writers && existingIssue.writers !== "[]" ? existingIssue.writers : writersStr,
+                     artists: existingIssue.artists && existingIssue.artists !== "[]" ? existingIssue.artists : artistsStr,
+                     characters: existingIssue.characters && existingIssue.characters !== "[]" ? existingIssue.characters : charsStr,
+                 }
              });
          } else {
              await prisma.issue.create({
                  data: {
-                     seriesId: series.id, cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
-                     number: issueNum, status: 'DOWNLOADED', filePath: finalPath, pageCount // <-- Added pageCount
+                     seriesId: series.id, 
+                     metadataId: targetMetaId,
+                     metadataSource: targetMetaSource,
+                     number: issueNum, 
+                     status: 'DOWNLOADED', 
+                     filePath: finalPath, 
+                     pageCount,
+                     name: xmlMeta?.title || null,
+                     description: xmlMeta?.summary || null,
+                     writers: writersStr,
+                     artists: artistsStr,
+                     characters: charsStr
                  }
              });
          }
@@ -389,7 +422,7 @@ export const Importer = {
       try {
           if (req.volumeId !== "0") {
               Logger.log("[Importer] Triggering direct internal metadata sync...", "info");
-              await syncSeriesMetadata(parseInt(req.volumeId), destFolder);
+              await syncSeriesMetadata(req.volumeId, destFolder, series?.metadataSource || 'COMICVINE');
           }
       } catch (syncErr: any) {
           Logger.log(`[Importer] Metadata sync failed: ${syncErr.message}`, "warn");

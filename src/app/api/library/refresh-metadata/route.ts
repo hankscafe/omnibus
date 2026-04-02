@@ -5,16 +5,18 @@ import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
-    const { cvId, folderPath } = await request.json();
+    const { cvId, metadataId, metadataSource, folderPath } = await request.json();
     
-    if (!cvId) return NextResponse.json({ error: "Missing cvId" }, { status: 400 });
+    const targetId = metadataId || (cvId ? cvId.toString() : null);
+    const targetSource = metadataSource || 'COMICVINE';
 
-    await syncSeriesMetadata(parseInt(cvId), folderPath);
+    if (!targetId) return NextResponse.json({ error: "Missing metadata ID" }, { status: 400 });
+
+    await syncSeriesMetadata(targetId, folderPath, targetSource);
     
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
     Logger.log(`Refresh Metadata Failed: ${getErrorMessage(error)}`, 'error');
-
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

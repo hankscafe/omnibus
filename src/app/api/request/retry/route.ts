@@ -15,7 +15,6 @@ export async function POST(request: NextRequest) {
 
     const userId = (token.id || token.sub) as string;
     
-    // --- GHOST SESSION SAFEGUARD ---
     const userExists = await prisma.user.findUnique({ where: { id: userId } });
     if (!userExists) {
         return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
@@ -33,8 +32,8 @@ export async function POST(request: NextRequest) {
 
         let year = "";
         let isManga = false; 
-        if (req.volumeId) {
-            const series = await prisma.series.findUnique({ where: { cvId: parseInt(req.volumeId) } });
+        if (req.volumeId && req.volumeId !== "0") {
+            const series = await prisma.series.findUnique({ where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: req.volumeId } } });
             if (series) {
                 year = series.year.toString();
                 isManga = series.isManga; 

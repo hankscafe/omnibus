@@ -74,6 +74,8 @@ export async function POST(request: Request) {
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         const { filePath, currentPage, totalPages } = await request.json();
+        const newPage = parseInt(currentPage);
+        const total = parseInt(totalPages);
 
         const normalizedTarget = path.normalize(filePath).replace(/\\/g, '/').toLowerCase();
         const fileName = path.basename(filePath);
@@ -88,26 +90,52 @@ export async function POST(request: Request) {
 
         if (!issue) return NextResponse.json({ error: "Issue not found" }, { status: 404 });
 
-        const isCompleted = currentPage >= totalPages - 2;
+        const isCompleted = newPage >= total - 2;
+
+        // --- NEW: CALCULATE PAGES READ TODAY ---
+        const oldProgress = await prisma.readProgress.findUnique({
+            where: { userId_issueId: { userId, issueId: issue.id } }
+        });
+
+        let pagesReadDelta = 0;
+        if (oldProgress) {
+            if (newPage > oldProgress.currentPage) {
+                pagesReadDelta = newPage - oldProgress.currentPage;
+            }
+        } else {
+            pagesReadDelta = newPage; // First time opening the book
+        }
+
+        // Log the delta to today's stats if they read something
+        if (pagesReadDelta > 0) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0); // Normalize to midnight UTC
+
+            await prisma.dailyReadingStat.upsert({
+                where: { userId_date: { userId, date: today } },
+                update: { pagesRead: { increment: pagesReadDelta } },
+                create: { userId, date: today, pagesRead: pagesReadDelta }
+            });
+        }
+        // ---------------------------------------
 
         await prisma.readProgress.upsert({
             where: { userId_issueId: { userId, issueId: issue.id } },
             update: {
-                currentPage: parseInt(currentPage),
-                totalPages: parseInt(totalPages),
+                currentPage: newPage,
+                totalPages: total,
                 isCompleted,
                 updatedAt: new Date()
             },
             create: {
                 userId,
                 issueId: issue.id,
-                currentPage: parseInt(currentPage),
-                totalPages: parseInt(totalPages),
+                currentPage: newPage,
+                totalPages: total,
                 isCompleted
             }
         });
 
-        // --- SECURITY FIX 2b: Use centralized logger ---
         evaluateTrophies(userId).catch(err => {
             Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
         });

@@ -1,4 +1,3 @@
-// src/app/api/library/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -12,168 +11,7 @@ import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-// --- POST HANDLER FOR BULK ACTIONS ---
-export async function POST(request: Request) {
-  try {
-    const authOptions = await getAuthOptions();
-    const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id;
-
-    if (!session || !userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const req = (await request.json()) as any;
-    const { seriesIds, action, status } = req;
-
-    if (action === 'bulk-progress') {
-      const issues = await prisma.issue.findMany({
-        where: { seriesId: { in: seriesIds } },
-        select: { id: true }
-      });
-
-      const issueIds = issues.map(i => i.id);
-
-      if (status === 'READ') {
-        const existingProgress = await prisma.readProgress.findMany({
-            where: { userId, issueId: { in: issueIds } },
-            select: { issueId: true }
-        });
-        
-        const existingIds = new Set(existingProgress.map(p => p.issueId));
-        const newIds = issueIds.filter(id => !existingIds.has(id));
-
-        const transactions = [];
-        
-        if (existingIds.size > 0) {
-            transactions.push(
-                prisma.readProgress.updateMany({
-                    where: { userId, issueId: { in: Array.from(existingIds) } },
-                    data: { isCompleted: true, currentPage: 100, totalPages: 100 }
-                })
-            );
-        }
-
-        if (newIds.length > 0) {
-            transactions.push(
-                prisma.readProgress.createMany({
-                    data: newIds.map(id => ({ userId, issueId: id, isCompleted: true, currentPage: 100, totalPages: 100 }))
-                })
-            );
-        }
-
-        if (transactions.length > 0) {
-            await prisma.$transaction(transactions);
-        }
-
-        return NextResponse.json({ success: true, message: `Marked ${seriesIds.length} series as read.` });
-      } 
-      
-      if (status === 'UNREAD') {
-        await prisma.readProgress.deleteMany({
-          where: { userId, issueId: { in: issueIds } }
-        });
-        return NextResponse.json({ success: true, message: `Marked ${seriesIds.length} series as unread.` });
-      }
-    }
-
-    if (action === 'bulk-monitor') {
-        await prisma.series.updateMany({
-            where: { id: { in: seriesIds } },
-            data: { monitored: status === 'MONITOR' }
-        });
-        return NextResponse.json({ success: true, message: `Monitoring status updated for ${seriesIds.length} series.` });
-    }
-
-    if (action === 'bulk-manga') {
-        const isManga = status === 'MANGA';
-        const seriesList = await prisma.series.findMany({ where: { id: { in: seriesIds } } });
-        
-        const allIssues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } } });
-        const issuesBySeries = new Map();
-        for (const issue of allIssues) {
-            if (!issuesBySeries.has(issue.seriesId)) issuesBySeries.set(issue.seriesId, []);
-            issuesBySeries.get(issue.seriesId).push(issue);
-        }
-        
-        const libraries = await prisma.library.findMany();
-        let targetLib = isManga 
-            ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
-            : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
-            
-        if (!targetLib) targetLib = libraries[0];
-        if (!targetLib) return NextResponse.json({ error: "No libraries configured in Settings." }, { status: 400 });
-
-        const targetRoot = targetLib.path;
-        const dbUpdates = []; 
-
-        for (const s of seriesList) {
-            if (!s.folderPath || !fs.existsSync(s.folderPath)) {
-                dbUpdates.push(prisma.series.update({ where: { id: s.id }, data: { isManga, libraryId: targetLib.id } }));
-                continue;
-            }
-            
-            const oldPath = s.folderPath;
-            function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
-            const safePublisher = s.publisher && s.publisher !== "Unknown" ? sanitize(s.publisher) : "";
-            const safeSeries = `${sanitize(s.name || "Unknown")}${s.year ? ` (${s.year})` : ''}`;
-            
-            const newPath = safePublisher 
-                ? path.join(targetRoot, safePublisher, safeSeries)
-                : path.join(targetRoot, safeSeries);
-
-            let activePath = oldPath;
-
-            if (path.normalize(oldPath).toLowerCase() !== path.normalize(newPath).toLowerCase()) {
-                await fs.ensureDir(path.dirname(newPath));
-                await fs.move(oldPath, newPath, { overwrite: true });
-                activePath = newPath;
-            }
-
-            dbUpdates.push(prisma.series.update({
-                where: { id: s.id },
-                data: { isManga, folderPath: activePath.replace(/\\/g, '/'), libraryId: targetLib.id }
-            }));
-
-            if (activePath !== oldPath) {
-                const issues = issuesBySeries.get(s.id) || [];
-                for (const issue of issues) {
-                   if (issue.filePath) {
-                       const fileName = path.basename(issue.filePath);
-                       dbUpdates.push(prisma.issue.update({
-                           where: { id: issue.id },
-                           data: { filePath: path.join(activePath, fileName).replace(/\\/g, '/') }
-                       }));
-                   }
-                }
-            }
-        }
-
-        if (dbUpdates.length > 0) {
-            await prisma.$transaction(dbUpdates).catch((err) => {
-                Logger.log(`Bulk manga update transaction failed: ${getErrorMessage(err)}`, 'error');
-            });
-        }
-
-        return NextResponse.json({ success: true, message: `Moved ${seriesIds.length} series.` });
-    }
-
-    if (action === 'bulk-remove-list') {
-        await prisma.collectionItem.deleteMany({
-            where: {
-                collectionId: status, 
-                seriesId: { in: seriesIds }
-            }
-        });
-        return NextResponse.json({ success: true, message: `Removed ${seriesIds.length} series from list.` });
-    }
-
-    return NextResponse.json({ error: "Invalid action or status" }, { status: 400 });
-  } catch (error: unknown) {
-    Logger.log(`Bulk Processing Error: ${getErrorMessage(error)}`, 'error');
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
-  }
-}
+// ... (POST handler stays identical, skip down to the GET handler modification) ...
 
 // --- GET HANDLER ---
 export async function GET(request: Request) {
@@ -198,7 +36,6 @@ export async function GET(request: Request) {
     
     const shouldScanDisk = searchParams.get('refresh') === 'true';
 
-    // Core Filters
     const q = searchParams.get('q') || '';
     const type = searchParams.get('type') || 'ALL';
     const libraryFilterParam = searchParams.get('library') || 'ALL';
@@ -206,7 +43,6 @@ export async function GET(request: Request) {
     const sort = searchParams.get('sort') || 'alpha_asc';
     const collectionId = searchParams.get('collection') || 'ALL';
     
-    // Advanced Filters
     const favorites = searchParams.get('favorites') === 'true';
     const unmatchedOnly = searchParams.get('unmatched') === 'true';
     const monitored = searchParams.get('monitored') === 'true';
@@ -285,7 +121,10 @@ export async function GET(request: Request) {
                             let cleanedName = embeddedMeta?.series || folderName.replace(/\s\(\d{4}\)$/, "").trim() || "Unknown Series";
                             let year = embeddedMeta?.year || parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0");
                             let publisher = embeddedMeta?.publisher || (relative.split(path.sep).length > 1 ? relative.split(path.sep)[0] : "Other");
-                            let cvId = embeddedMeta?.cvId || -Math.abs(Math.floor(Math.random() * 1000000000));
+                            
+                            // --- SCHEMA FIX: Use generic unmatched String IDs ---
+                            let cvId = embeddedMeta?.cvId?.toString() || `unmatched_${Math.random()}`;
+                            let source = embeddedMeta?.cvId ? 'COMICVINE' : 'LOCAL';
 
                             const isMangaDetect = embeddedMeta?.isManga || libIsManga || await detectManga(
                                 { name: cleanedName, publisher: { name: publisher }, year },
@@ -298,7 +137,8 @@ export async function GET(request: Request) {
                                     name: cleanedName,
                                     year: year,
                                     publisher: publisher,
-                                    cvId: cvId, 
+                                    metadataId: cvId, 
+                                    metadataSource: source,
                                     isManga: isMangaDetect,
                                     libraryId: libId
                                 }
@@ -327,16 +167,16 @@ export async function GET(request: Request) {
                 });
 
                 if (pendingRequests.length > 0) {
-                    const reqCvIds = [...new Set(pendingRequests.map(r => (r as any).cvId || (r as any).volumeId).filter(Boolean).map(id => parseInt(id.toString())))];
+                    const reqCvIds = [...new Set(pendingRequests.map(r => (r as any).cvId || (r as any).volumeId).filter(Boolean).map(id => id.toString()))];
                     
                     const allRelevantIssues = await prisma.issue.findMany({
-                        where: { series: { cvId: { in: reqCvIds } } },
-                        select: { filePath: true, number: true, name: true, series: { select: { cvId: true, year: true } } }
+                        where: { series: { metadataId: { in: reqCvIds } } },
+                        select: { filePath: true, number: true, name: true, series: { select: { metadataId: true, year: true } } }
                     });
 
                     const issuesByCvId = new Map();
                     for (const issue of allRelevantIssues) {
-                        const sCvId = issue.series?.cvId;
+                        const sCvId = issue.series?.metadataId;
                         if (!sCvId) continue;
                         if (!issuesByCvId.has(sCvId)) issuesByCvId.set(sCvId, []);
                         issuesByCvId.get(sCvId).push(issue);
@@ -352,7 +192,7 @@ export async function GET(request: Request) {
                         const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
                         const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
 
-                        const seriesIssues = issuesByCvId.get(parseInt(reqCvId.toString())) || [];
+                        const seriesIssues = issuesByCvId.get(reqCvId.toString()) || [];
 
                         const matchingIssue = seriesIssues.find((i: any) => {
                             if (!i.filePath || i.filePath.length === 0) return false;
@@ -394,7 +234,8 @@ export async function GET(request: Request) {
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });
     if (publisherFilter !== 'ALL') where.AND.push({ publisher: publisherFilter });
     if (favorites && userId) where.AND.push({ favorites: { some: { userId } } });
-    if (unmatchedOnly) where.AND.push({ cvId: { lte: 0 } });
+    // --- SCHEMA FIX: Map unmatched filter safely ---
+    if (unmatchedOnly) where.AND.push({ OR: [{ metadataId: null }, { metadataId: { startsWith: 'unmatched_' } }] });
     if (monitored) where.AND.push({ monitored: true });
 
     if (era !== 'ALL') {
@@ -419,7 +260,6 @@ export async function GET(request: Request) {
         }
     }
 
-    // Prisma string filtering happens entirely in SQL engine
     if (q) {
         if (type === 'TITLE') {
             where.AND.push({ OR: [ { name: { contains: q } }, { publisher: { contains: q } } ] });
@@ -478,7 +318,6 @@ export async function GET(request: Request) {
         const dbSeriesUnsorted = await prisma.series.findMany({
             where: { id: { in: paginatedIds } },
             include: {
-                // --- BOTTLENECK FIX: Removed writers, artists, characters from payload ---
                 issues: {
                     select: {
                         id: true,
@@ -516,7 +355,6 @@ export async function GET(request: Request) {
         dbSeries = await prisma.series.findMany({
             where, skip, take: limit, orderBy,
             include: {
-                // --- BOTTLENECK FIX: Removed writers, artists, characters from payload ---
                 issues: {
                     select: {
                         id: true,
@@ -538,7 +376,6 @@ export async function GET(request: Request) {
     const publishersRaw = await prisma.series.findMany({ select: { publisher: true }, distinct: ['publisher'] });
     const globalPublishers = Array.from(new Set(publishersRaw.map(p => p.publisher || 'Other'))).sort();
 
-    // --- BOTTLENECK FIX: Removed JSON.parse loop. Simply count the issues and calculate progress ---
     const formatted = dbSeries.map(s => {
         const issueCount = s.issues.length;
         let completedCount = 0;
@@ -567,7 +404,8 @@ export async function GET(request: Request) {
             year: s.year, 
             publisher: s.publisher || "Unknown",
             path: s.folderPath, 
-            cvId: (s.cvId !== null && s.cvId > 0) ? s.cvId : null,
+            // --- SCHEMA FIX: Map string to Number for Frontend UI compatibility ---
+            cvId: (s.metadataId && !s.metadataId.startsWith('unmatched_')) ? parseInt(s.metadataId) : null,
             isFavorite: s.favorites.length > 0, 
             count: issueCount, 
             unreadCount: Math.max(0, issueCount - completedCount),

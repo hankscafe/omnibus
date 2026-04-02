@@ -5,5 +5,9 @@ export async function register() {
 
         const { initCronJobs } = await import('./lib/cron');
         initCronJobs();
+
+        // Initialize BullMQ Worker
+        const { initWorker } = await import('./lib/queue');
+        initWorker();
     }
 }

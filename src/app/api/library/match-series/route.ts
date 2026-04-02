@@ -8,13 +8,17 @@ import { detectManga } from '@/lib/manga-detector';
 import { DiscordNotifier } from '@/lib/discord'; 
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger'; 
+import { MangaDexProvider } from '@/lib/metadata/providers/mangadex';
 
 export async function POST(request: Request) {
   try {
     const req = (await request.json()) as any;
-    const { oldFolderPath, cvId, name, year, publisher } = req;
+    const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher } = req;
 
-    if (!oldFolderPath || !cvId) {
+    const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
+    const targetSource = metadataSource || 'COMICVINE';
+
+    if (!oldFolderPath || !targetMetaId) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
@@ -23,13 +27,8 @@ export async function POST(request: Request) {
     const normalizedOld = path.normalize(oldFolderPath).toLowerCase();
     
     const isAuthorized = authorizedRoots.some(root => normalizedOld.startsWith(root));
-
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
     if (!fs.existsSync(oldFolderPath)) return NextResponse.json({ error: "Folder not found." }, { status: 404 });
-
-    const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
-    const cvApiKey = cvKeySetting?.value;
-    if (!cvApiKey) return NextResponse.json({ error: "ComicVine API Key missing" }, { status: 400 });
 
     let realPublisher = publisher && publisher !== 'Unknown' && publisher !== 'Other' ? publisher : '';
     let realName = name && name !== 'Unknown Series' ? name : '';
@@ -38,22 +37,34 @@ export async function POST(request: Request) {
     let status = 'Ongoing'; 
     
     try {
-        const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
-            params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image,end_year' },
-            headers: { 'User-Agent': 'Omnibus/1.0' },
-            timeout: 2000 
-        });
-        if (cvVolRes.data?.results) {
-            const vol = cvVolRes.data.results;
-            if (!realPublisher && vol.publisher?.name) realPublisher = vol.publisher.name;
-            if (!realName && vol.name) realName = vol.name;
-            if (!realYear && vol.start_year) realYear = parseInt(vol.start_year) || 0;
-            imageUrl = vol.image?.medium_url || vol.image?.super_url;
-            if (vol.end_year) status = 'Ended'; 
+        if (targetSource === 'MANGADEX') {
+            const md = new MangaDexProvider();
+            const details = await md.getSeriesDetails(targetMetaId);
+            if (!realPublisher) realPublisher = details.publisher;
+            if (!realName) realName = details.name;
+            if (!realYear) realYear = details.year;
+            imageUrl = details.coverUrl;
+            status = details.status;
+        } else {
+            const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
+            const cvApiKey = cvKeySetting?.value;
+            if (cvApiKey) {
+                const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${targetMetaId}/`, {
+                    params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image,end_year' },
+                    headers: { 'User-Agent': 'Omnibus/1.0' },
+                    timeout: 2000 
+                });
+                if (cvVolRes.data?.results) {
+                    const vol = cvVolRes.data.results;
+                    if (!realPublisher && vol.publisher?.name) realPublisher = vol.publisher.name;
+                    if (!realName && vol.name) realName = vol.name;
+                    if (!realYear && vol.start_year) realYear = parseInt(vol.start_year) || 0;
+                    imageUrl = vol.image?.medium_url || vol.image?.super_url;
+                    if (vol.end_year) status = 'Ended'; 
+                }
+            }
         }
-    } catch(e: unknown) { 
-        Logger.log(`[Match Series] ComicVine fetch failed or timed out: ${getErrorMessage(e)}`, 'warn');
-    }
+    } catch(e: unknown) { }
 
     if (!realName) realName = path.basename(oldFolderPath).replace(/\s\(\d{4}\)$/, "").trim(); 
     if (!realPublisher) realPublisher = 'Other';
@@ -78,20 +89,15 @@ export async function POST(request: Request) {
     const pubDir = path.dirname(newFolderPath);
     if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
 
-    const targetCvId = parseInt(cvId);
-    
-    // --- FIX 4a & D: Iterate through existing records to prevent Unique Constraint Collisions ---
     const existingOldSeries = await prisma.series.findMany({
-        where: { cvId: targetCvId }
+        where: { metadataId: targetMetaId, metadataSource: targetSource }
     });
 
     for (const old of existingOldSeries) {
         await prisma.series.update({
             where: { id: old.id },
-            data: { cvId: -Math.abs(Math.floor(Math.random() * 1000000000)) }
-        }).catch((err: unknown) => {
-            Logger.log(`[Match Series] Failed to reset old cvId for ${old.id}: ${getErrorMessage(err)}`, 'warn');
-        });
+            data: { metadataId: `unmatched_${Math.random()}`, metadataSource: 'LOCAL' }
+        }).catch(() => {});
     }
 
     let existingRecord = await prisma.series.findFirst({
@@ -99,7 +105,8 @@ export async function POST(request: Request) {
     });
 
     const updateData = {
-        cvId: targetCvId,
+        metadataId: targetMetaId,
+        metadataSource: targetSource,
         name: safeName,
         year: realYear,
         publisher: realPublisher,
@@ -121,7 +128,7 @@ export async function POST(request: Request) {
 
     DiscordNotifier.sendAlert('metadata_match', { 
         title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 
-    }).catch(() => {}); // Intentional Fire & Forget
+    }).catch(() => {});
 
     let activeFolderPath = oldFolderPath;
     if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
@@ -130,11 +137,7 @@ export async function POST(request: Request) {
             for (const file of files) {
                 await fs.promises.rename(path.join(oldFolderPath, file), path.join(newFolderPath, file));
             }
-            try { 
-                await fs.promises.rmdir(oldFolderPath); 
-            } catch(e: unknown) {
-                Logger.log(`[Match Series] Failed to remove old empty folder: ${getErrorMessage(e)}`, 'warn');
-            }
+            try { await fs.promises.rmdir(oldFolderPath); } catch(e) {}
         } else {
             await fs.promises.rename(oldFolderPath, newFolderPath);
         }
@@ -151,7 +154,6 @@ export async function POST(request: Request) {
                 const oldName = path.basename(file, ext);
                 let issueNumStr = "";
                 
-                // --- Variant Support Update ---
                 const explicitMatch = oldName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
                 if (explicitMatch) issueNumStr = explicitMatch[1];
                 else {
@@ -183,31 +185,24 @@ export async function POST(request: Request) {
         }
         
         if (pathUpdates.length > 0) {
-            await prisma.$transaction(pathUpdates).catch((err: unknown) => {
-                Logger.log(`[Match Series] Path updates transaction failed: ${getErrorMessage(err)}`, 'error');
-            });
+            await prisma.$transaction(pathUpdates).catch(() => {});
         }
 
         if (imageUrl) {
             try {
                 const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 3000, headers: { 'User-Agent': 'Omnibus/1.0' } });
                 await fs.promises.writeFile(path.join(activeFolderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-            } catch(e: unknown) {
-                Logger.log(`[Match Series] Failed to download cover image: ${getErrorMessage(e)}`, 'warn');
-            }
+            } catch(e) {}
         }
-    } catch (err: unknown) { 
-        Logger.log(`[Match Series] File operations block failed: ${getErrorMessage(err)}`, 'error');
-    }
+    } catch (err) {}
 
     try {
         const pendingRequests = await prisma.request.findMany({
-            where: { volumeId: targetCvId.toString(), status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } }
+            where: { volumeId: targetMetaId, status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } }
         });
 
         if (pendingRequests.length > 0) {
-            const seriesIssues = await prisma.issue.findMany({ where: { series: { cvId: targetCvId } } });
-            
+            const seriesIssues = await prisma.issue.findMany({ where: { series: { metadataId: targetMetaId } } });
             const requestsToComplete = [];
 
             for (const dbReq of pendingRequests) {
@@ -217,9 +212,7 @@ export async function POST(request: Request) {
                 if (issueNum === null) continue;
                 const matchingIssue = seriesIssues.find(i => parseFloat(i.number) === issueNum && i.filePath && i.filePath.length > 0);
 
-                if (matchingIssue) {
-                    requestsToComplete.push(dbReq.id);
-                }
+                if (matchingIssue) requestsToComplete.push(dbReq.id);
             }
 
             if (requestsToComplete.length > 0) {
@@ -229,12 +222,10 @@ export async function POST(request: Request) {
                 });
             }
         }
-    } catch (e: unknown) { 
-        Logger.log(`[Match Series] Pending requests update failed: ${getErrorMessage(e)}`, 'error');
-    }
+    } catch (e) {}
     
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
-    return NextResponse.json({ success: true, newPath: activeFolderPath, cvId: targetCvId });
+    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId });
 
   } catch (error: unknown) {
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

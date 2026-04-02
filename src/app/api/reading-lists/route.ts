@@ -4,7 +4,6 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 
-// Forces Next.js to never cache this route so newly built and healed lists appear instantly!
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
@@ -15,7 +14,6 @@ export async function GET(request: Request) {
 
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-        // Fetch lists that belong to the user OR are global
         let lists = await prisma.readingList.findMany({
             where: { OR: [ { userId: userId }, { userId: null } ] },
             include: {
@@ -28,25 +26,20 @@ export async function GET(request: Request) {
         });
 
         let requiresRefresh = false;
-        
-        // OPTIMIZATION: Collect all actions into bulk arrays
         const unlinkIds: string[] = [];
         const missingCvIssueIds: number[] = [];
 
         for (const list of lists) {
             for (const item of list.items) {
-                // 1. GHOST BUSTER PREP: Un-link issues that don't actually have a physical file!
                 if (item.issueId && (!item.issue || !item.issue.filePath || item.issue.filePath.length === 0)) {
                     unlinkIds.push(item.id);
                 }
-                // 2. AUTO-LINKER PREP: Gather CV IDs to search the DB in bulk
                 else if (!item.issueId && item.cvIssueId) {
                     missingCvIssueIds.push(item.cvIssueId);
                 }
             }
         }
 
-        // Execute bulk unlinking
         if (unlinkIds.length > 0) {
             await prisma.readingListItem.updateMany({
                 where: { id: { in: unlinkIds } },
@@ -55,12 +48,11 @@ export async function GET(request: Request) {
             requiresRefresh = true;
         }
 
-        // Execute bulk auto-linking
         if (missingCvIssueIds.length > 0) {
-            // Fetch ALL potential matching issues in ONE query
             const potentialIssues = await prisma.issue.findMany({
                 where: { 
-                    cvId: { in: missingCvIssueIds },
+                    metadataId: { in: missingCvIssueIds.map(String) },
+                    metadataSource: 'COMICVINE',
                     filePath: { not: null } 
                 }
             });
@@ -70,7 +62,7 @@ export async function GET(request: Request) {
             for (const list of lists) {
                 for (const item of list.items) {
                     if (!item.issueId && item.cvIssueId) {
-                        const validIssue = potentialIssues.find(i => i.cvId === item.cvIssueId && i.filePath && i.filePath.length > 0);
+                        const validIssue = potentialIssues.find(i => i.metadataId === item.cvIssueId!.toString() && i.filePath && i.filePath.length > 0);
                         
                         if (validIssue) {
                             linkUpdates.push(
@@ -84,14 +76,12 @@ export async function GET(request: Request) {
                 }
             }
 
-            // Execute all links in a single database transaction
             if (linkUpdates.length > 0) {
                 await prisma.$transaction(linkUpdates);
                 requiresRefresh = true;
             }
         }
 
-        // If we healed or busted any ghosts, refetch the clean data so the UI updates instantly
         if (requiresRefresh) {
             lists = await prisma.readingList.findMany({
                 where: { OR: [{ userId: userId }, { userId: null }] },

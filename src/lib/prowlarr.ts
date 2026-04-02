@@ -6,7 +6,6 @@ import { getErrorMessage } from './utils/error';
 import { ProwlarrSearchResult } from '@/types';
 
 export const ProwlarrService = {
-  // --- ADDED: isManga parameter to differentiate strict filtering rules ---
   async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false): Promise<ProwlarrSearchResult[]> {
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -66,16 +65,15 @@ export const ProwlarrService = {
 
       const rawData = data as Record<string, unknown>[];
 
-      // Extract expected number from the query to prevent hijacking
       let reqNumMatch = cleanQuery.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
       let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
       if (reqNum === null) {
           let noYearQuery = cleanQuery.replace(/\b(19|20)\d{2}\b/g, '');
-          const fallbacks = [...noYearQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+          // FIX: Lookbehind regex
+          const fallbacks = [...noYearQuery.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
           if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
       }
 
-      // EXTRACT YEAR FROM ORIGINAL QUERY
       const reqYearMatch = cleanQuery.match(/\b(19|20)\d{2}\b/);
       const reqYear = reqYearMatch ? reqYearMatch[1] : null;
 
@@ -84,10 +82,8 @@ export const ProwlarrService = {
             if (isInteractive) return true;
             const titleLower = (String(item.title || "")).toLowerCase();
             
-            // STRICT FILTER 1: Reject Omnibuses for Single Issue Searches
             const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
             if (!isManga) {
-                // If it is NOT a manga, explicitly add "vol", "volume", and "book" as banned words IF they weren't in the original query
                 tpbTerms.push('vol ', 'volume ', 'book ');
             }
 
@@ -98,11 +94,8 @@ export const ProwlarrService = {
                 }
             }
 
-            // STRICT FILTER 2: Direct Number Comparison
             let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
             
-            // If it's a Western Comic, aggressively strip out "Vol. X" and "Book X" strings before checking the numbers.
-            // This prevents "Moon Knight Vol. 2" from pretending to be "Moon Knight #2"
             let strippedForNumbers = cleanTor;
             if (!isManga) {
                 strippedForNumbers = strippedForNumbers.replace(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
@@ -113,18 +106,18 @@ export const ProwlarrService = {
             let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
             
             if (torNum === null) {
-                const fallbacks = [...strippedForNumbers.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                // FIX: Lookbehind regex
+                const fallbacks = [...strippedForNumbers.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
                 if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
             }
 
             if (reqNum !== null) {
                 if (torNum !== null && torNum !== reqNum) return false;
                 if (torNum === null) {
-                    return false; // Safely reject it if stripping Vol. left it with NO numbers
+                    return false; 
                 }
             }
 
-            // STRICT FILTER 2.5: Year Conflict Check
             const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
             const torYear = torYearMatch ? torYearMatch[1] : null;
 
@@ -132,15 +125,18 @@ export const ProwlarrService = {
                 return false;
             }
 
-            // STRICT FILTER 3: Check standard text words
+            // FIX: Improved Filter 3 to enforce titles that are 100% numerical
             for (let w of queryWords) {
-                if (!/^\d+$/.test(w) && !titleLower.includes(w)) return false;
+                const isIssueNum = reqNum !== null && parseFloat(w) === reqNum;
+                const isYear = reqYear !== null && w === reqYear;
+                if (isIssueNum || isYear) continue;
+
+                if (!titleLower.includes(w)) return false;
             }
 
             return true;
         })
         .map((item): ProwlarrSearchResult => {
-          // Extract the exact infoHash from the magnet URL if Prowlarr hid it
           let parsedHash = item.infoHash ? String(item.infoHash) : undefined;
           if (!parsedHash && item.magnetUrl) {
               const match = String(item.magnetUrl).match(/urn:btih:([a-zA-Z0-9]+)/i);

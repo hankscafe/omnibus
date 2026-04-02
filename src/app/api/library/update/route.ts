@@ -74,7 +74,9 @@ export async function POST(request: Request) {
                 folderPath: activePath,
                 monitored: parsedMonitored,
                 isManga: parsedIsManga, 
-                cvId: parsedCvId !== null ? parsedCvId : existingRecord.cvId,
+                // --- SCHEMA FIX: Map updated IDs stringly ---
+                metadataId: parsedCvId !== null ? parsedCvId.toString() : existingRecord.metadataId,
+                metadataSource: 'COMICVINE',
                 libraryId: targetLib.id
             }
         });
@@ -92,7 +94,6 @@ export async function POST(request: Request) {
                     }));
                 }
             }
-            // --- SECURITY FIX 2a: Log path updates transaction failures safely ---
             if (pathUpdates.length > 0) {
                 await prisma.$transaction(pathUpdates).catch((err) => {
                     Logger.log(`Path updates transaction failed: ${getErrorMessage(err)}`, 'error');
@@ -101,14 +102,15 @@ export async function POST(request: Request) {
         }
 
     } else if (parsedCvId) {
+        // --- SCHEMA FIX: Use the compound key ---
         await prisma.series.upsert({
-            where: { cvId: parsedCvId },
+            where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: parsedCvId.toString() } },
             update: {
                 name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
             },
             create: {
-                cvId: parsedCvId, name: cleanName, year: parsedYear, publisher: publisher || null,
+                metadataId: parsedCvId.toString(), metadataSource: 'COMICVINE', name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
             }
         });

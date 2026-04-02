@@ -1,4 +1,3 @@
-// src/app/api/library/issue/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -13,7 +12,6 @@ const safeParse = (str: string | null) => {
     if (!str) return [];
     try { 
         const arr = JSON.parse(str); 
-        // Filter out our magic "NONE" string so it never reaches the UI
         return Array.isArray(arr) ? arr.filter((item: string) => item !== "NONE") : [];
     } catch { return []; }
 }
@@ -37,9 +35,7 @@ export async function GET(request: Request) {
     const parsedGenres = safeParse((issue as any).genres); 
     const parsedStoryArcs = safeParse((issue as any).storyArcs); 
 
-    // --- SMART LAZY LOADING ---
-    // Trigger if writers are missing OR if storyArcs is exactly "[]" or null
-    const needsDeepFetch = issue.cvId > 0 && (
+    const needsDeepFetch = issue.metadataSource === 'COMICVINE' && issue.metadataId && (
         parsedWriters.length === 0 || 
         !(issue as any).storyArcs || 
         (issue as any).storyArcs === "[]"
@@ -49,8 +45,7 @@ export async function GET(request: Request) {
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
         if (setting?.value) {
             try {
-                // Fetch the specific deep data for this single issue
-                const deepRes = await axios.get(`https://comicvine.gamespot.com/api/issue/4000-${issue.cvId}/`, {
+                const deepRes = await axios.get(`https://comicvine.gamespot.com/api/issue/4000-${issue.metadataId}/`, {
                     params: { api_key: setting.value, format: 'json', field_list: 'person_credits,character_credits,concepts,story_arc_credits,description,deck' },
                     headers: { 'User-Agent': 'Omnibus/1.0' },
                     timeout: 5000
@@ -79,7 +74,6 @@ export async function GET(request: Request) {
                     const finalCharacters = [...new Set(newCharacters)];
                     const finalGenres = [...new Set([...parsedGenres, ...newGenres])];
                     
-                    // The Magic Trick: If ComicVine genuinely has NO story arcs for this issue, we save ["NONE"].
                     const finalStoryArcs = newStoryArcs.length > 0 ? [...new Set(newStoryArcs)] : ["NONE"];
 
                     const issueExists = await prisma.issue.findUnique({

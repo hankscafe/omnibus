@@ -195,7 +195,7 @@ export const DownloadService = {
           }).catch(() => {});
 
           const failedReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
-          const failedSeries = failedReq?.volumeId ? await prisma.series.findFirst({ where: { cvId: parseInt(failedReq.volumeId) } }) : null;
+          const failedSeries = failedReq?.volumeId && failedReq.volumeId !== "0" ? await prisma.series.findFirst({ where: { metadataId: failedReq.volumeId, metadataSource: 'COMICVINE' } }) : null;
 
           await DiscordNotifier.sendAlert('download_failed', { 
               title: finalFilename || "Unknown Download",

@@ -15,7 +15,7 @@ export default function DiagnosticsPage() {
         document.title = "Omnibus - Diagnostics";
     }, []);
 
-    const [activeTab, setActiveTab] = useState<'ghosts' | 'orphans' | 'integrity'>('ghosts');
+    const [activeTab, setActiveTab] = useState<'ghosts' | 'orphans' | 'integrity' | 'duplicates'>('ghosts');
     const [isScanning, setIsScanning] = useState(false);
     const [isResolving, setIsResolving] = useState(false);
     
@@ -25,6 +25,8 @@ export default function DiagnosticsPage() {
 
     // Multi-select state for orphans
     const [selectedOrphans, setSelectedOrphans] = useState<Set<string>>(new Set());
+
+    const [duplicates, setDuplicates] = useState<any[] | null>(null);
 
     const { toast } = useToast();
 
@@ -285,6 +287,59 @@ export default function DiagnosticsPage() {
                                     </div>
                                 ))}
                             </div>
+                        </Card>
+                    )}
+                </div>
+            )}
+
+            {/* CONTENT: DUPLICATES */}
+            {activeTab === 'duplicates' && (
+                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex justify-between items-center bg-primary/10 border border-primary/20 p-4 rounded-xl">
+                        <div>
+                            <h3 className="font-bold text-primary">Duplicate File Scanner</h3>
+                            <p className="text-sm text-primary/80">Finds issues in the same series that share the exact same issue number (e.g. multiple versions of Issue #1).</p>
+                        </div>
+                        <Button onClick={() => runScan('scan-duplicates' as any)} disabled={isScanning} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                            {isScanning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Search className="w-4 h-4 mr-2" />} Find Duplicates
+                        </Button>
+                    </div>
+
+                    {duplicates && duplicates.length === 0 && (
+                        <div className="text-center py-12 border-2 border-dashed rounded-xl border-border bg-muted/30">
+                            <CheckCircle2 className="w-12 h-12 text-green-500 mx-auto mb-3" />
+                            <p className="font-bold text-foreground">No duplicate issues found in your library!</p>
+                        </div>
+                    )}
+
+                    {duplicates && duplicates.length > 0 && (
+                        <Card className="border-primary/20 bg-background overflow-hidden p-4 space-y-4">
+                            <div className="border-b border-border pb-4">
+                                <span className="font-bold text-primary">Found {duplicates.length} duplicate groups</span>
+                            </div>
+                            {duplicates.map((group, idx) => (
+                                <div key={idx} className="bg-muted/30 border border-border rounded-lg p-4">
+                                    <h4 className="font-bold text-foreground mb-3">{group.seriesName} <Badge variant="secondary">Issue #{group.issueNumber}</Badge></h4>
+                                    <div className="space-y-2">
+                                        {group.files.map((file: any, fIdx: number) => (
+                                            <div key={file.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-background p-3 rounded border border-border">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
+                                                    <p className="text-xs text-muted-foreground font-mono">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                                                </div>
+                                                <Button size="sm" variant="destructive" className="shrink-0" onClick={async () => {
+                                                    setIsResolving(true);
+                                                    await fetch('/api/admin/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete-duplicates', payload: { idsToDelete: [file.id], deletePhysical: true } }) });
+                                                    runScan('scan-duplicates' as any);
+                                                    setIsResolving(false);
+                                                }}>
+                                                    <Trash2 className="w-4 h-4 mr-2" /> Delete
+                                                </Button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
                         </Card>
                     )}
                 </div>

@@ -32,7 +32,6 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // 1. Fetch only the data we need from the DB
     const recentProgress = await prisma.readProgress.findMany({
         where: {
             userId: userId,
@@ -46,12 +45,10 @@ export async function GET(request: Request) {
         take: 7
     });
 
-    // 2. BLAZING FAST MAPPING (No more physical disk scans!)
     const items = recentProgress.map(p => {
         const percentage = Math.round((p.currentPage / p.totalPages) * 100);
         const folderPath = p.issue.series.folderPath;
         
-        // Use DB cover URL instantly, fallback to deferred folder path
         let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
         if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
@@ -72,7 +69,7 @@ export async function GET(request: Request) {
             currentPage: p.currentPage,
             totalPages: p.totalPages,
             percentage: percentage,
-            seriesCvId: p.issue.series.cvId,
+            seriesCvId: (p.issue.series.metadataSource === 'COMICVINE' && p.issue.series.metadataId) ? parseInt(p.issue.series.metadataId) : null,
             seriesCoverUrl: seriesCoverUrl
         };
     });

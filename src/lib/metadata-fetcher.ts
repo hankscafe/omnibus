@@ -1,4 +1,3 @@
-// src/lib/metadata-fetcher.ts
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -6,19 +5,105 @@ import path from 'path';
 import { Logger } from './logger';
 import { parseComicVineCredits } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
-import { ComicVineVolume, ComicVineIssue } from '@/types'; 
+import { MangaDexProvider } from './metadata/providers/mangadex';
 
-export async function syncSeriesMetadata(cvId: number, folderPath: string) {
+export async function syncSeriesMetadata(metadataId: string, folderPath: string, metadataSource: string = 'COMICVINE') {
+    const series = await prisma.series.findFirst({ 
+        where: { metadataId, metadataSource } 
+    });
+    if (!series) throw new Error("Series not found in database.");
+
+    Logger.log(`[Metadata] Fetching data for ID: ${metadataId} via ${metadataSource}`, 'info');
+
+    // -------------------------------------------------------------
+    // MANGADEX ENGINE
+    // -------------------------------------------------------------
+    if (metadataSource === 'MANGADEX') {
+        const md = new MangaDexProvider();
+        const details = await md.getSeriesDetails(metadataId);
+        
+        await prisma.series.update({
+            where: { id: series.id },
+            data: {
+                name: details.name,
+                publisher: details.publisher,
+                year: details.year || series.year,
+                description: details.description,
+                coverUrl: details.coverUrl,
+                status: details.status
+            }
+        });
+
+        if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
+            try {
+                const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
+                await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
+            } catch (e) {}
+        }
+
+        const issues = await md.getSeriesIssues(metadataId);
+        let syncedCount = 0;
+        
+        for (const issue of issues) {
+            const issueNumStr = issue.issueNumber;
+            const existingByMetaId = await prisma.issue.findFirst({ 
+                where: { metadataId: issue.sourceId, metadataSource: 'MANGADEX' } 
+            });
+
+            const issueDataPayload = {
+                name: issue.name,
+                description: issue.description,
+                releaseDate: issue.releaseDate,
+                coverUrl: issue.coverUrl,
+                writers: JSON.stringify(issue.writers),
+                artists: JSON.stringify(issue.artists),
+                characters: JSON.stringify(issue.characters),
+                genres: "[]",
+                storyArcs: "[]", 
+            };
+
+            if (existingByMetaId) {
+                await prisma.issue.update({
+                    where: { id: existingByMetaId.id },
+                    data: { seriesId: series.id, number: issueNumStr, ...issueDataPayload }
+                });
+            } else {
+                const existingByNum = await prisma.issue.findFirst({
+                    where: { seriesId: series.id, number: issueNumStr }
+                });
+
+                if (existingByNum) {
+                    await prisma.issue.update({
+                        where: { id: existingByNum.id },
+                        data: { metadataId: issue.sourceId, metadataSource: 'MANGADEX', ...issueDataPayload }
+                    });
+                } else {
+                    await prisma.issue.create({
+                        data: {
+                            seriesId: series.id, 
+                            metadataId: issue.sourceId, 
+                            metadataSource: 'MANGADEX', 
+                            number: issueNumStr, 
+                            status: 'WANTED', 
+                            ...issueDataPayload
+                        }
+                    });
+                }
+            }
+            syncedCount++;
+        }
+
+        Logger.log(`[Metadata] Successfully synced ${syncedCount} MangaDex issues.`, 'success');
+        return { success: true, count: syncedCount };
+    }
+
+    // -------------------------------------------------------------
+    // COMICVINE ENGINE
+    // -------------------------------------------------------------
     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
     if (!setting?.value) throw new Error("No ComicVine API Key configured.");
 
-    const series = await prisma.series.findFirst({ where: { cvId } });
-    if (!series) throw new Error("Series not found in database.");
-
-    Logger.log(`[Metadata] Fetching Volume data for CV ID: ${cvId}`, 'info');
-
-    // 1. Fetch Volume
-    const volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
+    const volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
         params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year' },
         headers: { 'User-Agent': 'Omnibus/1.0' },
         timeout: 15000
@@ -30,10 +115,8 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
     const imageUrl = volData.image?.medium_url || volData.image?.super_url;
 
     const { 
-        writers: volWriters, 
-        artists: volArtists, 
-        characters: volCharacters,
-        genres: volGenres
+        writers: volWriters, artists: volArtists, 
+        characters: volCharacters, genres: volGenres
     } = parseComicVineCredits(volData.person_credits || undefined, volData.character_credits || undefined, volData.concepts || undefined);
 
     await prisma.series.update({
@@ -59,9 +142,6 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
 
     await new Promise(r => setTimeout(r, 1500));
 
-    Logger.log(`[Metadata] Fetching Issues for Volume: ${volData.name}`, 'info');
-
-    // 2. Fetch All Issues
     let offset = 0;
     let totalResults = 1;
     let loopCount = 0;
@@ -70,7 +150,7 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
     while (offset < totalResults && loopCount < 20) {
         const issueRes = await axios.get<{ number_of_total_results: number; results: any[] }>(`https://comicvine.gamespot.com/api/issues/`, {
             params: {
-                api_key: setting.value, format: 'json', filter: `volume:${cvId}`, sort: 'issue_number:asc', limit: 100, offset: offset,
+                api_key: setting.value, format: 'json', filter: `volume:${metadataId}`, sort: 'issue_number:asc', limit: 100, offset: offset,
                 field_list: 'id,name,issue_number,store_date,cover_date,image,deck,description,person_credits,character_credits,concepts,story_arc_credits'
             },
             headers: { 'User-Agent': 'Omnibus/1.0' },
@@ -96,10 +176,10 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
             const finalCharacters = characters.length > 0 ? characters : volCharacters;
             const finalGenres = genres.length > 0 ? genres : volGenres;
 
-            const existingByCvId = await prisma.issue.findUnique({ where: { cvId: cvIssue.id } });
+            const existingByCvId = await prisma.issue.findFirst({ 
+                where: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE' } 
+            });
 
-            // --- THE FIX: PRESERVE EXISTING STORY ARCS ---
-            // If the bulk endpoint drops the story arcs, we gracefully reuse the ones already in the database
             let finalStoryArcs = storyArcs;
             if (storyArcs.length === 0 && existingByCvId && (existingByCvId as any).storyArcs) {
                 try {
@@ -133,12 +213,17 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
                 if (existingByNum) {
                     await prisma.issue.update({
                         where: { id: existingByNum.id },
-                        data: { cvId: cvIssue.id, ...issueDataPayload }
+                        data: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE', ...issueDataPayload }
                     });
                 } else {
                     await prisma.issue.create({
                         data: {
-                            seriesId: series.id, cvId: cvIssue.id, number: issueNumStr, status: 'WANTED', ...issueDataPayload
+                            seriesId: series.id, 
+                            metadataId: cvIssue.id.toString(), 
+                            metadataSource: 'COMICVINE', 
+                            number: issueNumStr, 
+                            status: 'WANTED', 
+                            ...issueDataPayload
                         }
                     });
                 }
@@ -151,6 +236,6 @@ export async function syncSeriesMetadata(cvId: number, folderPath: string) {
         await new Promise(r => setTimeout(r, 1500));
     }
 
-    Logger.log(`[Metadata] Successfully synced ${syncedCount} issues.`, 'success');
+    Logger.log(`[Metadata] Successfully synced ${syncedCount} ComicVine issues.`, 'success');
     return { success: true, count: syncedCount };
 }

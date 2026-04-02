@@ -22,11 +22,10 @@ export async function GET(request: Request) {
   if (!setting?.value) return NextResponse.json({ error: 'Missing API Key' }, { status: 500 });
 
   try {
-    // 1. FAST LOCAL CHECK: Do we already know the Publisher from our Library?
     let localPublisher = null;
     if (volId && volId !== 'undefined') {
         const localSeries = await prisma.series.findFirst({ 
-            where: { cvId: parseInt(volId) },
+            where: { metadataId: volId, metadataSource: 'COMICVINE' },
             select: { publisher: true }
         });
         if (localSeries?.publisher) localPublisher = localSeries.publisher;
@@ -34,7 +33,6 @@ export async function GET(request: Request) {
 
     const endpoint = isIssue ? `issue/4000-${id}` : `volume/4050-${id}`;
     
-    // 2. Fetch the base Issue data
     const res = await axios.get(`https://comicvine.gamespot.com/api/${endpoint}/`, {
         params: { api_key: setting.value, format: 'json', field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,site_detail_url' },
         headers: { 'User-Agent': 'Omnibus/1.0' }
@@ -48,11 +46,9 @@ export async function GET(request: Request) {
     let htmlDescription = issueData.description || issueData.deck || null;
     let publisher = localPublisher || issueData.publisher?.name || issueData.volume?.publisher?.name || null;
 
-    // 3. THE RATE LIMIT DEFEATER (Sequential Fallback)
-    // If we are missing the publisher, OR missing deep data, politely fetch the Volume.
     if (isIssue && (!publisher || !person_credits.length || !character_credits.length || !htmlDescription) && issueData.volume?.api_detail_url) {
         try {
-            await new Promise(resolve => setTimeout(resolve, 1100)); // Respect 1 req/sec limit
+            await new Promise(resolve => setTimeout(resolve, 1100));
             const volRes = await axios.get(issueData.volume.api_detail_url, {
                 params: { api_key: setting.value, format: 'json', field_list: 'publisher,person_credits,character_credits,description,deck' },
                 headers: { 'User-Agent': 'Omnibus/1.0' }
@@ -66,7 +62,6 @@ export async function GET(request: Request) {
         } catch(e) {}
     }
 
-    // Use the centralized metadata parser
     const { writers, artists, characters, genres } = parseComicVineCredits(person_credits, character_credits, issueData.concepts || []);
 
     let displayName = issueData.name;

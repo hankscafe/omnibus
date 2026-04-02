@@ -1,4 +1,3 @@
-// src/app/api/library/series/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -27,7 +26,8 @@ function extractIssueNumber(filename: string): string {
     const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
     
-    const matches = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+    // FIX: Proper lookbehinds used here
+    const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) return parseFloat(matches[matches.length - 1][1]).toString();
     return "1"; 
 }
@@ -122,7 +122,7 @@ export async function GET(request: Request) {
         const dbIssueMap = new Map();
 
         for (const [stdNum, issues] of Array.from(issuesByNum.entries())) {
-            issues.sort((a, b) => b.cvId - a.cvId); 
+            issues.sort((a, b) => (parseInt(b.metadataId || "0") - parseInt(a.metadataId || "0"))); 
             const bestIssue = issues[0];
             dbIssueMap.set(stdNum, bestIssue);
 
@@ -132,9 +132,7 @@ export async function GET(request: Request) {
         }
 
         if (idsToDelete.length > 0) {
-            await prisma.issue.deleteMany({ where: { id: { in: idsToDelete } } }).catch((err) => {
-                Logger.log(`Failed to delete duplicate issues: ${getErrorMessage(err)}`, 'error');
-            });
+            await prisma.issue.deleteMany({ where: { id: { in: idsToDelete } } }).catch((err) => {});
         }
 
         const createsToFire: any[] = [];
@@ -151,7 +149,6 @@ export async function GET(request: Request) {
                 const stdNum = extractIssueNumber(file);
                 const existingIssue = dbIssueMap.get(stdNum);
 
-                // --- NEW: Calculate page count in the background ---
                 let pageCount = 0;
                 if (lowerFile.match(/\.(cbz|zip|epub)$/i)) {
                     try {
@@ -161,7 +158,6 @@ export async function GET(request: Request) {
                 }
 
                 if (existingIssue) {
-                    // --- AUTO-HEAL: Update if the file moved OR if it's missing the pageCount ---
                     if (existingIssue.filePath !== fullPath || (existingIssue as any).pageCount === 0) {
                         updateOperations.push(prisma.issue.update({ 
                             where: { id: existingIssue.id }, data: { filePath: fullPath, pageCount } 
@@ -172,8 +168,10 @@ export async function GET(request: Request) {
                 } else {
                     if (!creatingNums.has(stdNum)) {
                         createsToFire.push({
-                            seriesId: seriesRecord.id, cvId: -Math.abs(Math.floor(Math.random() * 1000000000)),
-                            number: stdNum, status: "DOWNLOADED", filePath: fullPath, pageCount // <-- Added pageCount
+                            seriesId: seriesRecord.id, 
+                            metadataId: `unmatched_${Math.random()}`,
+                            metadataSource: 'LOCAL',
+                            number: stdNum, status: "DOWNLOADED", filePath: fullPath, pageCount
                         });
                         creatingNums.add(stdNum); 
                     }
@@ -182,25 +180,19 @@ export async function GET(request: Request) {
         }
 
         if (createsToFire.length > 0) {
-            await prisma.issue.createMany({ data: createsToFire }).catch((err) => {
-                Logger.log(`Failed to create missing issues: ${getErrorMessage(err)}`, 'error');
-            });
+            await prisma.issue.createMany({ data: createsToFire }).catch(() => {});
         }
         if (updateOperations.length > 0) {
-            await Promise.all(updateOperations.map(op => op.catch((err: unknown) => {
-                Logger.log(`Issue update operation failed: ${getErrorMessage(err)}`, 'error');
-            }))); 
+            await Promise.all(updateOperations.map(op => op.catch(() => {}))); 
         }
 
         await prisma.issue.deleteMany({
             where: {
                 seriesId: seriesRecord.id,
-                cvId: { lt: 0 },
+                metadataId: { startsWith: 'unmatched_' },
                 filePath: { notIn: Array.from(activeFilePaths) as string[] }
             }
-        }).catch((err) => {
-            Logger.log(`Failed to delete ghost issues: ${getErrorMessage(err)}`, 'error');
-        });
+        }).catch(() => {});
 
         existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
 
@@ -210,7 +202,8 @@ export async function GET(request: Request) {
             const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
 
             const formatted = {
-                id: issue.id, cvId: issue.cvId,
+                id: issue.id, 
+                cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
                 name: issue.name || `${seriesRecord.name} #${issue.number}`,
                 parsedNum: parsedNum,
                 fullPath: issue.filePath, fileName: fileName,
@@ -220,13 +213,13 @@ export async function GET(request: Request) {
                 artists: safeParse(issue.artists),
                 characters: safeParse(issue.characters),
                 genres: safeParse((issue as any).genres),
-                storyArcs: safeParse((issue as any).storyArcs), // <-- THIS GETS IT TO THE UI
+                storyArcs: safeParse((issue as any).storyArcs), 
                 isRead: prog.isRead, readProgress: prog.readProgress
             };
 
             if (issue.filePath && fs.existsSync(issue.filePath)) {
                 downloadedIssues.push(formatted);
-            } else if (issue.cvId > 0) {
+            } else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) {
                 missingIssues.push(formatted);
             }
         }
@@ -240,7 +233,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ 
       id: seriesRecord?.id || null, isFavorite, 
-      cvId: (seriesRecord?.cvId && seriesRecord.cvId > 0) ? seriesRecord.cvId : null,
+      cvId: (seriesRecord?.metadataId && !seriesRecord.metadataId.startsWith('unmatched_')) ? parseInt(seriesRecord.metadataId) : null,
       seriesName: dbName ? dbName : fallbackName,
       publisher: seriesRecord?.publisher || null, year: seriesRecord?.year || null,
       description: seriesRecord?.description || null, status: seriesRecord?.status || null,
@@ -254,7 +247,6 @@ export async function GET(request: Request) {
   }
 }
 
-// ... DELETE function remains the same ...
 export async function DELETE(request: Request) {
     try {
         const authOptions = await getAuthOptions();

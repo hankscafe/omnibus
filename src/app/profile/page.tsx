@@ -17,7 +17,7 @@ import {
   Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, 
   Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, 
   ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Webhook, Copy, 
-  Plus, Smartphone, TabletSmartphone, Wifi
+  Plus, Smartphone, TabletSmartphone, Wifi, Flame, BookType, Sparkles, Layers
 } from "lucide-react"
 
 // --- Helper Component: Individual Activity Card ---
@@ -211,6 +211,7 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<any>(null)
   const [recentReqs, setRecentReqs] = useState<any[]>([])
   const [readingLists, setReadingLists] = useState<any[]>([])
+  const [analytics, setAnalytics] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   
   // Upload States
@@ -275,6 +276,9 @@ export default function ProfilePage() {
       const keysRes = await fetch('/api/user/api-keys')
       if (keysRes.ok) setApiKeys(await keysRes.json())
 
+      const analyticsRes = await fetch('/api/user/analytics')
+      if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
+
     } catch (e) {
       toast({ title: "Error", description: "Failed to load profile data.", variant: "destructive" })
     } finally {
@@ -285,6 +289,40 @@ export default function ProfilePage() {
   useEffect(() => { 
       if (session?.user?.id) fetchData() 
   }, [session])
+
+  // --- HEATMAP GENERATOR HELPER ---
+  const renderHeatmap = () => {
+      if (!analytics?.heatmap) return null;
+      
+      const today = new Date();
+      const days = [];
+      // Generate the last 180 days
+      for (let i = 180; i >= 0; i--) {
+          const d = new Date(today);
+          d.setDate(d.getDate() - i);
+          const dateStr = d.toISOString().split('T')[0];
+          const pagesRead = analytics.heatmap[dateStr] || 0;
+          
+          let colorClass = "bg-muted/50 border-border"; 
+          if (pagesRead > 0 && pagesRead <= 15) colorClass = "bg-primary/30 border-primary/20";
+          else if (pagesRead > 15 && pagesRead <= 50) colorClass = "bg-primary/60 border-primary/40";
+          else if (pagesRead > 50) colorClass = "bg-primary border-primary/80";
+
+          days.push(
+              <div 
+                  key={dateStr} 
+                  title={`${dateStr}: ${pagesRead} pages read`}
+                  className={`w-3 h-3 sm:w-4 sm:h-4 rounded-sm border ${colorClass} transition-colors hover:ring-2 hover:ring-foreground`}
+              />
+          );
+      }
+
+      return (
+          <div className="flex flex-wrap gap-1 mt-4 p-4 bg-muted/20 border border-border rounded-xl justify-end">
+              {days}
+          </div>
+      );
+  }
 
   // --- 2FA Handlers ---
   const handleBegin2FASetup = async () => {
@@ -788,6 +826,56 @@ export default function ProfilePage() {
                 <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><History className="w-5 h-5 text-primary mb-1" /><span className="text-2xl font-black">{profile?.stats?.historyStarted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Started</span></CardContent></Card>
                 <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Trophy className="w-5 h-5 text-emerald-500 mb-1" /><span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{profile?.stats?.historyCompleted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Finished</span></CardContent></Card>
             </div>
+            
+            {/* NEW: PERSONAL WRAPPED ANALYTICS */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                <Card className="shadow-sm border-primary/20 bg-primary/5">
+                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
+                        <Layers className="w-5 h-5 text-primary mb-1" />
+                        <span className="text-xl font-black text-foreground">{analytics?.topPublisher || "-"}</span>
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Publisher</span>
+                    </CardContent>
+                </Card>
+                <Card className="shadow-sm bg-muted/50">
+                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
+                        <BookType className="w-5 h-5 text-blue-500 mb-1" />
+                        <span className="text-xl font-black text-foreground">{analytics?.topGenre || "-"}</span>
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Genre</span>
+                    </CardContent>
+                </Card>
+                <Card className="shadow-sm bg-muted/50">
+                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
+                        <Sparkles className="w-5 h-5 text-yellow-500 mb-1" />
+                        <span className="text-xl font-black text-foreground">{analytics?.topCharacter || "-"}</span>
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Character</span>
+                    </CardContent>
+                </Card>
+            </div>
+
+            {/* NEW: READING HEATMAP */}
+            <Card className="shadow-sm bg-background border-border mt-4 overflow-hidden">
+                <CardHeader className="pb-0 pt-6 px-6">
+                    <div className="flex items-center justify-between">
+                        <CardTitle className="text-lg flex items-center gap-2">
+                            <Flame className="w-5 h-5 text-orange-500" /> Reading Activity (Last 6 Months)
+                        </CardTitle>
+                        <Badge variant="secondary" className="font-mono text-[10px]">
+                            {analytics?.totalPagesReadThisYear || 0} Pages Read
+                        </Badge>
+                    </div>
+                </CardHeader>
+                <CardContent className="p-6">
+                    {renderHeatmap()}
+                    <div className="flex justify-end items-center gap-2 mt-3 text-[10px] text-muted-foreground font-bold uppercase">
+                        <span>Less</span>
+                        <div className="w-3 h-3 rounded-sm bg-muted/50 border border-border" />
+                        <div className="w-3 h-3 rounded-sm bg-primary/30 border border-primary/20" />
+                        <div className="w-3 h-3 rounded-sm bg-primary/60 border border-primary/40" />
+                        <div className="w-3 h-3 rounded-sm bg-primary border border-primary/80" />
+                        <span>More</span>
+                    </div>
+                </CardContent>
+            </Card>
         </div>
 
         <div className="space-y-3">

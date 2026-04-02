@@ -37,6 +37,8 @@ model User {
 
   sessionVersion   Int     @default(0)
 
+  dailyReadingStats DailyReadingStat[]
+
   apiKeys             ApiKey[]  @relation("ApiKeysActsAs")
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
   opdsKeys        OpdsKey[]
@@ -98,7 +100,9 @@ model Library {
 
 model Series {
   id              String   @id @default(cuid())
-  cvId            Int      @unique
+  cvId            Int?
+  metadataId      String?  // Can hold "4050-12345" or a MangaDex UUID
+  metadataSource  String   @default("COMICVINE") // COMICVINE, MANGADEX, ANILIST, NONE
   name            String
   year            Int
   publisher       String?
@@ -122,13 +126,17 @@ model Series {
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
 
   @@index([libraryId])
+
+  @@unique([metadataSource, metadataId]) // Ensure we don't duplicate imports from the same source
 }
 
 model Issue {
   id              String   @id @default(cuid())
   seriesId        String
   series          Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
-  cvId            Int      @unique
+  cvId            Int?
+  metadataId      String?  
+  metadataSource  String   @default("COMICVINE")
   number          String   
   status          String   @default("WANTED") 
   filePath        String?
@@ -151,7 +159,8 @@ model Issue {
   bookmarks       Bookmark[]
 
   @@index([seriesId])
-  @@index([cvId])
+  @@index([metadataId])
+  @@index([metadataSource])
 }
 
 model IssueReport {
@@ -424,4 +433,17 @@ model Review {
 
   @@unique([userId, seriesId]) // One review per series per user
   @@index([seriesId])
+}
+
+model DailyReadingStat {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime // Stored as the start of the day (00:00:00)
+  pagesRead Int      @default(0)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
 }

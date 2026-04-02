@@ -12,11 +12,13 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        // PERFECTED QUERY: Since cvId is a required number, we only check for 0 or negative values.
-        // No more null checks causing Prisma to crash!
+        // --- SCHEMA FIX: Query Unmatched records safely via String ---
         const unmatched = await prisma.series.findMany({
             where: { 
-                cvId: { lte: 0 } 
+                OR: [
+                    { metadataId: null },
+                    { metadataId: { startsWith: 'unmatched_' } }
+                ]
             },
             orderBy: { name: 'asc' }
         });

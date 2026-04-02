@@ -19,12 +19,10 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
             return false;
         }
 
-        // 1. Parse JSON arrays back into strings
         const writers = issue.writers ? JSON.parse(issue.writers).join(', ') : '';
         const artists = issue.artists ? JSON.parse(issue.artists).join(', ') : '';
         const characters = issue.characters ? JSON.parse(issue.characters).join(', ') : '';
 
-        // 2. Handle Genres
         const genreList: string[] = [];
         if ((issue as any).genres) {
             try { genreList.push(...JSON.parse((issue as any).genres)); } catch(e) {}
@@ -34,7 +32,6 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         }
         const genres = genreList.join(', ');
 
-        // Parse Story Arcs (Filter out our hidden NONE flag)
         const storyArcsList: string[] = [];
         if ((issue as any).storyArcs) {
             try { 
@@ -44,7 +41,6 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         }
         const storyArcs = storyArcsList.join(', ');
 
-        // 3. Extract specific date parts
         let year = issue.series.year?.toString() || '';
         let month = '';
         let day = '';
@@ -55,11 +51,13 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
             day = parts[2] || '';
         }
 
-        const cvUrl = issue.series.cvId > 0 
-            ? `https://comicvine.gamespot.com/volume/4050-${issue.series.cvId}/` 
+        const isCvSeries = issue.series.metadataSource === 'COMICVINE';
+        const isCvIssue = issue.metadataSource === 'COMICVINE';
+
+        const cvUrl = (isCvSeries && issue.series.metadataId) 
+            ? `https://comicvine.gamespot.com/volume/4050-${issue.series.metadataId}/` 
             : '';
 
-        // 4. Build the ComicInfo.xml string
         const cleanDesc = (issue.description || '').replace(/<[^>]*>?/gm, '').trim();
 
         const xmlContent = `<?xml version="1.0" encoding="utf-8"?>
@@ -80,11 +78,10 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
   <Characters>${escapeXml(characters)}</Characters>
   <Web>${escapeXml(cvUrl)}</Web>
   <Manga>${issue.series.isManga ? 'YesAndRightToLeft' : 'No'}</Manga>
-  <ComicVineVolumeId>${issue.series.cvId > 0 ? issue.series.cvId : ''}</ComicVineVolumeId>
-  <ComicVineIssueId>${issue.cvId > 0 ? issue.cvId : ''}</ComicVineIssueId>
+  <ComicVineVolumeId>${(isCvSeries && issue.series.metadataId) ? issue.series.metadataId : ''}</ComicVineVolumeId>
+  <ComicVineIssueId>${(isCvIssue && issue.metadataId) ? issue.metadataId : ''}</ComicVineIssueId>
 </ComicInfo>`;
 
-        // 5. Safely write to the CBZ using AdmZip
         const zip = new AdmZip(issue.filePath);
         
         const existingEntry = zip.getEntries().find(e => e.entryName.toLowerCase() === 'comicinfo.xml');

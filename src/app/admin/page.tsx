@@ -1,3 +1,4 @@
+// src/app/admin/page.tsx
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
@@ -158,14 +159,12 @@ export default function AdminPage() {
   useEffect(() => {
     fetchAll();
     
-    // Poll internal database and download clients every 15s
     const dashboardInterval = setInterval(() => {
         fetchStats();
         fetchRequests();
         fetchDownloads();
     }, ADMIN_DASHBOARD_POLL_INTERVAL_MS);
 
-    // Poll external GitHub API for updates every 5m to avoid rate limits
     const alertInterval = setInterval(() => {
         fetchUpdates();
     }, ADMIN_ALERT_POLL_INTERVAL_MS);
@@ -310,7 +309,7 @@ const mappedRequests = requests.map(req => {
           if (!match && req.activeDownloadName) {
               match = torrents.find((d: any) => d.name === req.activeDownloadName);
           }
-          // FIX: Mathematical Matcher for UI
+          
           if (!match && req.activeDownloadName) {
               match = torrents.find((d: any) => {
                   const reqNameLower = req.activeDownloadName.toLowerCase();
@@ -324,7 +323,8 @@ const mappedRequests = requests.map(req => {
                       if (issueMatch) return parseFloat(issueMatch[1]);
                       const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
                       if (volMatch) return parseFloat(volMatch[1]);
-                      const fallbacks = [...clean.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                      // FIX: Proper lookbehinds used here
+                      const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
                       if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
                       return null;
                   };
@@ -332,7 +332,6 @@ const mappedRequests = requests.map(req => {
                   const reqNum = extractNum(reqNameLower);
                   const torNum = extractNum(torNameLower);
 
-                  // --- NEW YEAR CHECK ---
                   const reqYearMatch = reqNameLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
                   const reqYear = reqYearMatch ? reqYearMatch[1] : null;
 
@@ -340,20 +339,18 @@ const mappedRequests = requests.map(req => {
                   const torYear = torYearMatch ? torYearMatch[1] : null;
 
                   if (reqYear && torYear && reqYear !== torYear) {
-                      return false; // Reject immediately if the years conflict
+                      return false; 
                   }
-                  // ----------------------
 
                   if (reqNum !== null && torNum !== null) {
                       if (reqNum !== torNum) return false; 
                   } else if (reqNum !== null && torNum === null) {
-                      if (reqNum !== 1) return false; // Strict block: if torrent has no numbers, it can only be issue 1.
+                      if (reqNum !== 1) return false; 
                   }
 
                   let cleanReqName = reqNameLower.replace(/[0-9]/g, '');
                   let cleanTorName = torNameLower.replace(/[0-9]/g, '');
                   
-                  // Junk words filter prevents false positive hijacks
                   const junkWords = ['eng', 'cbz', 'cbr', 'cb7', 'zip', 'rar', 'webrip', 'digital', 'vol', 'volume', 'ch', 'chapter', 'issue', 'tpb', 'rip', 'the', 'and', 'of', 'by', 'gn'];
                   
                   const reqWords = cleanReqName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
@@ -364,9 +361,8 @@ const mappedRequests = requests.map(req => {
                   let matches = 0;
                   reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
                   
-                  // Use the longer title to calculate the ratio to prevent short titles from matching long titles
                   const maxLength = Math.max(reqWords.length, torWords.length);
-                  return (matches / maxLength) >= 0.7; // Requires 70% of the words to match perfectly
+                  return (matches / maxLength) >= 0.7; 
               });
           }
 
@@ -382,11 +378,9 @@ const mappedRequests = requests.map(req => {
       return { ...req, status: liveStatus, progress: liveProgress };
   });
 
-  // Ensure IMPORTING is included so it stays visible while the cron job runs
   const pendingRequests = mappedRequests.filter(r => ['PENDING', 'MANUAL_DDL', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR', 'IMPORTING'].includes(r.status));
   const pendingApprovals = mappedRequests.filter(r => r.status === 'PENDING_APPROVAL');
 
-  // Filter out any torrents that cleanly match a request so they aren't double-listed in the UI
   const activeList = torrents.filter(t => {
       if (parseFloat(t.progress) >= 100) return false;
       const isMatched = mappedRequests.some(r => 

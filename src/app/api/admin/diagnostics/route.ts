@@ -138,6 +138,57 @@ export async function POST(request: Request) {
             return NextResponse.json({ corrupted });
         }
 
+        // --- SCAN: DUPLICATE ISSUES ---
+        if (action === 'scan-duplicates') {
+            Logger.log("[UI Job] Manual Duplicate scan started", "info");
+            const issues = await prisma.issue.findMany({
+                where: { filePath: { not: null } },
+                include: { series: true }
+            });
+            
+            const dupesMap = new Map<string, any[]>();
+            for (const issue of issues) {
+                if (!issue.filePath || !fs.existsSync(issue.filePath)) continue;
+                const key = `${issue.seriesId}_${issue.number}`;
+                if (!dupesMap.has(key)) dupesMap.set(key, []);
+                dupesMap.get(key)!.push(issue);
+            }
+            
+            const duplicates = [];
+            for (const [key, group] of dupesMap.entries()) {
+                if (group.length > 1) {
+                    duplicates.push({
+                        seriesId: group[0].seriesId,
+                        seriesName: group[0].series.name,
+                        issueNumber: group[0].number,
+                        files: group.map(i => {
+                            let size = 0;
+                            try { size = fs.statSync(i.filePath).size; } catch(e){}
+                            return { id: i.id, path: i.filePath, name: path.basename(i.filePath), size };
+                        })
+                    });
+                }
+            }
+            
+            return NextResponse.json({ duplicates });
+        }
+
+        if (action === 'delete-duplicates') {
+            const { idsToDelete, deletePhysical } = payload;
+            for (const id of idsToDelete) {
+                const issue = await prisma.issue.findUnique({ where: { id } });
+                if (issue) {
+                    if (deletePhysical && issue.filePath && fs.existsSync(issue.filePath)) {
+                        await fs.remove(issue.filePath);
+                    }
+                    await prisma.readProgress.deleteMany({ where: { issueId: id } });
+                    await prisma.issue.delete({ where: { id } });
+                }
+            }
+            Logger.log(`Resolved duplicates: Deleted ${idsToDelete.length} records.`, "success");
+            return NextResponse.json({ success: true });
+        }
+
         // --- RESOLUTION ACTIONS ---
         if (action === 'delete-ghosts') {
             const { ids, type } = payload; 

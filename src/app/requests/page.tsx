@@ -1,3 +1,4 @@
+// src/app/requests/page.tsx
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
@@ -17,7 +18,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-// --- Helper Component: Individual Request Card ---
 function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (status: string) => string }) {
   const [desc, setDesc] = useState<string | null>(null)
   const [loadingDesc, setLoadingDesc] = useState(false)
@@ -64,7 +64,6 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
     <Card className="shadow-sm hover:border-primary/50 transition-colors overflow-hidden border-border bg-background">
       <CardContent className="p-4 flex flex-col sm:flex-row gap-6">
         
-        {/* Cover Image - Unified with Library Style */}
         <div className="w-full sm:w-32 shrink-0 sm:self-start aspect-[2/3] bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
             {req.imageUrl ? (
                 <img src={req.imageUrl} alt={displayName} className="object-cover w-full h-full" />
@@ -73,7 +72,6 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
             )}
         </div>
 
-        {/* Content Area */}
         <div className="flex-1 flex flex-col min-w-0">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-4">
                 <div className="space-y-1">

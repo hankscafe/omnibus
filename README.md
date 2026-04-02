@@ -346,14 +346,18 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    depends_on:
+      - omnibus-redis
     environment:
       - TZ=America/New_York
-      # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., [https://omnibus.mydomain.com](https://omnibus.mydomain.com))
-      # or your NAS IP (e.g., [http://192.168.1.100:3000](http://192.168.1.100:3000))
-      - NEXTAUTH_URL=[http://192.168.1.100:3000](http://192.168.1.100:3000)
+      # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., https://omnibus.mydomain.com)
+      # or your NAS IP (e.g., http://192.168.1.100:3000)
+      - NEXTAUTH_URL=http://192.168.1.100:3000
       # REQUIRED: Generate a random string for security
       # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key.  !!DO NOT LOSE THIS!!
       - NEXTAUTH_SECRET=
+      # REQUIRED: Connection URL for the background job queue
+      - REDIS_URL=redis://omnibus-redis:6379
       # REQUIRED: Cache directory for CBR -> CBZ convertor
       - CACHE_DIR=/cache
       # REQUIRED: Tells the app to store the database in our persistent config mount
@@ -387,6 +391,13 @@ services:
       # - /path/to/your/nas/comics:/comics
       # - /path/to/your/nas/manga:/manga
       # - /path/to/your/nas/downloads:/downloads
+
+  omnibus-redis:
+    image: redis:alpine
+    container_name: omnibus-redis
+    restart: unless-stopped
+    # No ports exposed to the host machine to prevent conflicts. 
+    # Omnibus connects to this purely via Docker's internal network.
 ```
 ---
 

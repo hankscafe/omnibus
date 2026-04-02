@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 function SeriesDetailSkeleton() {
   return (
@@ -57,9 +58,11 @@ function SeriesContent() {
   const [missingIssues, setMissingIssues] = useState<any[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean}>({ 
-    name: "", cover: null, cvId: null, path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean}>({ 
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false
   });
+
+  const [searchProvider, setSearchProvider] = useState("COMICVINE");
   
   const [copied, setCopied] = useState(false);
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false);
@@ -99,6 +102,10 @@ function SeriesContent() {
   const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
 
+  // --- BULK SPREADSHEET EDITOR STATES ---
+  const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
+  const [bulkEditData, setBulkEditData] = useState<any[]>([]);
+
   // --- REVIEWS STATE ---
   const [reviews, setReviews] = useState<any[]>([]);
   const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });
@@ -136,6 +143,8 @@ function SeriesContent() {
                 name: data.seriesName || data.name || "Unknown Series", 
                 cover: data.coverUrl, 
                 cvId: data.cvId,
+                metadataId: data.metadataId,
+                metadataSource: data.metadataSource || 'COMICVINE',
                 path: data.path || folderPath,
                 id: data.id || null, 
                 isFavorite: data.isFavorite || false,
@@ -202,32 +211,19 @@ function SeriesContent() {
     return () => { isMounted = false; };
   }, [activeIssue?.id]);
 
-  const runAutoDeepScan = async (cvId: string, currentPath: string) => {
+  const runAutoDeepScan = async (cvId: string, currentPath: string, source: string = 'COMICVINE') => {
       setIsRefreshingMetadata(true);
-      
-      setTimeout(() => {
-          toast({ 
-              title: "Downloading Deep Metadata", 
-              description: "Fetching writers, artists, and synopsis in the background..." 
-          });
-      }, 100);
+      setTimeout(() => { toast({ title: "Downloading Deep Metadata", description: "Fetching writers, artists, and synopsis in the background..." }); }, 100);
 
       try {
           const res = await fetch('/api/library/refresh-metadata', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ cvId: parseInt(cvId), folderPath: currentPath })
+              body: JSON.stringify({ metadataId: cvId, metadataSource: source, folderPath: currentPath })
           });
-          
           if (res.ok) {
-              toast({ 
-                  title: "Metadata Complete!", 
-                  description: "Refreshing page with new data..." 
-              });
-              
-              setTimeout(() => {
-                  window.location.reload(); 
-              }, 1500);
+              toast({ title: "Metadata Complete!", description: "Refreshing page with new data..." });
+              setTimeout(() => { window.location.reload(); }, 1500);
           }
       } catch (e) {
           Logger.log(getErrorMessage(e), 'error');
@@ -238,11 +234,13 @@ function SeriesContent() {
 
   useEffect(() => {
     const autoSync = searchParams.get('autoSync');
+    const provider = searchParams.get('provider') || 'COMICVINE';
     if (autoSync && folderPath && !loading) {
         const newUrl = new URL(window.location.href);
         newUrl.searchParams.delete('autoSync');
+        newUrl.searchParams.delete('provider');
         window.history.replaceState({}, '', newUrl.toString());
-        runAutoDeepScan(autoSync, folderPath);
+        runAutoDeepScan(autoSync, folderPath, provider);
     }
   }, [searchParams, folderPath, loading]);
 
@@ -256,15 +254,16 @@ function SeriesContent() {
   const hasCreators = writers.length > 0 || artists.length > 0;
 
   const handleRefreshMetadata = async () => {
-    if (!seriesInfo.cvId) return;
+    if (!seriesInfo.metadataId && !seriesInfo.cvId) return;
     setIsRefreshingMetadata(true);
-    toast({ title: "Syncing with ComicVine", description: "Downloading issues, credits, and synopsis. This may take a few seconds..." });
+    toast({ title: "Syncing Metadata", description: "Downloading issues, credits, and synopsis. This may take a few seconds..." });
     
     try {
+        const targetId = seriesInfo.metadataId || seriesInfo.cvId?.toString();
         const res = await fetch('/api/library/refresh-metadata', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cvId: seriesInfo.cvId, folderPath: folderPath })
+            body: JSON.stringify({ metadataId: targetId, metadataSource: seriesInfo.metadataSource || 'COMICVINE', folderPath: folderPath })
         });
         
         if (res.ok) {
@@ -361,21 +360,15 @@ function SeriesContent() {
 
       const nextPage = isLoadMore ? searchPage + 1 : 1;
 
-      if (!isLoadMore) {
-          setIsSearching(true);
-      } else {
-          setIsSearchingMore(true);
-      }
+      if (!isLoadMore) setIsSearching(true);
+      else setIsSearchingMore(true);
 
       try {
-          const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}&page=${nextPage}`);
+          const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}&page=${nextPage}&provider=${searchProvider}`);
           const data = await res.json();
           
-          if (isLoadMore) {
-              setSearchResults(prev => [...prev, ...(data.results || [])]);
-          } else {
-              setSearchResults(data.results || []);
-          }
+          if (isLoadMore) setSearchResults(prev => [...prev, ...(data.results || [])]);
+          else setSearchResults(data.results || []);
           
           setHasMoreSearch(data.hasMore || false);
           setSearchPage(nextPage);
@@ -390,18 +383,16 @@ function SeriesContent() {
   const handleMatch = async (item: any) => {
       setIsMatching(true);
       try {
-          const safeYear = item.start_year || (item.year ? item.year.toString() : new Date().getFullYear().toString());
-          let safePublisher = "Unknown";
-          if (item.publisher) {
-              if (typeof item.publisher === 'object' && item.publisher.name) safePublisher = item.publisher.name;
-              else if (typeof item.publisher === 'string') safePublisher = item.publisher;
-          }
+          const safeYear = item.year ? item.year.toString() : new Date().getFullYear().toString();
+          let safePublisher = item.publisher || "Unknown";
+          
           const res = await fetch('/api/library/match-series', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                   oldFolderPath: folderPath,
-                  cvId: parseInt(item.id) || item.id,
+                  metadataId: item.id || item.sourceId,
+                  metadataSource: searchProvider,
                   name: item.name || "Unknown",
                   year: safeYear,
                   publisher: safePublisher
@@ -410,7 +401,7 @@ function SeriesContent() {
           const data = await res.json();
           if (data.success) {
               toast({ title: "Series Matched!" });
-              window.location.href = `/library/series?path=${encodeURIComponent(data.newPath)}&autoSync=${data.cvId}`;
+              window.location.href = `/library/series?path=${encodeURIComponent(data.newPath)}&autoSync=${data.cvId || data.metadataId}&provider=${searchProvider}`;
           } else throw new Error(data.error);
       } catch (e: any) {
           toast({ title: "Match Failed", description: e.message, variant: "destructive" });
@@ -591,6 +582,30 @@ function SeriesContent() {
     } finally {
         setIsBulkProcessing(false);
     }
+  }
+
+  const handleSpreadsheetSave = async () => {
+      setIsBulkProcessing(true);
+      try {
+          const res = await fetch('/api/library/issue/bulk', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ updates: bulkEditData })
+          });
+          if (res.ok) {
+              toast({ title: "Issues Updated Successfully" });
+              setBulkEditModalOpen(false);
+              setSelectedIssues(new Set());
+              setIsSelectionMode(false);
+              window.location.reload(); // Refresh to catch new ordering
+          } else {
+              toast({ title: "Save Failed", variant: "destructive" });
+          }
+      } catch(e) {
+          toast({ title: "Error", variant: "destructive" });
+      } finally {
+          setIsBulkProcessing(false);
+      }
   }
 
   // --- SUBMIT REVIEW ---
@@ -1061,6 +1076,19 @@ function SeriesContent() {
                               <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(false)}>
                                   {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <EyeOff className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Mark Unread</span>
                               </Button>
+                              
+                              {isAdmin && (
+                                  <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => {
+                                      // Populate local state with the exact objects selected
+                                      const itemsToEdit = downloadedIssues.filter(i => selectedIssues.has(i.id)).map(i => ({
+                                          id: i.id, number: i.parsedNum?.toString() || "", name: i.name || "", releaseDate: i.releaseDate || ""
+                                      }));
+                                      setBulkEditData(itemsToEdit);
+                                      setBulkEditModalOpen(true);
+                                  }}>
+                                      <Edit className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Bulk Edit</span>
+                                  </Button>
+                              )}
                           </div>
                       </div>
                   )}
@@ -1149,7 +1177,16 @@ function SeriesContent() {
           <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col bg-background border-border">
               <DialogHeader><DialogTitle>Match Series</DialogTitle></DialogHeader>
               <form onSubmit={(e) => performSearch(e, false)} className="flex gap-2">
-                  <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-background border-border" />
+                  <Select value={searchProvider} onValueChange={setSearchProvider}>
+                      <SelectTrigger className="w-[140px] bg-background border-border shrink-0">
+                          <SelectValue placeholder="Source" />
+                      </SelectTrigger>
+                      <SelectContent>
+                          <SelectItem value="COMICVINE">ComicVine</SelectItem>
+                          <SelectItem value="MANGADEX">MangaDex</SelectItem>
+                      </SelectContent>
+                  </Select>
+                  <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-background border-border w-full" />
                   <Button type="submit" disabled={isSearching}><Search className="w-4 h-4" /></Button>
               </form>
               
@@ -1216,6 +1253,78 @@ function SeriesContent() {
                   </div>
               </div>
               <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)} className="border-border hover:bg-muted">Cancel</Button><Button className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
+          </DialogContent>
+      </Dialog>
+
+      {/* SPREADSHEET BULK EDITOR MODAL */}
+      <Dialog open={bulkEditModalOpen} onOpenChange={setBulkEditModalOpen}>
+          <DialogContent className="sm:max-w-4xl w-[95%] bg-background border-border rounded-xl">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-primary">
+                      <LayoutGrid className="w-5 h-5" /> Bulk Issue Editor
+                  </DialogTitle>
+                  <DialogDescription>
+                      Quickly edit the numbering, names, and release dates of the selected issues.
+                  </DialogDescription>
+              </DialogHeader>
+              <div className="max-h-[60vh] overflow-y-auto border border-border rounded-md mt-4">
+                  <table className="w-full text-sm text-left">
+                      <thead className="bg-muted text-xs text-muted-foreground uppercase sticky top-0 z-10">
+                          <tr>
+                              <th className="px-4 py-3 w-[15%]">Number</th>
+                              <th className="px-4 py-3 w-[55%]">Title / Name</th>
+                              <th className="px-4 py-3 w-[30%]">Date (YYYY-MM-DD)</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                          {bulkEditData.map((row, idx) => (
+                              <tr key={row.id} className="bg-background hover:bg-muted/30">
+                                  <td className="p-2">
+                                      <Input 
+                                          value={row.number} 
+                                          className="h-8 bg-transparent border-transparent hover:border-border focus:border-primary"
+                                          onChange={(e) => {
+                                              const nd = [...bulkEditData];
+                                              nd[idx].number = e.target.value;
+                                              setBulkEditData(nd);
+                                          }} 
+                                      />
+                                  </td>
+                                  <td className="p-2">
+                                      <Input 
+                                          value={row.name} 
+                                          className="h-8 bg-transparent border-transparent hover:border-border focus:border-primary"
+                                          onChange={(e) => {
+                                              const nd = [...bulkEditData];
+                                              nd[idx].name = e.target.value;
+                                              setBulkEditData(nd);
+                                          }} 
+                                      />
+                                  </td>
+                                  <td className="p-2">
+                                      <Input 
+                                          value={row.releaseDate || ""} 
+                                          placeholder="e.g. 2025-10-14"
+                                          className="h-8 bg-transparent border-transparent hover:border-border focus:border-primary"
+                                          onChange={(e) => {
+                                              const nd = [...bulkEditData];
+                                              nd[idx].releaseDate = e.target.value;
+                                              setBulkEditData(nd);
+                                          }} 
+                                      />
+                                  </td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
+              </div>
+              <DialogFooter>
+                  <Button variant="outline" onClick={() => setBulkEditModalOpen(false)} disabled={isBulkProcessing} className="border-border hover:bg-muted">Cancel</Button>
+                  <Button onClick={handleSpreadsheetSave} disabled={isBulkProcessing} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                      {isBulkProcessing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
+                      Save All Changes
+                  </Button>
+              </DialogFooter>
           </DialogContent>
       </Dialog>
 

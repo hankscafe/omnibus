@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
     Activity, RefreshCw, FileText, ExternalLink, Download, 
-    UploadCloud, TrendingUp, FileArchive, FileJson // <-- Added FileJson Icon
+    UploadCloud, TrendingUp, FileArchive, FileJson, Mail
 } from "lucide-react"
 import { getErrorMessage } from "@/lib/utils/error"
 
@@ -25,13 +25,14 @@ const INTERVALS = [
 
 export default function ScheduledJobsPage() {
   const [metadataSyncSchedule, setMetadataSyncSchedule] = useState("24")
-  const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0") // <-- Added State
+  const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0") 
   const [librarySyncSchedule, setLibrarySyncSchedule] = useState("12") 
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
   const [backupSyncSchedule, setBackupSyncSchedule] = useState("168") 
   const [popularSyncSchedule, setPopularSyncSchedule] = useState("24")
   const [converterSyncSchedule, setConverterSyncSchedule] = useState("24")
+  const [weeklyDigestSchedule, setWeeklyDigestSchedule] = useState("168") // <-- Weekly Digest Schedule
   
   const [savingJobs, setSavingJobs] = useState(false)
   const [runningJob, setRunningJob] = useState<string | null>(null) 
@@ -52,14 +53,15 @@ export default function ScheduledJobsPage() {
       const res = await fetch('/api/admin/config');
       if (res.ok) {
         const data = await res.json();
-        const metaItem = data.find((c: any) => c.key === 'metadata_sync_schedule');
-        const embedItem = data.find((c: any) => c.key === 'embed_metadata_schedule'); // <-- Fetch Config
-        const libItem = data.find((c: any) => c.key === 'library_sync_schedule');
-        const monitorItem = data.find((c: any) => c.key === 'monitor_sync_schedule'); 
-        const diagItem = data.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
-        const backupItem = data.find((c: any) => c.key === 'backup_sync_schedule'); 
-        const popularItem = data.find((c: any) => c.key === 'popular_sync_schedule'); 
-        const converterItem = data.find((c: any) => c.key === 'cbr_conversion_schedule');
+        const metaItem = data.settings.find((c: any) => c.key === 'metadata_sync_schedule');
+        const embedItem = data.settings.find((c: any) => c.key === 'embed_metadata_schedule'); 
+        const libItem = data.settings.find((c: any) => c.key === 'library_sync_schedule');
+        const monitorItem = data.settings.find((c: any) => c.key === 'monitor_sync_schedule'); 
+        const diagItem = data.settings.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
+        const backupItem = data.settings.find((c: any) => c.key === 'backup_sync_schedule'); 
+        const popularItem = data.settings.find((c: any) => c.key === 'popular_sync_schedule'); 
+        const converterItem = data.settings.find((c: any) => c.key === 'cbr_conversion_schedule');
+        const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule'); // <-- Fetch Digest config
         
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (embedItem) setEmbedMetadataSchedule(embedItem.value);
@@ -69,6 +71,7 @@ export default function ScheduledJobsPage() {
         if (backupItem) setBackupSyncSchedule(backupItem.value);
         if (popularItem) setPopularSyncSchedule(popularItem.value); 
         if (converterItem) setConverterSyncSchedule(converterItem.value);
+        if (digestItem) setWeeklyDigestSchedule(digestItem.value);
       }
     } catch (e) {
       toast({ title: "Error", description: "Failed to load schedules.", variant: "destructive" });
@@ -77,7 +80,7 @@ export default function ScheduledJobsPage() {
     }
   };
 
-  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter' | 'embed_metadata') => {
+  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter' | 'embed_metadata' | 'weekly_digest') => {
       setRunningJob(job);
       toast({ title: "Job Started", description: `The ${job} process has been triggered in the background.` });
       try {
@@ -106,14 +109,17 @@ export default function ScheduledJobsPage() {
               method: 'POST', 
               headers: { 'Content-Type': 'application/json' }, 
               body: JSON.stringify({ 
-                  metadata_sync_schedule: metadataSyncSchedule,
-                  embed_metadata_schedule: embedMetadataSchedule, // <-- Added to Save Payload
-                  library_sync_schedule: librarySyncSchedule,
-                  monitor_sync_schedule: monitorSyncSchedule,
-                  diagnostics_sync_schedule: diagnosticsSyncSchedule,
-                  backup_sync_schedule: backupSyncSchedule,
-                  popular_sync_schedule: popularSyncSchedule,
-                  cbr_conversion_schedule: converterSyncSchedule 
+                  settings: {
+                      metadata_sync_schedule: metadataSyncSchedule,
+                      embed_metadata_schedule: embedMetadataSchedule,
+                      library_sync_schedule: librarySyncSchedule,
+                      monitor_sync_schedule: monitorSyncSchedule,
+                      diagnostics_sync_schedule: diagnosticsSyncSchedule,
+                      backup_sync_schedule: backupSyncSchedule,
+                      popular_sync_schedule: popularSyncSchedule,
+                      cbr_conversion_schedule: converterSyncSchedule,
+                      weekly_digest_schedule: weeklyDigestSchedule // <-- Save Digest config
+                  }
               }) 
           })
           if (res.ok) {
@@ -189,7 +195,8 @@ export default function ScheduledJobsPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {/* EXISTING CARDS */}
+        
+        {/* DATABASE BACKUP */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Save className="w-5 h-5 text-primary" /> Database Backup</CardTitle>
@@ -222,6 +229,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
+        {/* LIBRARY AUTO-SCAN */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Database className="w-5 h-5 text-primary" /> Library Auto-Scan</CardTitle>
@@ -240,6 +248,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
+        {/* DEEP METADATA SYNC */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><RefreshCw className="w-5 h-5 text-primary" /> Deep Metadata Sync</CardTitle>
@@ -258,7 +267,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
-        {/* --- NEW: EMBED METADATA CARD --- */}
+        {/* EMBED XML METADATA */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileJson className="w-5 h-5 text-primary" /> Embed XML Metadata</CardTitle>
@@ -277,6 +286,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
+        {/* NEW ISSUE MONITOR */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Activity className="w-5 h-5 text-primary" /> New Issue Monitor</CardTitle>
@@ -295,7 +305,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
-        {/* --- EXISTING: CBR AUTO-CONVERTER CARD --- */}
+        {/* CBR AUTO-CONVERTER */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileArchive className="w-5 h-5 text-primary" /> CBR Auto-Converter</CardTitle>
@@ -314,6 +324,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
+        {/* DISCOVER SYNC */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><TrendingUp className="w-5 h-5 text-primary" /> Discover Sync</CardTitle>
@@ -332,6 +343,7 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
 
+        {/* SYSTEM DIAGNOSTICS */}
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><ShieldAlert className="w-5 h-5 text-primary" /> System Diagnostics</CardTitle>
@@ -346,6 +358,25 @@ export default function ScheduledJobsPage() {
                 </Select>
                 <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('diagnostics')} disabled={runningJob === 'diagnostics'}>
                     {runningJob === 'diagnostics' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                </Button>
+            </CardContent>
+        </Card>
+
+        {/* --- WEEKLY DIGEST EMAIL --- */}
+        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+            <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Mail className="w-5 h-5 text-primary" /> Weekly Email Digest</CardTitle>
+                <CardDescription className="text-muted-foreground">Sends users an email of newly added library items over the past 7 days (SMTP required).</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <Select value={weeklyDigestSchedule} onValueChange={setWeeklyDigestSchedule}>
+                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('weekly_digest')} disabled={runningJob === 'weekly_digest'}>
+                    {runningJob === 'weekly_digest' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
                 </Button>
             </CardContent>
         </Card>

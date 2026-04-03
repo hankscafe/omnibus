@@ -781,23 +781,24 @@ function SeriesContent() {
                       <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">
                           <PenTool className="w-3.5 h-3.5 text-primary"/> Issue Credits
                       </h4>
-                      <div className="space-y-4">
-                          {writers.length > 0 && (
-                              <div>
-                                  <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest block mb-1">Writers</span>
-                                  <p className="text-sm font-bold text-foreground leading-tight">{writers.join(", ")}</p>
-                              </div>
-                          )}
-                          {artists.length > 0 && (
-                              <div>
-                                  <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest block mb-1">Artists</span>
-                                  <p className="text-sm font-bold text-foreground leading-tight">{artists.join(", ")}</p>
-                              </div>
-                          )}
-                          {!hasCreators && (
-                              <p className="text-sm italic text-muted-foreground opacity-50 py-4 text-center">No credits found for this issue.</p>
-                          )}
-                      </div>
+                      {hasCreators ? (
+                          <div className="grid grid-cols-2 gap-4">
+                              {writers.length > 0 && (
+                                  <div>
+                                      <p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p>
+                                      <p className="text-sm font-medium text-foreground">{writers.join(", ")}</p>
+                                  </div>
+                              )}
+                              {artists.length > 0 && (
+                                  <div>
+                                      <p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p>
+                                      <p className="text-sm font-medium text-foreground">{artists.join(", ")}</p>
+                                  </div>
+                              )}
+                          </div>
+                      ) : (
+                          <p className="text-sm italic text-muted-foreground opacity-50 py-4 text-center">No credits found for this issue.</p>
+                      )}
                   </div>
 
                   <div className="flex flex-col h-full bg-background p-6 rounded-2xl border border-border shadow-sm">

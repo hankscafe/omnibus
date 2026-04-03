@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     const endpoint = isIssue ? `issue/4000-${id}` : `volume/4050-${id}`;
     
     const res = await axios.get(`https://comicvine.gamespot.com/api/${endpoint}/`, {
-        params: { api_key: setting.value, format: 'json', field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,site_detail_url' },
+        params: { api_key: setting.value, format: 'json', field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,story_arc_credits,site_detail_url' },
         headers: { 'User-Agent': 'Omnibus/1.0' }
     });
     
@@ -62,7 +62,7 @@ export async function GET(request: Request) {
         } catch(e) {}
     }
 
-    const { writers, artists, characters, genres } = parseComicVineCredits(person_credits, character_credits, issueData.concepts || []);
+    const { writers, artists, characters, genres, storyArcs } = parseComicVineCredits(person_credits, character_credits, issueData.concepts || [], issueData.story_arc_credits || []);
 
     let displayName = issueData.name;
     if (isIssue && issueData.volume?.name) {
@@ -81,6 +81,7 @@ export async function GET(request: Request) {
       artists: artists.slice(0, 5),
       characters: characters.slice(0, 15),
       genres: genres.slice(0, 10),
+      storyArcs: storyArcs.slice(0, 10),
       siteUrl: issueData.site_detail_url,
       rawImage: issueData.image || null,
       person_credits,

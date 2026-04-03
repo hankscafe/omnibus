@@ -19,7 +19,8 @@ export async function POST(request: Request) {
             'diagnostics': 'DIAGNOSTICS',
             'popular': 'DISCOVER_SYNC',
             'storage_scan': 'STORAGE_SCAN',
-            'update_check': 'UPDATE_CHECK'
+            'update_check': 'UPDATE_CHECK',
+            'weekly_digest': 'WEEKLY_DIGEST' // <-- ADDED
         };
 
         const jobType = jobMap[job];

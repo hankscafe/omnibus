@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
 import { DiscordNotifier } from '@/lib/discord';
+import { Mailer } from '@/lib/mailer';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
 
@@ -65,14 +66,18 @@ export async function PATCH(req: NextRequest) {
     });
 
     await AuditLogger.log('UPDATE_USER_PERMISSIONS', { 
-    targetUserId: id, 
-    updatedFields: updateData 
-}, token.id as string);
+        targetUserId: id, 
+        updatedFields: updateData 
+    }, token.id as string);
 
     if (isApproved === true && oldUser && !oldUser.isApproved) {
         DiscordNotifier.sendAlert('account_approved', {
             user: updatedUser.username,
             email: updatedUser.email
+        }).catch(() => {});
+        Mailer.sendAlert('account_approved', { 
+            user: updatedUser.username, 
+            email: updatedUser.email 
         }).catch(() => {});
     }
 
@@ -109,7 +114,6 @@ export async function DELETE(req: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    // --- SECURITY FIX 1b: Log real error, hide from client ---
     Logger.log(`[Users API] Delete Error: ${error.message}`, 'error');
     return NextResponse.json({ error: 'Failed to delete user. Check server logs.' }, { status: 500 });
   }
@@ -141,7 +145,6 @@ export async function POST(req: NextRequest) {
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const isAdmin = role === 'ADMIN';
 
       const newUser = await prisma.user.create({
           data: {
@@ -159,7 +162,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(safeUser);
 
   } catch (e: any) {
-      // --- SECURITY FIX 1b: Log real error, hide from client ---
       Logger.log(`[Users API] Create Error: ${e.message}`, 'error');
       return NextResponse.json({ error: "Failed to create user. Please check server logs." }, { status: 500 });
   }

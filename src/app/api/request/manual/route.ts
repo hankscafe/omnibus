@@ -8,6 +8,8 @@ import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from '@/lib/utils/error';
 import { detectManga } from '@/lib/manga-detector';
+import { DiscordNotifier } from '@/lib/discord';
+import { Mailer } from '@/lib/mailer';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,6 +79,22 @@ export async function POST(request: NextRequest) {
         imageUrl: image
       }
     });
+
+    if (initialStatus === 'PENDING_APPROVAL') {
+        DiscordNotifier.sendAlert('pending_request', {
+            title: name,
+            imageUrl: image,
+            user: token.name as string,
+            description: undefined,
+            publisher: publisher || "Unknown",
+            year: year
+        }).catch(() => {});
+        
+        Mailer.sendAlert('pending_request', { 
+            user: token.name as string, 
+            title: name 
+        }).catch(() => {});
+    }
 
     if (isAutoApprove && source !== 'flag_admin') {
         if (source === 'prowlarr') {

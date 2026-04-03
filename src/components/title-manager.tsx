@@ -27,6 +27,7 @@ export function TitleManager() {
     else if (pathname.startsWith("/admin/download-clients")) newTitle = "Omnibus - Download Clients";
     else if (pathname.startsWith("/admin/updates")) newTitle = "Omnibus - Updates";
     else if (pathname.startsWith("/admin/api-guide")) newTitle = "Omnibus - API Guide";
+    else if (pathname.startsWith("/admin/email-templates")) newTitle = "Omnibus - Email Templates";
     else if (pathname === "/admin") newTitle = "Omnibus - Admin";
     else if (pathname.startsWith("/library/series")) newTitle = "Omnibus - Series";
     else if (pathname.startsWith("/library/history")) newTitle = "Omnibus - Reading History";

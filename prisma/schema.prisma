@@ -116,6 +116,10 @@ model Series {
   description     String?
   status          String?
   coverUrl        String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+
   issues          Issue[]
   favorites       Favorite[]
   collectionItems CollectionItem[]
@@ -128,7 +132,6 @@ model Series {
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
 
   @@index([libraryId])
-
   @@unique([metadataSource, metadataId]) // Ensure we don't duplicate imports from the same source
 }
 
@@ -154,6 +157,9 @@ model Issue {
   characters      String?  // Stored as JSON string
   genres          String?  // Stored as JSON string
   storyArcs       String?  // Stored as JSON string
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
 
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
@@ -359,7 +365,7 @@ model ReadingListItem {
   listId      String
   list        ReadingList  @relation(fields: [listId], references: [id], onDelete: Cascade)
   
-  issueId     String?      
+  issueId     String?
   issue       Issue?       @relation(fields: [issueId], references: [id], onDelete: SetNull)
   
   cvIssueId   Int?
@@ -381,7 +387,7 @@ model OpdsKey {
 
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
-
+  
   @@index([userId])
 }
 

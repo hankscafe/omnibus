@@ -12,7 +12,8 @@ const SENSITIVE_KEYS = [
     'prowlarr_key', 
     'oidc_client_secret', 
     'discord_webhooks', // Legacy flat key
-    'omnibus_api_key'   // Legacy flat key
+    'omnibus_api_key',  // Legacy flat key
+    'smtp_pass'         // <-- ADDED for SMTP support
 ];
 
 export async function GET(request: Request) {

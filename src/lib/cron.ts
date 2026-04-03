@@ -233,6 +233,7 @@ export function initCronJobs() {
     await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
     await checkAndTrigger('popular', 'popular_sync_schedule', 'last_popular_sync', 'Discover Sync');
     await checkAndTrigger('backup', 'backup_sync_schedule', 'last_backup_sync', 'Database Backup');
+    await checkAndTrigger('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest', 'Weekly Digest Email'); // <-- ADDED
 
     try {
         const lastUpdateCheck = await prisma.systemSetting.findUnique({ where: { key: 'last_update_check_time' } });

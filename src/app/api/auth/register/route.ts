@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
 import { DiscordNotifier } from '@/lib/discord';
+import { Mailer } from '@/lib/mailer';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
@@ -93,14 +94,20 @@ export async function POST(request: Request) {
         });
     }
 
-    // 6. Send Discord Notification for New Users (Admins excluded)
+    // 6. Send Notifications for New Users (Admins excluded)
     if (!isFirstUser) {
       await DiscordNotifier.sendAlert('pending_account', {
         title: "New Account Registration",
         user: username,
         email: email,
         date: new Date().toLocaleString()
-      });
+      }).catch(() => {});
+
+      await Mailer.sendAlert('pending_account', { 
+        user: username, 
+        email: email,
+        title: username
+      }).catch(() => {});
     }
 
     return NextResponse.json({ 

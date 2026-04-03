@@ -1,8 +1,10 @@
+// src/lib/queue.ts
 import { Queue, Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { prisma } from './db';
 import { Logger } from './logger';
 import { DiscordNotifier } from './discord';
+import { Mailer } from './mailer';
 import crypto from 'crypto';
 import axios from 'axios';
 import fs from 'fs-extra';
@@ -16,7 +18,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 
 const execFileAsync = promisify(execFile);
 
-// --- HELPER FUNCTIONS ---
+// ... (Helper functions remain the same) ...
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
     const cleanCurrent = current.replace(/^v/, '');
@@ -448,7 +450,6 @@ export function initWorker() {
                                     let clean = (r.activeDownloadName || "").replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
                                     const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
                                     if (explicitMatch && parseFloat(explicitMatch[1]) === cvNum) return true;
-                                    // FIX: Proper lookbehinds used here
                                     const fallbackMatches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
                                     if (fallbackMatches.length > 0 && parseFloat(fallbackMatches[fallbackMatches.length - 1][1]) === cvNum) return true;
                                     return false;
@@ -632,6 +633,74 @@ export function initWorker() {
                         data: { jobType: 'DISCOVER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}` }
                     });
                     DiscordNotifier.sendAlert('job_discover_sync', { description: `Successfully rebuilt the Discover cache (New & Popular).` }).catch(() => {});
+                    break;
+                }
+
+                // --- NEW WEEKLY DIGEST JOB ---
+                case 'WEEKLY_DIGEST': {
+                    await prisma.systemSetting.upsert({ 
+                        where: { key: 'last_weekly_digest' }, 
+                        update: { value: nowStr }, 
+                        create: { key: 'last_weekly_digest', value: nowStr } 
+                    });
+
+                    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+                    
+                    const newIssues = await prisma.issue.findMany({
+                        where: { createdAt: { gte: sevenDaysAgo }, filePath: { not: null } },
+                        include: { series: true },
+                        orderBy: { series: { name: 'asc' } }
+                    });
+
+                    if (newIssues.length === 0) {
+                        await prisma.jobLog.create({
+                            data: { jobType: 'WEEKLY_DIGEST', status: 'COMPLETED', durationMs: Date.now() - startTime, message: "Skipped: No new issues added in the last 7 days." }
+                        });
+                        break;
+                    }
+
+                    const comicsMap: Record<string, any> = {};
+                    const mangaMap: Record<string, any> = {};
+
+                    for (const issue of newIssues) {
+                        const targetMap = issue.series.isManga ? mangaMap : comicsMap;
+                        const sId = issue.series.id;
+                        const issueTag = `#${parseFloat(issue.number)}`;
+                        
+                        if (!targetMap[sId]) {
+                            targetMap[sId] = {
+                                name: issue.series.name,
+                                coverUrl: issue.series.coverUrl,
+                                publisher: issue.series.publisher || "Unknown",
+                                year: issue.series.year?.toString() || "????",
+                                description: issue.series.description || "No synopsis available.",
+                                issues: []
+                            };
+                        }
+                        targetMap[sId].issues.push(issueTag);
+                    }
+
+                    // Format numbers sequentially
+                    for (const s in comicsMap) {
+                        comicsMap[s].issues = [...new Set(comicsMap[s].issues)].sort((a: any, b: any) => parseFloat(a.replace('#','')) - parseFloat(b.replace('#','')));
+                    }
+                    for (const s in mangaMap) {
+                        mangaMap[s].issues = [...new Set(mangaMap[s].issues)].sort((a: any, b: any) => parseFloat(a.replace('#','')) - parseFloat(b.replace('#','')));
+                    }
+
+                    const users = await prisma.user.findMany({ 
+                        where: { email: { not: '' }, isApproved: true },
+                        select: { email: true }
+                    });
+                    const toEmails = users.map(u => u.email);
+
+                    if (toEmails.length > 0) {
+                        await Mailer.sendWeeklyDigest(toEmails, Object.values(comicsMap), Object.values(mangaMap));
+                    }
+
+                    await prisma.jobLog.create({
+                        data: { jobType: 'WEEKLY_DIGEST', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Sent weekly digest to ${toEmails.length} users.` }
+                    });
                     break;
                 }
 

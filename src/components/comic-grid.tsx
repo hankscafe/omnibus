@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users, Globe, Activity, Library, FileCheck } from "lucide-react"
+import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users, Globe, Activity, Library, FileCheck, Tags, BookMarked } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogHeader } from "@/components/ui/dialog"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
@@ -26,6 +26,8 @@ interface Comic {
   artists?: string[];
   coverArtists?: string[];
   characters?: string[];
+  genres?: string[];
+  storyArcs?: string[];
   isVolume?: boolean;
 }
 
@@ -427,6 +429,28 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                         ))}
                                     </div>
                                 </div>
+                             )}
+
+                             {selectedComic.genres && selectedComic.genres.length > 0 && (
+                                 <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Genres & Concepts</h4>
+                                     <div className="flex flex-wrap gap-1.5">
+                                         {selectedComic.genres.map((genre: string) => (
+                                             <Badge key={genre} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:text-foreground">{genre}</Badge>
+                                         ))}
+                                     </div>
+                                 </div>
+                             )}
+
+                             {selectedComic.storyArcs && selectedComic.storyArcs.length > 0 && (
+                                 <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><BookMarked className="w-4 h-4 text-primary"/> Story Arcs</h4>
+                                     <div className="flex flex-wrap gap-1.5">
+                                         {selectedComic.storyArcs.map((arc: string) => (
+                                             <Badge key={arc} className="font-medium text-[10px] bg-primary/10 text-primary border-primary/30 hover:bg-primary/20">{arc}</Badge>
+                                         ))}
+                                     </div>
+                                 </div>
                              )}
 
                              <div className="space-y-2">

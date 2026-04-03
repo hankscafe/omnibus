@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck } from "lucide-react"
+import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck, Tags, BookMarked } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } from "@/components/ui/dialog"
@@ -23,6 +23,8 @@ interface SearchResult {
   writers?: string[];
   artists?: string[];
   characters?: string[];
+  genres?: string[];
+  storyArcs?: string[];
 }
 
 interface Issue {
@@ -35,6 +37,8 @@ interface Issue {
   writers?: string[];
   artists?: string[];
   characters?: string[];
+  genres?: string[];
+  storyArcs?: string[];
 }
 
 type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
@@ -393,6 +397,28 @@ export function RequestSearch() {
                                         ))}
                                     </div>
                                 </div>
+                             )}
+
+                             {selectedItem.genres && selectedItem.genres.length > 0 && (
+                                 <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Genres & Concepts</h4>
+                                     <div className="flex flex-wrap gap-1.5">
+                                         {selectedItem.genres.map((genre: string) => (
+                                             <Badge key={genre} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:text-foreground">{genre}</Badge>
+                                         ))}
+                                     </div>
+                                 </div>
+                             )}
+
+                             {selectedItem.storyArcs && selectedItem.storyArcs.length > 0 && (
+                                 <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><BookMarked className="w-4 h-4 text-primary"/> Story Arcs</h4>
+                                     <div className="flex flex-wrap gap-1.5">
+                                         {selectedItem.storyArcs.map((arc: string) => (
+                                             <Badge key={arc} className="font-medium text-[10px] bg-primary/10 text-primary border-primary/30 hover:bg-primary/20">{arc}</Badge>
+                                         ))}
+                                     </div>
+                                 </div>
                              )}
 
                              <div className="space-y-2">

@@ -1,7 +1,9 @@
+// src/app/api/admin/test/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Mailer } from '@/lib/mailer';
 
 export async function POST(request: Request) {
   let type = 'unknown';
@@ -30,7 +32,6 @@ export async function POST(request: Request) {
         } catch (e) { }
     }
 
-    // --- HELPER: Resolve obfuscated keys from the DB ---
     const getRealValue = async (key: string, providedValue: string) => {
         if (providedValue === '********') {
             const setting = await prisma.systemSetting.findUnique({ where: { key } });
@@ -38,6 +39,86 @@ export async function POST(request: Request) {
         }
         return providedValue;
     };
+
+    // --- SMTP TEST ---
+    if (type === 'smtp' || type === 'smtp_digest') {
+        const { smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, test_email } = config;
+        if (!smtp_host || !smtp_port || !test_email) {
+            return NextResponse.json({ success: false, message: 'Missing Host, Port, or Test Email.' });
+        }
+
+        const realPass = await getRealValue('smtp_pass', smtp_pass);
+        
+        let nodemailer;
+        try {
+            nodemailer = await import('nodemailer');
+        } catch (e) {
+            return NextResponse.json({ success: false, message: "Missing 'nodemailer' package. Please run 'npm install nodemailer' in your terminal." });
+        }
+
+        const transporter = nodemailer.createTransport({
+            host: smtp_host,
+            port: parseInt(smtp_port),
+            secure: parseInt(smtp_port) === 465,
+            auth: smtp_user ? {
+                user: smtp_user,
+                pass: realPass
+            } : undefined
+        });
+
+        if (type === 'smtp') {
+            await transporter.sendMail({
+                from: smtp_from || 'omnibus@localhost',
+                to: test_email,
+                subject: "Omnibus SMTP Test",
+                text: "If you are reading this, your Omnibus SMTP configuration is working perfectly!"
+            });
+            return NextResponse.json({ success: true, message: `Test email sent to ${test_email}` });
+        } else {
+            // Test Weekly Digest Format with rich dummy objects
+            const dummyComics = [
+                {
+                    name: "Batman",
+                    issues: ["#132", "#133"],
+                    coverUrl: "https://comicvine.gamespot.com/a/uploads/scale_large/6/67663/8856799-132a.jpg",
+                    publisher: "DC Comics",
+                    year: "2016",
+                    description: "The Dark Knight faces his greatest challenge as Gotham descends into chaos..."
+                },
+                {
+                    name: "Amazing Spider-Man",
+                    issues: ["#24"],
+                    coverUrl: "https://comicvine.gamespot.com/a/uploads/scale_large/12/124259/9002237-large-1191590.jpg",
+                    publisher: "Marvel",
+                    year: "2022",
+                    description: "Peter Parker's life takes a dramatic turn after a startling revelation..."
+                }
+            ];
+
+            const dummyManga = [
+                {
+                    name: "Chainsaw Man",
+                    issues: ["Vol. 12"],
+                    coverUrl: "https://comicvine.gamespot.com/a/uploads/scale_large/11136/111365313/8660341-c11.jpg",
+                    publisher: "Shueisha",
+                    year: "2018",
+                    description: "Denji's a poor young man who'll do anything for money..."
+                }
+            ];
+
+            // Use the mailer to generate the actual template so we test exactly what users see
+            const htmlContent = await Mailer.buildWeeklyDigestHtml(dummyComics, dummyManga);
+
+            await transporter.sendMail({
+                from: smtp_from || 'omnibus@localhost',
+                to: test_email,
+                subject: "Omnibus Weekly Digest (Test)",
+                html: htmlContent
+            });
+
+            return NextResponse.json({ success: true, message: `Weekly digest test sent to ${test_email}` });
+        }
+    }
 
     // --- CLIENTS TEST ---
     if (type === 'clients') {
@@ -50,7 +131,6 @@ export async function POST(request: Request) {
             const loginParams = new URLSearchParams();
             loginParams.append('username', user || '');
             
-            // Resolve real password if frontend sent the obfuscated placeholder
             const realPass = (pass === '********') 
                 ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
                 : pass;
@@ -74,7 +154,6 @@ export async function POST(request: Request) {
             }
         } 
         else if (clientType === 'sab') {
-            // Resolve real API key if obfuscated
             const realApiKey = (apiKey === '********')
                 ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey || ""
                 : apiKey;
@@ -121,7 +200,6 @@ export async function POST(request: Request) {
     if (type === 'prowlarr') {
       const url = config.prowlarr_url?.replace(/\/$/, '');
       
-      // Resolve the real key from DB if the placeholder was sent
       const key = await getRealValue('prowlarr_key', config.prowlarr_key);
       
       if (!url || !key) return NextResponse.json({ success: false, message: 'Missing URL/Key' });
@@ -153,7 +231,6 @@ export async function POST(request: Request) {
 
     // --- COMICVINE ---
     if (type === 'comicvine') {
-      // Resolve the real key from DB if the placeholder was sent
       const apiKey = await getRealValue('cv_api_key', config.cv_api_key);
 
       if (!apiKey) return NextResponse.json({ success: false, message: 'Missing API Key' });

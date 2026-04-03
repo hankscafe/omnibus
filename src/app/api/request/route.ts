@@ -4,6 +4,7 @@ import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import axios from 'axios';
 import { DiscordNotifier } from '@/lib/discord';
+import { Mailer } from '@/lib/mailer';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
 import { detectManga } from '@/lib/manga-detector'; 
 import { isReleasedYet } from '@/lib/utils';
@@ -101,6 +102,11 @@ export async function POST(request: NextRequest) {
               publisher: safePublisher,
               year: year
           }).catch(() => {});
+          
+          Mailer.sendAlert('pending_request', { 
+              user: token.name as string, 
+              title: name 
+          }).catch(() => {});
       }
 
       const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -189,6 +195,11 @@ export async function POST(request: NextRequest) {
               publisher: safePublisher,
               year: year
           }).catch(() => {});
+          
+          Mailer.sendAlert('pending_request', { 
+              user: token.name as string, 
+              title: name 
+          }).catch(() => {});
       }
 
       if (initialStatus === 'PENDING') {
@@ -223,7 +234,7 @@ export async function PATCH(request: NextRequest) {
 
     if (!id || !status) return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
 
-    const reqRecord = await prisma.request.findUnique({ where: { id } });
+    const reqRecord = await prisma.request.findUnique({ where: { id }, include: { user: true } });
     if (!reqRecord) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
 
     const skipIndexers = reqRecord.downloadLink === 'DIRECT_GETCOMICS';
@@ -258,10 +269,14 @@ export async function PATCH(request: NextRequest) {
           publisher: publisher,
           year: year 
       }).catch(() => {});
+      
+      Mailer.sendAlert('request_approved', { 
+          user: token.name as string, 
+          title: searchName || reqRecord.volumeId || "Unknown Comic",
+          email: reqRecord.user?.email
+      }).catch(() => {});
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
-      
-      // FIX: Proper lookbehinds used here
       const fallbackMatches = [...searchName.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
       
       searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));

@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
-  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText
+  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -79,7 +79,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("comicvine")
   
   const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean, text: string } | null }>({
-    comicvine: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null
+    comicvine: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null
   })
   
   const [refreshing, setRefreshing] = useState(false)
@@ -124,7 +124,8 @@ export default function SettingsPage() {
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     download_retry_delay: "5", 
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
-    folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: ""
+    folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "",
+    smtp_enabled: "false", smtp_host: "", smtp_port: "", smtp_user: "", smtp_pass: "", smtp_from: ""
   })
 
   useEffect(() => {
@@ -216,8 +217,7 @@ export default function SettingsPage() {
     if (res.ok) {
         toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
         
-        // ADDED FIX: Automatically trigger the Discover Sync job in the background
-        // so the new filters are applied to the cache instantly.
+        // Automatically trigger the Discover Sync job in the background
         fetch('/api/admin/jobs/trigger', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1055,7 +1055,7 @@ export default function SettingsPage() {
             </Card>
         </TabsContent>
 
-        {/* 7. ALERTS (DISCORD WEBHOOKS) */}
+        {/* 7. ALERTS (DISCORD WEBHOOKS & EMAIL) */}
         <TabsContent value="alerts">
           <Card className="shadow-sm border-border bg-background">
             <CardHeader>
@@ -1139,6 +1139,73 @@ export default function SettingsPage() {
                   <strong className="text-primary">Pro-Tip:</strong> Separate webhooks allow for channel-specific logging. For example, send "Download Failed" to your #dev-logs and "Comic Available" to #general.
                 </p>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* EMAIL SETTINGS */}
+          <Card className="shadow-sm border-border bg-background mt-6">
+            <CardHeader>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                      <CardTitle className="flex items-center gap-2 text-foreground">
+                        <Mail className="w-5 h-5 text-primary" /> SMTP Email Alerts
+                      </CardTitle>
+                      <CardDescription className="text-muted-foreground mt-1">
+                        Configure an SMTP server to send email notifications for approvals and fulfilled requests.
+                      </CardDescription>
+                  </div>
+                  {/* --- NEW BUTTON --- */}
+                  <Button variant="outline" size="sm" asChild className="h-12 sm:h-9 font-bold border-border hover:bg-muted text-foreground transition-colors w-full sm:w-auto">
+                      <Link href="/admin/email-templates">
+                          <FileEdit className="w-4 h-4 mr-2 text-primary" /> Customize Templates
+                      </Link>
+                  </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                  <Switch 
+                      id="smtp-toggle"
+                      checked={config.smtp_enabled === "true"} 
+                      onCheckedChange={(c) => setConfig({...config, smtp_enabled: c ? "true" : "false"})} 
+                  />
+                  <Label htmlFor="smtp-toggle" className="cursor-pointer font-bold">Enable Email Notifications</Label>
+              </div>
+
+              {config.smtp_enabled === "true" && (
+                  <div className="grid gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="grid gap-2"><Label>SMTP Host</Label><Input value={config.smtp_host} onChange={e => setConfig({...config, smtp_host: e.target.value})} placeholder="smtp.gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Port</Label><Input value={config.smtp_port} onChange={e => setConfig({...config, smtp_port: e.target.value})} placeholder="587" className="bg-muted/20 border-border text-foreground" /></div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="grid gap-2"><Label>SMTP Username</Label><Input value={config.smtp_user} onChange={e => setConfig({...config, smtp_user: e.target.value})} placeholder="user@gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={config.smtp_pass} onChange={e => setConfig({...config, smtp_pass: e.target.value})} placeholder="App Password" className="bg-muted/20 border-border text-foreground" /></div>
+                      </div>
+                      <div className="grid gap-2"><Label>From Email Address</Label><Input value={config.smtp_from} onChange={e => setConfig({...config, smtp_from: e.target.value})} placeholder="omnibus@yourdomain.com" className="bg-muted/20 border-border text-foreground" /></div>
+                      
+                      <div className="border-t border-border pt-4 flex flex-col sm:flex-row gap-2">
+                          <Input id="smtp-test-email" placeholder="Send test email to..." className="bg-muted/20 border-border max-w-xs text-foreground flex-1 sm:flex-none" />
+                          <div className="flex gap-2">
+                              <Button variant="outline" className="border-border hover:bg-muted text-foreground flex-1 sm:flex-none" onClick={() => {
+                                  const testEmail = (document.getElementById('smtp-test-email') as HTMLInputElement)?.value;
+                                  if (testEmail) handleTest('smtp', { ...config, test_email: testEmail });
+                                  else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
+                              }} disabled={!!testing}>
+                                  {testing === 'smtp' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />} Test SMTP
+                              </Button>
+                              <Button variant="outline" className="border-primary/30 text-primary bg-primary/10 hover:bg-primary/20 flex-1 sm:flex-none" onClick={() => {
+                                  const testEmail = (document.getElementById('smtp-test-email') as HTMLInputElement)?.value;
+                                  if (testEmail) handleTest('smtp_digest', { ...config, test_email: testEmail });
+                                  else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
+                              }} disabled={!!testing}>
+                                  {testing === 'smtp_digest' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileText className="w-4 h-4 mr-2" />} Test Weekly Digest
+                              </Button>
+                          </div>
+                      </div>
+                      <StatusBox result={testResults.smtp || testResults.smtp_digest} />
+                  </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -1251,12 +1318,14 @@ export default function SettingsPage() {
                     </Button>
 
                     {generatedKey && (
-                        <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 mt-4 animate-in fade-in slide-in-from-top-2">
+                        <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 mt-4 animate-in fade-in slide-in-from-top-2 w-full">
                             <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><X className="w-4 h-4"/></button>
-                            <p className="font-bold flex items-center gap-2"><CheckCircle2 className="w-5 h-5"/> Token created successfully! Copy it now — it won't be shown again.</p>
-                            <div className="flex gap-2 items-center mt-2">
-                                <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800">{generatedKey}</code>
-                                <Button variant="secondary" onClick={() => copyToClipboard(generatedKey)} className="shrink-0"><Copy className="w-4 h-4 mr-2" /> Copy</Button>
+                            <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won't be shown again.</span></p>
+                            <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2 w-full">
+                                <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800 text-[11px] sm:text-xs select-all w-full min-w-0 break-all">
+                                    {generatedKey}
+                                </code>
+                                <Button variant="secondary" onClick={() => copyToClipboard(generatedKey)} className="shrink-0 w-full sm:w-auto h-9 sm:h-auto"><Copy className="w-4 h-4 mr-2" /> Copy</Button>
                             </div>
                         </div>
                     )}

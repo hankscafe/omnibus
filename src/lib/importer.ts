@@ -6,6 +6,7 @@ import { Logger } from './logger';
 import { resolveRemotePath } from './utils/path-resolver'; 
 import axios from 'axios';
 import { DiscordNotifier } from './discord';
+import { Mailer } from './mailer';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
@@ -23,7 +24,6 @@ function extractIssueNumber(filename: string): string {
         return explicitMatch[1].replace(/^0+(?=\d)/, '');
     }
     
-    // FIX: Lookbehind regex
     const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) {
         return matches[matches.length - 1][1].replace(/^0+(?=\d)/, '');
@@ -152,7 +152,6 @@ export const Importer = {
         }
     }
 
-    // --- SCHEMA FIX: Find Series via MetadataID ---
     let series = await prisma.series.findFirst({ 
         where: { metadataId: req.volumeId, metadataSource: 'COMICVINE' } 
     });
@@ -374,7 +373,6 @@ export const Importer = {
              where: { seriesId: series.id, number: issueNum }
          });
 
-         // --- SCHEMA FIX: Use metadataId/Source ---
          const targetMetaId = xmlMeta?.cvId ? xmlMeta.cvId.toString() : `unmatched_${Math.random()}`;
          const targetMetaSource = xmlMeta?.cvId ? 'COMICVINE' : 'LOCAL';
 
@@ -458,6 +456,11 @@ export const Importer = {
           description: series?.description,
           publisher: series?.publisher,
           year: series?.year?.toString()
+      }).catch(() => {});
+      
+      await Mailer.sendAlert('comic_available', {
+          title: req.activeDownloadName || series?.name || "Unknown Comic",
+          email: req.user?.email
       }).catch(() => {});
 
       Logger.log(`[Importer] Successfully imported to: ${destFolder}`, "success");

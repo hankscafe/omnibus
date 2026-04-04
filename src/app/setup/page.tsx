@@ -1,3 +1,4 @@
+// src/app/setup/page.tsx
 "use client"
 
 import { useState, useEffect, useRef } from "react"
@@ -15,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { 
     UserPlus, Database, HardDrive, Download, Search, Settings2, 
     CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw,
-    Webhook, Bell, User, Zap, FolderOpen, UploadCloud, Send, AlertCircle
+    Webhook, Bell, User, Zap, FolderOpen, UploadCloud, Send, AlertCircle, Mail, FileText
 } from "lucide-react"
 
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
@@ -58,7 +59,8 @@ export default function SetupWizard() {
     download_path: '',
     prowlarr_url: '', prowlarr_key: '', prowlarr_categories: '7030, 8030',
     filter_enabled: false, filter_publishers: '', filter_keywords: '',
-    oidc_enabled: false, oidc_issuer: '', oidc_client_id: '', oidc_client_secret: ''
+    oidc_enabled: false, oidc_issuer: '', oidc_client_id: '', oidc_client_secret: '',
+    smtp_enabled: false, smtp_host: '', smtp_port: '', smtp_user: '', smtp_pass: '', smtp_from: ''
   });
 
   // Relational States
@@ -166,7 +168,6 @@ export default function SetupWizard() {
           if (data.success) {
               setTestStates(prev => ({ ...prev, [stateKey]: 'success' }));
               toast({ title: "Connection Successful!", description: data.message });
-              // Removed the premature Discover Sync trigger from here!
               return true;
           } else {
               setTestStates(prev => ({ ...prev, [stateKey]: 'error' }));
@@ -355,6 +356,12 @@ export default function SetupWizard() {
               oidc_issuer: formData.oidc_issuer,
               oidc_client_id: formData.oidc_client_id,
               oidc_client_secret: formData.oidc_client_secret,
+              smtp_enabled: formData.smtp_enabled ? "true" : "false",
+              smtp_host: formData.smtp_host,
+              smtp_port: formData.smtp_port,
+              smtp_user: formData.smtp_user,
+              smtp_pass: formData.smtp_pass,
+              smtp_from: formData.smtp_from,
               setup_complete: 'true' 
           },
           libraries,
@@ -379,7 +386,7 @@ export default function SetupWizard() {
                   }).catch(() => {});
               }
 
-              // Trigger Discover Sync HERE, after filters have been successfully saved to DB!
+              // Trigger Discover Sync HERE, after filters have been successfully saved to DB
               if (formData.cv_api_key) {
                   fetch('/api/admin/jobs/trigger', {
                       method: 'POST', 
@@ -413,7 +420,7 @@ export default function SetupWizard() {
       { id: 3, title: "Storage", icon: HardDrive },
       { id: 4, title: "Clients", icon: Download },
       { id: 5, title: "Indexers", icon: Search },
-      { id: 6, title: "Discord", icon: Webhook },
+      { id: 6, title: "Alerts", icon: Bell },
       { id: 7, title: "Users", icon: User },
       { id: 8, title: "Finalize", icon: Settings2 },
   ];
@@ -692,17 +699,17 @@ export default function SetupWizard() {
                 </div>
             )}
 
-            {/* STEP 6: DISCORD */}
+            {/* STEP 6: ALERTS (DISCORD & SMTP) */}
             {step === 6 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Webhook className="w-6 h-6 text-indigo-500"/> Discord Alerts (Optional)</h2>
-                        <p className="text-muted-foreground mt-1">Automatically send notifications to your server when new comics are added or requested.</p>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Bell className="w-6 h-6 text-indigo-500"/> Alerts & Notifications (Optional)</h2>
+                        <p className="text-muted-foreground mt-1">Automatically send notifications to your server or email when new comics are added or requested.</p>
                     </div>
 
                     <div className="space-y-4 pt-2">
                         <Button variant="outline" className="w-full h-12 font-bold border-dashed border-2" onClick={() => openWebhookModal()}>
-                            <Plus className="w-4 h-4 mr-2" /> Add Webhook
+                            <Plus className="w-4 h-4 mr-2" /> Add Discord Webhook
                         </Button>
                         
                         {webhooks.length > 0 && (
@@ -753,6 +760,55 @@ export default function SetupWizard() {
                                 ))}
                             </div>
                         )}
+                    </div>
+
+                    <div className="border-t border-slate-200 dark:border-slate-800 my-6" />
+
+                    <div>
+                        <h3 className="text-lg font-bold flex items-center gap-2 text-foreground mb-4"><Mail className="w-5 h-5 text-blue-500"/> SMTP Email Alerts</h3>
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border dark:border-slate-800">
+                                <div>
+                                    <Label className="text-base">Enable Email Notifications</Label>
+                                    <p className="text-xs text-muted-foreground mt-1">Configure an SMTP server to send email notifications.</p>
+                                </div>
+                                <Switch checked={formData.smtp_enabled} onCheckedChange={v => updateForm('smtp_enabled', v)} />
+                            </div>
+
+                            {formData.smtp_enabled && (
+                                <div className="grid gap-4 p-4 border dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-950/50">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="grid gap-2"><Label>SMTP Host</Label><Input value={formData.smtp_host} onChange={e => updateForm('smtp_host', e.target.value)} placeholder="smtp.gmail.com" className="bg-white dark:bg-slate-900" /></div>
+                                        <div className="grid gap-2"><Label>SMTP Port</Label><Input value={formData.smtp_port} onChange={e => updateForm('smtp_port', e.target.value)} placeholder="587" className="bg-white dark:bg-slate-900" /></div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="grid gap-2"><Label>SMTP Username</Label><Input value={formData.smtp_user} onChange={e => updateForm('smtp_user', e.target.value)} placeholder="user@gmail.com" className="bg-white dark:bg-slate-900" /></div>
+                                        <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={formData.smtp_pass} onChange={e => updateForm('smtp_pass', e.target.value)} placeholder="App Password" className="bg-white dark:bg-slate-900" /></div>
+                                    </div>
+                                    <div className="grid gap-2"><Label>From Email Address</Label><Input value={formData.smtp_from} onChange={e => updateForm('smtp_from', e.target.value)} placeholder="omnibus@yourdomain.com" className="bg-white dark:bg-slate-900" /></div>
+                                    
+                                    <div className="border-t dark:border-slate-800 pt-4 flex flex-col sm:flex-row gap-2">
+                                        <Input id="setup-smtp-test-email" placeholder="Send test email to..." className="bg-white dark:bg-slate-900 max-w-xs flex-1 sm:flex-none" />
+                                        <div className="flex gap-2">
+                                            <Button variant="outline" className="bg-white dark:bg-slate-900 flex-1 sm:flex-none" onClick={() => {
+                                                const testEmail = (document.getElementById('setup-smtp-test-email') as HTMLInputElement)?.value;
+                                                if (testEmail) handleTestConnection('smtp', { ...formData, test_email: testEmail }, 'smtp');
+                                                else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
+                                            }} disabled={isTesting !== null}>
+                                                {isTesting === 'smtp' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />} Test SMTP
+                                            </Button>
+                                            <Button variant="outline" className="text-blue-600 border-blue-200 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-400 flex-1 sm:flex-none" onClick={() => {
+                                                const testEmail = (document.getElementById('setup-smtp-test-email') as HTMLInputElement)?.value;
+                                                if (testEmail) handleTestConnection('smtp_digest', { ...formData, test_email: testEmail }, 'smtp_digest');
+                                                else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
+                                            }} disabled={isTesting !== null}>
+                                                {isTesting === 'smtp_digest' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileText className="w-4 h-4 mr-2" />} Test Digest
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
@@ -1022,6 +1078,7 @@ export default function SetupWizard() {
                 </div>
               </div>
 
+              {/* --- CUSTOM USERNAME AND AVATAR INPUTS --- */}
               <div className="grid sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label className="text-xs font-bold uppercase text-muted-foreground">Bot Username (Optional)</Label>

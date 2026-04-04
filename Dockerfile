@@ -22,9 +22,11 @@ USER root
 # Destroy deeply nested vulnerable copies inside the compiled app
 RUN find .next/standalone/node_modules -type d -name "picomatch" -exec rm -rf {} + || true
 RUN find .next/standalone/node_modules -type d -name "brace-expansion" -exec rm -rf {} + || true
+RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {} + || true
 
 # Force secure versions into the standalone folder
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 --no-save
+# Added nodemailer@8.0.4 to patch GHSA-c7w3-x93f-qmm8
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@8.0.4 --no-save
 
 
 # --- Stage 2: Final Production Image ---

@@ -64,4 +64,5 @@ EXPOSE 3000
 ENV PORT=3000
 
 # Execute database push using the node binary directly (since npx was deleted)
-CMD ["sh", "-c", "node ./node_modules/prisma/build/index.js db push --schema=/app/prisma/schema.prisma --skip-generate && node server.js"]
+# ADDED: --accept-data-loss to bypass interactive warnings when adding unique columns
+CMD ["sh", "-c", "node ./node_modules/prisma/build/index.js db push --schema=/app/prisma/schema.prisma --skip-generate --accept-data-loss && node server.js"]

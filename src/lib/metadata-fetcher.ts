@@ -22,6 +22,16 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         const md = new MangaDexProvider();
         const details = await md.getSeriesDetails(metadataId);
         
+        // FIX: Download image first and generate local API path
+        let finalCoverUrl = details.coverUrl;
+        if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
+            try {
+                const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
+                await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
+                finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, 'cover.jpg'))}`;
+            } catch (e) {}
+        }
+        
         await prisma.series.update({
             where: { id: series.id },
             data: {
@@ -29,17 +39,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 publisher: details.publisher,
                 year: details.year || series.year,
                 description: details.description,
-                coverUrl: details.coverUrl,
+                coverUrl: finalCoverUrl, // Saves local route if successful
                 status: details.status
             }
         });
-
-        if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
-            try {
-                const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
-                await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-            } catch (e) {}
-        }
 
         const issues = await md.getSeriesIssues(metadataId);
         let syncedCount = 0;
@@ -119,6 +122,18 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         characters: volCharacters, genres: volGenres
     } = parseComicVineCredits(volData.person_credits || undefined, volData.character_credits || undefined, volData.concepts || undefined);
 
+    // FIX: Download image first and generate local API path
+    let finalCoverUrl = imageUrl;
+    if (imageUrl && folderPath && fs.existsSync(folderPath)) {
+        try {
+            const imgRes = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer' });
+            await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
+            finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, 'cover.jpg'))}`;
+        } catch (e: unknown) {
+            Logger.log(`[Metadata] Failed to save cover image locally: ${getErrorMessage(e)}`, 'warn');
+        }
+    }
+
     await prisma.series.update({
         where: { id: series.id },
         data: {
@@ -126,19 +141,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             publisher: volData.publisher?.name || 'Other',
             year: parseInt(volData.start_year || "0") || series.year,
             description: volData.description || volData.deck || null,
-            coverUrl: imageUrl,
+            coverUrl: finalCoverUrl, // Saves local route if successful
             status: volData.end_year ? 'Ended' : 'Ongoing' 
         }
     });
-
-    if (imageUrl && folderPath && fs.existsSync(folderPath)) {
-        try {
-            const imgRes = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer' });
-            await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-        } catch (e: unknown) {
-            Logger.log(`[Metadata] Failed to save cover image locally: ${getErrorMessage(e)}`, 'warn');
-        }
-    }
 
     await new Promise(r => setTimeout(r, 1500));
 

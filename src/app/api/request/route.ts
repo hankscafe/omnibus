@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
 
           await prisma.series.upsert({
               where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
-              update: { monitored: true },
+              update: { monitored: true, coverUrl: image },
               create: { 
                   metadataId: cvId.toString(), 
                   metadataSource: 'COMICVINE',
@@ -87,7 +87,8 @@ export async function POST(request: NextRequest) {
                   folderPath: targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName}` : `/${libraryTypeFolder}/${safePubFolder}/${safeFolderName}`, 
                   monitored: true,
                   isManga: isManga,
-                  libraryId: targetLib?.id 
+                  libraryId: targetLib?.id,
+                  coverUrl: image
               }
           });
           Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');

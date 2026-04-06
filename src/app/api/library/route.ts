@@ -230,6 +230,11 @@ export async function GET(request: Request) {
 
     let where: any = { AND: [] };
     
+    // Hide ghost/empty series from the main library grid unless explicitly looking for Monitored or Unmatched
+    if (!monitored && !unmatchedOnly) {
+        where.AND.push({ issues: { some: {} } });
+    }
+
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });
     if (publisherFilter !== 'ALL') where.AND.push({ publisher: publisherFilter });

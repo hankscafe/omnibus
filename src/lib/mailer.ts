@@ -5,10 +5,11 @@ import { getErrorMessage } from './utils/error';
 
 const DEFAULT_TEMPLATES: Record<string, string> = {
     account_approved: `<h2 style="color: #f8fafc; margin-top: 0;">Welcome aboard!</h2>\n<p>Hello <strong>{{user}}</strong>,</p>\n<p>Your account has been approved by an administrator. You can now log in to your Omnibus library and begin reading.</p>`,
-    comic_available: `<h2 style="color: #f8fafc; margin-top: 0;">Ready to Read</h2>\n<p>Good news!</p>\n<p>Your request for <strong>{{title}}</strong> has finished downloading and is now available in the library.</p>`,
-    request_approved: `<h2 style="color: #f8fafc; margin-top: 0;">Request Accepted</h2>\n<p>Your request for <strong>{{title}}</strong> has been approved by {{user}}.</p>\n<p>It has been sent to the download client and will be available in your library shortly.</p>`,
-    pending_request: `<h2 style="color: #f8fafc; margin-top: 0;">Approval Required</h2>\n<p>User <strong>{{user}}</strong> has requested <strong>{{title}}</strong>.</p>\n<p>Please review and approve the request in the Omnibus admin dashboard.</p>`,
+    comic_available: `<h2 style="color: #f8fafc; margin-top: 0;">Ready to Read</h2>\n<p>Good news! Your requested comic has successfully finished downloading and is now available in your library!</p>\n<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 20px; background-color: #0f172a; border-radius: 8px; border: 1px solid #334155;"><tr><td width="120" valign="top" style="padding: 16px;"><img src="{{imageUrl}}" alt="Cover" style="width: 100px; height: 150px; object-fit: cover; border-radius: 4px; background-color: #1e293b;" /></td><td valign="top" style="padding: 16px 16px 16px 0;"><h3 style="color: #f8fafc; margin: 0 0 8px 0; font-size: 18px;">{{title}}</h3><p style="color: #94a3b8; font-size: 13px; margin: 0 0 12px 0;"><strong>Requested by:</strong> {{requester}}<br/><strong>Date:</strong> {{date}}</p><p style="color: #cbd5e1; font-size: 14px; margin: 0; line-height: 1.5;">{{description}}</p></td></tr></table>`,
+    request_approved: `<h2 style="color: #f8fafc; margin-top: 0;">Request Accepted</h2>\n<p>Your request has been approved by <strong>{{user}}</strong>. It has been sent to the download client and will be available in your library shortly.</p>\n<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 20px; background-color: #0f172a; border-radius: 8px; border: 1px solid #334155;"><tr><td width="120" valign="top" style="padding: 16px;"><img src="{{imageUrl}}" alt="Cover" style="width: 100px; height: 150px; object-fit: cover; border-radius: 4px; background-color: #1e293b;" /></td><td valign="top" style="padding: 16px 16px 16px 0;"><h3 style="color: #f8fafc; margin: 0 0 8px 0; font-size: 18px;">{{title}}</h3><p style="color: #94a3b8; font-size: 13px; margin: 0 0 12px 0;"><strong>Requested by:</strong> {{requester}}<br/><strong>Date:</strong> {{date}}</p><p style="color: #cbd5e1; font-size: 14px; margin: 0; line-height: 1.5;">{{description}}</p></td></tr></table>`,
+    pending_request: `<h2 style="color: #f8fafc; margin-top: 0;">Approval Required</h2>\n<p>A new request has been submitted and is waiting for your approval.</p>\n<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 20px; background-color: #0f172a; border-radius: 8px; border: 1px solid #334155;"><tr><td width="120" valign="top" style="padding: 16px;"><img src="{{imageUrl}}" alt="Cover" style="width: 100px; height: 150px; object-fit: cover; border-radius: 4px; background-color: #1e293b;" /></td><td valign="top" style="padding: 16px 16px 16px 0;"><h3 style="color: #f8fafc; margin: 0 0 8px 0; font-size: 18px;">{{title}}</h3><p style="color: #94a3b8; font-size: 13px; margin: 0 0 12px 0;"><strong>Requested by:</strong> {{requester}}<br/><strong>Date:</strong> {{date}}</p><p style="color: #cbd5e1; font-size: 14px; margin: 0; line-height: 1.5;">{{description}}</p></td></tr></table>`,
     pending_account: `<h2 style="color: #f8fafc; margin-top: 0;">Account Approval Required</h2>\n<p>A new user <strong>{{user}}</strong> ({{email}}) has registered and is waiting for approval to access the server.</p>`,
+    password_reset: `<h2 style="color: #f8fafc; margin-top: 0;">Password Reset Request</h2>\n<p>Hello <strong>{{user}}</strong>,</p>\n<p>We received a request to reset your Omnibus password. Click the secure link below to set a new password:</p>\n<br/><p><a href="{{resetLink}}" style="background-color: #3b82f6; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; display: inline-block;">Reset Your Password</a></p>\n<br/><p style="color: #94a3b8; font-size: 13px;">If you did not request this, please safely ignore this email.</p>`,
     weekly_digest: `<h2 style="color: #f8fafc; margin-top: 0; font-size: 24px; font-weight: 800;">This Week's Additions</h2>\n<p style="color: #cbd5e1; font-size: 15px; margin-bottom: 24px;">Here are the latest issues that have been downloaded and added to your library over the past 7 days.</p>\n{{comics_html}}\n{{manga_html}}`
 };
 
@@ -99,10 +100,18 @@ export const Mailer = {
          let subject = '';
          let content = '';
 
+         const cleanDesc = payload.description ? payload.description.replace(/(<([^>]+)>)/gi, "") : 'No synopsis available.';
+         const shortDesc = cleanDesc.length > 250 ? cleanDesc.substring(0, 247) + '...' : cleanDesc;
+
          const variables: Record<string, string> = {
              user: payload.user || '',
+             requester: payload.requester || payload.user || 'Unknown',
              title: payload.title || '',
-             email: payload.email || ''
+             email: payload.email || '',
+             imageUrl: payload.imageUrl || 'https://via.placeholder.com/100x150/1e293b/94a3b8?text=No+Cover',
+             resetLink: payload.resetLink || '#',
+             description: shortDesc,
+             date: payload.date || new Date().toLocaleString()
          };
 
          switch(event) {
@@ -111,6 +120,12 @@ export const Mailer = {
                  to = [payload.email];
                  subject = 'Your Omnibus Account has been Approved!';
                  content = await this.getTemplate('account_approved', variables);
+                 break;
+             case 'password_reset':
+                 if (!payload.email) return;
+                 to = [payload.email];
+                 subject = 'Omnibus - Password Reset';
+                 content = await this.getTemplate('password_reset', variables);
                  break;
              case 'comic_available':
                  if (!payload.email) return;

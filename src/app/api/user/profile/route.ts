@@ -23,12 +23,8 @@ export async function GET(req: Request) {
     });
 
     const historyStats = await prisma.$transaction([
-        prisma.readProgress.count({ 
-            where: { userId: token.id as string } 
-        }),
-        prisma.readProgress.count({ 
-            where: { userId: token.id as string, isCompleted: true } 
-        })
+        prisma.readProgress.count({ where: { userId: token.id as string } }),
+        prisma.readProgress.count({ where: { userId: token.id as string, isCompleted: true } })
     ]);
 
     const started = historyStats[0];
@@ -48,20 +44,19 @@ export async function GET(req: Request) {
 
     const recentProgresses = await prisma.readProgress.findMany({
         where: { userId: token.id as string },
-        include: { 
-            issue: { include: { series: true } } 
-        },
+        include: { issue: { include: { series: true } } },
         orderBy: { updatedAt: 'desc' },
         take: 24 
     });
 
-    // --- FIX: Use the reliable Series DB Cover instead of the Request table ---
     const recentHistory = recentProgresses.map(rp => {
         const progressPct = rp.totalPages > 0 ? Math.round((rp.currentPage / rp.totalPages) * 100) : 0;
         const folderPath = rp.issue?.series?.folderPath;
         
         let seriesCoverUrl = (rp.issue?.series as any)?.coverUrl || null;
-        if (!seriesCoverUrl && folderPath) {
+        if (seriesCoverUrl && seriesCoverUrl.startsWith('http')) {
+            seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(seriesCoverUrl)}`;
+        } else if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
         }
         
@@ -105,6 +100,8 @@ export async function POST(req: Request) {
   const token = await getToken({ req: req as any });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  const configDir = process.env.OMNIBUS_CONFIG_DIR || '/config';
+
   try {
     const { avatarBase64, bannerBase64, removeBanner } = await req.json();
     
@@ -112,13 +109,12 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: 'No image or action provided' }, { status: 400 });
     }
 
-    // --- REMOVE BANNER ---
     if (removeBanner) {
         const currentUser = await prisma.user.findUnique({ where: { id: token.id as string } });
         if (currentUser?.banner) {
             const oldFileName = currentUser.banner.split('?')[0].split('/').pop();
             if (oldFileName) {
-                const oldPath = path.join(process.cwd(), 'public', 'banners', oldFileName);
+                const oldPath = path.join(configDir, 'uploads', 'banners', oldFileName);
                 if (await fs.exists(oldPath)) await fs.unlink(oldPath);
             }
         }
@@ -126,29 +122,29 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: true, bannerUrl: null });
     }
 
-    // --- UPLOAD AVATAR ---
     if (avatarBase64) {
-        const avatarDir = path.join(process.cwd(), 'public', 'avatars');
+        const avatarDir = path.join(configDir, 'uploads', 'avatars');
         await fs.ensureDir(avatarDir);
         const fileName = `${token.id}.jpg`;
         const filePath = path.join(avatarDir, fileName);
         const base64Data = avatarBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
         
+        // --- FIX: Output URL routed through new uploads API endpoint ---
         const avatarUrl = `/api/uploads/avatars/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { avatar: avatarUrl } });
         return NextResponse.json({ success: true, avatarUrl });
     }
 
-    // --- UPLOAD BANNER ---
     if (bannerBase64) {
-        const bannerDir = path.join(process.cwd(), 'public', 'banners');
+        const bannerDir = path.join(configDir, 'uploads', 'banners');
         await fs.ensureDir(bannerDir);
         const fileName = `${token.id}_banner.jpg`;
         const filePath = path.join(bannerDir, fileName);
         const base64Data = bannerBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
         
+        // --- FIX: Output URL routed through new uploads API endpoint ---
         const bannerUrl = `/api/uploads/banners/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { banner: bannerUrl } });
         return NextResponse.json({ success: true, bannerUrl });

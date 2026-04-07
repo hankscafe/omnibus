@@ -6,23 +6,19 @@ import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET() {
     try {
-        // Fetch the 7 most recently added series that contain at least 1 issue
         const recentSeries = await prisma.series.findMany({
-            where: {
-                issues: { some: {} } // Ensures we don't show empty/ghost folders
-            },
-            orderBy: { id: 'desc' }, // Orders chronologically by newest added
+            where: { issues: { some: {} } },
+            orderBy: { id: 'desc' },
             take: 7,
-            include: {
-                _count: {
-                    select: { issues: true }
-                }
-            }
+            include: { _count: { select: { issues: true } } }
         });
 
         const formatted = recentSeries.map(s => {
+            // --- FIX: Proxy external URL if it hasn't been downloaded locally yet ---
             let coverUrl = (s as any).coverUrl || null;
-            if (!coverUrl && s.folderPath) {
+            if (coverUrl && coverUrl.startsWith('http')) {
+                coverUrl = `/api/library/cover?path=${encodeURIComponent(coverUrl)}`;
+            } else if (!coverUrl && s.folderPath) {
                 coverUrl = `/api/library/cover?path=${encodeURIComponent(s.folderPath)}`;
             }
 
@@ -39,7 +35,6 @@ export async function GET() {
         return NextResponse.json({ items: formatted });
     } catch (error: unknown) {
         Logger.log(`Recent Library API Error: ${getErrorMessage(error)}`, 'error');
-
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

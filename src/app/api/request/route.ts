@@ -106,7 +106,10 @@ export async function POST(request: NextRequest) {
           
           Mailer.sendAlert('pending_request', { 
               user: token.name as string, 
-              title: name 
+              title: name,
+              imageUrl: image,
+              description: description,
+              date: new Date().toLocaleString()
           }).catch(() => {});
       }
 
@@ -199,7 +202,10 @@ export async function POST(request: NextRequest) {
           
           Mailer.sendAlert('pending_request', { 
               user: token.name as string, 
-              title: name 
+              title: name,
+              imageUrl: image,
+              description: description,
+              date: new Date().toLocaleString()
           }).catch(() => {});
       }
 
@@ -273,8 +279,12 @@ export async function PATCH(request: NextRequest) {
       
       Mailer.sendAlert('request_approved', { 
           user: token.name as string, 
+          requester: reqRecord.user?.username || "Unknown",
           title: searchName || reqRecord.volumeId || "Unknown Comic",
-          email: reqRecord.user?.email
+          email: reqRecord.user?.email,
+          imageUrl: reqRecord.imageUrl,
+          description: description,
+          date: new Date().toLocaleString()
       }).catch(() => {});
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });

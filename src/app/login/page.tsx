@@ -1,3 +1,4 @@
+// src/app/login/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -9,10 +10,10 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert" 
 import { useToast } from "@/components/ui/use-toast"
-import { Loader2, LogIn, ShieldCheck, Fingerprint, UserPlus, AlertTriangle, CheckCircle2 } from "lucide-react" 
+import { Loader2, LogIn, ShieldCheck, Fingerprint, UserPlus, AlertTriangle, CheckCircle2, Mail } from "lucide-react" 
 import Image from "next/image"
 import { OmnibusLogo } from "@/components/omnibus-logo"
-import packageJson from "../../../package.json" // <-- Added import
+import packageJson from "../../../package.json"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 
@@ -21,7 +22,7 @@ export default function LoginPage() {
   const { toast } = useToast()
   
   // UI State
-  const [isRegistering, setIsRegistering] = useState(false)
+  const [view, setView] = useState<'login' | 'register' | 'forgot'>('login')
   const [loading, setLoading] = useState(false)
   const [ssoLoading, setSsoLoading] = useState(false)
   const [ssoProvider, setSsoProvider] = useState<boolean>(false)
@@ -41,28 +42,35 @@ export default function LoginPage() {
   const [confirmPassword, setConfirmPassword] = useState("")
 
   useEffect(() => {
-    // 1. SETUP WIZARD ENFORCEMENT CHECK
     fetch('/api/setup/check')
       .then(res => res.json())
       .then(data => {
-          if (data.requiresSetup) {
-              router.push('/setup');
-          }
+          if (data.requiresSetup) router.push('/setup');
       })
       .catch(err => Logger.log(`Setup check failed: ${getErrorMessage(err)}`, 'error'));
 
-    // 2. CHECK FOR SSO PROVIDERS
     getProviders().then(prov => {
         if (prov?.oidc) setSsoProvider(true);
     });
 
-    // 3. CHECK FOR AUTH ERRORS IN URL
     const params = new URLSearchParams(window.location.search);
     if (params.get('error')) {
         setErrorMsg("Authentication failed or account pending approval.");
         window.history.replaceState({}, '', '/login'); 
     }
   }, [router])
+
+  const toggleView = (target: 'login' | 'register' | 'forgot') => {
+      setView(target);
+      setUsername("");
+      setEmail("");
+      setPassword("");
+      setConfirmPassword("");
+      setShowTwoFactor(false);
+      setTotpCode("");
+      setErrorMsg(null);
+      setSuccessMsg(null);
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -120,9 +128,7 @@ export default function LoginPage() {
       
       if (res.ok && data.success) {
         setSuccessMsg(data.message)
-        setIsRegistering(false) 
-        setPassword("") 
-        setConfirmPassword("")
+        toggleView('login')
       } else {
         setErrorMsg(data.error || "Registration failed.")
       }
@@ -133,21 +139,35 @@ export default function LoginPage() {
     }
   }
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+      e.preventDefault()
+      setLoading(true)
+      setErrorMsg(null)
+      setSuccessMsg(null)
+
+      try {
+          const res = await fetch('/api/auth/reset-password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email })
+          })
+          const data = await res.json()
+          if (res.ok) {
+              setSuccessMsg("If an account exists, a password reset link has been sent.")
+              setEmail("")
+          } else {
+              setErrorMsg(data.error || "An error occurred.")
+          }
+      } catch (error) {
+          setErrorMsg("Connection failed.")
+      } finally {
+          setLoading(false)
+      }
+  }
+
   const handleSsoLogin = () => {
       setSsoLoading(true);
       signIn('oidc');
-  }
-
-  const toggleView = () => {
-      setIsRegistering(!isRegistering);
-      setUsername("");
-      setEmail("");
-      setPassword("");
-      setConfirmPassword("");
-      setShowTwoFactor(false);
-      setTotpCode("");
-      setErrorMsg(null);
-      setSuccessMsg(null);
   }
 
   return (
@@ -159,7 +179,6 @@ export default function LoginPage() {
 
       <div className="relative z-10 flex-1" />
 
-      {/* EXACT LOGO FORMATTING RESTORED */}
       <div className="relative z-10 w-full max-w-[800px] px-4 shrink animate-in fade-in slide-in-from-top-4 duration-1000 flex justify-center min-h-0">
         <OmnibusLogo className="w-full max-w-[600px] h-auto max-h-[40vh] text-foreground drop-shadow-xl transition-colors duration-300" />
       </div>
@@ -169,8 +188,10 @@ export default function LoginPage() {
       <Card className="relative z-10 w-full max-w-sm shrink-0 bg-card text-card-foreground border border-border rounded-xl shadow-lg overflow-hidden transition-all duration-300">
         <CardHeader className="pb-4 relative z-10 border-b border-border">
           <CardTitle className="flex items-center justify-center gap-2 text-xl font-bold text-foreground leading-tight">
-            {isRegistering ? (
+            {view === 'register' ? (
                 <><UserPlus className="w-5 h-5 text-primary" /> Create Account</>
+            ) : view === 'forgot' ? (
+                <><Mail className="w-5 h-5 text-primary" /> Reset Password</>
             ) : showTwoFactor ? (
                 <><ShieldCheck className="w-5 h-5 text-primary" /> Two-Factor Auth</>
             ) : (
@@ -180,7 +201,7 @@ export default function LoginPage() {
         </CardHeader>
         
         <CardContent className="relative z-10 pt-6">
-          <form suppressHydrationWarning onSubmit={isRegistering ? handleRegister : handleLogin} className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
+          <form suppressHydrationWarning onSubmit={view === 'register' ? handleRegister : view === 'forgot' ? handleForgotPassword : handleLogin} className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
             
             {showTwoFactor ? (
               <div className="space-y-2 animate-in slide-in-from-right-4">
@@ -200,11 +221,26 @@ export default function LoginPage() {
                   autoFocus
                 />
               </div>
+            ) : view === 'forgot' ? (
+              <div className="space-y-2 animate-in slide-in-from-right-4">
+                  <Label htmlFor="email" className="font-semibold text-xs text-foreground">Account Email Address</Label>
+                  <Input 
+                      id="email" 
+                      type="email"
+                      placeholder="Enter email address..." 
+                      value={email} 
+                      onChange={(e) => setEmail(e.target.value)} 
+                      className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
+                      required
+                      autoFocus
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">We will send a password reset link to this email address.</p>
+              </div>
             ) : (
               <>
                 <div className="space-y-2">
                   <Label htmlFor="username" className="font-semibold text-xs text-foreground">
-                    {isRegistering ? "Username" : "Username / Email"}
+                    {view === 'register' ? "Username" : "Username / Email"}
                   </Label>
                   <Input 
                     id="username" 
@@ -215,12 +251,12 @@ export default function LoginPage() {
                     className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
                     autoCapitalize="none"
                     autoCorrect="off"
-                    autoComplete={isRegistering ? "off" : "username"}
+                    autoComplete={view === 'register' ? "off" : "username"}
                     required
                   />
                 </div>
                 
-                {isRegistering && (
+                {view === 'register' && (
                   <div className="space-y-2">
                     <Label htmlFor="email" className="font-semibold text-xs text-foreground">Email Address</Label>
                     <Input 
@@ -240,7 +276,14 @@ export default function LoginPage() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="password" title="Required" className="font-semibold text-xs text-foreground">Password</Label>
+                  <div className="flex items-center justify-between">
+                      <Label htmlFor="password" title="Required" className="font-semibold text-xs text-foreground">Password</Label>
+                      {view === 'login' && (
+                          <Button variant="link" type="button" onClick={() => toggleView('forgot')} className="h-auto p-0 text-[10px] text-muted-foreground hover:text-primary">
+                              Forgot password?
+                          </Button>
+                      )}
+                  </div>
                   <Input 
                     id="password"
                     suppressHydrationWarning
@@ -249,13 +292,13 @@ export default function LoginPage() {
                     value={password} 
                     onChange={(e) => setPassword(e.target.value)} 
                     className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
-                    autoComplete={isRegistering ? "new-password" : "current-password"}
+                    autoComplete={view === 'register' ? "new-password" : "current-password"}
                     required
                   />
-                  {isRegistering && <p className="text-[10px] text-muted-foreground">Min 12 chars. Must include uppercase, lowercase, number, and symbol.</p>}
+                  {view === 'register' && <p className="text-[10px] text-muted-foreground">Min 12 chars. Must include uppercase, lowercase, number, and symbol.</p>}
                 </div>
 
-                {isRegistering && (
+                {view === 'register' && (
                   <div className="space-y-2">
                     <Label htmlFor="confirmPassword" title="Required" className="font-semibold text-xs text-foreground">Confirm Password</Label>
                     <Input 
@@ -294,28 +337,34 @@ export default function LoginPage() {
             )}
 
             <Button type="submit" className="w-full font-bold h-12 sm:h-11 mt-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-md transition-colors" disabled={loading || ssoLoading}>
-              {loading ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : (isRegistering ? <UserPlus className="w-5 h-5 mr-2" /> : <LogIn className="w-5 h-5 mr-2" />)}
-              {isRegistering ? "Register Account" : showTwoFactor ? "Verify Code" : "Log Into Omnibus"}
+              {loading ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : (view === 'register' ? <UserPlus className="w-5 h-5 mr-2" /> : view === 'forgot' ? <Mail className="w-5 h-5 mr-2" /> : <LogIn className="w-5 h-5 mr-2" />)}
+              {view === 'register' ? "Register Account" : view === 'forgot' ? "Send Reset Link" : showTwoFactor ? "Verify Code" : "Log Into Omnibus"}
             </Button>
           </form>
 
           {showTwoFactor && (
-            <div className="text-center mt-4">
-                <Button variant="link" type="button" onClick={() => { setShowTwoFactor(false); setTotpCode(""); setErrorMsg(null); }} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
+            <div className="text-center mt-4 flex flex-col gap-2">
+                <Button variant="link" type="button" onClick={() => toggleView('login')} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
                     &larr; Back to Password
                 </Button>
             </div>
           )}
 
           {!showTwoFactor && (
-            <div className="text-center mt-4">
-                <Button variant="link" type="button" onClick={toggleView} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
-                    {isRegistering ? "Already have an account? Log in." : "Need an account? Register here."}
-                </Button>
+            <div className="text-center mt-4 flex flex-col gap-2">
+                {view === 'forgot' ? (
+                    <Button variant="link" type="button" onClick={() => toggleView('login')} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
+                        &larr; Back to Login
+                    </Button>
+                ) : (
+                    <Button variant="link" type="button" onClick={() => toggleView(view === 'register' ? 'login' : 'register')} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
+                        {view === 'register' ? "Already have an account? Log in." : "Need an account? Register here."}
+                    </Button>
+                )}
             </div>
           )}
 
-          {ssoProvider && !showTwoFactor && (
+          {ssoProvider && !showTwoFactor && view !== 'forgot' && (
               <div className="mt-6">
                   <div className="relative mb-6">
                       <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
@@ -329,7 +378,7 @@ export default function LoginPage() {
                       Single Sign-On (SSO)
                   </Button>
                   
-                  {isRegistering && (
+                  {view === 'register' && (
                       <p className="text-[10px] text-center text-muted-foreground mt-3">
                           SSO users do not need to register. You can log in directly using your provider.
                       </p>
@@ -339,7 +388,6 @@ export default function LoginPage() {
         </CardContent>
         
         <CardFooter className="flex justify-between items-center pb-6 pt-2 relative z-10">
-          {/* Dynamically pulling version from package.json */}
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
             Build: v{packageJson.version}
           </p>

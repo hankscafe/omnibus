@@ -69,13 +69,16 @@ export async function GET(request: Request) {
         displayName = `${issueData.volume.name} #${issueData.issue_number || ''}`;
     }
 
+    // --- FIX: Proxy external ComicVine image immediately ---
+    const rawImage = issueData.image?.medium_url || issueData.image?.super_url || issueData.image?.small_url || null;
+
     return NextResponse.json({
       id: issueData.id,
       volumeId: issueData.volume?.id || issueData.id,
       name: displayName || 'Unknown',
       year: isIssue ? (issueData.cover_date?.split('-')[0] || issueData.store_date?.split('-')[0] || '????') : (issueData.start_year || '????'),
       publisher: publisher || 'Unknown', 
-      image: issueData.image?.medium_url || issueData.image?.super_url || issueData.image?.small_url || null,
+      image: rawImage ? `/api/library/cover?path=${encodeURIComponent(rawImage)}` : null,
       description: (htmlDescription || "").replace(/<[^>]*>?/gm, '').trim().substring(0, 800),
       writers: writers.slice(0, 5),
       artists: artists.slice(0, 5),
@@ -83,7 +86,7 @@ export async function GET(request: Request) {
       genres: genres.slice(0, 10),
       storyArcs: storyArcs.slice(0, 10),
       siteUrl: issueData.site_detail_url,
-      rawImage: issueData.image || null,
+      rawImage: rawImage, // Keep raw in case it needs to be sent to DB during request
       person_credits,
       character_credits,
       htmlDescription: htmlDescription || "No synopsis available."

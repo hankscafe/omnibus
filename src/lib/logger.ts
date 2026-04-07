@@ -1,3 +1,4 @@
+// src/lib/logger.ts
 type LogEntry = { timestamp: string; message: string; type: 'info' | 'error' | 'success' | 'warn' };
 
 // Prevent logs from being cleared during Next.js Hot Reloads
@@ -6,7 +7,6 @@ if (!globalForLogger.logBuffer) globalForLogger.logBuffer = [];
 
 export const Logger = {
   log(message: string, type: LogEntry['type'] = 'info') {
-    // --- FIX 6a: Standardize on ISO 8601 timestamps ---
     const timestamp = new Date().toISOString(); 
     const msgStr = typeof message === 'string' ? message : JSON.stringify(message);
     
@@ -40,7 +40,7 @@ export const Logger = {
         const path = pathRaw.default || pathRaw;
         
         try {
-            const logDir = process.env.LOG_PATH || path.join(process.cwd(), 'config', 'logs');
+            const logDir = process.env.OMNIBUS_LOGS_DIR || path.join(process.cwd(), 'config', 'logs');
             if (!fs.existsSync(logDir)) {
                 fs.mkdirSync(logDir, { recursive: true });
             }
@@ -70,7 +70,7 @@ export const Logger = {
             const path = pathRaw.default || pathRaw;
             
             try {
-                const logDir = process.env.LOG_PATH || path.join(process.cwd(), 'config', 'logs');
+                const logDir = process.env.OMNIBUS_LOGS_DIR || path.join(process.cwd(), 'config', 'logs');
                 const logFile = path.join(logDir, 'omnibus.log');
                 fs.writeFileSync(logFile, "");
             } catch(e) {}

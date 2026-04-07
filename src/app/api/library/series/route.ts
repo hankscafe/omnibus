@@ -27,7 +27,6 @@ function extractIssueNumber(filename: string): string {
     const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
     
-    // FIX: Proper lookbehinds used here
     const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) return parseFloat(matches[matches.length - 1][1]).toString();
     return "1"; 
@@ -202,13 +201,18 @@ export async function GET(request: Request) {
             const fileName = issue.filePath ? path.basename(issue.filePath) : null;
             const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
 
+            // --- FIX: Proxy external issue covers to bypass hotlinking ---
+            const finalIssueCoverUrl = issue.coverUrl && issue.coverUrl.startsWith('http') 
+                ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}` 
+                : issue.coverUrl;
+
             const formatted = {
                 id: issue.id, 
                 cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
                 name: issue.name || `${seriesRecord.name} #${issue.number}`,
                 parsedNum: parsedNum,
                 fullPath: issue.filePath, fileName: fileName,
-                coverUrl: issue.coverUrl,
+                coverUrl: finalIssueCoverUrl,
                 description: issue.description, releaseDate: issue.releaseDate,
                 writers: safeParse(issue.writers),
                 artists: safeParse(issue.artists),
@@ -232,6 +236,9 @@ export async function GET(request: Request) {
     const dbName = seriesRecord?.name?.trim();
     const fallbackName = path.basename(folderPath).replace(/\s\(\d{4}\)$/, "");
 
+    // --- FIX: Proxy external series covers as well ---
+    const finalSeriesCoverUrl = coverUrl || (seriesRecord?.coverUrl && seriesRecord.coverUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` : seriesRecord?.coverUrl) || null;
+
     return NextResponse.json({ 
       id: seriesRecord?.id || null, isFavorite, 
       cvId: (seriesRecord?.metadataId && !seriesRecord.metadataId.startsWith('unmatched_')) ? parseInt(seriesRecord.metadataId) : null,
@@ -239,7 +246,7 @@ export async function GET(request: Request) {
       publisher: seriesRecord?.publisher || null, year: seriesRecord?.year || null,
       description: seriesRecord?.description || null, status: seriesRecord?.status || null,
       monitored: seriesRecord?.monitored || false, isManga: (seriesRecord as any)?.isManga || false,
-      path: folderPath, coverUrl: coverUrl || seriesRecord?.coverUrl || null, 
+      path: folderPath, coverUrl: finalSeriesCoverUrl, 
       downloadedIssues, missingIssues
     });
 
@@ -248,13 +255,13 @@ export async function GET(request: Request) {
   }
 }
 
+// ... DELETE Route omitted for brevity (Keep existing DELETE unchanged)
 export async function DELETE(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
-        // FIX: Define userId for the AuditLogger
         const userId = (session.user as any).id;
 
         const { seriesIds, deleteFiles, folderPath } = await request.json();
@@ -269,7 +276,6 @@ export async function DELETE(request: Request) {
             await prisma.issue.deleteMany({ where: { seriesId: { in: seriesIds } } });
             await prisma.series.deleteMany({ where: { id: { in: seriesIds } } });
 
-            // --- AUDIT LOG ---
             await AuditLogger.log('DELETE_SERIES', { 
                 seriesIds, 
                 seriesNames: seriesToDelete.map(s => s.name),

@@ -1,10 +1,11 @@
+// src/app/admin/users/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff } from "lucide-react"
+import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff, Mail } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -34,6 +35,11 @@ export default function AdminUsersPage() {
   const [reset2faConfirmOpen, setReset2faConfirmOpen] = useState(false)
   const [userToReset, setUserToReset] = useState<{ id: string, username: string } | null>(null)
   const [isResetting2fa, setIsResetting2fa] = useState(false)
+
+  // Password Reset States
+  const [resetPassConfirmOpen, setResetPassConfirmOpen] = useState(false)
+  const [userToResetPass, setUserToResetPass] = useState<{ id: string, username: string } | null>(null)
+  const [isResettingPass, setIsResettingPass] = useState(false)
 
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -66,9 +72,8 @@ export default function AdminUsersPage() {
         body: JSON.stringify({ id, [field]: value })
       })
       if (res.ok) {
-        const data = await res.json() // <-- Extract the JSON response
+        const data = await res.json()
         toast({ title: "User Updated", description: "Changes saved successfully." })
-        // <-- Replace the old setUsers logic with this so it absorbs all the backend permission changes -->
         setUsers(prev => prev.map(u => u.id === id ? data.user : u))
       } else throw new Error("Update failed")
     } catch (error: unknown) {
@@ -117,7 +122,6 @@ export default function AdminUsersPage() {
     }
   }
 
-  // --- NEW: 2FA Reset Methods ---
   const initiateReset2FA = (id: string, username: string) => {
     setUserToReset({ id, username });
     setReset2faConfirmOpen(true);
@@ -143,6 +147,34 @@ export default function AdminUsersPage() {
         setIsResetting2fa(false);
         setUserToReset(null);
     }
+  }
+
+  // --- NEW: Password Reset Handlers ---
+  const initiateResetPassword = (id: string, username: string) => {
+      setUserToResetPass({ id, username });
+      setResetPassConfirmOpen(true);
+  }
+
+  const handleConfirmedResetPassword = async () => {
+      if (!userToResetPass) return;
+      setIsResettingPass(true);
+      try {
+          const res = await fetch('/api/admin/users/reset-password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: userToResetPass.id })
+          });
+          const data = await res.json();
+          if (res.ok) {
+              toast({ title: "Reset Email Sent", description: `A password reset link has been sent to ${userToResetPass.username}.` });
+              setResetPassConfirmOpen(false);
+          } else throw new Error(data.error || "Failed to send reset email");
+      } catch (error: any) {
+          toast({ title: "Reset Failed", description: error.message, variant: "destructive" });
+      } finally {
+          setIsResettingPass(false);
+          setUserToResetPass(null);
+      }
   }
 
   const handleCreateUser = async () => {
@@ -228,6 +260,10 @@ export default function AdminUsersPage() {
                             <Eye className="w-3.5 h-3.5 mr-1.5" /> Login As
                         </Button>
                         
+                        <Button variant="outline" size="icon" onClick={() => initiateResetPassword(user.id, user.username)} className="text-blue-500 hover:text-blue-600 border-border hover:bg-muted h-8 w-8 shrink-0" title="Send Password Reset Email">
+                            <Mail className="w-4 h-4" />
+                        </Button>
+
                         <div className="w-8 h-8 flex shrink-0">
                             {user.twoFactorEnabled && (
                                 <Button variant="outline" size="icon" onClick={() => initiateReset2FA(user.id, user.username)} className="text-orange-500 hover:text-orange-600 border-border hover:bg-muted h-8 w-8" title="Reset 2FA">
@@ -306,6 +342,15 @@ export default function AdminUsersPage() {
                     <Eye className="w-4 h-4 mr-2" /> Login As
                 </Button>
                 
+                <Button 
+                    variant="outline" 
+                    onClick={() => initiateResetPassword(user.id, user.username)} 
+                    className="h-12 w-12 shrink-0 text-blue-500 hover:text-blue-600 border-border hover:bg-muted bg-background"
+                    title="Send Password Reset"
+                >
+                    <Mail className="w-5 h-5" />
+                </Button>
+
                 {user.twoFactorEnabled && (
                     <Button 
                         variant="outline" 
@@ -380,6 +425,17 @@ export default function AdminUsersPage() {
         description={`Are you sure you want to disable 2FA for ${userToReset?.username}? They will only need their password to log in until they set it up again.`} 
         confirmText="Reset 2FA" 
         variant="destructive"
+      />
+
+      <ConfirmationDialog 
+        isOpen={resetPassConfirmOpen} 
+        onClose={() => setResetPassConfirmOpen(false)} 
+        onConfirm={handleConfirmedResetPassword} 
+        isLoading={isResettingPass} 
+        title="Send Password Reset" 
+        description={`Are you sure you want to send a password reset email to ${userToResetPass?.username}? They will receive a secure link valid for 1 hour.`} 
+        confirmText="Send Email" 
+        variant="default"
       />
     </div>
   )

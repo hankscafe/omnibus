@@ -16,7 +16,7 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
     const cbzPath = cbrPath.replace(/\.(cbr|rar)$/i, '.cbz');
     
     // --- FIX: Defaults to /cache to align with standard Docker setups ---
-    const baseTempDir = process.env.CACHE_DIR || '/cache';
+    const baseTempDir = process.env.OMNIBUS_CACHE_DIR || '/cache';
     const tempDir = path.join(baseTempDir, `cbr_${crypto.randomBytes(8).toString('hex')}`);
 
     try {

@@ -18,7 +18,6 @@ import { getErrorMessage } from '@/lib/utils/error';
 
 const execFileAsync = promisify(execFile);
 
-// ... (Helper functions remain the same) ...
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
     const cleanCurrent = current.replace(/^v/, '');
@@ -123,7 +122,7 @@ const globalForMQ = globalThis as unknown as {
 };
 
 // 2. Cache the Redis connection
-const connection = globalForMQ.redisConnection || new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+const connection = globalForMQ.redisConnection || new IORedis(process.env.OMNIBUS_REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null
 });
 
@@ -167,7 +166,7 @@ export function initWorker() {
                     const key = crypto.createHash('sha256').update(String(secret)).digest();
                     const iv = crypto.randomBytes(16);
                     
-                    const backupDir = process.env.BACKUP_PATH || '/backups';
+                    const backupDir = process.env.OMNIBUS_BACKUPS_DIR || '/backups';
                     await fs.ensureDir(backupDir);
                     const fileName = `omnibus_backup_${Date.now()}.json`;
                     const filePath = path.join(backupDir, fileName);
@@ -636,7 +635,6 @@ export function initWorker() {
                     break;
                 }
 
-                // --- NEW WEEKLY DIGEST JOB ---
                 case 'WEEKLY_DIGEST': {
                     await prisma.systemSetting.upsert({ 
                         where: { key: 'last_weekly_digest' }, 

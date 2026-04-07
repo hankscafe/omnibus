@@ -1,3 +1,4 @@
+// src/app/api/admin/logs/download/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
@@ -18,7 +19,7 @@ export async function GET() {
         }
 
         // Dynamically find the log file using the same logic from logger.ts
-        const logDir = process.env.LOG_PATH || path.join(process.cwd(), 'config', 'logs');
+        const logDir = process.env.OMNIBUS_LOGS_DIR || path.join(process.cwd(), 'config', 'logs');
         const logFile = path.join(logDir, 'omnibus.log');
 
         if (!fs.existsSync(logFile)) {

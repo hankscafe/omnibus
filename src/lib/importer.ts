@@ -460,7 +460,12 @@ export const Importer = {
       
       await Mailer.sendAlert('comic_available', {
           title: req.activeDownloadName || series?.name || "Unknown Comic",
-          email: req.user?.email
+          email: req.user?.email,
+          user: req.user?.username,
+          requester: req.user?.username,
+          imageUrl: req.imageUrl,
+          description: series?.description,
+          date: new Date().toLocaleString()
       }).catch(() => {});
 
       Logger.log(`[Importer] Successfully imported to: ${destFolder}`, "success");

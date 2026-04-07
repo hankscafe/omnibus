@@ -51,7 +51,6 @@ interface WebhookConfig {
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
 const RECOMMENDED_KEYWORDS = "weekly young, young animal, weekly shonen, monthly shonen, gee-whiz, manga, hentai, doujinshi, shoujo, seinen, shojo, josei, gaze, lustiges taschenbuch enten-edition, les tuniques bleues, big comic superior, Creature Girls: A Hands-On Field Journal In Another World, Young King Bull, weekly playboy, big comic spirits, Young Champion Retsu, Big Comic Zōkan, Monthly Young Magazine, Comic Zenon, shonen sunday s, Chira Chiller";
 
-// --- UPDATED DISCORD EVENTS LIST ---
 const DISCORD_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
   { id: "request_approved", label: "Request Approved", desc: "Includes admin username, cover image, and synopsis." },
@@ -158,7 +157,6 @@ export default function SettingsPage() {
         const newConfig: any = { ...config };
         if (Array.isArray(data.settings)) {
             data.settings.forEach((item: any) => { 
-                // Exclude legacy api key from flat config mapping to avoid confusion
                 if (item.key !== 'omnibus_api_key') {
                     newConfig[item.key] = item.value;
                 }
@@ -170,7 +168,6 @@ export default function SettingsPage() {
         setConfig(newConfig);
     })
 
-    // Fetch Users & API Keys
     fetch('/api/admin/users').then(res => res.json()).then(data => {
         if (Array.isArray(data)) setUsers(data);
     });
@@ -216,8 +213,6 @@ export default function SettingsPage() {
     
     if (res.ok) {
         toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
-        
-        // Automatically trigger the Discover Sync job in the background
         fetch('/api/admin/jobs/trigger', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -229,7 +224,6 @@ export default function SettingsPage() {
   }
 }
 
-  // --- Multi-Library Management Handlers ---
   const addLibrary = () => {
     setConfiguredLibraries([...configuredLibraries, {
         id: `tmp_${Date.now()}`, name: "", path: "", isManga: false, isDefault: configuredLibraries.length === 0
@@ -294,7 +288,6 @@ export default function SettingsPage() {
     toast({ title: "Indexer Removed" })
   }
 
-  // --- Webhook Handlers ---
   const openWebhookModal = (webhook?: WebhookConfig) => {
     setTestResults(prev => ({ ...prev, webhooks: null }));
     if (webhook) {
@@ -427,7 +420,6 @@ export default function SettingsPage() {
   const updateHeader = (i: number, f: 'key' | 'value', v: string) => { const h = [...customHeaders]; (h[i] as any)[f] = v; setCustomHeaders(h); }
   const removeHeader = (id: string) => setCustomHeaders(customHeaders.filter(c => c.id !== id))
 
-  // --- API Key Handlers ---
   const handleGenerateKey = async () => {
       setIsGeneratingKey(true);
       setGeneratedKey(null);
@@ -837,26 +829,31 @@ export default function SettingsPage() {
 
                         {/* --- THE FIX: DOCKER VOLUME BINDINGS UI --- */}
                         <div className="grid gap-2 pt-6 border-t border-border mt-4">
-                            <Label className="text-foreground font-semibold text-lg flex items-center gap-2"><Database className="w-4 h-4 text-primary"/> Docker Volume Bindings (System Defaults)</Label>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+                            <Label className="text-foreground font-semibold text-lg flex items-center gap-2"><Database className="w-4 h-4 text-primary"/> Environment Paths (System Defaults)</Label>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-2">
+                                <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
+                                    <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Database className="w-3 h-3"/> Database Path</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.DATABASE_URL}>{envPaths?.DATABASE_URL?.replace('file:', '') || '/config/omnibus.db'}</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2">Where the SQLite database file is stored.</p>
+                                </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Save className="w-3 h-3"/> Backup Directory</p>
-                                    <p className="font-mono text-sm font-bold text-primary">{envPaths?.BACKUP_PATH || '/backups'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_BACKUPS_DIR}>{envPaths?.OMNIBUS_BACKUPS_DIR || '/backups'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where automated database backups are saved.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Zap className="w-3 h-3"/> Cache & Temp Dir</p>
-                                    <p className="font-mono text-sm font-bold text-primary">{envPaths?.CACHE_DIR || '/cache'}</p>
-                                    <p className="text-[10px] text-muted-foreground mt-2">Map this to a drive with plenty of free space for CBR to CBZ conversions.</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_CACHE_DIR}>{envPaths?.OMNIBUS_CACHE_DIR || '/cache'}</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2">Map this to a drive with plenty of free space.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><FileText className="w-3 h-3"/> Log Directory</p>
-                                    <p className="font-mono text-sm font-bold text-primary">{envPaths?.LOG_PATH || '/app/config/logs'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_LOGS_DIR}>{envPaths?.OMNIBUS_LOGS_DIR || '/app/config/logs'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where system activity logs are written.</p>
                                 </div>
                             </div>
                             <p className="text-[11px] text-muted-foreground mt-2">
-                                These paths are configured via Environment Variables (<code className="text-foreground font-bold">BACKUP_PATH</code>, <code className="text-foreground font-bold">CACHE_DIR</code>, <code className="text-foreground font-bold">LOG_PATH</code>) in your Docker setup. 
+                                These paths are configured via Environment Variables (<code className="text-foreground font-bold">DATABASE_URL</code>, <code className="text-foreground font-bold">OMNIBUS_BACKUPS_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_CACHE_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_LOGS_DIR</code>) in your Docker setup. 
                             </p>
                         </div>
                         {/* ------------------------------------------- */}
@@ -1490,7 +1487,6 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <StatusBox result={testResults.webhooks} />
             </div>
           )}
 

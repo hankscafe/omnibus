@@ -32,7 +32,7 @@ export async function GET(request: Request) {
             year: r.year,
             publisher: r.publisher,
             count: 0,
-            image: r.coverUrl,
+            image: r.coverUrl ? `/api/library/cover?path=${encodeURIComponent(r.coverUrl)}` : null, // FIX
             description: r.description || "No description available."
         }));
         return NextResponse.json({ results, hasMore: false }); 
@@ -64,10 +64,13 @@ export async function GET(request: Request) {
          if (desc.length > 500) desc = desc.substring(0, 500) + '...';
       }
 
+      // --- FIX: Proxies external ComicVine image immediately ---
+      const rawImage = vol.image?.medium_url || vol.image?.small_url || vol.image?.super_url || null;
+
       return {
         id: vol.id, name: vol.name, year: vol.start_year || null,
         publisher: vol.publisher?.name || 'Other', count: vol.count_of_issues || 0,
-        image: vol.image?.medium_url || vol.image?.small_url || vol.image?.super_url || null,
+        image: rawImage ? `/api/library/cover?path=${encodeURIComponent(rawImage)}` : null,
         description: desc || "No description available."
       };
     });

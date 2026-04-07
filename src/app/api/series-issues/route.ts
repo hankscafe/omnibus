@@ -4,13 +4,12 @@ import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { parseComicVineCredits } from '@/lib/utils';
-import { ComicVineIssue } from '@/types'; // <-- STRICT TYPE IMPORT
+import { ComicVineIssue } from '@/types'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
-// Create a local interface for the return type to eliminate `any[]`
 interface MappedIssueResult {
     id: number;
     volumeId: number;
@@ -35,7 +34,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Volume ID required' }, { status: 400 });
   }
   
-  // 1. FETCH KEY FROM DB
   const setting = await prisma.systemSetting.findUnique({
     where: { key: 'cv_api_key' }
   });
@@ -46,12 +44,11 @@ export async function GET(request: Request) {
   }
 
   try {
-    const allResults: MappedIssueResult[] = []; // TYPING FIX: Removed any[]
+    const allResults: MappedIssueResult[] = []; 
     let offset = 0;
     let totalResults = 1; 
     let loopCount = 0;    
 
-    // 2. PAGINATION LOOP
     while (offset < totalResults && loopCount < 20) {
       const response = await axios.get(`${BASE_URL}/issues/`, {
         params: {
@@ -67,12 +64,8 @@ export async function GET(request: Request) {
       });
 
       const data = response.data;
-      
-      if (offset === 0) {
-        totalResults = data.number_of_total_results || 0;
-      }
+      if (offset === 0) totalResults = data.number_of_total_results || 0;
 
-      // TYPING FIX: Force the mapping function to strictly expect a ComicVineIssue
       const pageResults: MappedIssueResult[] = (data.results || []).map((item: ComicVineIssue) => {
         let desc = item.deck;
         if (!desc && item.description) {
@@ -84,6 +77,9 @@ export async function GET(request: Request) {
 
         const dateStr = item.store_date || item.cover_date;
         const year = dateStr ? dateStr.split('-')[0] : '????';
+        
+        // --- FIX: Proxy external ComicVine image immediately ---
+        const rawImage = item.image?.medium_url || item.image?.small_url || item.image?.super_url || null;
 
         return {
           id: item.id,
@@ -93,7 +89,7 @@ export async function GET(request: Request) {
           issue_number: item.issue_number, 
           year: year,
           publisher: item.volume?.publisher?.name || null,
-          image: item.image?.medium_url || item.image?.small_url || item.image?.super_url || null,
+          image: rawImage ? `/api/library/cover?path=${encodeURIComponent(rawImage)}` : null,
           description: desc || "No description available.",
           siteUrl: item.site_detail_url,
           writers: writers.slice(0, 3), 

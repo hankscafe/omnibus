@@ -33,7 +33,6 @@ export async function GET(request: Request) {
       let seriesDisplayName = "";
       let issueNumberStr = "";
       
-      // ...
       if (req.activeDownloadName) {
           const match = req.activeDownloadName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
           if (match && match[1]) {
@@ -43,7 +42,6 @@ export async function GET(request: Request) {
               if (fallback && fallback[1]) issueNumberStr = ` Issue #${fallback[1].padStart(3, '0')}`;
           }
       }
-// ...
 
       if (series) {
           seriesDisplayName = `${series.name}${issueNumberStr} (${series.year})`;
@@ -63,7 +61,8 @@ export async function GET(request: Request) {
         status: req.status,
         progress: req.progress, 
         downloadLink: req.downloadLink,
-        imageUrl: req.imageUrl,
+        // --- FIX: Proxy external ComicVine images for requests to bypass hotlinking ---
+        imageUrl: req.imageUrl && req.imageUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(req.imageUrl)}` : req.imageUrl,
         activeDownloadName: req.activeDownloadName,
         retryCount: req.retryCount || 0 
       };

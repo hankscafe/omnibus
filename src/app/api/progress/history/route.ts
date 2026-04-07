@@ -24,8 +24,11 @@ export async function GET(request: Request) {
     const items = history.map((p) => {
         const folderPath = p.issue.series.folderPath;
         
+        // --- FIX: Proxy external URL if it hasn't been downloaded locally yet ---
         let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
-        if (!seriesCoverUrl && folderPath) {
+        if (seriesCoverUrl && seriesCoverUrl.startsWith('http')) {
+            seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(seriesCoverUrl)}`;
+        } else if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
         }
 

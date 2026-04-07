@@ -1,3 +1,4 @@
+// src/app/api/uploads/[...path]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
@@ -6,7 +7,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ path
     const resolvedParams = await params;
     const pathArray = resolvedParams.path;
 
-    const baseDir = path.resolve(process.cwd(), 'public');
+    // --- FIX: Map the base directory to the persistent /config volume ---
+    const configDir = process.env.OMNIBUS_CONFIG_DIR || '/config';
+    const baseDir = path.resolve(configDir, 'uploads');
     const filePath = path.resolve(baseDir, ...pathArray);
 
     if (!filePath.startsWith(baseDir)) {
@@ -35,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ path
 
     const contentType = contentTypes[extension];
 
-    // --- SECURITY FIX 1c: Block unknown file types entirely ---
+    // Block unknown file types entirely
     if (!contentType) {
         return new NextResponse("Forbidden file type. Only recognized image extensions are allowed.", { status: 403 });
     }

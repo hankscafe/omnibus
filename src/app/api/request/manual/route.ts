@@ -93,7 +93,10 @@ export async function POST(request: NextRequest) {
         
         Mailer.sendAlert('pending_request', { 
             user: token.name as string, 
-            title: name 
+            title: name,
+            imageUrl: image,
+            description: body.description || undefined,
+            date: new Date().toLocaleString()
         }).catch(() => {});
     }
 

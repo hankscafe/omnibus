@@ -1,3 +1,4 @@
+// src/app/api/trophies/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -25,18 +26,23 @@ export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    const configDir = process.env.OMNIBUS_CONFIG_DIR || '/config';
+
     try {
         const { id, name, description, actionType, targetValue, iconBase64 } = await req.json();
 
         let iconUrl = undefined;
         if (iconBase64) {
-            const trophyDir = path.join(process.cwd(), 'public', 'trophies');
+            // --- FIX: Saves trophy to /config/uploads/trophies ---
+            const trophyDir = path.join(configDir, 'uploads', 'trophies');
             await fs.ensureDir(trophyDir);
             const fileName = `${Date.now()}.png`;
             const filePath = path.join(trophyDir, fileName);
             const base64Data = iconBase64.replace(/^data:image\/\w+;base64,/, "");
             await fs.writeFile(filePath, base64Data, 'base64');
-            iconUrl = `/trophies/${fileName}`;
+            
+            // --- FIX: Returns updated dynamic path so client can render it immediately ---
+            iconUrl = `/api/uploads/trophies/${fileName}`;
         }
 
         if (id) {
@@ -51,7 +57,6 @@ export async function POST(req: Request) {
             return NextResponse.json(created);
         }
     } catch (e: any) {
-        // --- SECURITY FIX 1b: Log real error, hide from client ---
         Logger.log(`[Trophies API] Create/Update Error: ${e.message}`, 'error');
         return NextResponse.json({ error: "Failed to save trophy. Please check server logs." }, { status: 500 });
     }

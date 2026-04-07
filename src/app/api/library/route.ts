@@ -11,8 +11,6 @@ import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-// ... (POST handler stays identical, skip down to the GET handler modification) ...
-
 // --- GET HANDLER ---
 export async function GET(request: Request) {
   try {
@@ -398,8 +396,11 @@ export async function GET(request: Request) {
             }
         });
 
+        // --- FIX: Proxy external URL if it hasn't been downloaded locally yet ---
         let coverUrl = (s as any).coverUrl || null;
-        if (!coverUrl && s.folderPath) {
+        if (coverUrl && coverUrl.startsWith('http')) {
+            coverUrl = `/api/library/cover?path=${encodeURIComponent(coverUrl)}`;
+        } else if (!coverUrl && s.folderPath) {
             coverUrl = `/api/library/cover?path=${encodeURIComponent(s.folderPath)}`;
         }
 
@@ -409,7 +410,6 @@ export async function GET(request: Request) {
             year: s.year, 
             publisher: s.publisher || "Unknown",
             path: s.folderPath, 
-            // --- SCHEMA FIX: Map string to Number for Frontend UI compatibility ---
             cvId: (s.metadataId && !s.metadataId.startsWith('unmatched_')) ? parseInt(s.metadataId) : null,
             isFavorite: s.favorites.length > 0, 
             count: issueCount, 

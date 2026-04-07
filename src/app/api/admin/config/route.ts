@@ -13,7 +13,7 @@ const SENSITIVE_KEYS = [
     'oidc_client_secret', 
     'discord_webhooks', // Legacy flat key
     'omnibus_api_key',  // Legacy flat key
-    'smtp_pass'         // <-- ADDED for SMTP support
+    'smtp_pass'         
 ];
 
 export async function GET(request: Request) {
@@ -55,11 +55,12 @@ export async function GET(request: Request) {
       events: typeof w.events === 'string' ? JSON.parse(w.events) : w.events
   }));
 
-  // --- THE FIX: EXPOSE DOCKER PATHS (Updated to /cache) ---
+  // --- THE FIX: EXPOSE DOCKER PATHS (Updated to include Database URL) ---
   const envPaths = {
-      BACKUP_PATH: process.env.BACKUP_PATH || '/backups',
-      CACHE_DIR: process.env.CACHE_DIR || '/cache',
-      LOG_PATH: process.env.LOG_PATH || '/app/config/logs'
+      DATABASE_URL: process.env.DATABASE_URL || 'file:./omnibus.db',
+      OMNIBUS_BACKUPS_DIR: process.env.OMNIBUS_BACKUPS_DIR || '/backups',
+      OMNIBUS_CACHE_DIR: process.env.OMNIBUS_CACHE_DIR || '/cache',
+      OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs'
   };
 
   // 3. Return cleanly structured data

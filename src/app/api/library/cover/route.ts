@@ -1,3 +1,4 @@
+// src/app/api/library/cover/route.ts
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
@@ -12,14 +13,43 @@ export async function GET(request: Request) {
   if (!filePath) return new Response("Missing path", { status: 400 });
 
   try {
+    // --- FIX 1: Proxy External URLs to bypass hotlinking protection ---
+    if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        try {
+            const imgRes = await fetch(filePath, {
+                headers: { 
+                    'User-Agent': 'Omnibus/1.0',
+                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+                }
+            });
+            if (!imgRes.ok) throw new Error(`Status ${imgRes.status}`);
+            
+            const buffer = await imgRes.arrayBuffer();
+            const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+            
+            return new NextResponse(buffer, {
+                headers: {
+                    'Content-Type': contentType,
+                    'Cache-Control': 'public, max-age=86400, stale-while-revalidate=43200'
+                }
+            });
+        } catch (e) {
+            Logger.log(`External Image Fetch Failed: ${getErrorMessage(e)}`, 'warn');
+            return new Response("External Image Fetch Failed", { status: 500 });
+        }
+    }
+
+    // --- LOCAL FILE LOGIC ---
     // NATIVE DB FETCH: Get all configured libraries to authorize the path
     const libraries = await prisma.library.findMany();
-    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
-    const targetPath = path.normalize(filePath).toLowerCase();
-
-    const isAuthorized = authorizedRoots.some(root => 
-    targetPath === root || targetPath.startsWith(root + path.sep)
-    );
+    
+    // --- FIX 2: Bulletproof Path Check to fix broken local covers ---
+    const cleanTarget = filePath.replace(/\\/g, '/').toLowerCase();
+    const isAuthorized = libraries.some(lib => {
+        let cleanRoot = lib.path.replace(/\\/g, '/').toLowerCase();
+        if (!cleanRoot.endsWith('/')) cleanRoot += '/';
+        return cleanTarget === cleanRoot || cleanTarget.startsWith(cleanRoot);
+    });
 
     if (!isAuthorized) {
       return new Response("Unauthorized", { status: 403 });
@@ -60,7 +90,6 @@ export async function GET(request: Request) {
     
   } catch (error) {
     Logger.log(`Cover Error: ${getErrorMessage(error)}`, 'error');
-
     return new Response("Error", { status: 500 });
   }
 }

@@ -20,10 +20,12 @@ export async function GET(request: Request) {
       if (cache && cache.value) {
           const allResults = JSON.parse(cache.value);
           
-          // Slice the array based on the requested page
-          const results = allResults.slice(offset, offset + limit);
+          // --- FIX: Proxy the images inside the cache slice map ---
+          const results = allResults.slice(offset, offset + limit).map((r: any) => ({
+              ...r,
+              image: r.image && r.image.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(r.image)}` : r.image
+          }));
           
-          // If there's more data left in the cache, provide a nextOffset
           const nextOffset = (offset + limit < allResults.length) ? offset + limit : null;
 
           return NextResponse.json({ results, nextOffset });
@@ -33,7 +35,6 @@ export async function GET(request: Request) {
 
   } catch (error) {
       Logger.log(`Discovery API Error: ${getErrorMessage(error)}`, 'error');
-
       return NextResponse.json({ results: [], nextOffset: null }); 
   }
 }

@@ -350,40 +350,36 @@ services:
       - omnibus-redis
     environment:
       - TZ=America/New_York
+      
       # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., https://omnibus.mydomain.com)
       # or your NAS IP (e.g., http://192.168.1.100:3000)
       - NEXTAUTH_URL=http://192.168.1.100:3000
+      
       # REQUIRED: Generate a random string for security
-      # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key.  !!DO NOT LOSE THIS!!
+      # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key. !!DO NOT LOSE THIS!!
       - NEXTAUTH_SECRET=
+      
       # REQUIRED: Connection URL for the background job queue
-      - REDIS_URL=redis://omnibus-redis:6379/0
-      # REQUIRED: Cache directory for CBR -> CBZ convertor
-      - CACHE_DIR=/cache
-      # REQUIRED: Tells the app to store the database in our persistent config mount
+      - OMNIBUS_REDIS_URL=redis://omnibus-redis:6379/0
+      
+      # REQUIRED: Database connection string
       - DATABASE_URL=file:/config/omnibus.db
-      # OPTIONAL: Tells the app what path to use for the database backups, if not used Omnibus will default to /backups
-      - OMNIBUS_BACKUP_DIR=/backups
-      # REQUIRED: Tells the app where to store log files
-      - LOG_PATH=/logs
+      
+      # PRE-STAGED PATHS: These automatically create subfolders inside your mapped /config volume below
+      - OMNIBUS_CACHE_DIR=/config/cache
+      - OMNIBUS_LOGS_DIR=/config/logs
+      - OMNIBUS_BACKUPS_DIR=/config/backups
 
     volumes:
-      # REQUIRED: Persistent storage for your database, logs, and settings
+      # REQUIRED: Persistent storage for Database, Logs, Backups, Cache, and Uploaded Images
       - /path/to/your/nas/config:/config
-      # REQUIRED: Maps cache directory where CBR files are temporarily extracted then converted to CBZ
-      - /path/to/your/nas/cache:/cache
-      # REQUIRED: Maps backup folder for database backups (can be defined using environment variable)
-      - /path/to/your/nas/backups:/backups
-      # REQUIRED: Maps logs folder for persistent logging
-      - /path/to/your/nas/logs:/logs
-      # REQUIRED: Persistent storage for user avatars and banners
-      - /path/to/your/nas/avatars:/app/public/avatars
-      - /path/to/your/nas/banners:/app/public/banners
+      
       # -------------------------------------------------------------------------
       # OPTION 1: The Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
       # -------------------------------------------------------------------------
       # Maps your entire media/download root to /data for optimal performance
       - /path/to/your/nas/data:/data 
+      
       # -------------------------------------------------------------------------
       # OPTION 2: Separate Mounts (Slower copy/paste/delete operations)
       # Uncomment these and remove Option 1 if your folders are on different drives

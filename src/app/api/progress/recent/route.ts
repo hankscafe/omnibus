@@ -18,12 +18,7 @@ export async function GET(request: Request) {
         const sessionName = session.user.name;
         
         const user = await prisma.user.findFirst({
-            where: {
-                OR: [
-                    ...(sessionEmail ? [{ email: sessionEmail }] : []),
-                    ...(sessionName ? [{ username: sessionName }] : [])
-                ]
-            }
+            where: { OR: [ ...(sessionEmail ? [{ email: sessionEmail }] : []), ...(sessionName ? [{ username: sessionName }] : []) ] }
         });
         userId = user?.id || null;
     }
@@ -33,14 +28,8 @@ export async function GET(request: Request) {
     }
 
     const recentProgress = await prisma.readProgress.findMany({
-        where: {
-            userId: userId,
-            isCompleted: false,
-            totalPages: { gt: 0 }
-        },
-        include: {
-            issue: { include: { series: true } }
-        },
+        where: { userId: userId, isCompleted: false, totalPages: { gt: 0 } },
+        include: { issue: { include: { series: true } } },
         orderBy: { updatedAt: 'desc' },
         take: 7
     });
@@ -49,8 +38,11 @@ export async function GET(request: Request) {
         const percentage = Math.round((p.currentPage / p.totalPages) * 100);
         const folderPath = p.issue.series.folderPath;
         
+        // --- FIX: Proxy external URL if it hasn't been downloaded locally yet ---
         let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
-        if (!seriesCoverUrl && folderPath) {
+        if (seriesCoverUrl && seriesCoverUrl.startsWith('http')) {
+            seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(seriesCoverUrl)}`;
+        } else if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
         }
 

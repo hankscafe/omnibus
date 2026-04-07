@@ -1,3 +1,4 @@
+// src/lib/encryption.ts
 import crypto from 'crypto';
 import { Logger } from './logger';
 import { prisma } from './db';
@@ -13,24 +14,24 @@ async function getEncryptionKey() {
 
     let secret = dbKey?.value;
 
-    // Fallback to NEXTAUTH_SECRET only if the DB key is missing 
-    // to prevent immediate crashes for users migrating from older versions.
+    // SECURITY FIX: Removed insecure string fallback. 
+    // If the DB key is missing, we must use the environment variable.
     if (!secret) {
         secret = process.env.NEXTAUTH_SECRET;
-        if (!secret) throw new Error("No encryption key found in database or environment.");
+    }
+
+    // CRITICAL FIX: Fail-fast if no secret is provided.
+    if (!secret || secret === 'change_this_to_a_random_secure_string_123!') {
+        throw new Error("CRITICAL SECURITY ERROR: NEXTAUTH_SECRET is missing or insecure. Encryption cannot proceed.");
     }
 
     // Derive a 32-byte key from the secret
     return crypto.createHash('sha256').update(String(secret)).digest();
 }
 
-/**
- * Encrypts a plaintext 2FA secret. 
- * Returns the prefixed string containing the IV and ciphertext.
- */
 export async function encrypt2FA(text: string | null): Promise<string | null> {
     if (!text) return text;
-    if (text.startsWith(PREFIX)) return text; // Already encrypted
+    if (text.startsWith(PREFIX)) return text; 
 
     const iv = crypto.randomBytes(16);
     const key = await getEncryptionKey();
@@ -39,20 +40,15 @@ export async function encrypt2FA(text: string | null): Promise<string | null> {
     let encrypted = cipher.update(text, 'utf8', 'hex');
     encrypted += cipher.final('hex');
     
-    // Format: enc:v1:<iv_hex>:<ciphertext_hex>
     return `${PREFIX}${iv.toString('hex')}:${encrypted}`;
 }
 
-/**
- * Decrypts a 2FA secret.
- * If the secret lacks the encryption prefix, it assumes it is a legacy plaintext secret and returns it as-is.
- */
 export async function decrypt2FA(text: string | null): Promise<string | null> {
     if (!text) return text;
-    if (!text.startsWith(PREFIX)) return text; // Legacy plaintext fallback
+    if (!text.startsWith(PREFIX)) return text; 
 
     try {
-        const payload = text.slice(PREFIX.length); // Remove 'enc:v1:'
+        const payload = text.slice(PREFIX.length); 
         const [ivHex, encryptedText] = payload.split(':');
         
         const iv = Buffer.from(ivHex, 'hex');
@@ -64,7 +60,7 @@ export async function decrypt2FA(text: string | null): Promise<string | null> {
         
         return decrypted;
     } catch (error) {
-        Logger.log("[Encryption] Failed to decrypt 2FA secret. DATABASE_ENCRYPTION_KEY may have changed.", 'error');
+        Logger.log("[Encryption] Failed to decrypt 2FA secret. DATABASE_ENCRYPTION_KEY or NEXTAUTH_SECRET may have changed.", 'error');
         throw new Error("Decryption failed");
     }
 }

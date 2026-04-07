@@ -842,13 +842,21 @@ function SeriesContent() {
               </div>
 
               <div className="space-y-3">
-                  <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground px-1">
-                    {activeIssue ? `${activeIssue.name} Synopsis` : 'Synopsis'}
-                  </h4>
-                  <div className="text-sm leading-relaxed bg-muted/30 p-6 rounded-2xl border border-border min-h-[120px] text-foreground shadow-sm break-words">
-                      <div dangerouslySetInnerHTML={{__html: displayDescription}} />
-                  </div>
-              </div>
+    <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground px-1">
+      {activeIssue ? `${activeIssue.name} Synopsis` : 'Synopsis'}
+    </h4>
+    {/* SECURITY FIX: Data is now server-side sanitized. Rendering via prose class. */}
+    <div className="text-sm leading-relaxed bg-muted/30 p-6 rounded-2xl border border-border min-h-[120px] text-foreground shadow-sm break-words">
+        {displayDescription ? (
+            <div 
+                className="prose prose-sm dark:prose-invert max-w-none"
+                dangerouslySetInnerHTML={{ __html: displayDescription }} 
+            />
+        ) : (
+            <span className="italic opacity-50">No synopsis available.</span>
+        )}
+    </div>
+</div>
 
               {/* --- COMMUNITY REVIEWS SECTION --- */}
               <div className="space-y-6 mt-8 pt-8 border-t border-border">

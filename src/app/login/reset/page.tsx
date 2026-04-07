@@ -84,6 +84,7 @@ function ResetPasswordContent() {
                     placeholder="Enter new password..."  
                     value={password} 
                     onChange={(e) => setPassword(e.target.value)} 
+                    disabled={loading} // FIX: Disable during loading
                     className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
                     required
                   />
@@ -97,6 +98,7 @@ function ResetPasswordContent() {
                     placeholder="Confirm new password..."  
                     value={confirmPassword} 
                     onChange={(e) => setConfirmPassword(e.target.value)} 
+                    disabled={loading} // FIX: Disable during loading
                     className="bg-background border-input rounded-md h-12 sm:h-10 text-base sm:text-sm focus-visible:ring-primary transition-colors" 
                     required
                   />

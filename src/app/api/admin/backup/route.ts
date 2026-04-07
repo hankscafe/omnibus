@@ -15,19 +15,26 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+        // SECURITY FIX: Mandatory secret check - no literal fallback
+        const secret = process.env.NEXTAUTH_SECRET;
+        if (!secret || secret === 'change_this_to_a_random_secure_string_123!') {
+            throw new Error("Backup failed: NEXTAUTH_SECRET is not configured.");
+        }
+
         const algorithm = 'aes-256-cbc';
-        const secret = process.env.NEXTAUTH_SECRET || 'omnibus_default_encryption_key_!@#';
-        const key = crypto.createHash('sha256').update(String(secret)).digest();
+        const salt = crypto.randomBytes(16);
         const iv = crypto.randomBytes(16);
+
+        // STRENGTHEN KDF: Use PBKDF2 with 100,000 iterations instead of single SHA-256
+        const key = crypto.pbkdf2Sync(secret, salt, 100000, 32, 'sha256');
         const cipher = crypto.createCipheriv(algorithm, key, iv);
 
-        // --- THE FIX: STREAMING CIPHER ENGINE ---
-        // Instead of loading the DB into RAM, we stream chunks directly through the cipher to the client
         const stream = new ReadableStream({
             async start(controller) {
                 const encEncoder = new TextEncoder();
                 
-                controller.enqueue(encEncoder.encode(`{\n  "encrypted": true,\n  "version": "2.2",\n  "iv": "${iv.toString('hex')}",\n  "data": "`));
+                // Version 3.0: Supports PBKDF2 key derivation
+                controller.enqueue(encEncoder.encode(`{\n  "encrypted": true,\n  "version": "3.0",\n  "salt": "${salt.toString('hex')}",\n  "iv": "${iv.toString('hex')}",\n  "data": "`));
 
                 cipher.on('data', (chunk) => {
                     controller.enqueue(encEncoder.encode(chunk.toString('hex')));
@@ -40,7 +47,6 @@ export async function GET() {
 
                 cipher.write('{"timestamp":"' + new Date().toISOString() + '","data":{');
 
-                // Ordered safely for foreign key restoration
                 const tables = [
                     { name: 'users', model: prisma.user },
                     { name: 'settings', model: prisma.systemSetting },
@@ -67,18 +73,14 @@ export async function GET() {
                 for (const table of tables) {
                     if (!firstTable) cipher.write(',');
                     firstTable = false;
-                    
                     cipher.write(`"${table.name}":[`);
-                    
                     let skip = 0;
-                    const take = 500; // Chunk size to keep RAM usage low
+                    const take = 500;
                     let firstRow = true;
-                    
                     while (true) {
                         // @ts-ignore
                         const rows = await table.model.findMany({ skip, take });
                         if (rows.length === 0) break;
-                        
                         for (const row of rows) {
                             if (!firstRow) cipher.write(',');
                             firstRow = false;
@@ -90,7 +92,7 @@ export async function GET() {
                 }
 
                 cipher.write('}}');
-                cipher.end(); // Triggers cipher 'end' event which closes the HTTP stream
+                cipher.end();
             }
         });
 
@@ -103,7 +105,7 @@ export async function GET() {
         });
 
     } catch (error: unknown) {
-        Logger.log(`[Backup API] Generation Failed: ${getErrorMessage(error)}`, 'error');
-        return NextResponse.json({ error: "Backup generation failed. Please check the server logs." }, { status: 500 });
+        Logger.log(`[Backup API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: "Backup generation failed." }, { status: 500 });
     }
 }

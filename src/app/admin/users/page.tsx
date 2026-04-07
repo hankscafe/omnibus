@@ -22,6 +22,7 @@ export default function AdminUsersPage() {
       document.title = "Omnibus - Users";
   }, []);
 
+  const [copied, setCopied] = useState(false);
   const { data: session } = useSession()
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -49,6 +50,15 @@ export default function AdminUsersPage() {
   })
   
   const { toast } = useToast()
+
+  const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      setCopied(true);
+      toast({ title: "Copied!", description: "API Key copied to clipboard." });
+      
+      // --- FIX: Reset state after 2 seconds ---
+      setTimeout(() => setCopied(false), 2000);
+  }
 
   const fetchUsers = async () => {
     try {

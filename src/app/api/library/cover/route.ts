@@ -1,95 +1,90 @@
 // src/app/api/library/cover/route.ts
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-export async function GET(request: Request) {
+const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org'];
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+
+export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const filePath = searchParams.get('path');
 
   if (!filePath) return new Response("Missing path", { status: 400 });
 
   try {
-    // --- FIX 1: Proxy External URLs to bypass hotlinking protection ---
+    // 1. SSRF MITIGATION: Validate External URLs
     if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        const url = new URL(filePath);
+        
+        if (!ALLOWED_METADATA_HOSTS.includes(url.hostname)) {
+            return new Response("Forbidden: Untrusted Host", { status: 403 });
+        }
+
+        const isPrivate = /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.|0\.|169\.254\.)/.test(url.hostname);
+        if (isPrivate) return new Response("Forbidden: Internal Address", { status: 403 });
+
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000); 
+
             const imgRes = await fetch(filePath, {
-                headers: { 
-                    'User-Agent': 'Omnibus/1.0',
-                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
-                }
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Omnibus/1.0' }
             });
+            clearTimeout(timeoutId);
+
             if (!imgRes.ok) throw new Error(`Status ${imgRes.status}`);
             
+            const contentLength = parseInt(imgRes.headers.get('content-length') || '0');
+            if (contentLength > MAX_IMAGE_SIZE) return new Response("File too large", { status: 413 });
+
             const buffer = await imgRes.arrayBuffer();
-            const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
-            
             return new NextResponse(buffer, {
                 headers: {
-                    'Content-Type': contentType,
-                    'Cache-Control': 'public, max-age=86400, stale-while-revalidate=43200'
+                    'Content-Type': imgRes.headers.get('content-type') || 'image/jpeg',
+                    'Cache-Control': 'public, max-age=86400'
                 }
             });
         } catch (e) {
-            Logger.log(`External Image Fetch Failed: ${getErrorMessage(e)}`, 'warn');
-            return new Response("External Image Fetch Failed", { status: 500 });
+            // --- FIX: Return fallback image on fetch failure ---
+            return NextResponse.redirect(new URL('/favicon.ico', request.url));
         }
     }
 
-    // --- LOCAL FILE LOGIC ---
-    // NATIVE DB FETCH: Get all configured libraries to authorize the path
+    // 2. PATH TRAVERSAL FIX
+    const realTarget = fs.realpathSync(filePath);
     const libraries = await prisma.library.findMany();
     
-    // --- FIX 2: Bulletproof Path Check to fix broken local covers ---
-    const cleanTarget = filePath.replace(/\\/g, '/').toLowerCase();
     const isAuthorized = libraries.some(lib => {
-        let cleanRoot = lib.path.replace(/\\/g, '/').toLowerCase();
-        if (!cleanRoot.endsWith('/')) cleanRoot += '/';
-        return cleanTarget === cleanRoot || cleanTarget.startsWith(cleanRoot);
+        const realLibRoot = fs.realpathSync(lib.path);
+        return realTarget.startsWith(realLibRoot);
     });
 
     if (!isAuthorized) {
       return new Response("Unauthorized", { status: 403 });
     }
 
-    if (!fs.existsSync(filePath)) return new Response("Not Found", { status: 404 });
-
-    let finalPath = filePath;
-    const stat = fs.statSync(filePath);
-    
-    if (stat.isDirectory()) {
-        const possibleCovers = ['cover.jpg', 'cover.png', 'folder.jpg', 'poster.jpg'];
-        let found = false;
-        for (const coverName of possibleCovers) {
-            const testPath = path.join(filePath, coverName);
-            if (fs.existsSync(testPath)) {
-                finalPath = testPath;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return new Response("Not Found", { status: 404 });
+    if (!fs.existsSync(realTarget)) {
+        // --- FIX: Return fallback image on file missing ---
+        return NextResponse.redirect(new URL('/favicon.ico', request.url));
     }
 
-    const ext = path.extname(finalPath).toLowerCase();
-    let contentType = 'image/jpeg';
-    if (ext === '.png') contentType = 'image/png';
-    if (ext === '.webp') contentType = 'image/webp';
-
-    const buffer = fs.readFileSync(finalPath);
+    const ext = path.extname(realTarget).toLowerCase();
+    const buffer = fs.readFileSync(realTarget);
     
     return new NextResponse(buffer, { 
         headers: { 
-            'Content-Type': contentType,
-            'Cache-Control': 'public, max-age=86400, stale-while-revalidate=43200' 
+            'Content-Type': ext === '.png' ? 'image/png' : 'image/jpeg',
+            'Cache-Control': 'public, max-age=86400'
         } 
     });
     
   } catch (error) {
     Logger.log(`Cover Error: ${getErrorMessage(error)}`, 'error');
-    return new Response("Error", { status: 500 });
+    return NextResponse.redirect(new URL('/favicon.ico', request.url));
   }
 }

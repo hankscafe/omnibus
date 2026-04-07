@@ -43,11 +43,33 @@ interface Comic {
   [key: string]: any;
 }
 
+interface LibrarySeries {
+  id: string;
+  path: string;
+  name: string;
+  cover?: string;
+  publisher?: string;
+  year?: string;
+  count: number;
+  unreadCount?: number;
+  progressPercentage?: number;
+  isFavorite: boolean;
+  cvId?: number;
+  monitored?: boolean;
+  isManga?: boolean;
+}
+
+interface Collection {
+  id: string;
+  name: string;
+  items?: { id: string }[];
+}
+
 type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
 
 function LibrarySkeleton({ count = 24 }: { count?: number }) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10" aria-hidden="true">
       {[...Array(count)].map((_, i) => (
         <div key={i} className="space-y-2">
           <div className="aspect-[2/3] rounded-xl bg-muted animate-pulse" />
@@ -68,7 +90,7 @@ function LibraryContent() {
   const toastRef = useRef(toast);
   toastRef.current = toast;
 
-  const [series, setSeries] = useState<any[]>([])
+  const [series, setSeries] = useState<LibrarySeries[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -76,11 +98,10 @@ function LibraryContent() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   
-  // Safe SSR default
   const [pageSize, setPageSize] = useState<number>(24);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
-  const [editing, setEditing] = useState<any>(null)
+  const [editing, setEditing] = useState<LibrarySeries | null>(null)
   const [updating, setUpdating] = useState(false)
   const [copied, setCopied] = useState(false);
   
@@ -101,9 +122,9 @@ function LibraryContent() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [refreshTarget, setRefreshTarget] = useState<{cvId: number, path: string} | null>(null)
   
-  const [collections, setCollections] = useState<any[]>([])
+  const [collections, setCollections] = useState<Collection[]>([])
   const [activeCollection, setActiveCollection] = useState("ALL")
-  const [targetSeries, setTargetSeries] = useState<any>(null)
+  const [targetSeries, setTargetSeries] = useState<LibrarySeries | null>(null)
   const [newCollectionName, setNewCollectionName] = useState("")
   const [selectedCollectionId, setSelectedCollectionId] = useState("")
   const [manageListsOpen, setManageListsOpen] = useState(false)
@@ -122,14 +143,9 @@ function LibraryContent() {
 
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
-  // Deep Details State
   const [selectedComic, setSelectedComic] = useState<Comic | null>(null)
   const [relatedIssues, setRelatedIssues] = useState<Comic[]>([])
   const [loadingRelated, setLoadingRelated] = useState(false)
-  const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
-  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, directSource?: 'getcomics' } | null>(null);
-  
-  const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
   
   const [ownedSeries, setOwnedSeries] = useState<Set<number>>(new Set())
   const [monitoredSeries, setMonitoredSeries] = useState<Set<number>>(new Set())
@@ -140,7 +156,6 @@ function LibraryContent() {
 
   const isAdmin = (session?.user as any)?.role === 'ADMIN'
 
-  // --- STABLE FILTER TRACKING ---
   const filtersRef = useRef({
       search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
       sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
@@ -161,7 +176,6 @@ function LibraryContent() {
       return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Status Checkers
   useEffect(() => {
     fetch('/api/library/ids')
       .then(res => res.json())
@@ -176,35 +190,7 @@ function LibraryContent() {
       .catch(() => {});
   }, []);
 
-  const getVolumeStatus = (volumeId: number, name: string): StatusType => {
-      if (ownedSeries.has(volumeId)) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
-      if (requestedVolumes.has(volumeId)) return 'REQUESTED';
-      
-      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
-      if (activeReqs.length > 0) {
-          const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
-          if (allCompleted) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
-          if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
-      }
-      return null;
-  }
-
-  const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
-      if (ownedIssues.has(issueId)) return 'ISSUE_OWNED';
-      if (requestedIssues.has(issueName)) return 'REQUESTED';
-
-      const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
-      if (req) {
-          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
-          if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
-          return 'REQUESTED';
-      }
-      return null;
-  }
-
-  // --- DEEP METADATA FETCH (FIXED) ---
   useEffect(() => {
-    // FIX: Using cvId to fetch volume details instead of the Prisma CUID
     if (!selectedComic?.cvId) return;
     
     fetch(`/api/issue-details?id=${selectedComic.cvId}&type=volume&_t=${Date.now()}`)
@@ -216,7 +202,7 @@ function LibraryContent() {
             return {
                 ...prev,
                 ...data,
-                name: prev?.name || data.name, // Keep local override if present
+                name: prev?.name || data.name,
                 publisher: (data.publisher && data.publisher !== 'Unknown') ? data.publisher : prev?.publisher,
                 year: (data.year && data.year !== '????') ? data.year : prev?.year,
                 image: data.image || prev?.image || prev?.cover,
@@ -228,10 +214,9 @@ function LibraryContent() {
           });
         }
       });
-  }, [selectedComic?.id, selectedComic?.cvId]); // Ensure both are present
+  }, [selectedComic?.id, selectedComic?.cvId]);
 
   useEffect(() => {
-    // Fetch related issues for the bottom of the modal
     if (!selectedComic?.cvId) { setRelatedIssues([]); return; }
     setLoadingRelated(true)
     fetch(`/api/series-issues?volumeId=${selectedComic.cvId}`)
@@ -245,29 +230,6 @@ function LibraryContent() {
       .finally(() => setLoadingRelated(false))
   }, [selectedComic?.cvId])
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string) => {
-    const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
-    setRequestingTarget(targetKey);
-    try {
-      const res = await fetch('/api/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored, directSource })
-      });
-      if (res.ok) {
-          toast({ title: "Success", description: `${name} added to queue.` })
-          if (type === 'volume') {
-              setRequestedVolumes(prev => new Set(prev).add(id));
-          } else {
-              setRequestedIssues(prev => new Set(prev).add(name));
-              setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
-          }
-      }
-    } finally { setRequestingTarget(null) }
-  }
-
-
-  // --- STABLE DATA FETCHING ENGINE ---
   const loadLibraryData = useCallback(async (pageNum: number, isRefreshScan: boolean, appendResults: boolean) => {
       if (isRefreshScan) setIsRefreshing(true);
       else if (pageNum === 1) setLoading(true);
@@ -303,8 +265,8 @@ function LibraryContent() {
           if (data.series) {
               setSeries(prev => {
                   if (!appendResults) return data.series;
-                  const existingIds = new Set(prev.map((s: any) => s.id || s.path));
-                  const newItems = data.series.filter((s: any) => !existingIds.has(s.id || s.path));
+                  const existingIds = new Set(prev.map((s: LibrarySeries) => s.id || s.path));
+                  const newItems = data.series.filter((s: LibrarySeries) => !existingIds.has(s.id || s.path));
                   return [...prev, ...newItems];
               });
               setHasMore(data.hasMore);
@@ -330,7 +292,6 @@ function LibraryContent() {
 
   const isFirstRender = useRef(true);
 
-  // --- 1. MOUNT INITIALIZATION ---
   useEffect(() => {
       fetchCollections();
       
@@ -360,16 +321,13 @@ function LibraryContent() {
           isFirstRender.current = false;
       }, 100);
       
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadLibraryData, fetchCollections]);
 
-  // --- 2. FILTER CHANGES (STRICTLY BOUND) ---
   useEffect(() => { 
       if (isFirstRender.current) return;
       setPage(1); 
       loadLibraryData(1, false, false); 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger, pageSize])
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger, pageSize, loadLibraryData])
 
   const toggleViewMode = (mode: 'grid' | 'list') => {
       setViewMode(mode)
@@ -545,7 +503,7 @@ function LibraryContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             currentPath: editing.path, name: editing.name, year: editing.year, publisher: editing.publisher, 
-            cvId: editing.cvId ? parseInt(editing.cvId) : null, monitored: editing.monitored, isManga: editing.isManga
+            cvId: editing.cvId ? editing.cvId : null, monitored: editing.monitored, isManga: editing.isManga
         })
       });
       if (res.ok) {
@@ -559,7 +517,7 @@ function LibraryContent() {
     } catch (e: any) { toastRef.current({ title: "Error", description: e.message, variant: "destructive" }); } finally { setUpdating(false) }
   }
 
-  const initiateRefreshMetadata = (cvId: number, folderPath: string) => {
+  const initiateRefreshMetadata = (cvId: number | undefined, folderPath: string) => {
     if (!cvId) { toastRef.current({ title: "Missing ID", description: "This folder isn't linked to a ComicVine ID. Use 'Edit Info' to add one." }); return; }
     setRefreshTarget({ cvId, path: folderPath }); setConfirmOpen(true);
   }
@@ -684,36 +642,34 @@ function LibraryContent() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <h1 className="text-3xl font-bold flex items-center gap-2 text-foreground">Library</h1>
         <div className="flex flex-wrap items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-end">
-            <div className="flex bg-muted p-1 rounded-md shrink-0 shadow-inner border border-border overflow-x-auto max-w-full">
-                <Button variant={libraryFilter === 'ALL' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'ALL' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('ALL')}>All</Button>
-                <Button variant={libraryFilter === 'COMICS' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'COMICS' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('COMICS')}>Comics</Button>
-                <Button variant={libraryFilter === 'MANGA' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'MANGA' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('MANGA')}>Manga</Button>
+            <div className="flex bg-muted p-1 rounded-md shrink-0 shadow-inner border border-border overflow-x-auto max-w-full" role="tablist" aria-label="Library Section Filters">
+                <Button role="tab" aria-selected={libraryFilter === 'ALL'} variant={libraryFilter === 'ALL' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'ALL' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('ALL')}>All</Button>
+                <Button role="tab" aria-selected={libraryFilter === 'COMICS'} variant={libraryFilter === 'COMICS' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'COMICS' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('COMICS')}>Comics</Button>
+                <Button role="tab" aria-selected={libraryFilter === 'MANGA'} variant={libraryFilter === 'MANGA' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'MANGA' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('MANGA')}>Manga</Button>
                 {isAdmin && (
-                    <Button variant={libraryFilter === 'UNMATCHED' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'UNMATCHED' ? 'shadow-sm bg-orange-500 hover:bg-orange-600 text-white' : 'text-orange-500 hover:text-orange-600'}`} onClick={() => setLibraryFilter('UNMATCHED')}>
+                    <Button role="tab" aria-selected={libraryFilter === 'UNMATCHED'} variant={libraryFilter === 'UNMATCHED' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'UNMATCHED' ? 'shadow-sm bg-orange-500 hover:bg-orange-600 text-white' : 'text-orange-500 hover:text-orange-600'}`} onClick={() => setLibraryFilter('UNMATCHED')}>
                         Unmatched
                     </Button>
                 )}
             </div>
             
             <div className="flex items-center gap-2 shrink-0">
-                <Button variant={isSelectionMode ? "secondary" : "outline"} size="sm" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedSeries(new Set()); }} className={`h-10 sm:h-9 ${isSelectionMode ? "bg-primary/20 text-primary border-primary/50 hover:bg-primary/30" : "border-border"}`}>
+                <Button aria-label={isSelectionMode ? "Cancel series selection" : "Enter series selection mode"} variant={isSelectionMode ? "secondary" : "outline"} size="sm" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedSeries(new Set()); }} className={`h-10 sm:h-9 ${isSelectionMode ? "bg-primary/20 text-primary border-primary/50 hover:bg-primary/30" : "border-border"}`}>
                     <CheckSquare className="w-4 h-4 mr-2" /> {isSelectionMode ? "Cancel Select" : "Select"}
                 </Button>
-                <Button onClick={handleRefresh} disabled={loading || isRefreshing} variant="outline" size="sm" className="h-10 sm:h-9 border-border">
+                <Button aria-label="Scan library folders for new files" onClick={handleRefresh} disabled={loading || isRefreshing} variant="outline" size="sm" className="h-10 sm:h-9 border-border">
                 {isRefreshing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />} Refresh
                 </Button>
             </div>
         </div>
       </div>
 
-      {/* --- ADVANCED TOOLBAR (DOUBLE STACKED) --- */}
-      <div className="flex flex-col gap-4 mb-8 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
+      <div className="flex flex-col gap-4 mb-8 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300" role="group" aria-label="Advanced Search and Filtering">
           
-          {/* TOP ROW: Search & View Options */}
           <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full">
               <div className="relative flex flex-col sm:flex-row flex-1 w-full gap-2">
                   <Select value={searchType} onValueChange={setSearchType}>
-                      <SelectTrigger className="w-full sm:w-[140px] bg-background shadow-sm border-border shrink-0 h-10 sm:h-9">
+                      <SelectTrigger aria-label="Filter search by field" className="w-full sm:w-[140px] bg-background shadow-sm border-border shrink-0 h-10 sm:h-9">
                           <SelectValue placeholder="Search In" />
                       </SelectTrigger>
                       <SelectContent className="bg-popover border-border">
@@ -726,12 +682,12 @@ function LibraryContent() {
                   </Select>
                   <div className="relative flex-1 w-full">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <Input placeholder={`Search ${searchType === 'ALL' ? 'series, creators, or characters' : searchType.toLowerCase()}...`} className="pl-9 h-10 sm:h-9 bg-background shadow-sm border-border w-full" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                      <Input aria-label="Search text box" placeholder={`Search ${searchType === 'ALL' ? 'series, creators, or characters' : searchType.toLowerCase()}...`} className="pl-9 h-10 sm:h-9 bg-background shadow-sm border-border w-full" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                   </div>
               </div>
               <div className="flex flex-row flex-wrap w-full lg:w-auto gap-3 items-center justify-between lg:justify-end">
                   <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
-                      <SelectTrigger className="flex-1 lg:w-[130px] lg:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                      <SelectTrigger aria-label="Change items per page" className="flex-1 lg:w-[130px] lg:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
                           <div className="flex items-center gap-2 truncate"><List className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Show 24" /></div>
                       </SelectTrigger>
                       <SelectContent className="bg-popover border-border">
@@ -743,42 +699,39 @@ function LibraryContent() {
                   </Select>
                   
                   <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
-                    <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'grid' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('grid')}>
+                    <Button aria-label="Grid view mode" variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'grid' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('grid')}>
                         <LayoutGrid className="w-4 h-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'list' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('list')}>
+                    <Button aria-label="List view mode" variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'list' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('list')}>
                         <List className="w-4 h-4" />
                     </Button>
                 </div>
               </div>
           </div>
 
-          {/* BOTTOM ROW: Filters & Toggles */}
           <div className="flex flex-col sm:flex-row flex-wrap gap-3 items-center w-full">
-              {/* Quick Action Toggles */}
               <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 max-w-full">
-                  <Button variant={showFavoritesOnly ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
+                  <Button aria-label="Filter by favorite status" variant={showFavoritesOnly ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
                       <Heart className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''} sm:mr-2`} />
                       <span className="hidden sm:inline-block">Favorites</span>
                   </Button>
                   
-                  <Button variant="outline" className="shrink-0 h-10 sm:h-9 shadow-sm bg-blue-600 hover:bg-blue-700 text-white border-0 px-3" onClick={handleSurpriseMe}>
+                  <Button aria-label="Randomize library order" variant="outline" className="shrink-0 h-10 sm:h-9 shadow-sm bg-blue-600 hover:bg-blue-700 text-white border-0 px-3" onClick={handleSurpriseMe}>
                       <Dices className="w-4 h-4 sm:mr-2" />
                       <span className="hidden sm:inline font-bold">Surprise Me</span>
                   </Button>
 
                   {isAdmin && (
-                      <Button variant={monitoredFilter ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${monitoredFilter ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setMonitoredFilter(!monitoredFilter)}>
+                      <Button aria-label="Filter monitored series" variant={monitoredFilter ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${monitoredFilter ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setMonitoredFilter(!monitoredFilter)}>
                           <Activity className={`w-4 h-4 sm:mr-2`} />
                           <span className="hidden sm:inline-block">Monitored</span>
                       </Button>
                   )}
               </div>
 
-              {/* Collections & Dropdown Filters */}
               <div className="flex items-center gap-1 w-full sm:w-auto flex-1 sm:flex-none">
                   <Select value={activeCollection} onValueChange={setActiveCollection}>
-                      <SelectTrigger className={`w-full sm:w-[150px] h-10 sm:h-9 shadow-sm ${activeCollection !== "ALL" ? "bg-primary/10 text-primary border-primary/30 font-bold" : "bg-background border-border"}`}>
+                      <SelectTrigger aria-label="Filter by reading list" className={`w-full sm:w-[150px] h-10 sm:h-9 shadow-sm ${activeCollection !== "ALL" ? "bg-primary/10 text-primary border-primary/30 font-bold" : "bg-background border-border"}`}>
                           <div className="flex items-center gap-2 truncate"><Layers className="w-3 h-3 shrink-0"/> <SelectValue placeholder="Reading Lists" /></div>
                       </SelectTrigger>
                       <SelectContent className="bg-popover border-border">
@@ -787,11 +740,11 @@ function LibraryContent() {
                           {collections.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                       </SelectContent>
                   </Select>
-                  <Button variant="outline" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 shrink-0 bg-background border-border shadow-sm" onClick={() => setManageListsOpen(true)} title="Manage Lists"><Settings2 className="w-4 h-4 text-muted-foreground" /></Button>
+                  <Button variant="outline" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 shrink-0 bg-background border-border shadow-sm" onClick={() => setManageListsOpen(true)} title="Manage Lists" aria-label="Manage reading lists"><Settings2 className="w-4 h-4 text-muted-foreground" /></Button>
               </div>
               
               <Select value={readStatus} onValueChange={setReadStatus}>
-                  <SelectTrigger className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                  <SelectTrigger aria-label="Filter by reading status" className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
                       <div className="flex items-center gap-2 truncate"><BookOpen className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Read Status" /></div>
                   </SelectTrigger>
                   <SelectContent className="bg-popover border-border">
@@ -803,7 +756,7 @@ function LibraryContent() {
               </Select>
 
               <Select value={eraFilter} onValueChange={setEraFilter}>
-                  <SelectTrigger className="flex-1 sm:w-[130px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                  <SelectTrigger aria-label="Filter by publication era" className="flex-1 sm:w-[130px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
                       <div className="flex items-center gap-2 truncate"><Clock className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Era" /></div>
                   </SelectTrigger>
                   <SelectContent className="bg-popover border-border">
@@ -818,7 +771,7 @@ function LibraryContent() {
               </Select>
 
               <Select value={publisherFilter} onValueChange={setPublisherFilter}>
-                  <SelectTrigger className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                  <SelectTrigger aria-label="Filter by publisher" className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
                       <div className="flex items-center gap-2 truncate"><Filter className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Publisher" /></div>
                   </SelectTrigger>
                   <SelectContent className="bg-popover border-border">
@@ -828,7 +781,7 @@ function LibraryContent() {
               </Select>
               
               <Select value={sortOption} onValueChange={setSortOption}>
-                  <SelectTrigger className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                  <SelectTrigger aria-label="Sort library results" className="flex-1 sm:w-[150px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
                       <div className="flex items-center gap-2 truncate"><SortAsc className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Sort By" /></div>
                   </SelectTrigger>
                   <SelectContent className="bg-popover border-border">
@@ -842,7 +795,7 @@ function LibraryContent() {
               </Select>
 
               {hasActiveFilters && (
-                  <Button variant="ghost" className="h-10 sm:h-9 text-muted-foreground hover:text-foreground px-3 flex-1 sm:flex-none" onClick={handleResetFilters}>
+                  <Button aria-label="Clear all applied filters" variant="ghost" className="h-10 sm:h-9 text-muted-foreground hover:text-foreground px-3 flex-1 sm:flex-none" onClick={handleResetFilters}>
                       <X className="w-4 h-4 sm:mr-2" />
                       <span className="hidden sm:inline font-bold">Clear Filters</span>
                   </Button>
@@ -859,7 +812,7 @@ function LibraryContent() {
         </div>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10">
-          {series.map((item: any) => {
+          {series.map((item: LibrarySeries) => {
               const unread = item.unreadCount !== undefined ? item.unreadCount : item.count;
               const isCompleted = unread === 0 && item.count > 0;
               const progress = item.progressPercentage || 0;
@@ -873,7 +826,7 @@ function LibraryContent() {
                       <div 
                           role="button"
                           tabIndex={0}
-                          aria-label={`Open ${item.name}`}
+                          aria-label={`Open series: ${item.name}`}
                           className="relative flex-1 bg-muted flex items-center justify-center overflow-hidden focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                           onClick={(e) => { if (!isSelectionMode) handleNavigate(e as any, item.path, navId); else toggleSeriesSelection(item.id); }}
                           onKeyDown={(e) => {
@@ -887,7 +840,7 @@ function LibraryContent() {
                           {item.cover && (
                               <img 
                                 src={item.cover} 
-                                alt={item.name || "Comic Cover"} 
+                                alt={`Cover art for ${item.name}`} 
                                 loading="lazy" 
                                 className={`object-cover w-full h-full relative z-10 transition-opacity ${isCompleted ? 'opacity-60' : ''}`} 
                                 onError={(e) => { e.currentTarget.style.display = 'none'; }} 
@@ -900,12 +853,12 @@ function LibraryContent() {
                                   ) : unread > 0 ? (
                                       <Badge className="text-[9px] px-1.5 h-4 bg-primary hover:bg-primary/90 border-0 text-primary-foreground font-bold shadow-sm uppercase tracking-wider">{unread === item.count ? 'Unread' : `${unread} Left`}</Badge>
                                   ) : null}
-                                  <Badge className="text-[9px] px-1.5 h-4 bg-black/70 hover:bg-black/70 border-0 text-white font-mono shadow-sm backdrop-blur-sm" title="Total Issues">{item.count} {item.count === 1 ? 'Issue' : 'Issues'}</Badge>
+                                  <Badge className="text-[9px] px-1.5 h-4 bg-black/70 hover:bg-black/70 border-0 text-white font-mono shadow-sm backdrop-blur-sm" title={`${item.count} total issues in this series`}>{item.count} {item.count === 1 ? 'Issue' : 'Issues'}</Badge>
                               </div>
                           )}
                           {!isSelectionMode && (
                               <div className="absolute top-1.5 right-1.5 z-30">
-                                  <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`h-8 w-8 sm:h-6 sm:w-6 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center transition-all ${item.isFavorite ? 'text-primary opacity-100' : 'text-white/70 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-primary'}`}>
+                                  <button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`h-8 w-8 sm:h-6 sm:w-6 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center transition-all ${item.isFavorite ? 'text-primary opacity-100' : 'text-white/70 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-primary'}`}>
                                       <Heart className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${item.isFavorite ? 'fill-current' : ''}`} />
                                   </button>
                               </div>
@@ -919,6 +872,7 @@ function LibraryContent() {
                             size="sm" 
                             className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 min-w-0 px-2" 
                             onClick={(e) => handleNavigate(e as any, item.path, navId)}
+                            aria-label={`Open reader for ${item.name}`}
                         >
                             {navigatingTo === navId ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 mr-1.5 shrink-0" />} 
                             <span className="truncate">{navigatingTo === navId ? "Loading..." : "Read Series"}</span>
@@ -930,6 +884,7 @@ function LibraryContent() {
                             className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}
                             title="Add to List"
+                            aria-label={`Add ${item.name} to a reading list`}
                         >
                             <ListPlus className="w-4 h-4 shrink-0" /> 
                         </Button>
@@ -940,19 +895,20 @@ function LibraryContent() {
                                 className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
                                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}
                                 title="Edit Metadata"
+                                aria-label={`Edit metadata for ${item.name}`}
                             >
                                 <Settings2 className="w-4 h-4 shrink-0" /> 
                             </Button>
                             )}
                         </div>
                         {isAdmin && (
-                            <Button variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold border-0 min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.cvId, item.path); }}>
+                            <Button aria-label={`Refresh cover art for ${item.name}`} variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold border-0 min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.cvId, item.path); }}>
                                 <RefreshCw className="w-3 h-3 mr-1.5 shrink-0" /> 
                                 <span className="truncate">Fetch Cover</span>
                             </Button>
                         )}
                         {activeCollection !== "ALL" && (
-                            <Button variant="destructive" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}>
+                            <Button aria-label={`Remove ${item.name} from current list`} variant="destructive" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}>
                                 <Minus className="w-3 h-3 mr-1.5 shrink-0" /> 
                                 <span className="truncate">Remove</span>
                             </Button>
@@ -974,7 +930,7 @@ function LibraryContent() {
                       <div className="flex items-start justify-between gap-1 cursor-pointer hover:underline">
                           <h3 className={`text-[12px] sm:text-[11px] font-bold truncate leading-tight ${isCompleted ? 'text-muted-foreground' : 'text-foreground'}`} title={item.name}>{item.name}</h3>
                       </div>
-                      <p className="text-[10px] sm:text-[9px] text-muted-foreground mt-0.5 truncate">{item.publisher || 'Unknown'} • {item.year || '????'}</p>
+                      <p className="text-[10px] sm:text-[9px] text-muted-foreground mt-0.5 truncate" title={item.publisher || 'Unknown'}>{item.publisher || 'Unknown'} • {item.year || '????'}</p>
                   </div>
                 </div>
               )
@@ -988,7 +944,7 @@ function LibraryContent() {
                 <tr>{isSelectionMode && <th className="w-12 px-4 py-3 text-center">Select</th>}<th className="w-16 px-4 py-3 text-center">Cover</th><th className="px-4 py-3">Series Name</th><th className="px-4 py-3 hidden md:table-cell">Publisher</th><th className="px-4 py-3 hidden sm:table-cell text-center">Year</th><th className="px-4 py-3 text-center">Issues</th>{!isSelectionMode && <th className="px-4 py-3 text-right">Actions</th>}</tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {series.map((item: any) => {
+                {series.map((item: LibrarySeries) => {
                   const unread = item.unreadCount !== undefined ? item.unreadCount : item.count;
                   const isCompleted = unread === 0 && item.count > 0;
                   const isSelected = selectedSeries.has(item.id);
@@ -999,14 +955,14 @@ function LibraryContent() {
                         className={`transition-colors group ${isSelectionMode ? 'cursor-pointer hover:bg-muted ' + (isSelected ? 'bg-primary/10' : '') : 'hover:bg-muted/50'}`} 
                         onClick={() => isSelectionMode && item.id && toggleSeriesSelection(item.id)}
                     >
-                        {isSelectionMode && (<td className="px-4 py-3 text-center">{isSelected ? <CheckSquare className="w-6 h-6 text-primary mx-auto" /> : <Square className="w-6 h-6 text-muted-foreground mx-auto" />}</td>)}
+                        {isSelectionMode && (<td className="px-4 py-3 text-center">{isSelected ? <CheckSquare className="w-6 h-6 text-primary mx-auto" aria-label="Selected" /> : <Square className="w-6 h-6 text-muted-foreground mx-auto" aria-label="Not selected" />}</td>)}
                         
                         <td className="px-4 py-2">
                             <div 
                                 className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                                 role="button"
                                 tabIndex={0}
-                                aria-label={`Open ${item.name}`}
+                                aria-label={`Open series: ${item.name}`}
                                 onClick={(e) => { if(!isSelectionMode) handleNavigate(e as any, item.path, navId); }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' || e.key === ' ') {
@@ -1019,7 +975,7 @@ function LibraryContent() {
                                 {item.cover && (
                                     <img 
                                       src={item.cover} 
-                                      alt={item.name || "Comic Cover"} 
+                                      alt={`Cover art for ${item.name}`} 
                                       loading="lazy" 
                                       className={`w-full h-full object-cover relative z-10 transition-opacity ${isCompleted ? 'opacity-60' : ''}`} 
                                       onError={(e) => { e.currentTarget.style.display = 'none'; }}
@@ -1034,19 +990,20 @@ function LibraryContent() {
                                     <button 
                                         onClick={(e) => handleNavigate(e as any, item.path, navId)} 
                                         className="hover:text-primary transition-colors text-left font-bold flex items-center gap-2 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-sm"
+                                        title={item.name}
                                     >
                                         {item.name}
                                         {navigatingTo === navId && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
                                     </button>
                                 )}
-                                {!isSelectionMode && (<button onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`transition-colors focus:outline-none p-2 -m-2 ${item.isFavorite ? 'text-primary' : 'text-muted-foreground/50 hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}><Heart className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${item.isFavorite ? 'fill-current' : ''}`} /></button>)}
+                                {!isSelectionMode && (<button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`transition-colors focus:outline-none p-2 -m-2 ${item.isFavorite ? 'text-primary' : 'text-muted-foreground/50 hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}><Heart className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${item.isFavorite ? 'fill-current' : ''}`} /></button>)}
                             </div>
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{item.publisher || 'Unknown'}</td>
+                        <td className="px-4 py-3 text-muted-foreground hidden md:table-cell" title={item.publisher || 'Unknown'}>{item.publisher || 'Unknown'}</td>
                         <td className="px-4 py-3 text-center hidden sm:table-cell">{item.year || '????'}</td>
                         <td className="px-4 py-3 text-center">
                             <div className="flex items-center justify-center gap-2">
-                                <Badge variant="secondary" className="font-mono bg-muted border-border" title="Total Issues">{item.count}</Badge>
+                                <Badge variant="secondary" className="font-mono bg-muted border-border" title={`${item.count} total issues in this series`}>{item.count}</Badge>
                                 {unread > 0 && !isCompleted && (
                                     <Badge className="bg-primary/20 text-primary border-0 font-bold uppercase tracking-wider text-[10px]">{unread === item.count ? 'Unread' : `${unread} Left`}</Badge>
                                 )}
@@ -1055,14 +1012,15 @@ function LibraryContent() {
                         {!isSelectionMode && (
                             <td className="px-4 py-3 text-right">
                                 <div className="flex items-center justify-end gap-2">
-                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:text-primary hover:bg-primary/10" title="Add to List" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}> <ListPlus className="w-5 h-5 sm:w-4 sm:h-4" /> </Button> 
-                                    {activeCollection !== "ALL" && (<Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="Remove from List" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}> <Minus className="w-5 h-5 sm:w-4 sm:h-4" /> </Button>)} 
-                                    <Button variant="ghost" size="icon" className="hidden sm:inline-flex h-8 w-8 hover:bg-muted" title="Edit Metadata" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}> <Settings2 className="w-4 h-4 text-muted-foreground" /> </Button>
+                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:text-primary hover:bg-primary/10" title="Add to List" aria-label={`Add ${item.name} to a reading list`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}> <ListPlus className="w-5 h-5 sm:w-4 sm:h-4" /> </Button> 
+                                    {activeCollection !== "ALL" && (<Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="Remove from List" aria-label={`Remove ${item.name} from current reading list`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}> <Minus className="w-5 h-5 sm:w-4 sm:h-4" /> </Button>)} 
+                                    <Button aria-label={`Edit metadata for ${item.name}`} variant="ghost" size="icon" className="hidden sm:inline-flex h-8 w-8 hover:bg-muted" title="Edit Metadata" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}> <Settings2 className="w-4 h-4 text-muted-foreground" /> </Button>
                                     <Button 
                                         variant="ghost" 
                                         size="icon" 
                                         className="h-10 w-10 sm:h-8 sm:w-8 hover:text-primary hover:bg-primary/10"
                                         title="Read Series"
+                                        aria-label={`Open reader for ${item.name}`}
                                         onClick={(e) => handleNavigate(e as any, item.path, navId)}
                                     > 
                                         {navigatingTo === navId ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin text-primary" /> : <BookOpen className="w-5 h-5 sm:w-4 sm:h-4" />}
@@ -1091,26 +1049,25 @@ function LibraryContent() {
           </div>
       )}
 
-      {/* FLOATING ACTION BAR */}
       {isSelectionMode && (
           <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background text-foreground px-4 sm:px-6 py-3 rounded-full shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] flex items-center gap-3 sm:gap-4 z-50 animate-in slide-in-from-bottom-8 border border-border w-[95%] sm:w-auto overflow-x-auto">
               <Button variant="ghost" size="sm" className="h-10 sm:h-8 shrink-0 hover:bg-muted text-muted-foreground font-medium" onClick={toggleSelectAll}>
                   {selectedSeries.size === series.length && series.length > 0 ? "Deselect All" : "Select All"}
               </Button>
               <div className="h-5 w-px bg-border shrink-0" />
-              <span className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedSeries.size} Selected</span>
+              <span aria-live="polite" className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedSeries.size} Selected</span>
               
               <div className="flex gap-2 shrink-0">
-                <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedSeries.size > 0 ? 'text-primary hover:bg-muted border-primary/50' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress('UNREAD')}>
+                <Button aria-label="Mark selected series as unread" size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedSeries.size > 0 ? 'text-primary hover:bg-muted border-primary/50' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress('UNREAD')}>
                     <EyeOff className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Mark Unread</span>
                 </Button>
                 
-                <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedSeries.size > 0 ? 'text-primary hover:bg-muted border-primary/50' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkListModalOpen(true)}>
+                <Button aria-label="Add selected series to a reading list" size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedSeries.size > 0 ? 'text-primary hover:bg-muted border-primary/50' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkListModalOpen(true)}>
                     <ListPlus className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Add to List</span>
                 </Button>
 
                 {activeCollection !== "ALL" && (
-                    <Button size="sm" variant="destructive" className="h-10 sm:h-8 shadow-sm font-bold ml-1 sm:ml-2 transition-all" disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkAdvanced('bulk-remove-list', activeCollection)}>
+                    <Button aria-label="Remove selected series from current list" size="sm" variant="destructive" className="h-10 sm:h-8 shadow-sm font-bold ml-1 sm:ml-2 transition-all" disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkAdvanced('bulk-remove-list', activeCollection)}>
                         <Minus className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Remove</span>
                     </Button>
                 )}
@@ -1118,7 +1075,7 @@ function LibraryContent() {
                 {isAdmin && (
                   <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                          <Button size="sm" variant="outline" disabled={selectedSeries.size === 0 || isBulkProcessing} className="h-10 sm:h-8 shadow-sm font-bold bg-background border-border ml-1 sm:ml-2">
+                          <Button aria-label="Bulk actions menu" size="sm" variant="outline" disabled={selectedSeries.size === 0 || isBulkProcessing} className="h-10 sm:h-8 shadow-sm font-bold bg-background border-border ml-1 sm:ml-2">
                               <MoreHorizontal className="w-4 h-4" />
                           </Button>
                       </DropdownMenuTrigger>
@@ -1148,7 +1105,7 @@ function LibraryContent() {
                 )}
 
                 {isAdmin && (
-                  <Button size="sm" className={`h-10 sm:h-8 shadow-sm font-bold ml-1 sm:ml-2 transition-all ${selectedSeries.size > 0 ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-muted text-muted-foreground cursor-not-allowed'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkDeleteModalOpen(true)}>
+                  <Button aria-label="Delete selected series" size="sm" className={`h-10 sm:h-8 shadow-sm font-bold ml-1 sm:ml-2 transition-all ${selectedSeries.size > 0 ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-muted text-muted-foreground cursor-not-allowed'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkDeleteModalOpen(true)}>
                       <Trash2 className="w-4 h-4" />
                   </Button>
                 )}
@@ -1173,7 +1130,7 @@ function LibraryContent() {
                             <p className="font-bold text-sm text-foreground">{c.name}</p>
                             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold mt-0.5">{c.items?.length || 0} Items</p>
                         </div>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setCollectionToDelete(c.id)}>
+                        <Button aria-label={`Delete list: ${c.name}`} variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setCollectionToDelete(c.id)}>
                             <Trash2 className="w-4 h-4" />
                         </Button>
                     </div>
@@ -1193,9 +1150,9 @@ function LibraryContent() {
           </DialogHeader>
           <div className="space-y-6 py-4">
             <div className="space-y-2">
-              <Label>Select Existing List</Label>
+              <Label htmlFor="bulk-col-select">Select Existing List</Label>
               <Select value={selectedCollectionId} onValueChange={(v) => { setSelectedCollectionId(v); setNewCollectionName(""); }}>
-                <SelectTrigger className="bg-background border-border h-12 sm:h-10"><SelectValue placeholder="Choose a list..." /></SelectTrigger>
+                <SelectTrigger id="bulk-col-select" className="bg-background border-border h-12 sm:h-10"><SelectValue placeholder="Choose a list..." /></SelectTrigger>
                 <SelectContent className="bg-popover border-border">
                   {collections.length === 0 && <SelectItem value="none" disabled>No lists available</SelectItem>}
                   {collections.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
@@ -1203,8 +1160,8 @@ function LibraryContent() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Or Create New List</Label>
-              <Input placeholder="e.g. Webtoons, Marvel Events, Mature..." value={newCollectionName} className="bg-background h-12 sm:h-10 border-border" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} />
+              <Label htmlFor="bulk-new-list-input">Or Create New List</Label>
+              <Input id="bulk-new-list-input" placeholder="e.g. Webtoons, Marvel Events, Mature..." value={newCollectionName} className="bg-background h-12 sm:h-10 border-border" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} />
             </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setBulkListModalOpen(false)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitBulkAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold w-full h-12 sm:h-10">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <ListPlus className="w-5 h-5 mr-2" />} Save to List</Button></DialogFooter>
@@ -1222,9 +1179,9 @@ function LibraryContent() {
             </DialogHeader>
             <div className="py-4 space-y-4">
                 <div className="space-y-2">
-                    <Label>Select Naming Convention</Label>
+                    <Label htmlFor="rename-convention-select">Select Naming Convention</Label>
                     <Select value={renamePattern} onValueChange={setRenamePattern}>
-                        <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                        <SelectTrigger id="rename-convention-select" className="bg-background border-border h-12 sm:h-10">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-popover border-border">
@@ -1235,7 +1192,7 @@ function LibraryContent() {
                         </SelectContent>
                     </Select>
                 </div>
-                <div className="bg-muted p-3 rounded-lg border border-border text-xs text-muted-foreground">
+                <div className="bg-muted p-3 rounded-lg border border-border text-xs text-muted-foreground" aria-live="polite">
                     <span className="font-bold text-foreground mb-1 block">Live Example Preview:</span>
                     <span className="font-mono text-primary">
                     {renamePattern
@@ -1267,8 +1224,8 @@ function LibraryContent() {
         <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
           <DialogHeader><DialogTitle>Add to Reading List</DialogTitle><DialogDescription>Add <strong className="text-primary">{targetSeries?.name}</strong> to a collection.</DialogDescription></DialogHeader>
           <div className="space-y-6 py-4">
-              <div className="space-y-2"><Label>Select Existing List</Label><Select value={selectedCollectionId} onValueChange={(v) => { setSelectedCollectionId(v); setNewCollectionName(""); }}><SelectTrigger className="bg-background border-border h-12 sm:h-10"><SelectValue placeholder="Choose a list..." /></SelectTrigger><SelectContent className="bg-popover border-border">{collections.length === 0 && <SelectItem value="none" disabled>No lists available</SelectItem>}{collections.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Create New List</Label><Input placeholder="e.g. Marvel Events" value={newCollectionName} className="bg-background border-border h-12 sm:h-10" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} /></div>
+              <div className="space-y-2"><Label htmlFor="col-select-single">Select Existing List</Label><Select value={selectedCollectionId} onValueChange={(v) => { setSelectedCollectionId(v); setNewCollectionName(""); }}><SelectTrigger id="col-select-single" className="bg-background border-border h-12 sm:h-10"><SelectValue placeholder="Choose a list..." /></SelectTrigger><SelectContent className="bg-popover border-border">{collections.length === 0 && <SelectItem value="none" disabled>No lists available</SelectItem>}{collections.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent></Select></div>
+              <div className="space-y-2"><Label htmlFor="col-input-single">Create New List</Label><Input id="col-input-single" placeholder="e.g. Marvel Events" value={newCollectionName} className="bg-background border-border h-12 sm:h-10" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} /></div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setTargetSeries(null)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="h-12 sm:h-10 w-full sm:w-auto font-bold bg-primary hover:bg-primary/90 text-primary-foreground">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save to List</Button></DialogFooter>
         </DialogContent>
@@ -1280,13 +1237,13 @@ function LibraryContent() {
             {editing && (
                 <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
-                        <Label>Source Folder Path</Label>
+                        <Label htmlFor="path-copy">Source Folder Path</Label>
                         <div className="flex gap-2">
-                            <Input readOnly value={editing.path || ""} className="bg-muted text-xs truncate border-border text-muted-foreground h-12 sm:h-10" />
-                            <Button variant="secondary" size="icon" onClick={copyToClipboard} type="button" className="shrink-0 h-12 w-12 sm:h-10 sm:w-10 hover:bg-muted border border-border">{copied ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5 text-muted-foreground" />}</Button>
+                            <Input id="path-copy" readOnly value={editing.path || ""} className="bg-muted text-xs truncate border-border text-muted-foreground h-12 sm:h-10" />
+                            <Button aria-label="Copy folder path to clipboard" variant="secondary" size="icon" onClick={copyToClipboard} type="button" className="shrink-0 h-12 w-12 sm:h-10 sm:w-10 hover:bg-muted border border-border">{copied ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5 text-muted-foreground" />}</Button>
                         </div>
                     </div>
-                    <div className="grid gap-2"><Label htmlFor="cvId">ComicVine ID</Label><Input id="cvId" type="number" value={editing.cvId || ""} onChange={e => setEditing({...editing, cvId: e.target.value ? parseInt(e.target.value) : null})} className="bg-background border-border h-12 sm:h-10 text-lg" /></div>
+                    <div className="grid gap-2"><Label htmlFor="cvId">ComicVine ID</Label><Input id="cvId" type="number" value={editing.cvId || ""} onChange={e => setEditing({...editing, cvId: e.target.value ? parseInt(e.target.value) : undefined})} className="bg-background border-border h-12 sm:h-10 text-lg" /></div>
                     <div className="grid gap-2"><Label htmlFor="publisher">Publisher</Label><Input id="publisher" value={editing.publisher || ""} onChange={e => setEditing({...editing, publisher: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
                     <div className="grid gap-2"><Label htmlFor="name">Series Name</Label><Input id="name" value={editing.name || ""} onChange={e => setEditing({...editing, name: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
                     <div className="grid gap-2"><Label htmlFor="year">Year</Label><Input id="year" type="number" value={editing.year || ""} onChange={e => setEditing({...editing, year: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>

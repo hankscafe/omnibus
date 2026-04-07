@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const [totalSeries, totalIssues, totalRequests, completed30d, failed30d, totalUsers] = await prisma.$transaction([
-      prisma.series.count(), prisma.issue.count(), prisma.request.count(),
+      prisma.request.count(), prisma.issue.count(), prisma.request.count(),
       prisma.request.count({ where: { status: 'IMPORTED', createdAt: { gte: thirtyDaysAgo } } }),
       prisma.request.count({ where: { status: { in: ['FAILED', 'ERROR'] }, createdAt: { gte: thirtyDaysAgo } } }),
       prisma.user.count()
@@ -97,12 +97,21 @@ export async function GET(req: NextRequest) {
 
     Logger.log(`[Stats API] Successfully served stats to Homepage.`, 'info');
 
+    // --- FIX: Generalized fallbacks for environment paths ---
+    const envPaths = {
+        DATABASE_URL: (process.env.DATABASE_URL || 'file:./database.db').replace(/:.*@/, ':****@'),
+        OMNIBUS_BACKUPS_DIR: process.env.OMNIBUS_BACKUPS_DIR || '/backups',
+        OMNIBUS_CACHE_DIR: process.env.OMNIBUS_CACHE_DIR || '/cache',
+        OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs'
+    };
+
     return NextResponse.json({
       success: true,
       data: {
         systemHealth: healthLabel, updateAvailable, currentVersion, latestVersion,
         totalSeries, totalIssues, totalRequests, completed30d, failed30d, totalUsers,
-        activeDownloads: activeDownloads.length, queue: activeDownloads 
+        activeDownloads: activeDownloads.length, queue: activeDownloads,
+        envPaths 
       }
     });
   } catch (error: unknown) {

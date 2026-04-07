@@ -1,3 +1,4 @@
+// src/app/api/admin/impersonate/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
@@ -10,28 +11,27 @@ export async function POST(request: Request) {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
         
-        // Strict Admin verification
         if (session?.user?.role !== 'ADMIN') {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
         const adminId = (session.user as any).id;
         const { userId, action } = await request.json();
-        const cookieStore = cookies();
+        
+        // SECURITY FIX: Mandatory secret check for signing cookies
+        const secret = process.env.NEXTAUTH_SECRET;
+        if (!secret || secret === 'change_this_to_a_random_secure_string_123!') {
+            return NextResponse.json({ error: "Server Configuration Error: NEXTAUTH_SECRET is not set." }, { status: 500 });
+        }
 
         if (action === 'start') {
-            // --- SECURITY FIX: Cryptographically bind the cookie to the Admin's Session ---
-            const secret = process.env.NEXTAUTH_SECRET || 'fallback_secret';
             const payload = `${userId}|${adminId}`;
-            
-            // Create a tamper-proof HMAC signature
             const signature = crypto.createHmac('sha256', secret).update(payload).digest('hex');
             const boundCookieValue = `${payload}|${signature}`;
 
             const cookieStore = await cookies();
             cookieStore.set('omnibus_impersonate', boundCookieValue, {
                 httpOnly: true,
-                // Enforce secure if deployed behind HTTPS, but allow HTTP for local LAN users
                 secure: process.env.NODE_ENV === 'production' || process.env.REQUIRE_SECURE_COOKIES === 'true',
                 sameSite: 'lax',
                 maxAge: 60 * 60, // 1 hour
@@ -41,10 +41,9 @@ export async function POST(request: Request) {
         } 
         
         if (action === 'stop') {
-            // Delete the impersonation cookie
             const cookieStore = await cookies();
             cookieStore.delete('omnibus_impersonate');
-            return NextResponse.json({ success: true, message: "Impersonation stopped. Welcome back, Admin." });
+            return NextResponse.json({ success: true, message: "Impersonation stopped." });
         }
 
         return NextResponse.json({ error: "Invalid action." }, { status: 400 });

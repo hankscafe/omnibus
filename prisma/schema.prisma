@@ -1,3 +1,5 @@
+// src/prisma/schema.prisma
+
 // SQLite configuration
 datasource db {
   provider = "sqlite"
@@ -14,13 +16,18 @@ model User {
   email               String    @unique
   password            String
   role                String    @default("USER") // "ADMIN" or "USER"
-  isApproved          Boolean   @default(false)  // Requires Admin approval to log in
-  autoApproveRequests Boolean   @default(false)  // If true, requests skip the admin queue
+  isApproved          Boolean   @default(false)
+  autoApproveRequests Boolean   @default(false)
   canDownload         Boolean   @default(false)
   avatar              String?
   banner              String?
   createdAt           DateTime  @default(now())
+  twoFactorEnabled    Boolean   @default(false)
+  twoFactorSecret     String?
   
+  // SECURITY FIX: Used to invalidate all active sessions instantly [cite: 122]
+  sessionVersion      Int       @default(0)
+
   requests            Request[]
   readProgresses      ReadProgress[]
   favorites           Favorite[]
@@ -28,24 +35,14 @@ model User {
   readingLists        ReadingList[]
   trophies            UserTrophy[]
   issueReports        IssueReport[]
-
   bookmarks           Bookmark[]
   reviews             Review[]
-
-  twoFactorEnabled Boolean @default(false)
-  twoFactorSecret  String?
-
-  sessionVersion   Int     @default(0)
-
-  dailyReadingStats DailyReadingStat[]
-
+  dailyReadingStats   DailyReadingStat[]
   auditLogs           AuditLog[]
-
   apiKeys             ApiKey[]  @relation("ApiKeysActsAs")
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
-  opdsKeys        OpdsKey[]
-
-  koreaderSyncs KoreaderSync[]
+  opdsKeys            OpdsKey[]
+  koreaderSyncs       KoreaderSync[]
 }
 
 model ApiKey {
@@ -53,13 +50,10 @@ model ApiKey {
   name        String
   keyHash     String    @unique
   prefix      String
-  
   userId      String
   user        User      @relation("ApiKeysActsAs", fields: [userId], references: [id], onDelete: Cascade)
-  
   createdById String
   createdBy   User      @relation("ApiKeysCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  
   lastUsedAt  DateTime?
   expiresAt   DateTime?
   createdAt   DateTime  @default(now())
@@ -72,7 +66,7 @@ model Request {
   id                 String   @id @default(cuid())
   userId             String   
   volumeId           String
-  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED
+  status             String   
   progress           Int      @default(0)
   retryCount         Int      @default(0)
   downloadLink       String?
@@ -89,22 +83,26 @@ model Request {
   @@index([volumeId])
 }
 
-// --- NEW MULTI-LIBRARY ARCHITECTURE ---
 model Library {
   id        String   @id @default(cuid())
   name      String
   path      String   @unique
   isManga   Boolean  @default(false)
   isDefault Boolean  @default(false)
-
   series    Series[]
 }
 
 model Series {
   id              String   @id @default(cuid())
-  cvId            Int?
-  metadataId      String?  // Can hold "4050-12345" or a MangaDex UUID
-  metadataSource  String   @default("COMICVINE") // COMICVINE, MANGADEX, ANILIST, NONE
+  
+  // HIGH FIX: Split overloaded metadataId into specific types [cite: 131, 132]
+  cvId            Int?     @unique // ComicVine ID
+  metadataId      String?  // Legacy or generic UUID for other providers
+  
+  // MEDIUM FIX: Using String for SQLite compatibility instead of Enum
+  matchState      String   @default("UNMATCHED") // "MATCHED", "UNMATCHED", or "MANUAL_PRIORITY"
+  
+  metadataSource  String   @default("COMICVINE")
   name            String
   year            Int
   publisher       String?
@@ -112,42 +110,40 @@ model Series {
   monitored       Boolean?
   isManga         Boolean  @default(false)
   size            Float?   @default(0)
-  
   description     String?
   status          String?
   coverUrl        String?
-  
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @default(now()) @updatedAt
+  updatedAt       DateTime @updatedAt
 
   issues          Issue[]
   favorites       Favorite[]
   collectionItems CollectionItem[]
   issueReports    IssueReport[]
-
   reviews         Review[]
-
-  // Links to the new Library model
   libraryId       String?
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
 
   @@index([libraryId])
-  @@unique([metadataSource, metadataId]) // Ensure we don't duplicate imports from the same source
+  @@unique([metadataSource, metadataId])
 }
 
 model Issue {
   id              String   @id @default(cuid())
   seriesId        String
   series          Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
-  cvId            Int?
+  
+  // HIGH FIX: Dedicated metadata ID tracking [cite: 139]
+  cvId            Int?     
   metadataId      String?  
+  matchState      String   @default("UNMATCHED") // "MATCHED", "UNMATCHED", or "MANUAL_PRIORITY"
+  
   metadataSource  String   @default("COMICVINE")
   number          String   
   status          String   @default("WANTED") 
   filePath        String?
   downloadId      String?
   pageCount       Int      @default(0)
-
   name            String?
   description     String?
   releaseDate     String?
@@ -159,11 +155,10 @@ model Issue {
   storyArcs       String?  // Stored as JSON string
 
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @default(now()) @updatedAt
+  updatedAt       DateTime @updatedAt
 
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
-
   bookmarks       Bookmark[]
 
   @@index([seriesId])
@@ -190,13 +185,11 @@ model IssueReport {
   @@index([status])
 }
 
-// --- NEW CONFIGURATION TABLES ---
-
 model DownloadClient {
   id         String  @id @default(cuid())
   name       String
-  type       String  // qbit, sab, deluge, nzbget
-  protocol   String  // Torrent, Usenet
+  type       String  
+  protocol   String  
   url        String
   user       String?
   pass       String?
@@ -207,17 +200,17 @@ model DownloadClient {
 }
 
 model DiscordWebhook {
-  id       String  @id @default(cuid())
-  name     String
-  url      String
-  isActive Boolean @default(true)
-  events   String  // JSON array string of event triggers
+  id           String  @id @default(cuid())
+  name         String
+  url          String
+  isActive     Boolean @default(true)
+  events       String  // JSON array string of event triggers
   botUsername  String?
   botAvatarUrl String?
 }
 
 model Indexer {
-  id        Int     @id // Prowlarr's internal ID
+  id        Int     @id 
   name      String
   protocol  String
   priority  Int     @default(25)
@@ -237,8 +230,6 @@ model SearchAcronym {
   key   String @unique
   value String
 }
-
-// --------------------------------
 
 model SystemSetting {
   key   String @id @unique
@@ -354,7 +345,6 @@ model ReadingList {
   items       ReadingListItem[]
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
-
   shareId     String?           @unique
 
   @@index([userId])
@@ -364,10 +354,8 @@ model ReadingListItem {
   id          String       @id @default(cuid())
   listId      String
   list        ReadingList  @relation(fields: [listId], references: [id], onDelete: Cascade)
-  
   issueId     String?
   issue       Issue?       @relation(fields: [issueId], references: [id], onDelete: SetNull)
-  
   cvIssueId   Int?
   title       String       
   order       Int          
@@ -381,13 +369,11 @@ model OpdsKey {
   name       String
   keyHash    String    @unique
   prefix     String
-  
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
-  
+
   @@index([userId])
 }
 
@@ -395,18 +381,17 @@ model KoreaderSync {
   id          String   @id @default(cuid())
   userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  document    String   // KOReader's document hash or filename
-  progress    String   // KOReader's proprietary location string
+  document    String   
+  progress    String   
   percentage  Float
   device      String
   deviceId    String
-  timestamp   Int      // Unix timestamp
+  timestamp   Int      
 
   @@unique([userId, document])
   @@index([userId])
 }
 
-// --- DISTRIBUTED ATOMIC LOCKS ---
 model JobLock {
   id        String   @id
   lockedAt  DateTime @default(now())
@@ -417,13 +402,13 @@ model Bookmark {
   userId    String
   issueId   String
   pageIndex Int
-  note      String?  // Optional user notes/highlights
+  note      String?
   createdAt DateTime @default(now())
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, issueId, pageIndex]) // Prevent duplicate bookmarks on the same page
+  @@unique([userId, issueId, pageIndex]) 
   @@index([userId])
 }
 
@@ -431,22 +416,22 @@ model Review {
   id        String   @id @default(cuid())
   userId    String
   seriesId  String
-  rating    Int      @default(0) // 1-5 stars
-  text      String?  // Optional text review
+  rating    Int      @default(0) 
+  text      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   series    Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, seriesId]) // One review per series per user
+  @@unique([userId, seriesId]) 
   @@index([seriesId])
 }
 
 model DailyReadingStat {
   id        String   @id @default(cuid())
   userId    String
-  date      DateTime // Stored as the start of the day (00:00:00)
+  date      DateTime 
   pagesRead Int      @default(0)
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -460,11 +445,9 @@ model AuditLog {
   id          String   @id @default(cuid())
   userId      String?
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  
-  action      String   // e.g., "DELETE_SERIES", "UPDATE_CONFIG", "DELETE_USER"
-  details     String?  // JSON string containing what was changed/deleted
-  ipAddress   String?  // Optional: Track where the request came from
-  
+  action      String   
+  details     String?
+  ipAddress   String?
   createdAt   DateTime @default(now())
 
   @@index([userId])

@@ -57,7 +57,7 @@ export async function GET(request: Request) {
 
   // --- THE FIX: EXPOSE DOCKER PATHS (Updated to include Database URL) ---
   const envPaths = {
-      DATABASE_URL: process.env.DATABASE_URL || 'file:./omnibus.db',
+      DATABASE_URL: (process.env.DATABASE_URL || 'file:./omnibus.db').replace(/:.*@/, ':****@'),
       OMNIBUS_BACKUPS_DIR: process.env.OMNIBUS_BACKUPS_DIR || '/backups',
       OMNIBUS_CACHE_DIR: process.env.OMNIBUS_CACHE_DIR || '/cache',
       OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs'

@@ -37,23 +37,49 @@ export async function GET(request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
     let userId = (session?.user as any)?.id || null;
+    
+    // 1. Resolve Auth
     if (!userId && session?.user) {
         const user = await prisma.user.findFirst({ where: { OR: [ ...(session.user.email ? [{ email: session.user.email }] : []), ...(session.user.name ? [{ username: session.user.name }] : []) ] } });
         userId = user?.id || null;
     }
 
+    // 2. Validate Path and Authorization
     const libraries = await prisma.library.findMany();
-    // HIGH FIX: Resolve symlinks and perform strict case-sensitive prefix check
     const realTarget = fs.realpathSync(folderPath);
+    const normalizedTarget = realTarget.replace(/\\/g, '/').toLowerCase();
+
     const isAuthorized = libraries.some(lib => {
         const realLibRoot = fs.realpathSync(lib.path);
-        return realTarget.startsWith(realLibRoot);
+        return realTarget.toLowerCase().startsWith(realLibRoot.toLowerCase());
     });
 
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
     if (!fs.existsSync(realTarget)) return NextResponse.json({ error: "The physical folder is missing." }, { status: 404 });
 
-    let seriesRecord = await prisma.series.findFirst({ where: { folderPath: folderPath } });
+    // 3. Series Lookup
+    let seriesRecord = await prisma.series.findFirst({ 
+        where: { folderPath: folderPath } 
+    });
+
+    if (!seriesRecord) {
+        const allSeries = await prisma.series.findMany({ select: { id: true, folderPath: true } });
+        const matched = allSeries.find(s => 
+            s.folderPath.replace(/\\/g, '/').toLowerCase() === normalizedTarget
+        );
+        if (matched) {
+            seriesRecord = await prisma.series.findUnique({ where: { id: matched.id } });
+        }
+    }
+
+    if (!seriesRecord) {
+        const folderName = path.basename(realTarget);
+        seriesRecord = await prisma.series.findFirst({
+            where: { name: folderName }
+        });
+    }
+
+    // 4. Load Metadata and Progress
     let isFavorite = false;
     let progressMap: Record<string, { readProgress: number, isRead: boolean }> = {};
     
@@ -66,22 +92,22 @@ export async function GET(request: Request) {
                 const fileName = path.basename(p.issue.filePath);
                 const safeTotal = (p.totalPages && !isNaN(p.totalPages)) ? p.totalPages : 0;
                 const safeProgress = (safeTotal > 0) ? (p.currentPage / safeTotal) * 100 : 0;
-                progressMap[fileName] = { 
-                    isRead: p.isCompleted, 
-                    readProgress: safeProgress
-                };    
+                progressMap[fileName] = { isRead: p.isCompleted, readProgress: safeProgress };    
             }
         }
     }
 
+    // 5. Scan Folder for Issues and Cover
     const files = await fs.promises.readdir(folderPath);
-    let coverUrl = null;
-    for (const file of files) {
-        if (['cover.jpg', 'cover.png', 'folder.jpg', 'poster.jpg'].includes(file.toLowerCase())) {
-            const fullFilePath = path.join(folderPath, file);
-            coverUrl = `/api/library/cover?path=${encodeURIComponent(fullFilePath)}`;
-            break;
-        }
+    let physicalCover = null;
+    
+    const coverFile = files.find(f => 
+        ['cover.jpg', 'cover.png', 'folder.jpg', 'poster.jpg'].includes(f.toLowerCase())
+    );
+
+    if (coverFile) {
+        const fullCoverPath = path.join(folderPath, coverFile);
+        physicalCover = `/api/library/cover?path=${encodeURIComponent(fullCoverPath)}`;
     }
 
     let downloadedIssues: any[] = [];
@@ -89,6 +115,9 @@ export async function GET(request: Request) {
 
     if (seriesRecord) {
         let existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
+        const dbIssueMap = new Map();
+        const idsToDelete: string[] = [];
+        
         const issuesByNum = new Map<string, any[]>();
         for (const issue of existingIssues) {
             const stdNum = parseFloat(issue.number.replace(/[^0-9.]/g, '') || "0").toString();
@@ -96,18 +125,15 @@ export async function GET(request: Request) {
             issuesByNum.get(stdNum)!.push(issue);
         }
 
-        const idsToDelete: string[] = [];
-        const dbIssueMap = new Map();
         for (const [stdNum, issues] of Array.from(issuesByNum.entries())) {
+            // Prioritize matched ComicVine records over local unmatched records
             issues.sort((a, b) => (parseInt(b.metadataId || "0") - parseInt(a.metadataId || "0"))); 
             dbIssueMap.set(stdNum, issues[0]);
             for (let i = 1; i < issues.length; i++) idsToDelete.push(issues[i].id);
         }
 
-        // HIGH FIX: Surface DB errors instead of silent .catch
         if (idsToDelete.length > 0) {
-            await prisma.issue.deleteMany({ where: { id: { in: idsToDelete } } })
-                .catch((err) => Logger.log(`[Series API] Deletion failed: ${err.message}`, 'error'));
+            await prisma.issue.deleteMany({ where: { id: { in: idsToDelete } } }).catch(() => {});
         }
 
         const createsToFire: any[] = [];
@@ -122,40 +148,40 @@ export async function GET(request: Request) {
                 const stdNum = extractIssueNumber(file);
                 const existingIssue = dbIssueMap.get(stdNum);
 
-                let pageCount = 0;
-                if (file.toLowerCase().match(/\.(cbz|zip|epub)$/i)) {
-                    try {
-                        const zip = new AdmZip(fullPath);
-                        pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.match(/__macosx/i) && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i)).length;
-                    } catch(e) {}
-                }
-
+                // FIX: prioritize matching to existing metadata records to support "In Library" badges
                 if (existingIssue) {
-                    if (existingIssue.filePath !== fullPath || (existingIssue as any).pageCount === 0) {
-                        updateOperations.push(prisma.issue.update({ where: { id: existingIssue.id }, data: { filePath: fullPath, pageCount } }));
+                    if (existingIssue.filePath !== fullPath) {
+                        updateOperations.push(prisma.issue.update({ 
+                            where: { id: existingIssue.id }, 
+                            data: { filePath: fullPath, status: "DOWNLOADED" } 
+                        }));
                     }
                 } else if (!creatingNums.has(stdNum)) {
-                    createsToFire.push({ seriesId: seriesRecord.id, metadataId: `unmatched_${Math.random()}`, metadataSource: 'LOCAL', number: stdNum, status: "DOWNLOADED", filePath: fullPath, pageCount });
+                    createsToFire.push({ 
+                        seriesId: seriesRecord.id, 
+                        metadataId: `unmatched_${Math.random()}`, 
+                        metadataSource: 'LOCAL', 
+                        matchState: 'UNMATCHED',
+                        number: stdNum, 
+                        status: "DOWNLOADED", 
+                        filePath: fullPath
+                    });
                     creatingNums.add(stdNum); 
                 }
             }
         }
 
-        // HIGH FIX: Await and log all background operations
-        if (createsToFire.length > 0) {
-            await prisma.issue.createMany({ data: createsToFire })
-                .catch((err) => Logger.log(`[Series API] Bulk create failed: ${err.message}`, 'error'));
-        }
-        if (updateOperations.length > 0) {
-            // Explicitly typing 'err' as 'any' or 'Error' to satisfy the compiler
-            await Promise.all(updateOperations.map(op => op.catch((err: any) => 
-                Logger.log(`[Series API] Update failed: ${err.message}`, 'error')
-            ))); 
-        }
+        if (createsToFire.length > 0) await prisma.issue.createMany({ data: createsToFire });
+        if (updateOperations.length > 0) await Promise.all(updateOperations);
 
+        // Cleanup stale unmatched records
         await prisma.issue.deleteMany({
-            where: { seriesId: seriesRecord.id, metadataId: { startsWith: 'unmatched_' }, filePath: { notIn: Array.from(activeFilePaths) as string[] } }
-        }).catch((err) => Logger.log(`[Series API] Cleanup failed: ${err.message}`, 'error'));
+            where: {
+                seriesId: seriesRecord.id,
+                metadataId: { startsWith: 'unmatched_' },
+                filePath: { notIn: Array.from(activeFilePaths) as string[] }
+            }
+        }).catch(() => {});
 
         existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
         for (const issue of existingIssues) {
@@ -164,10 +190,19 @@ export async function GET(request: Request) {
             const finalIssueCoverUrl = issue.coverUrl && issue.coverUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}` : issue.coverUrl;
 
             const formatted = {
-                id: issue.id, cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
-                name: issue.name || `${seriesRecord.name} #${issue.number}`, parsedNum: parseFloat(issue.number), fullPath: issue.filePath,
-                coverUrl: finalIssueCoverUrl, writers: safeParse(issue.writers), artists: safeParse(issue.artists), characters: safeParse(issue.characters),
-                genres: safeParse((issue as any).genres), storyArcs: safeParse((issue as any).storyArcs), isRead: prog.isRead, readProgress: prog.readProgress
+                id: issue.id, 
+                cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
+                name: issue.name || `${seriesRecord.name} #${issue.number}`, 
+                parsedNum: parseFloat(issue.number), 
+                fullPath: issue.filePath,
+                coverUrl: finalIssueCoverUrl, 
+                writers: safeParse(issue.writers), 
+                artists: safeParse(issue.artists), 
+                characters: safeParse(issue.characters),
+                genres: safeParse((issue as any).genres), 
+                storyArcs: safeParse((issue as any).storyArcs), 
+                isRead: prog.isRead, 
+                readProgress: prog.readProgress
             };
 
             if (issue.filePath && fs.existsSync(issue.filePath)) downloadedIssues.push(formatted);
@@ -177,14 +212,25 @@ export async function GET(request: Request) {
 
     downloadedIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
     missingIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
-    const finalSeriesCoverUrl = coverUrl || (seriesRecord?.coverUrl && seriesRecord.coverUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` : seriesRecord?.coverUrl) || null;
+    const finalSeriesCoverUrl = physicalCover || 
+        (seriesRecord?.coverUrl && seriesRecord.coverUrl.startsWith('http') 
+            ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 
+            : seriesRecord?.coverUrl) || null;
 
     return NextResponse.json({ 
-      id: seriesRecord?.id || null, isFavorite, cvId: (seriesRecord?.metadataId && !seriesRecord.metadataId.startsWith('unmatched_')) ? parseInt(seriesRecord.metadataId) : null,
+      id: seriesRecord?.id || null, 
+      isFavorite, 
+      cvId: (seriesRecord?.metadataId && !seriesRecord.metadataId.startsWith('unmatched_')) ? parseInt(seriesRecord.metadataId) : null,
       seriesName: seriesRecord?.name?.trim() || path.basename(folderPath).replace(/\s\(\d{4}\)$/, ""),
-      publisher: seriesRecord?.publisher || null, year: seriesRecord?.year || null, monitored: seriesRecord?.monitored || false,
-      path: folderPath, coverUrl: finalSeriesCoverUrl, downloadedIssues, missingIssues
+      publisher: seriesRecord?.publisher || null, 
+      year: seriesRecord?.year || null, 
+      monitored: seriesRecord?.monitored || false,
+      path: folderPath, 
+      coverUrl: finalSeriesCoverUrl, 
+      downloadedIssues, 
+      missingIssues
     });
+
   } catch (error: any) {
     Logger.log(`[Series API] Fatal Error: ${error.message}`, 'error');
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

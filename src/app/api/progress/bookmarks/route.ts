@@ -13,10 +13,16 @@ async function getIssueFromPath(filePath: string) {
     const normalizedTarget = path.normalize(filePath).replace(/\\/g, '/').toLowerCase();
     const fileName = path.basename(filePath);
     
+    // FIX: Standard contains query for SQLite (remove mode: 'insensitive' if present)
     const possibleIssues = await prisma.issue.findMany({
-        where: { filePath: { contains: fileName } }
+        where: { 
+            filePath: { 
+                contains: fileName 
+            } 
+        }
     });
     
+    // Perform the strict case-insensitive check in memory to bypass SQLite limitations
     return possibleIssues.find(i =>
         i.filePath && path.normalize(i.filePath).replace(/\\/g, '/').toLowerCase() === normalizedTarget
     );

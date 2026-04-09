@@ -86,7 +86,9 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
       });
 
       if (res.ok) {
-        toast({ title: "Success", description: source === 'flag_admin' ? "Flagged for manual admin import." : "Download requested." });
+        const data = await res.json();
+        // --- FIX: Use descriptive message from API ---
+        toast({ title: "Success", description: data.message || (source === 'flag_admin' ? "Flagged for manual admin import." : "Download requested.") });
         onClose();
       } else {
         const err = await res.json();

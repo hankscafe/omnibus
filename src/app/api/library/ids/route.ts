@@ -1,3 +1,5 @@
+// src/app/api/library/ids/route.ts
+
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
@@ -16,15 +18,15 @@ export async function GET() {
         return NextResponse.json(globalForCache.libraryIdsCache);
     }
 
-    // --- SCHEMA FIX: Use metadataId to check presence in DB ---
+    // FIX: Added cvId to the select blocks so it is available for the payload mapping
     const [series, issues, requests] = await Promise.all([
         prisma.series.findMany({ 
             where: { issues: { some: { filePath: { not: null } } }, metadataId: { not: null } },
-            select: { metadataId: true, monitored: true }
+            select: { cvId: true, metadataId: true, monitored: true }
         }),
         prisma.issue.findMany({ 
             where: { filePath: { not: null }, metadataId: { not: null } },
-            select: { metadataId: true } 
+            select: { cvId: true, metadataId: true } 
         }),
         prisma.request.findMany({ 
             select: { volumeId: true, status: true, activeDownloadName: true } 
@@ -32,9 +34,10 @@ export async function GET() {
     ]);
 
     const payload = {
-        series: series.map(s => parseInt(s.metadataId!)).filter(id => !isNaN(id)),
-        monitored: series.filter(s => s.monitored).map(s => parseInt(s.metadataId!)).filter(id => !isNaN(id)),
-        issues: issues.map(i => parseInt(i.metadataId!)).filter(id => !isNaN(id)),
+        // Now s.cvId is recognized by TypeScript because it was included in the select block above
+        series: series.map(s => s.cvId || parseInt(s.metadataId!)).filter(id => !isNaN(id)),
+        monitored: series.filter(s => s.monitored).map(s => s.cvId || parseInt(s.metadataId!)).filter(id => !isNaN(id)),
+        issues: issues.map(i => i.cvId || parseInt(i.metadataId!)).filter(id => !isNaN(id)),
         requests: requests.map(r => ({ 
             volumeId: parseInt(r.volumeId), 
             status: r.status, 

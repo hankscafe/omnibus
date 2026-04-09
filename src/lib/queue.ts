@@ -390,7 +390,9 @@ export function initWorker() {
                     });
                     const monitoredCvIds = monitoredSeries.filter(s => s.metadataSource === 'COMICVINE' && s.metadataId).map(s => parseInt(s.metadataId!));
 
-                    const unreleasedRequests = await prisma.request.findMany({ where: { status: 'UNRELEASED' } });
+                    const allRequests = await prisma.request.findMany(); // Fetch all requests to check for duplicates
+
+                    const unreleasedRequests = allRequests.filter(r => r.status === 'UNRELEASED');
                     const unreleasedVolumeIds = unreleasedRequests.map(r => parseInt(r.volumeId)).filter(id => !isNaN(id));
 
                     const allCvIdsToCheck = [...new Set([...monitoredCvIds, ...unreleasedVolumeIds])];
@@ -411,55 +413,46 @@ export function initWorker() {
                             const seriesYear = seriesRecord?.year?.toString() || new Date().getFullYear().toString();
                             const isManga = seriesRecord ? (seriesRecord as any).isManga : false;
 
-                            let offset = 0;
-                            let totalResults = 1;
-                            let loopCount = 0;
-                            const allCvIssues = [];
-
-                            while (offset < totalResults && loopCount < 20) {
-                                const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
-                                    params: { 
-                                        api_key: cvApiKey, format: 'json', filter: `volume:${cvId}`, 
-                                        sort: 'store_date:desc', limit: 100, offset: offset,
-                                        field_list: 'id,name,issue_number,cover_date,store_date,image' 
-                                    },
-                                    headers: { 'User-Agent': 'Omnibus/1.0' }
-                                });
-                                if (offset === 0) totalResults = cvRes.data.number_of_total_results || 0;
-                                allCvIssues.push(...(cvRes.data.results || []));
-                                offset += 100;
-                                loopCount++;
-                                await new Promise(r => setTimeout(r, 1500)); 
-                            }
-
-                            const existingRequestsForVolume = await prisma.request.findMany({ where: { volumeId: cvId.toString() } });
+                            // Fetch CV Issues for this volume
+                            const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
+                                params: { 
+                                    api_key: cvApiKey, format: 'json', filter: `volume:${cvId}`, 
+                                    sort: 'issue_number:desc', limit: 50, 
+                                    field_list: 'id,name,issue_number,cover_date,store_date,image' 
+                                },
+                                headers: { 'User-Agent': 'Omnibus/1.0' }
+                            });
+                            
+                            const allCvIssues = cvRes.data.results || [];
 
                             for (const cvIssue of allCvIssues) {
                                 const cvNum = parseFloat(cvIssue.issue_number);
                                 if (isNaN(cvNum)) continue;
 
-                                const alreadyInLibrary = seriesRecord?.issues.some(i => parseFloat(i.number) === cvNum && i.filePath && i.filePath.length > 0);
+                                // 1. DATABASE CHECK: Does this specific number exist in the library?
+                                const alreadyInLibrary = seriesRecord?.issues.some(i => 
+                                    parseFloat(i.number) === cvNum && i.filePath && i.filePath.length > 0
+                                );
                                 if (alreadyInLibrary) continue;
 
                                 const searchName = `${seriesName} #${cvIssue.issue_number}`;
-                                const isReleased = isReleasedYet(cvIssue.store_date, cvIssue.cover_date);
                                 
-                                const alreadyReq = existingRequestsForVolume.find(r => {
+                                // 2. REQUEST CHECK: Is there already a request (Pending or Downloading) for this number?
+                                const alreadyReq = allRequests.find(r => {
+                                    if (r.volumeId !== cvId.toString()) return false;
                                     if (r.activeDownloadName === searchName) return true;
-                                    let clean = (r.activeDownloadName || "").replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-                                    const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                                    if (explicitMatch && parseFloat(explicitMatch[1]) === cvNum) return true;
-                                    const fallbackMatches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                                    if (fallbackMatches.length > 0 && parseFloat(fallbackMatches[fallbackMatches.length - 1][1]) === cvNum) return true;
-                                    return false;
+                                    
+                                    const reqNumMatch = r.activeDownloadName?.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                                    return reqNumMatch && parseFloat(reqNumMatch[1]) === cvNum;
                                 });
 
-                                const issueImage = cvIssue.image?.medium_url || cvIssue.image?.small_url;
+                                const isReleased = isReleasedYet(cvIssue.store_date, cvIssue.cover_date);
                                 const issueYear = (cvIssue.store_date || cvIssue.cover_date || seriesYear).split('-')[0];
 
                                 if (alreadyReq) {
+                                    // If it was UNRELEASED and is now out, upgrade it
                                     if (alreadyReq.status === 'UNRELEASED' && isReleased) {
-                                        details += `[RELEASED] Upgraded to Pending: ${searchName}\n`;
+                                        details += `[UPGRADE] ${searchName} is now released. Triggering search...\n`;
                                         await prisma.request.update({ where: { id: alreadyReq.id }, data: { status: 'PENDING' } });
                                         searchAndDownload(alreadyReq.id, searchName, issueYear, seriesPublisher, isManga).catch(() => {});
                                         unreleasedUpgraded++;
@@ -467,31 +460,37 @@ export function initWorker() {
                                     continue; 
                                 }
 
+                                // 3. MONITOR NEW ISSUE: Only create if definitively not in Library or Requests
                                 if (isMonitored) {
                                     const issueStatus = isReleased ? 'PENDING' : 'UNRELEASED';
-                                    details += `[NEW] Found and Queued (${issueStatus}): ${searchName}\n`;
+                                    details += `[NEW] Found ${cvIssue.issue_number} (${issueStatus}): ${searchName}\n`;
+                                    
                                     const newReq = await prisma.request.create({
                                         data: {
-                                            userId: admin?.id || 'system', volumeId: cvId.toString(), status: issueStatus,
-                                            activeDownloadName: searchName, imageUrl: issueImage
+                                            userId: admin?.id || 'system', 
+                                            volumeId: cvId.toString(), 
+                                            status: issueStatus,
+                                            activeDownloadName: searchName, 
+                                            imageUrl: cvIssue.image?.medium_url
                                         }
                                     });
+
                                     if (isReleased) {
                                         searchAndDownload(newReq.id, searchName, issueYear, seriesPublisher, isManga).catch(() => {});
                                         newIssuesFound++;
                                     }
                                 }
                             }
-                            await new Promise(r => setTimeout(r, 1500));
+                            await new Promise(r => setTimeout(r, 1000));
                         } catch (err: any) {
                             details += `[ERROR] Failed to scan volume ${cvId}: ${err.message}\n`;
                         }
                     }
 
                     await prisma.jobLog.create({ 
-                        data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nScan Complete. New issues queued: ${newIssuesFound} | Unreleased issues upgraded: ${unreleasedUpgraded}` } 
+                        data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nSummary: Found ${newIssuesFound} new issues | Upgraded ${unreleasedUpgraded} unreleased issues.` } 
                     });
-                    DiscordNotifier.sendAlert('job_issue_monitor', { description: `Monitor Scan Complete. Queued: ${newIssuesFound}, Upgraded: ${unreleasedUpgraded}` }).catch(() => {});
+                    DiscordNotifier.sendAlert('job_issue_monitor', { description: `Monitor Scan Complete. New: ${newIssuesFound}, Upgraded: ${unreleasedUpgraded}` }).catch(() => {});
                     break;
                 }
 

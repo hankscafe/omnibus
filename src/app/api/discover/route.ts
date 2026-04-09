@@ -19,15 +19,39 @@ export async function GET(request: Request) {
 
       if (cache && cache.value) {
           const allResults = JSON.parse(cache.value);
+          const slice = allResults.slice(offset, offset + limit);
+
+          // --- FIX: Cross-reference with Library and Requests ---
+          const volumeIds = slice.map((r: any) => r.cvId?.toString()).filter(Boolean);
           
-          // --- FIX: Proxy the images inside the cache slice map ---
-          const results = allResults.slice(offset, offset + limit).map((r: any) => ({
-              ...r,
-              image: r.image && r.image.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(r.image)}` : r.image
-          }));
+          const existingRequests = await prisma.request.findMany({
+              where: { volumeId: { in: volumeIds } },
+              select: { volumeId: true, activeDownloadName: true, status: true }
+          });
+
+          const existingIssues = await prisma.issue.findMany({
+              where: { series: { metadataId: { in: volumeIds } } },
+              select: { number: true, series: { select: { metadataId: true } } }
+          });
+
+          const results = slice.map((r: any) => {
+              const issueName = `${r.title} #${r.issueNumber}`;
+              const request = existingRequests.find(req => 
+                  req.volumeId === r.cvId?.toString() && req.activeDownloadName === issueName
+              );
+              const inLibrary = existingIssues.some(iss => 
+                  iss.series.metadataId === r.cvId?.toString() && iss.number === r.issueNumber
+              );
+
+              return {
+                  ...r,
+                  image: r.image && r.image.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(r.image)}` : r.image,
+                  requestStatus: request?.status || null,
+                  inLibrary: inLibrary
+              };
+          });
           
           const nextOffset = (offset + limit < allResults.length) ? offset + limit : null;
-
           return NextResponse.json({ results, nextOffset });
       }
 

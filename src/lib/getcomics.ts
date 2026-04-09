@@ -12,26 +12,17 @@ export const GetComicsService = {
         query,
         query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
         noYearQuery,
-        noYearQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
-        noIssueQuery, 
-        noIssueQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim() 
+        noIssueQuery
     ];
     
     const uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
     
     for (const q of uniqueSearches) {
-        let retries = 2;
-        while (retries > 0) {
-            try {
-                const results = await this.performSearch(q, query, isInteractive, isManga); 
-                if (results.length > 0) return results;
-                break; 
-            } catch (e: any) { 
-                Logger.log(`[GetComics] Search failed for "${q}": ${e.message}`, 'warn');
-                retries--;
-                if (retries === 0) break;
-                await new Promise(r => setTimeout(r, 3000));
-            }
+        try {
+            const results = await this.performSearch(q, query, isInteractive, isManga); 
+            if (results.length > 0) return results;
+        } catch (e: any) { 
+            Logger.log(`[GetComics] Search failed for "${q}": ${e.message}`, 'warn');
         }
     }
     return [];
@@ -53,15 +44,12 @@ export const GetComicsService = {
 
     let reqNumMatch = cleanOriginal.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
-    if (reqNum === null) {
-        let noYearQuery = cleanOriginal.replace(/\b(19|20)\d{2}\b/g, '');
-        // FIX: Lookbehind regex prevents space consumption overlap
-        const fallbacks = [...noYearQuery.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-        if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-    }
 
     const reqYearMatch = cleanOriginal.match(/\b(19|20)\d{2}\b/);
     const reqYear = reqYearMatch ? reqYearMatch[1] : null;
+
+    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
+    const significantWords = queryWords.filter(w => !stopWords.includes(w) && w.length > 2 && w !== reqYear);
 
     $('article, .post').each((i, el) => {
       const titleEl = $(el).find('h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a').first();
@@ -74,63 +62,27 @@ export const GetComicsService = {
       let isRelevant = true;
 
       if (!isInteractive) {
-          
-          const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
-          if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
+          // 1. STRICT YEAR ANCHOR
+          if (reqYear && !titleLower.includes(reqYear)) isRelevant = false;
 
-          const isLookingForOmnibus = queryWords.some(w => tpbTerms.includes(w));
-          if (reqNum !== null && !isLookingForOmnibus) {
-              if (tpbTerms.some(term => titleLower.includes(term))) {
-                  isRelevant = false;
-              }
-          }
-
+          // 2. MANDATORY WORD INTERSECTION
           if (isRelevant) {
-              let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-              
-              let strippedForNumbers = cleanTor;
-              if (!isManga) {
-                  strippedForNumbers = strippedForNumbers.replace(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
-                  strippedForNumbers = strippedForNumbers.replace(/(?:book\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
-              }
-
-              let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-              let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
-              if (torNum === null) {
-                  // FIX: Lookbehind regex prevents space consumption overlap
-                  const fallbacks = [...strippedForNumbers.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                  if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-              }
-
-              if (reqNum !== null) {
-                  if (torNum !== null && torNum !== reqNum) isRelevant = false;
-                  if (torNum === null) {
-                      isRelevant = false; 
-                  }
-              }
-          }
-
-          if (isRelevant) {
-              const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
-              const torYear = torYearMatch ? torYearMatch[1] : null;
-
-              if (reqYear && torYear && reqYear !== torYear) {
-                  isRelevant = false;
-              }
-          }
-
-          // FIX: Improved Filter 3 to enforce titles that are 100% numerical
-          if (isRelevant) {
-              for (let w of queryWords) {
-                  const isIssueNum = reqNum !== null && parseFloat(w) === reqNum;
-                  const isYear = reqYear !== null && w === reqYear;
-                  if (isIssueNum || isYear) continue;
-
-                  if (!titleLower.includes(w)) {
+              for (const word of significantWords) {
+                  if (!titleLower.includes(word)) {
                       isRelevant = false;
                       break;
                   }
               }
+          }
+
+          // 3. RELAXED ISSUE NUMBER MATCH
+          if (isRelevant && reqNum !== null) {
+              let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})\)/g, '');
+              const fallbacks = [...cleanTor.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+              let torNum = fallbacks.length > 0 ? parseFloat(fallbacks[fallbacks.length - 1][1]) : null;
+              
+              // Only reject if it's the WRONG number. If no number is listed, assume it's a valid series post.
+              if (torNum !== null && torNum !== reqNum) isRelevant = false;
           }
       }
 
@@ -167,40 +119,41 @@ export const GetComicsService = {
           };
 
           $('a').each((i, el) => {
-              const text = $(el).text().toLowerCase();
-              const titleAttr = ($(el).attr('title') || "").toLowerCase();
+              const text = $(el).text().trim();
+              const titleAttr = ($(el).attr('title') || "").trim();
               const href = $(el).attr('href') || "";
               
-              if (!href.includes('go.php') && !text.includes('download') && !titleAttr.includes('download')) {
-                  return; 
-              }
-
               const decoded = decodeLink(href);
               if (!decoded) return;
 
-              const isMainServer = 
-                  text.includes('main server') || titleAttr.includes('main server') || 
-                  text.includes('download now') || titleAttr.includes('download now') ||
-                  text.includes('direct download');
+              // FIX: Use case-insensitive Regex to find the button
+              const isDownloadText = /download now|main server|direct download/i.test(text) || 
+                                     /download now|main server|direct download/i.test(titleAttr);
               
-              const isThirdParty = decoded.includes('mediafire.com') || decoded.includes('mega.nz') || decoded.includes('zippyshare.com') || decoded.includes('userscloud.com');
+              // Ensure we only automate links that stay on the getcomics.org domain
+              const isInternal = decoded.includes('getcomics.org');
+              const isDirectFile = !!decoded.match(/\.(cbz|cbr|zip|rar|epub)$/i);
 
-              if ((isMainServer || decoded.match(/\.(cbz|cbr|zip)$/i)) && !isThirdParty) {
+              if (isDownloadText && (isInternal || isDirectFile)) {
                   bestLink = decoded;
                   isDirect = true;
-                  return false; 
+                  return false; // Found the primary link, exit each loop
               } 
-              else if (!bestLink) {
+              
+              // Fallback: If we find a direct file link elsewhere, use it if no high-priority link found
+              if (isDirectFile && !bestLink) {
                   bestLink = decoded;
-                  isDirect = !isThirdParty; 
+                  isDirect = true;
               }
           });
 
-          if (bestLink) return { url: bestLink, isDirect };
-          return { url: articleUrl, isDirect: false };
+          // Final cleanup check
+          if (!bestLink || bestLink === articleUrl) {
+              return { url: articleUrl, isDirect: false };
+          }
 
+          return { url: bestLink, isDirect: true };
       } catch (error: unknown) {
-          Logger.log(`[GetComics Scrape] Failed to parse deep link: ${getErrorMessage(error)}`, 'error');
           return { url: articleUrl, isDirect: false };
       }
   }

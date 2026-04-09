@@ -84,7 +84,7 @@ export function RequestSearch() {
       if (ownedSeries.has(volumeId)) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
       if (requestedVolumes.has(volumeId)) return 'REQUESTED';
       
-      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
+      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId.toString());
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
           if (allCompleted) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
@@ -97,7 +97,7 @@ export function RequestSearch() {
       if (ownedIssues.has(issueId)) return 'ISSUE_OWNED';
       if (requestedIssues.has(issueName)) return 'REQUESTED';
 
-      const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
+      const req = activeRequests.find(r => r.volumeId === volumeId.toString() && r.name === issueName);
       if (req) {
           if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
           if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
@@ -172,6 +172,11 @@ export function RequestSearch() {
   }, [selectedItem?.id, selectedItem?.isVolume]);
 
   const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string) => {
+    if (!name || name === "Unknown" || name === "undefined") {
+        toast({ title: "Request Failed", description: "Missing valid series name. Try interactive search.", variant: "destructive" });
+        return;
+    }
+
     const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
     setRequestingTarget(targetKey);
     try {
@@ -187,7 +192,7 @@ export function RequestSearch() {
             setOpen(false);
         } else {
             setRequestedIssues(prev => new Set(prev).add(name));
-            setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
+            setActiveRequests(prev => [...prev, { volumeId: id.toString(), name: name, status: 'PENDING' }]);
         }
       }
     } finally { setRequestingTarget(null) }
@@ -291,8 +296,14 @@ export function RequestSearch() {
                           </div>
                           
                           {(() => {
-                              const issueTargetName = selectedItem.isVolume ? `${selectedItem.name.split(' #')[0]} #1` : selectedItem.name;
-                              const volStatus = getVolumeStatus(selectedItem.volumeId, selectedItem.name.split(' #')[0]);
+                              // FIX: Use volumeName from API to prevent "Unknown" bug 
+                              const seriesBaseName = selectedItem.volumeName || (selectedItem.name ? selectedItem.name.split(' #')[0] : "Unknown");
+    
+                              const issueTargetName = selectedItem.issueNumber 
+                                  ? `${seriesBaseName} #${selectedItem.issueNumber}` 
+                                  : `${seriesBaseName} #1`;
+    
+                              const volStatus = getVolumeStatus(selectedItem.volumeId, seriesBaseName);
                               const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, issueTargetName);
                               
                               const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';
@@ -312,7 +323,7 @@ export function RequestSearch() {
                                             <Button 
                                                 className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold px-1 whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
                                                 variant="default" 
-                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: undefined })} 
+                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: seriesBaseName, image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: undefined })} 
                                                 disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
                                             >
                                                 {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : (
@@ -321,9 +332,8 @@ export function RequestSearch() {
                                             </Button>
                                             <Button 
                                                 className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-1 border-0 whitespace-normal" 
-                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: selectedItem.name.split(' #')[0], image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: 'getcomics' })} 
+                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: seriesBaseName, image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: 'getcomics' })} 
                                                 disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
-                                                title={isVolOwned ? "Force missing issues from GetComics" : "Force direct download from GetComics"}
                                             >
                                                 {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
                                             </Button>
@@ -352,7 +362,6 @@ export function RequestSearch() {
                                                 variant="outline" 
                                                 onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, 'getcomics')} 
                                                 disabled={requestingTarget === `iss-${issueTargetName}`}
-                                                title="Force direct download from GetComics"
                                             >
                                                 {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
                                             </Button>
@@ -362,7 +371,7 @@ export function RequestSearch() {
                                     <Button 
                                       variant="outline" 
                                       className="w-full gap-1.5 border-dashed shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" 
-                                      onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? selectedItem.name.split(' #')[0] : selectedItem.name, type: selectedItem.isVolume ? 'issue' : 'volume' })}
+                                      onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? seriesBaseName : selectedItem.name, type: selectedItem.isVolume ? 'issue' : 'volume' })}
                                       disabled={(!selectedItem.isVolume && isIssueOwned) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                     >
                                         {overallStatus === 'PENDING_APPROVAL' ? (

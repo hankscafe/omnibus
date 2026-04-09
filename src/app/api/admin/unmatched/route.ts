@@ -12,12 +12,18 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        // --- SCHEMA FIX: Query Unmatched records safely via String ---
+        // FIX: Ensure records with a valid cvId are NOT considered unmatched
         const unmatched = await prisma.series.findMany({
             where: { 
-                OR: [
-                    { metadataId: null },
-                    { metadataId: { startsWith: 'unmatched_' } }
+                AND: [
+                    { cvId: null },
+                    { matchState: 'UNMATCHED' },
+                    {
+                        OR: [
+                            { metadataId: null },
+                            { metadataId: { startsWith: 'unmatched_' } }
+                        ]
+                    }
                 ]
             },
             orderBy: { name: 'asc' }

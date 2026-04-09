@@ -32,7 +32,15 @@ export async function GET(request: Request) {
         const recommendations = await prisma.series.findMany({
             where: {
                 id: { not: lastRead.issue.seriesId },
-                issues: { some: { OR: targetTags.map(tag => ({ genres: { contains: tag } })) } }
+                issues: { 
+                    some: { 
+                        OR: targetTags.map(tag => ({ 
+                            genres: { 
+                                contains: tag // Removed mode: 'insensitive'
+                            } 
+                        })) 
+                    } 
+                }
             },
             take: 7, 
             include: { issues: { select: { id: true } } }

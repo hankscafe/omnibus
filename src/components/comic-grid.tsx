@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users, Globe, Activity, Library, FileCheck, Tags, BookMarked } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
@@ -29,6 +30,7 @@ interface Comic {
   genres?: string[];
   storyArcs?: string[];
   isVolume?: boolean;
+  volumeName?: string; // FIX: Added volumeName to interface 
 }
 
 interface Props {
@@ -50,6 +52,7 @@ function ComicGridSkeleton({ count = 14 }: { count?: number }) {
 }
 
 export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
+  const { data: session } = useSession()
   const [comics, setComics] = useState<Comic[]>([])
   const [loading, setLoading] = useState(true)
   
@@ -108,7 +111,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       if (ownedSeries.has(volumeId)) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
       if (requestedVolumes.has(volumeId)) return 'REQUESTED';
       
-      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId);
+      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId.toString());
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
           if (allCompleted) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
@@ -117,11 +120,14 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       return null;
   }
 
-  const getIssueStatus = (issueId: number, volumeId: number, issueName: string): StatusType => {
-      if (ownedIssues.has(issueId)) return 'ISSUE_OWNED';
+  const getIssueStatus = (issueId: number | string, volumeId: number | string, issueName: string): StatusType => {
+      // FIX: Force to Number for set comparison
+      if (ownedIssues.has(Number(issueId))) return 'ISSUE_OWNED';
       if (requestedIssues.has(issueName)) return 'REQUESTED';
 
-      const req = activeRequests.find(r => r.volumeId === volumeId && r.name === issueName);
+      const req = activeRequests.find(r => 
+          String(r.volumeId) === String(volumeId) && r.name === issueName
+      );
       if (req) {
           if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
           if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
@@ -148,7 +154,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   useEffect(() => {
     if (!selectedComic?.id) return;
     
-    fetch(`/api/issue-details?id=${selectedComic.id}&type=issue`)
+    fetch(`/api/issue-details?id=${selectedComic.id}&type=issue&_t=${Date.now()}`)
       .then(res => res.json())
       .then(data => {
         if (data && !data.error) {
@@ -157,7 +163,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
             return {
                 ...prev,
                 ...data,
-                name: data.name || prev?.name,
+                // FIX: Only overwrite the name if the new name is valid and NOT "Unknown"
+                name: (data.name && data.name !== "Unknown") ? data.name : prev?.name,
                 publisher: (data.publisher && data.publisher !== 'Unknown') ? data.publisher : prev?.publisher,
                 year: (data.year && data.year !== '????') ? data.year : prev?.year,
                 image: data.image || prev?.image,
@@ -182,22 +189,47 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       .finally(() => setLoadingRelated(false))
   }, [selectedComic?.volumeId])
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string) => {
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string, issueNumber?: string) => {
+    if (!name || name === "Unknown" || name === "undefined") {
+        toast({ title: "Request Failed", description: "Could not resolve series name. Please try interactive search.", variant: "destructive" });
+        return;
+    }
+
     const targetKey = type === 'volume' ? `vol-${id}` : `iss-${name}`;
     setRequestingTarget(targetKey);
     try {
       const res = await fetch('/api/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored, directSource })
+        body: JSON.stringify({ 
+            cvId: id, 
+            name, 
+            year, 
+            publisher: publisher || "Unknown", 
+            image, 
+            type, 
+            monitored, 
+            directSource,
+            issueNumber 
+        })
       });
+
       if (res.ok) {
           toast({ title: "Success", description: `${name} added to queue.` })
+          
           if (type === 'volume') {
               setRequestedVolumes(prev => new Set(prev).add(id));
           } else {
+              // Now 'session' is defined and the TS2304 error is resolved
               setRequestedIssues(prev => new Set(prev).add(name));
-              setActiveRequests(prev => [...prev, { volumeId: id, name: name, status: 'PENDING' }]);
+              setActiveRequests(prev => [
+                  ...prev, 
+                  { 
+                      volumeId: id.toString(), 
+                      name: name, 
+                      status: (session?.user as any)?.role === 'ADMIN' ? 'PENDING' : 'PENDING_APPROVAL' 
+                  }
+              ]);
           }
       }
     } finally { setRequestingTarget(null) }
@@ -323,8 +355,11 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                             </div>
                             
                             {(() => {
-                                const issueTargetName = selectedComic.issueNumber ? selectedComic.name : `${selectedComic.name.split(' #')[0]} #1`;
-                                const volStatus = getVolumeStatus(selectedComic.volumeId, selectedComic.name.split(' #')[0]);
+                                // FIX: Use volumeName if available from API to prevent name overwrite bugs 
+                                const seriesBaseName = selectedComic.volumeName || (selectedComic.name ? selectedComic.name.split(' #')[0] : "Unknown");
+                                const issueTargetName = selectedComic.issueNumber ? selectedComic.name : `${seriesBaseName} #1`;
+                                
+                                const volStatus = getVolumeStatus(selectedComic.volumeId, seriesBaseName);
                                 const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, issueTargetName);
                                 
                                 const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';
@@ -344,7 +379,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               <Button 
                                                   className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold px-1 whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
                                                   variant="default" 
-                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined })} 
+                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined })} 
                                                   disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
                                               >
                                                   {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : (
@@ -353,9 +388,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               </Button>
                                               <Button 
                                                   className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-1 border-0 whitespace-normal" 
-                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: selectedComic.name.split(' #')[0], image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: 'getcomics' })} 
+                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: 'getcomics' })} 
                                                   disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
-                                                  title={isVolOwned ? "Force missing issues from GetComics" : "Force direct download from GetComics"}
                                               >
                                                   {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
                                               </Button>
@@ -374,7 +408,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               <Button 
                                                   className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 px-1 whitespace-normal" 
                                                   variant="outline" 
-                                                  onClick={() => handleRequest(selectedComic.volumeId, issueTargetName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher)} 
+                                                  // FIX: Pass selectedComic.issueNumber to target specific issue
+                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber)} 
                                                   disabled={requestingTarget === `iss-${issueTargetName}`}
                                               >
                                                   {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
@@ -382,9 +417,9 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               <Button 
                                                   className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 px-1 border-0 whitespace-normal" 
                                                   variant="outline" 
-                                                  onClick={() => handleRequest(selectedComic.volumeId, issueTargetName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, 'getcomics')} 
+                                                  // FIX: Pass selectedComic.issueNumber to target specific issue
+                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, 'getcomics', selectedComic.issueNumber)} 
                                                   disabled={requestingTarget === `iss-${issueTargetName}`}
-                                                  title="Force direct download from GetComics"
                                               >
                                                   {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
                                               </Button>
@@ -394,7 +429,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                       <Button 
                                         variant="outline" 
                                         className="w-full gap-1.5 border-dashed shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" 
-                                        onClick={() => setInteractiveQuery({ query: selectedComic.isVolume ? selectedComic.name.split(' #')[0] : selectedComic.name, type: selectedComic.isVolume ? 'issue' : 'volume' })}
+                                        onClick={() => setInteractiveQuery({ query: selectedComic.isVolume ? seriesBaseName : selectedComic.name, type: selectedComic.isVolume ? 'issue' : 'volume' })}
                                         disabled={(!selectedComic.isVolume && isIssueOwned) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                       >
                                           {overallStatus === 'PENDING_APPROVAL' ? (

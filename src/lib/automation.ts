@@ -14,57 +14,20 @@ export async function getDownloadClient() {
 
 export async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
   const acronyms = await getCustomAcronyms();
-  const queries = generateSearchQueries(name, year, acronyms, isManga); // <-- Passed isManga
+  const queries = generateSearchQueries(name, year, acronyms, isManga);
   
   Logger.log(`[Automation] Generated ${queries.length} search variations for: ${name}`, 'info');
-  
-  let healthyResults: any[] = [];
-  let successfulQuery = "";
 
-  if (!skipIndexers) {
-      for (const query of queries) {
-          Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
-          const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga); // <-- Passed isManga
-          healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
-          if (healthyResults.length > 0) {
-              successfulQuery = query;
-              break; 
-          }
-      }
-
-      if (healthyResults.length > 0) {
-        healthyResults.sort((a: any, b: any) => b.score - a.score);
-        const best = healthyResults[0];
-        
-        const config = await getDownloadClient();
-        if (config) {
-          Logger.log(`[Automation] Sending to Client: ${best.title} (Priority: ${best.priority})`, 'info');
-          await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
-          
-          const trackingHash = best.infoHash || best.guid || null;
-          
-          await prisma.request.update({
-            where: { id: requestId },
-            data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash }
-          });
-          return; 
-        }
-      }
-  }
-
-  Logger.log(skipIndexers ? `[Automation] Direct GetComics requested for: ${name}` : `[Automation] Not found on Indexers. Falling back to GetComics...`, 'info');
-  
+  Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
   let getComicsResults: any[] = [];
   for (const query of queries) {
-      Logger.log(`[Automation] Searching GetComics: "${query}"`, 'info');
-      getComicsResults = await GetComicsService.search(query, false, isManga); // <-- Passed isManga
-      if (getComicsResults.length > 0) {
-          successfulQuery = query;
-          break;
-      }
+      Logger.log(`[Automation] [GetComics] Trying variation: "${query}"`, 'info');
+      getComicsResults = await GetComicsService.search(query, false, isManga);
+      if (getComicsResults.length > 0) break;
   }
   
   if (getComicsResults.length > 0) {
+    Logger.log(`[Automation] [GetComics] Found ${getComicsResults.length} potential matches.`, 'success');
     const best = getComicsResults[0];
     const { url, isDirect } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
     
@@ -86,18 +49,63 @@ export async function searchAndDownload(requestId: string, name: string, year: s
             }
         })
         .catch(e => Logger.log(getErrorMessage(e), 'error'));
+      
+      return; // EXIT: Found an automated path on GetComics
     } else {
+      Logger.log(`[Automation] [GetComics] Best match was a hoster link. Saved to Manual Queue.`, 'warn');
       await prisma.request.update({
         where: { id: requestId },
         data: { status: 'MANUAL_DDL', downloadLink: url }
       });
     }
   } else {
-     Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
-     await prisma.request.update({
-        where: { id: requestId },
-        data: { status: 'STALLED' }
-     });
+    Logger.log(`[Automation] [GetComics] No valid matches found across all variations.`, 'info');
+  }
+
+  // --- PHASE 2: INDEXER FALLBACK ---
+  if (!skipIndexers) {
+      Logger.log(`[Automation] Fallback Phase: Searching Prowlarr...`, 'info');
+      let healthyResults: any[] = [];
+      let successfulQuery = "";
+
+      for (const query of queries) {
+          Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
+          const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga);
+          healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
+          if (healthyResults.length > 0) {
+              successfulQuery = query;
+              break; 
+          }
+      }
+
+      if (healthyResults.length > 0) {
+        healthyResults.sort((a: any, b: any) => b.score - a.score);
+        const best = healthyResults[0];
+        
+        const config = await getDownloadClient();
+        if (config) {
+          Logger.log(`[Automation] Sending to Client: ${best.title}`, 'info');
+          await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
+          
+          const trackingHash = best.infoHash || best.guid || null;
+          
+          await prisma.request.update({
+            where: { id: requestId },
+            data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash }
+          });
+          return; // Exit: Successfully handled via Prowlarr
+        }
+      }
+  }
+
+  // Final check: if neither source found a direct download, mark as STALLED if not already MANUAL_DDL
+  const currentReq = await prisma.request.findUnique({ where: { id: requestId } });
+  if (currentReq?.status !== 'MANUAL_DDL' && currentReq?.status !== 'DOWNLOADING') {
+      Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
+      await prisma.request.update({
+         where: { id: requestId },
+         data: { status: 'STALLED' }
+      });
   }
 }
 

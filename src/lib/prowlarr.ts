@@ -13,125 +13,92 @@ export const ProwlarrService = {
     if (!config.prowlarr_url || !config.prowlarr_key) return [];
 
     const cleanQuery = query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
-    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue'];
-    const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => !stopWords.includes(w) && w.length > 0);
-
-    const categoriesStr = config.prowlarr_categories;
-    let searchCategories: string[] = [];
-    
-    if (categoriesStr === undefined) {
-        searchCategories = ['7030', '8030'];
-    } else if (categoriesStr.trim() !== "") {
-        searchCategories = categoriesStr.split(',').map((c: string) => c.trim()).filter(Boolean);
-    }
+    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
+    const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => w.length > 0);
 
     let configuredIndexers: { id: number | string }[] = [];
     try {
         configuredIndexers = await prisma.indexer.findMany();
     } catch (e: unknown) {
-        Logger.log(`[Prowlarr] Failed to fetch indexers from database: ${getErrorMessage(e)}`, 'warn');
+        Logger.log(`[Prowlarr] Failed to fetch indexers: ${getErrorMessage(e)}`, 'warn');
     }
 
     const params = new URLSearchParams();
     params.append('query', cleanQuery);
     params.append('type', 'search');
     
-    searchCategories.forEach(cat => {
-        params.append('categories', cat);
-    });
+    const categoriesStr = config.prowlarr_categories || '7030, 8030';
+    categoriesStr.split(',').map(c => c.trim()).filter(Boolean).forEach(cat => params.append('categories', cat));
 
     if (configuredIndexers.length > 0) {
-        configuredIndexers.forEach(idx => {
-            params.append('indexerIds', idx.id.toString());
-        });
+        configuredIndexers.forEach(idx => params.append('indexerIds', idx.id.toString()));
     }
 
     const customHeaders = await getCustomHeaders();
-    const reqHeaders: Record<string, string> = { 
-        'X-Api-Key': config.prowlarr_key,
-        ...customHeaders
-    };
+    const reqHeaders: Record<string, string> = { 'X-Api-Key': config.prowlarr_key, ...customHeaders };
 
     try {
       const url = `${config.prowlarr_url.replace(/\/$/, '')}/api/v1/search?${params.toString()}`;
-      Logger.log(`[Prowlarr] Searching: ${url}`, 'info');
-
-      const { data } = await axios.get<unknown[] | string | Record<string, unknown>>(url, {
-          headers: reqHeaders, 
-          timeout: 30000 
-      });
+      const { data } = await axios.get<any[]>(url, { headers: reqHeaders, timeout: 30000 });
 
       if (!Array.isArray(data)) return [];
 
-      const rawData = data as Record<string, unknown>[];
-
       let reqNumMatch = cleanQuery.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
       let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
-      if (reqNum === null) {
-          let noYearQuery = cleanQuery.replace(/\b(19|20)\d{2}\b/g, '');
-          // FIX: Lookbehind regex
-          const fallbacks = [...noYearQuery.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-          if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-      }
-
+      
       const reqYearMatch = cleanQuery.match(/\b(19|20)\d{2}\b/);
       const reqYear = reqYearMatch ? reqYearMatch[1] : null;
 
-      return rawData
+      const significantQueryWords = queryWords.filter(w => !stopWords.includes(w.toLowerCase()) && w.length > 2 && w !== reqYear);
+
+      return data
         .filter((item) => {
             if (isInteractive) return true;
             const titleLower = (String(item.title || "")).toLowerCase();
             
-            const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
-            if (!isManga) {
-                tpbTerms.push('vol ', 'volume ', 'book ');
-            }
-
-            const isLookingForOmnibus = queryWords.some(w => tpbTerms.includes(w));
-            if (reqNum !== null && !isLookingForOmnibus) {
-                if (tpbTerms.some(term => titleLower.includes(term))) {
-                    return false;
-                }
-            }
-
-            let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-            
-            let strippedForNumbers = cleanTor;
-            if (!isManga) {
-                strippedForNumbers = strippedForNumbers.replace(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
-                strippedForNumbers = strippedForNumbers.replace(/(?:book\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
-            }
-
-            let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-            let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
-            
-            if (torNum === null) {
-                // FIX: Lookbehind regex
-                const fallbacks = [...strippedForNumbers.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
-            }
-
-            if (reqNum !== null) {
-                if (torNum !== null && torNum !== reqNum) return false;
-                if (torNum === null) {
-                    return false; 
-                }
-            }
-
+            // 1. PERSISTENT YEAR ANCHOR
+            const originalReqYear = query.match(/\b(19|20)\d{2}\b/)?.[0] || reqYear;
             const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
-            const torYear = torYearMatch ? torYearMatch[1] : null;
+            const torYear = torYearMatch ? torYearMatch[0].replace(/[\[\]\(\)]/g, '') : null;
 
-            if (reqYear && torYear && reqYear !== torYear) {
+            if (originalReqYear) {
+                if (torYear && originalReqYear !== torYear) return false; 
+                if (!torYear && !titleLower.includes(originalReqYear)) return false; 
+            }
+
+            // 2. MANDATORY WORD INTERSECTION
+            for (const word of significantQueryWords) {
+                if (!titleLower.includes(word.toLowerCase())) return false;
+            }
+
+            // 3. REVERSE VALIDATION (Extra Word Check)
+            const resultWords = titleLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+                .filter(w => !stopWords.includes(w) && w.length > 2 && w !== torYear);
+            const extraWords = resultWords.filter(w => !significantQueryWords.includes(w));
+            if (extraWords.length > 1) return false;
+
+            // 4. TPB/Omnibus Filter
+            const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'annual'];
+            const isLookingForOmnibus = significantQueryWords.some(w => tpbTerms.includes(w));
+            if (reqNum !== null && !isLookingForOmnibus && tpbTerms.some(term => titleLower.includes(term))) {
                 return false;
             }
 
-            // FIX: Improved Filter 3 to enforce titles that are 100% numerical
-            for (let w of queryWords) {
-                const isIssueNum = reqNum !== null && parseFloat(w) === reqNum;
-                const isYear = reqYear !== null && w === reqYear;
-                if (isIssueNum || isYear) continue;
+            // 5. Issue Number Check
+            let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})\)/g, '');
+            let torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+            let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+            
+            if (torNum === null) {
+                const fallbacks = [...cleanTor.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+                // FIX: Corrected variable name from fallbackMatches to fallbacks
+                if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+            }
 
-                if (!titleLower.includes(w)) return false;
+            // REJECTION LOGIC: If we asked for #18 and the result is #17, reject it.
+            if (reqNum !== null) {
+                if (torNum !== null && torNum !== reqNum) return false;
+                if (torNum === null) return false; 
             }
 
             return true;
@@ -142,7 +109,6 @@ export const ProwlarrService = {
               const match = String(item.magnetUrl).match(/urn:btih:([a-zA-Z0-9]+)/i);
               if (match) parsedHash = match[1].toLowerCase();
           }
-
           return {
             guid: String(item.guid || ""),
             title: String(item.title || ""),

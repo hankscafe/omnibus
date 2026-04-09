@@ -179,9 +179,18 @@ export async function GET(request: Request) {
     if (q) {
         where.AND.push({
             OR: [
-                { name: { contains: q, mode: 'insensitive' } },
-                { publisher: { contains: q, mode: 'insensitive' } },
-                { issues: { some: { OR: [ { writers: { contains: q, mode: 'insensitive' } }, { artists: { contains: q, mode: 'insensitive' } } ] } } }
+                { name: { contains: q } }, // REMOVED mode: 'insensitive'
+                { publisher: { contains: q } }, // REMOVED mode: 'insensitive'
+                { 
+                    issues: { 
+                        some: { 
+                            OR: [ 
+                                { writers: { contains: q } }, // REMOVED mode: 'insensitive'
+                                { artists: { contains: q } }  // REMOVED mode: 'insensitive'
+                            ] 
+                        } 
+                    } 
+                }
             ]
         });
     }

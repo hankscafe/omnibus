@@ -10,6 +10,7 @@ import { detectManga } from '@/lib/manga-detector';
 import { isReleasedYet } from '@/lib/utils';
 import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
 import { getErrorMessage } from '@/lib/utils/error';
+import { syncSeriesMetadata } from '@/lib/metadata-fetcher'; 
 
 export const dynamic = 'force-dynamic';
 
@@ -27,36 +28,41 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { cvId, name, year, type, image, monitored, directSource } = body; 
-    let { publisher, description } = body;
+    let name = body.name || body.seriesName || body.title;
+    const { cvId, type, image, monitored, directSource } = body; 
+    let { publisher, year, description } = body;
 
-    const skipIndexers = directSource === 'getcomics';
+    if (!cvId) return NextResponse.json({ error: 'Missing ComicVine ID' }, { status: 400 });
 
-    if (!cvId || !name) return NextResponse.json({ error: 'Missing metadata' }, { status: 400 });
-
-    const initialStatus = token.autoApproveRequests ? 'PENDING' : 'PENDING_APPROVAL';
-
-    if (!publisher || publisher === "Unknown" || publisher === "Other" || !description) {
+    // Force metadata recovery for Volume requests to guarantee name accuracy
+    if (!name || name === "Unknown" || type === 'volume' || !publisher || publisher === "Unknown" || !year) {
         try {
             const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
             if (cvKeySetting?.value) {
                 const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${cvId}/`, {
-                    params: { api_key: cvKeySetting.value, format: 'json', field_list: 'publisher,description,deck' },
+                    params: { api_key: cvKeySetting.value, format: 'json', field_list: 'publisher,description,deck,name,start_year' },
                     headers: { 'User-Agent': 'Omnibus/1.0' },
                     timeout: 4000
                 });
                 const volData = cvVolRes.data?.results;
                 if (volData) {
-                    if (!publisher || publisher === "Unknown" || publisher === "Other") {
-                        publisher = volData.publisher?.name;
-                    }
-                    if (!description) {
-                        description = volData.description || volData.deck;
-                    }
+                    name = volData.name;
+                    if (!publisher || publisher === "Unknown") publisher = volData.publisher?.name;
+                    if (!year) year = volData.start_year;
+                    if (!description) description = volData.description || volData.deck;
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            Logger.log(`[Request] Metadata recovery failed for CV:${cvId}`, 'warn');
+        }
     }
+
+    if (!name || name === "Unknown") {
+        return NextResponse.json({ error: 'Series name unresolved. Please try Interactive Search.' }, { status: 400 });
+    }
+
+    const skipIndexers = directSource === 'getcomics';
+    const initialStatus = token.autoApproveRequests ? 'PENDING' : 'PENDING_APPROVAL';
 
     const safePublisher = publisher || "Unknown";
     const isManga = await detectManga({ name, publisher: { name: safePublisher }, year: parseInt(year) });
@@ -65,34 +71,49 @@ export async function POST(request: NextRequest) {
     if (type === 'volume') {
       Logger.log(`[Request] User ${token.name} requested full Volume: ${name}`, 'info');
       
-      if (monitored) {
-          const libraries = await prisma.library.findMany();
-          let targetLib = isManga 
-              ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
-              : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
-          if (!targetLib) targetLib = libraries[0];
+      const libraries = await prisma.library.findMany();
+      let targetLib = isManga 
+          ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+          : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+      if (!targetLib) targetLib = libraries[0];
 
-          const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-          const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
+      const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+      const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
+      const folderPath = targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName} (${year})` : `/${libraryTypeFolder}/${safePubFolder}/${safeFolderName} (${year})`;
 
-          await prisma.series.upsert({
-              where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
-              update: { monitored: true, coverUrl: image },
-              create: { 
-                  metadataId: cvId.toString(), 
-                  metadataSource: 'COMICVINE',
-                  name, 
-                  year: parseInt(year) || new Date().getFullYear(), 
-                  publisher: safePublisher, 
-                  folderPath: targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName}` : `/${libraryTypeFolder}/${safePubFolder}/${safeFolderName}`, 
-                  monitored: true,
-                  isManga: isManga,
-                  libraryId: targetLib?.id,
-                  coverUrl: image
-              }
-          });
-          Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');
-      }
+      const series = await prisma.series.upsert({
+          where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
+          update: { 
+              monitored: true, 
+              coverUrl: image, 
+              name, 
+              cvId: parseInt(cvId), 
+              matchState: 'MATCHED',
+              year: parseInt(year) 
+          },
+          create: { 
+              cvId: parseInt(cvId), 
+              metadataId: cvId.toString(), 
+              metadataSource: 'COMICVINE',
+              matchState: 'MATCHED',
+              name, 
+              year: parseInt(year) || new Date().getFullYear(), 
+              publisher: safePublisher, 
+              folderPath, 
+              monitored: true,
+              isManga: isManga,
+              libraryId: targetLib?.id,
+              coverUrl: image,
+              description
+          }
+      });
+
+      // FIX: Trigger immediate sync to get issue-specific covers and metadata
+    syncSeriesMetadata(cvId.toString(), series.folderPath, 'COMICVINE').catch(err => {
+        Logger.log(`[Request] Background metadata sync failed: ${err.message}`, 'error');
+    });
+
+      Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');
 
       if (initialStatus === 'PENDING_APPROVAL') {
           DiscordNotifier.sendAlert('pending_request', {
@@ -115,7 +136,6 @@ export async function POST(request: NextRequest) {
 
       const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
       const cvApiKey = cvKeySetting?.value;
-      
       if (!cvApiKey) throw new Error("Missing ComicVine API Key");
 
       const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
@@ -135,13 +155,9 @@ export async function POST(request: NextRequest) {
         const issueYear = (issue.store_date || issue.cover_date || year || "").split('-')[0];
         const searchName = `${name} #${issue.issue_number}`;
         const issueImage = issue.image?.medium_url || issue.image?.small_url || image;
-
         const isReleased = isReleasedYet(issue.store_date, issue.cover_date);
         let issueStatus = initialStatus;
-        
-        if (!isReleased) {
-            issueStatus = 'UNRELEASED';
-        }
+        if (!isReleased) issueStatus = 'UNRELEASED';
 
         const existing = await prisma.request.findFirst({
           where: { volumeId: cvId.toString(), activeDownloadName: searchName }
@@ -158,7 +174,6 @@ export async function POST(request: NextRequest) {
               downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null 
             }
           });
-          
           if (issueStatus === 'PENDING') {
             createdRequests.push({ id: newReq.id, name: searchName, year: issueYear, publisher: safePublisher, isManga, skipIndexers });
           }
@@ -169,22 +184,23 @@ export async function POST(request: NextRequest) {
         processAutomationQueue(createdRequests);
       }
 
-      evaluateTrophies(userId).catch(err => {
-          Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
-      });
-
       return NextResponse.json({ 
         success: true, 
         message: initialStatus === 'PENDING' ? `Queued ${createdRequests.length} issues.` : "Sent for Admin approval." 
       });
 
     } else {
+      // Logic for single issue requests
+      const searchName = type === 'issue' && body.issueNumber 
+        ? `${name} #${body.issueNumber}` 
+        : name;
+
       const newReq = await prisma.request.create({
         data: {
           userId: userId,
           volumeId: cvId.toString(),
           status: initialStatus,
-          activeDownloadName: name,
+          activeDownloadName: searchName,
           imageUrl: image,
           downloadLink: skipIndexers && initialStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
         }
@@ -192,7 +208,7 @@ export async function POST(request: NextRequest) {
 
       if (initialStatus === 'PENDING_APPROVAL') {
           DiscordNotifier.sendAlert('pending_request', {
-              title: name,
+              title: searchName,
               imageUrl: image,
               user: token.name as string,
               description: description,
@@ -202,7 +218,7 @@ export async function POST(request: NextRequest) {
           
           Mailer.sendAlert('pending_request', { 
               user: token.name as string, 
-              title: name,
+              title: searchName,
               imageUrl: image,
               description: description,
               date: new Date().toLocaleString()
@@ -210,16 +226,16 @@ export async function POST(request: NextRequest) {
       }
 
       if (initialStatus === 'PENDING') {
-        searchAndDownload(newReq.id, name, year, safePublisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
+        searchAndDownload(newReq.id, searchName, year, safePublisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
       }
 
-      evaluateTrophies(userId).catch(err => {
-          Logger.log(`Trophy evaluation failed: ${getErrorMessage(err)}`, 'error');
-      });
+      evaluateTrophies(userId).catch(() => {});
 
       return NextResponse.json({ 
         success: true, 
-        message: initialStatus === 'PENDING' ? "Download started." : "Pending Admin approval." 
+        message: initialStatus === 'PENDING' ? "Download started." : "Pending Admin approval.",
+        requestId: newReq.id,
+        status: initialStatus
       });
     }
 
@@ -288,7 +304,6 @@ export async function PATCH(request: NextRequest) {
       }).catch(() => {});
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
-      const fallbackMatches = [...searchName.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
       
       searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
     }

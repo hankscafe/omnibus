@@ -25,24 +25,50 @@ export async function POST(request: NextRequest) {
         const req = await prisma.request.findUnique({ where: { id } });
         if (!req) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
-        Logger.log(`[Retry] Manually restarting download for request: ${req.activeDownloadName || req.id}`, 'info');
-
         const settings = await prisma.systemSetting.findMany();
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+        const safeTitle = (req.activeDownloadName || "comic").replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
 
+        // --- FIX: Fetch series context to define 'year' and 'isManga' for fuzzy search ---
         let year = "";
-        let isManga = false; 
+        let isManga = false;
         if (req.volumeId && req.volumeId !== "0") {
-            const series = await prisma.series.findUnique({ where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: req.volumeId } } });
+            const series = await prisma.series.findFirst({ 
+                where: { metadataId: req.volumeId, metadataSource: 'COMICVINE' } 
+            });
             if (series) {
                 year = series.year.toString();
-                isManga = series.isManga; 
+                isManga = series.isManga;
             }
         }
 
-        if (req.downloadLink && req.downloadLink.startsWith('http')) {
-            const safeTitle = (req.activeDownloadName || "comic").replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+        // 1. GetComics Scrape Retry
+        if (req.downloadLink && req.downloadLink.includes('getcomics.org') && !req.downloadLink.match(/\.(cbz|cbr|zip)$/i)) {
+            Logger.log(`[Retry] Scraping fresh link for: ${req.downloadLink}`, 'info');
             
+            const { url, isDirect } = await GetComicsService.scrapeDeepLink(req.downloadLink);
+            
+            if (isDirect) {
+                await prisma.request.update({
+                    where: { id },
+                    data: { status: 'DOWNLOADING', retryCount: 0, progress: 0 }
+                });
+
+                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, req.id)
+                    .then(async (success) => {
+                        if (success) {
+                            await new Promise(r => setTimeout(r, 2000));
+                            await Importer.importRequest(req.id);
+                        }
+                    })
+                    .catch(() => {});
+                
+                return NextResponse.json({ success: true, message: "Fresh link found, download started." });
+            }
+        }
+
+        // 2. Standard direct link retry (for non-GetComics links)
+        if (req.downloadLink && req.downloadLink.startsWith('http')) {
             await prisma.request.update({
                 where: { id },
                 data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeTitle }
@@ -58,6 +84,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: true });
         } 
         
+        // 3. Recovery Fuzzy Search (Uses the variables defined above)
         Logger.log(`[Retry] No link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
         
         const acronyms = await getCustomAcronyms();
@@ -74,14 +101,17 @@ export async function POST(request: NextRequest) {
             const { url, isDirect } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
             
             if (isDirect) {
-                const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+                // Variable is declared correctly here
+                const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
 
                 await prisma.request.update({
                     where: { id },
-                    data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeTitle }
+                    // FIX: Changed safeSearchSearchTitle to safeSearchTitle
+                    data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeSearchTitle }
                 });
 
-                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, req.id)
+                // FIX: Changed safeSearchSearchTitle to safeSearchTitle
+                DownloadService.downloadDirectFile(url, safeSearchTitle, config.download_path, req.id)
                     .then(async (success) => {
                         if (success) {
                             await new Promise(r => setTimeout(r, 2000));

@@ -49,41 +49,54 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    depends_on:
+      - omnibus-redis
     environment:
       - TZ=America/New_York
+      
       # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., https://omnibus.mydomain.com)
       # or your NAS IP (e.g., http://192.168.1.100:3000)
       - NEXTAUTH_URL=http://192.168.1.100:3000
       
-      # REQUIRED: Generate a random 32-character string for security.
-      # !!NOTE!! - This also works as the master database encryption key. DO NOT LOSE THIS!
-      - NEXTAUTH_SECRET=your_super_secret_random_string
+      # REQUIRED: Generate a random string for security
+      # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key. !!DO NOT LOSE THIS!!
+      - NEXTAUTH_SECRET=
       
-      # REQUIRED: Path configurations
-      - CACHE_DIR=/cache
+      # REQUIRED: Connection URL for the background job queue
+      - OMNIBUS_REDIS_URL=redis://omnibus-redis:6379/0
+      
+      # REQUIRED: Database connection string
       - DATABASE_URL=file:/config/omnibus.db
-      - LOG_PATH=/logs
-      # OPTIONAL: Defines backup path (defaults to /backups if omitted)
-      - OMNIBUS_BACKUP_DIR=/backups
+      
+      # PRE-STAGED PATHS: These automatically create subfolders inside your mapped /config volume below
+      - OMNIBUS_CACHE_DIR=/config/cache
+      - OMNIBUS_LOGS_DIR=/config/logs
+      - OMNIBUS_BACKUPS_DIR=/config/backups
 
     volumes:
-      # SYSTEM MOUNTS (Required)
+      # REQUIRED: Persistent storage for Database, Logs, Backups, Cache, and Uploaded Images
       - /path/to/your/nas/config:/config
-      - /path/to/your/nas/cache:/cache
-      - /path/to/your/nas/backups:/backups
-      - /path/to/your/nas/logs:/logs
-      - /path/to/your/nas/avatars:/app/public/avatars
-      - /path/to/your/nas/banners:/app/public/banners
       
-      # MEDIA MOUNTS
-      # OPTION 1: Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
+      # -------------------------------------------------------------------------
+      # OPTION 1: The Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
+      # -------------------------------------------------------------------------
+      # Maps your entire media/download root to /data for optimal performance
       - /path/to/your/nas/data:/data 
       
+      # -------------------------------------------------------------------------
       # OPTION 2: Separate Mounts (Slower copy/paste/delete operations)
       # Uncomment these and remove Option 1 if your folders are on different drives
+      # -------------------------------------------------------------------------
       # - /path/to/your/nas/comics:/comics
       # - /path/to/your/nas/manga:/manga
       # - /path/to/your/nas/downloads:/downloads
+
+  omnibus-redis:
+    image: redis:alpine
+    container_name: omnibus-redis
+    restart: unless-stopped
+    # No ports exposed to the host machine to prevent conflicts. 
+    # Omnibus connects to this purely via Docker's internal network.
 ```
 
 2.  Run `docker-compose up -d`.

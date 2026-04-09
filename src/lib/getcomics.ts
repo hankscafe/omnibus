@@ -12,17 +12,26 @@ export const GetComicsService = {
         query,
         query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
         noYearQuery,
-        noIssueQuery
+        noYearQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
+        noIssueQuery, 
+        noIssueQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim() 
     ];
     
     const uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
     
     for (const q of uniqueSearches) {
-        try {
-            const results = await this.performSearch(q, query, isInteractive, isManga); 
-            if (results.length > 0) return results;
-        } catch (e: any) { 
-            Logger.log(`[GetComics] Search failed for "${q}": ${e.message}`, 'warn');
+        let retries = 2;
+        while (retries > 0) {
+            try {
+                const results = await this.performSearch(q, query, isInteractive, isManga); 
+                if (results.length > 0) return results;
+                break; 
+            } catch (e: any) { 
+                Logger.log(`[GetComics] Search failed for "${q}": ${e.message}`, 'warn');
+                retries--;
+                if (retries === 0) break;
+                await new Promise(r => setTimeout(r, 2000));
+            }
         }
     }
     return [];
@@ -62,10 +71,8 @@ export const GetComicsService = {
       let isRelevant = true;
 
       if (!isInteractive) {
-          // 1. STRICT YEAR ANCHOR
           if (reqYear && !titleLower.includes(reqYear)) isRelevant = false;
 
-          // 2. MANDATORY WORD INTERSECTION
           if (isRelevant) {
               for (const word of significantWords) {
                   if (!titleLower.includes(word)) {
@@ -75,13 +82,11 @@ export const GetComicsService = {
               }
           }
 
-          // 3. RELAXED ISSUE NUMBER MATCH
           if (isRelevant && reqNum !== null) {
               let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})\)/g, '');
               const fallbacks = [...cleanTor.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
               let torNum = fallbacks.length > 0 ? parseFloat(fallbacks[fallbacks.length - 1][1]) : null;
               
-              // Only reject if it's the WRONG number. If no number is listed, assume it's a valid series post.
               if (torNum !== null && torNum !== reqNum) isRelevant = false;
           }
       }
@@ -119,41 +124,40 @@ export const GetComicsService = {
           };
 
           $('a').each((i, el) => {
-              const text = $(el).text().trim();
-              const titleAttr = ($(el).attr('title') || "").trim();
+              const text = $(el).text().toLowerCase();
+              const titleAttr = ($(el).attr('title') || "").toLowerCase();
               const href = $(el).attr('href') || "";
               
+              if (!href.includes('go.php') && !text.includes('download') && !titleAttr.includes('download')) {
+                  return; 
+              }
+
               const decoded = decodeLink(href);
               if (!decoded) return;
 
-              // FIX: Use case-insensitive Regex to find the button
-              const isDownloadText = /download now|main server|direct download/i.test(text) || 
-                                     /download now|main server|direct download/i.test(titleAttr);
+              const isMainServer = 
+                  text.includes('main server') || titleAttr.includes('main server') || 
+                  text.includes('download now') || titleAttr.includes('download now') ||
+                  text.includes('direct download');
               
-              // Ensure we only automate links that stay on the getcomics.org domain
-              const isInternal = decoded.includes('getcomics.org');
-              const isDirectFile = !!decoded.match(/\.(cbz|cbr|zip|rar|epub)$/i);
+              const isThirdParty = decoded.includes('mediafire.com') || decoded.includes('mega.nz') || decoded.includes('zippyshare.com') || decoded.includes('userscloud.com');
 
-              if (isDownloadText && (isInternal || isDirectFile)) {
+              if ((isMainServer || decoded.match(/\.(cbz|cbr|zip)$/i)) && !isThirdParty) {
                   bestLink = decoded;
                   isDirect = true;
-                  return false; // Found the primary link, exit each loop
+                  return false; 
               } 
-              
-              // Fallback: If we find a direct file link elsewhere, use it if no high-priority link found
-              if (isDirectFile && !bestLink) {
+              else if (!bestLink) {
                   bestLink = decoded;
-                  isDirect = true;
+                  isDirect = !isThirdParty; 
               }
           });
 
-          // Final cleanup check
-          if (!bestLink || bestLink === articleUrl) {
-              return { url: articleUrl, isDirect: false };
-          }
+          if (bestLink) return { url: bestLink, isDirect };
+          return { url: articleUrl, isDirect: false };
 
-          return { url: bestLink, isDirect: true };
       } catch (error: unknown) {
+          Logger.log(`[GetComics Scrape] Failed to parse deep link: ${getErrorMessage(error)}`, 'error');
           return { url: articleUrl, isDirect: false };
       }
   }

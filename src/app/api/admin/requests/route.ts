@@ -1,8 +1,13 @@
+// src/app/api/admin/requests/route.ts
+
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { AuditLogger } from '@/lib/audit-logger';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +20,6 @@ export async function GET(request: Request) {
         status: { in: ['PENDING', 'PENDING_APPROVAL', 'MANUAL_DDL', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR'] }
     } : {};
 
-    // HIGH FIX: Use include to pre-fetch related user and series to eliminate N+1 queries
     const requests = await prisma.request.findMany({
       where: whereClause,
       orderBy: { createdAt: 'desc' },
@@ -24,7 +28,6 @@ export async function GET(request: Request) {
       }
     });
 
-    // Efficiently batch look up series for all request volume IDs
     const volumeIds = Array.from(new Set(requests.map(r => r.volumeId)));
     const seriesList = await prisma.series.findMany({ 
         where: { metadataId: { in: volumeIds }, metadataSource: 'COMICVINE' } 
@@ -61,6 +64,11 @@ export async function GET(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    // --- NEW: Add Session Fetching for the Audit Log ---
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const userId = session?.user ? (session.user as any).id : 'System';
+
     let idsToDelete: string[] = [];
     const { searchParams } = new URL(request.url);
     const urlId = searchParams.get('id');
@@ -74,7 +82,11 @@ export async function DELETE(request: Request) {
 
     if (idsToDelete.length === 0) return NextResponse.json({ error: "Missing IDs" }, { status: 400 });
 
-    // HIGH FIX: Changed to awaited async function to prevent race conditions
+    // Fetch the items before deleting them so we can log their names
+    const requestsToDelete = await prisma.request.findMany({
+        where: { id: { in: idsToDelete } }
+    });
+
     const cleanupGhostSeries = async (ids: string[]) => {
         for (const id of ids) {
             const req = await prisma.request.findUnique({ where: { id } });
@@ -89,10 +101,15 @@ export async function DELETE(request: Request) {
         }
     };
     
-    // Ensure cleanup completes before the request record is deleted
     await cleanupGhostSeries(idsToDelete).catch(err => Logger.log(`[Requests API] Cleanup failed: ${err.message}`, 'warn'));
     await prisma.request.deleteMany({ where: { id: { in: idsToDelete } } });
     
+    // --- NEW: LOG REQUEST DELETIONS ---
+    await AuditLogger.log('DELETE_REQUEST', { 
+        requestIds: idsToDelete,
+        titles: requestsToDelete.map(r => r.activeDownloadName || r.volumeId)
+    }, userId);
+
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
     return NextResponse.json({ error: "Delete Failed" }, { status: 500 });

@@ -1,3 +1,5 @@
+// src/app/api/library/series/route.ts
+
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import fs from 'fs-extra';
@@ -126,7 +128,6 @@ export async function GET(request: Request) {
         }
 
         for (const [stdNum, issues] of Array.from(issuesByNum.entries())) {
-            // Prioritize matched ComicVine records over local unmatched records
             issues.sort((a, b) => (parseInt(b.metadataId || "0") - parseInt(a.metadataId || "0"))); 
             dbIssueMap.set(stdNum, issues[0]);
             for (let i = 1; i < issues.length; i++) idsToDelete.push(issues[i].id);
@@ -148,7 +149,6 @@ export async function GET(request: Request) {
                 const stdNum = extractIssueNumber(file);
                 const existingIssue = dbIssueMap.get(stdNum);
 
-                // FIX: prioritize matching to existing metadata records to support "In Library" badges
                 if (existingIssue) {
                     if (existingIssue.filePath !== fullPath) {
                         updateOperations.push(prisma.issue.update({ 
@@ -174,7 +174,6 @@ export async function GET(request: Request) {
         if (createsToFire.length > 0) await prisma.issue.createMany({ data: createsToFire });
         if (updateOperations.length > 0) await Promise.all(updateOperations);
 
-        // Cleanup stale unmatched records
         await prisma.issue.deleteMany({
             where: {
                 seriesId: seriesRecord.id,
@@ -242,15 +241,31 @@ export async function DELETE(request: Request) {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+        
         const { seriesIds, deleteFiles } = await request.json();
         const seriesToDelete = await prisma.series.findMany({ where: { id: { in: seriesIds } } });
+        
         await prisma.issue.deleteMany({ where: { seriesId: { in: seriesIds } } });
         await prisma.series.deleteMany({ where: { id: { in: seriesIds } } });
+        
+        const deletedPaths = [];
         if (deleteFiles) {
             for (const series of seriesToDelete) {
-                if (series.folderPath && fs.existsSync(series.folderPath)) await fs.remove(series.folderPath);
+                if (series.folderPath && fs.existsSync(series.folderPath)) {
+                    await fs.remove(series.folderPath);
+                    deletedPaths.push(series.folderPath);
+                }
             }
         }
+
+        // --- NEW: LOG SERIES DELETIONS ---
+        await AuditLogger.log('DELETE_SERIES', {
+            seriesIds,
+            seriesNames: seriesToDelete.map(s => s.name),
+            deletedPhysicalFiles: deleteFiles,
+            deletedPaths
+        }, (session.user as any).id);
+
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
         return NextResponse.json({ error: "Deletion failed" }, { status: 500 });

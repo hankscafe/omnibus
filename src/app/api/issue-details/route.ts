@@ -1,3 +1,4 @@
+// src/app/api/issue-details/route.ts
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
         params: { 
             api_key: cvKey, 
             format: 'json', 
-            field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,story_arc_credits,site_detail_url' 
+            field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,site_detail_url' 
         },
         headers: { 'User-Agent': 'Omnibus/1.0' }
     });
@@ -43,11 +44,17 @@ export async function GET(request: Request) {
 
     const rawHtml = issueData.description || issueData.deck || "";
     const cleanHtml = sanitizeDescription(rawHtml);
-    const { writers, artists, characters, genres, storyArcs } = parseComicVineCredits(issueData.person_credits);
+    const { writers, artists, coverArtists, colorists, letterers, characters, genres, storyArcs, teams, locations } = parseComicVineCredits(
+        issueData.person_credits, 
+        issueData.character_credits, 
+        issueData.concepts, 
+        issueData.story_arc_credits,
+        issueData.team_credits,
+        issueData.location_credits
+    );
 
     return NextResponse.json({
       id: issueData.id,
-      // FIX: Use null instead of 'Unknown' so the frontend fallback (||) works correctly
       name: issueData.name || null, 
       volumeName: isIssue ? issueData.volume?.name : issueData.name, 
       volumeId: isIssue ? issueData.volume?.id : issueData.id,
@@ -55,9 +62,14 @@ export async function GET(request: Request) {
       image: issueData.image?.medium_url,
       year: (issueData.start_year || issueData.cover_date || "").split('-')[0] || '????',
       description: cleanHtml.replace(/<[^>]*>?/gm, '').trim().substring(0, 800),
-      writers: writers.slice(0, 5),
-      artists: artists.slice(0, 5),
-      characters: characters.slice(0, 15),
+      writers: writers.slice(0, 10),
+      artists: artists.slice(0, 10),
+      coverArtists: coverArtists.slice(0, 10),
+      colorists: colorists.slice(0, 10),
+      letterers: letterers.slice(0, 5),
+      characters: characters.slice(0, 20),
+      teams: teams.slice(0, 10),
+      locations: locations.slice(0, 10),
       genres,
       storyArcs,
       htmlDescription: cleanHtml

@@ -25,7 +25,7 @@ model User {
   twoFactorEnabled    Boolean   @default(false)
   twoFactorSecret     String?
   
-  // SECURITY FIX: Used to invalidate all active sessions instantly [cite: 122]
+  // SECURITY FIX: Used to invalidate all active sessions instantly
   sessionVersion      Int       @default(0)
 
   requests            Request[]
@@ -50,10 +50,13 @@ model ApiKey {
   name        String
   keyHash     String    @unique
   prefix      String
+  
   userId      String
   user        User      @relation("ApiKeysActsAs", fields: [userId], references: [id], onDelete: Cascade)
+  
   createdById String
   createdBy   User      @relation("ApiKeysCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  
   lastUsedAt  DateTime?
   expiresAt   DateTime?
   createdAt   DateTime  @default(now())
@@ -66,7 +69,7 @@ model Request {
   id                 String   @id @default(cuid())
   userId             String   
   volumeId           String
-  status             String   
+  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED
   progress           Int      @default(0)
   retryCount         Int      @default(0)
   downloadLink       String?
@@ -76,7 +79,7 @@ model Request {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  user               User     @relation(fields: [userId], references: [id])
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])
@@ -89,20 +92,16 @@ model Library {
   path      String   @unique
   isManga   Boolean  @default(false)
   isDefault Boolean  @default(false)
+
   series    Series[]
 }
 
 model Series {
   id              String   @id @default(cuid())
-  
-  // HIGH FIX: Split overloaded metadataId into specific types [cite: 131, 132]
-  cvId            Int?     @unique // ComicVine ID
-  metadataId      String?  // Legacy or generic UUID for other providers
-  
-  // MEDIUM FIX: Using String for SQLite compatibility instead of Enum
-  matchState      String   @default("UNMATCHED") // "MATCHED", "UNMATCHED", or "MANUAL_PRIORITY"
-  
-  metadataSource  String   @default("COMICVINE")
+  cvId            Int?
+  metadataId      String?  
+  metadataSource  String   @default("COMICVINE") 
+  matchState      String?  @default("UNMATCHED")
   name            String
   year            Int
   publisher       String?
@@ -110,52 +109,57 @@ model Series {
   monitored       Boolean?
   isManga         Boolean  @default(false)
   size            Float?   @default(0)
+  
   description     String?
   status          String?
   coverUrl        String?
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  updatedAt       DateTime @default(now()) @updatedAt
 
   issues          Issue[]
   favorites       Favorite[]
   collectionItems CollectionItem[]
   issueReports    IssueReport[]
   reviews         Review[]
+
   libraryId       String?
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
 
   @@index([libraryId])
-  @@unique([metadataSource, metadataId])
+  @@unique([metadataSource, metadataId]) 
 }
 
 model Issue {
   id              String   @id @default(cuid())
   seriesId        String
   series          Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
-  
-  // HIGH FIX: Dedicated metadata ID tracking [cite: 139]
-  cvId            Int?     
+  cvId            Int?
   metadataId      String?  
-  matchState      String   @default("UNMATCHED") // "MATCHED", "UNMATCHED", or "MANUAL_PRIORITY"
-  
   metadataSource  String   @default("COMICVINE")
+  matchState      String?  @default("UNMATCHED")
   number          String   
   status          String   @default("WANTED") 
   filePath        String?
   downloadId      String?
   pageCount       Int      @default(0)
+
   name            String?
   description     String?
   releaseDate     String?
   coverUrl        String?
-  writers         String?  // Stored as JSON string
-  artists         String?  // Stored as JSON string
-  characters      String?  // Stored as JSON string
-  genres          String?  // Stored as JSON string
-  storyArcs       String?  // Stored as JSON string
+  writers         String?
+  artists         String?
+  coverArtists    String?  // <-- NEW
+  colorists       String?  // <-- NEW
+  letterers       String?  // <-- NEW
+  characters      String?
+  genres          String?
+  storyArcs       String?
+  teams           String?  // <-- NEW
+  locations       String?  // <-- NEW
 
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  updatedAt       DateTime @default(now()) @updatedAt
 
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
@@ -200,11 +204,11 @@ model DownloadClient {
 }
 
 model DiscordWebhook {
-  id           String  @id @default(cuid())
-  name         String
-  url          String
-  isActive     Boolean @default(true)
-  events       String  // JSON array string of event triggers
+  id       String  @id @default(cuid())
+  name     String
+  url      String
+  isActive Boolean @default(true)
+  events   String  
   botUsername  String?
   botAvatarUrl String?
 }
@@ -354,8 +358,10 @@ model ReadingListItem {
   id          String       @id @default(cuid())
   listId      String
   list        ReadingList  @relation(fields: [listId], references: [id], onDelete: Cascade)
+  
   issueId     String?
-  issue       Issue?       @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  issue       Issue?       @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  
   cvIssueId   Int?
   title       String       
   order       Int          
@@ -369,11 +375,12 @@ model OpdsKey {
   name       String
   keyHash    String    @unique
   prefix     String
+  
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
-
   @@index([userId])
 }
 
@@ -386,7 +393,7 @@ model KoreaderSync {
   percentage  Float
   device      String
   deviceId    String
-  timestamp   Int      
+  timestamp   Int    
 
   @@unique([userId, document])
   @@index([userId])
@@ -445,9 +452,11 @@ model AuditLog {
   id          String   @id @default(cuid())
   userId      String?
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
   action      String   
   details     String?
   ipAddress   String?
+  
   createdAt   DateTime @default(now())
 
   @@index([userId])

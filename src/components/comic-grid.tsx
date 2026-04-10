@@ -1,9 +1,9 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useSession } from "next-auth/react" 
+import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
-import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users, Globe, Activity, Library, FileCheck, Tags, BookMarked } from "lucide-react"
+import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users, Globe, Activity, Library, FileCheck, Tags, BookMarked, MapPin, Shield } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogHeader } from "@/components/ui/dialog"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
@@ -26,9 +26,13 @@ interface Comic {
   writers?: string[];
   artists?: string[];
   coverArtists?: string[];
+  colorists?: string[];
+  letterers?: string[];
   characters?: string[];
   genres?: string[];
   storyArcs?: string[];
+  teams?: string[];
+  locations?: string[];
   isVolume?: boolean;
   volumeName?: string;
 }
@@ -52,7 +56,7 @@ function ComicGridSkeleton({ count = 14 }: { count?: number }) {
 }
 
 export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
-  const { data: session } = useSession() 
+  const { data: session } = useSession()
   const [comics, setComics] = useState<Comic[]>([])
   const [loading, setLoading] = useState(true)
   
@@ -260,9 +264,14 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   };
 
   const displayDescription = getDisplayDescription();
-  const hasCreators = selectedComic && ((selectedComic.writers?.length ?? 0) > 0 || (selectedComic.artists?.length ?? 0) > 0);
+  const hasCreators = selectedComic && (
+    (selectedComic.writers?.length ?? 0) > 0 || 
+    (selectedComic.artists?.length ?? 0) > 0 ||
+    (selectedComic.coverArtists?.length ?? 0) > 0 ||
+    (selectedComic.colorists?.length ?? 0) > 0 ||
+    (selectedComic.letterers?.length ?? 0) > 0
+  );
   
-  // FIX: Extracted seriesBaseName to the main component scope so it's accessible everywhere
   const seriesBaseName = selectedComic?.volumeName || (selectedComic?.name ? selectedComic.name.split(' #')[0] : "Unknown");
 
   return (
@@ -406,7 +415,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               <Button 
                                                   className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 px-1 whitespace-normal" 
                                                   variant="outline" 
-                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber || "1")} 
+                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber)} 
                                                   disabled={requestingTarget === `iss-${issueTargetName}`}
                                               >
                                                   {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
@@ -414,7 +423,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               <Button 
                                                   className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 px-1 border-0 whitespace-normal" 
                                                   variant="outline" 
-                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, 'getcomics', selectedComic.issueNumber || "1")} 
+                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, 'getcomics', selectedComic.issueNumber)} 
                                                   disabled={requestingTarget === `iss-${issueTargetName}`}
                                               >
                                                   {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
@@ -448,12 +457,15 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                 <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
                                     {selectedComic.writers && selectedComic.writers.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedComic.writers.join(", ")}</p></div>)}
                                     {selectedComic.artists && selectedComic.artists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedComic.artists.join(", ")}</p></div>)}
+                                    {selectedComic.coverArtists && selectedComic.coverArtists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Cover Artist</p><p className="text-sm font-medium text-foreground">{selectedComic.coverArtists.join(", ")}</p></div>)}
+                                    {selectedComic.colorists && selectedComic.colorists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Colorist</p><p className="text-sm font-medium text-foreground">{selectedComic.colorists.join(", ")}</p></div>)}
+                                    {selectedComic.letterers && selectedComic.letterers.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Letterer</p><p className="text-sm font-medium text-foreground">{selectedComic.letterers.join(", ")}</p></div>)}
                                 </div>
                              )}
 
                              {selectedComic.characters && selectedComic.characters.length > 0 && (
                                 <div className="space-y-2">
-                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Users className="w-4 h-4"/> Key Appearances</h4>
+                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Users className="w-4 h-4"/> Characters</h4>
                                     <div className="flex flex-wrap gap-1.5">
                                         {selectedComic.characters.map((char: string) => (
                                             <Badge key={char} variant="secondary" className="font-medium text-[10px] bg-muted text-foreground border-border hover:bg-muted/80">{char}</Badge>
@@ -462,9 +474,31 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                 </div>
                              )}
 
+                             {selectedComic.teams && selectedComic.teams.length > 0 && (
+                                <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Shield className="w-4 h-4 text-primary"/> Teams</h4>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {selectedComic.teams.map((team: string) => (
+                                            <Badge key={team} variant="secondary" className="font-medium text-[10px] bg-primary/5 text-primary border-primary/20 hover:bg-primary/10">{team}</Badge>
+                                        ))}
+                                    </div>
+                                </div>
+                             )}
+
+                             {selectedComic.locations && selectedComic.locations.length > 0 && (
+                                <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><MapPin className="w-4 h-4 text-primary"/> Locations</h4>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {selectedComic.locations.map((loc: string) => (
+                                            <Badge key={loc} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border">{loc}</Badge>
+                                        ))}
+                                    </div>
+                                </div>
+                             )}
+
                              {selectedComic.genres && selectedComic.genres.length > 0 && (
                                  <div className="space-y-2 mt-4 pt-4 border-t border-border">
-                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Genres & Concepts</h4>
+                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Concepts</h4>
                                      <div className="flex flex-wrap gap-1.5">
                                          {selectedComic.genres.map((genre: string) => (
                                              <Badge key={genre} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:text-foreground">{genre}</Badge>

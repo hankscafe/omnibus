@@ -11,7 +11,8 @@ import {
   Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
-  LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star
+  LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
+  MapPin, Shield // ADDED: Imported missing icons for the new sections
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -102,11 +103,9 @@ function SeriesContent() {
   const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
 
-  // --- BULK SPREADSHEET EDITOR STATES ---
   const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
   const [bulkEditData, setBulkEditData] = useState<any[]>([]);
 
-  // --- REVIEWS STATE ---
   const [reviews, setReviews] = useState<any[]>([]);
   const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });
   const [userReview, setUserReview] = useState({ rating: 0, text: "" });
@@ -171,7 +170,6 @@ function SeriesContent() {
         .finally(() => setLoading(false));
   }, [folderPath]);
 
-  // --- FETCH REVIEWS ---
   useEffect(() => {
       if (!seriesInfo.id) return;
       fetch(`/api/reviews?seriesId=${seriesInfo.id}`)
@@ -186,6 +184,7 @@ function SeriesContent() {
           });
   }, [seriesInfo.id, session]);
 
+  // FIX: Include the extended metadata payload from the backend route
   useEffect(() => {
     if (!activeIssue?.id) return;
     
@@ -199,9 +198,14 @@ function SeriesContent() {
                     ...prev,
                     writers: data.writers?.length > 0 ? data.writers : prev.writers,
                     artists: data.artists?.length > 0 ? data.artists : prev.artists,
+                    coverArtists: data.coverArtists?.length > 0 ? data.coverArtists : prev.coverArtists,
+                    colorists: data.colorists?.length > 0 ? data.colorists : prev.colorists,
+                    letterers: data.letterers?.length > 0 ? data.letterers : prev.letterers,
                     characters: data.characters?.length > 0 ? data.characters : prev.characters,
                     genres: data.genres?.length > 0 ? data.genres : prev.genres,
                     storyArcs: data.storyArcs?.length > 0 ? data.storyArcs : prev.storyArcs, 
+                    teams: data.teams?.length > 0 ? data.teams : prev.teams,
+                    locations: data.locations?.length > 0 ? data.locations : prev.locations,
                     description: data.description || prev.description
                 }));
             }
@@ -246,12 +250,20 @@ function SeriesContent() {
 
   const writers = activeIssue?.writers || [];
   const artists = activeIssue?.artists || [];
+  const coverArtists = activeIssue?.coverArtists || [];
+  const colorists = activeIssue?.colorists || [];
+  const letterers = activeIssue?.letterers || [];
   const characters = activeIssue?.characters || [];
   const genres = activeIssue?.genres || []; 
   const storyArcs = activeIssue?.storyArcs || [];
+  const teams = activeIssue?.teams || [];
+  const locations = activeIssue?.locations || [];
+
   const displayDescription = activeIssue?.description || seriesInfo.description || "No synopsis available.";
   const displayCover = activeIssue?.coverUrl || seriesInfo.cover;
-  const hasCreators = writers.length > 0 || artists.length > 0;
+  
+  // Update hasCreators trigger
+  const hasCreators = writers.length > 0 || artists.length > 0 || coverArtists.length > 0 || colorists.length > 0 || letterers.length > 0;
 
   const handleRefreshMetadata = async () => {
     if (!seriesInfo.metadataId && !seriesInfo.cvId) return;
@@ -597,7 +609,7 @@ function SeriesContent() {
               setBulkEditModalOpen(false);
               setSelectedIssues(new Set());
               setIsSelectionMode(false);
-              window.location.reload(); // Refresh to catch new ordering
+              window.location.reload(); 
           } else {
               toast({ title: "Save Failed", variant: "destructive" });
           }
@@ -608,7 +620,6 @@ function SeriesContent() {
       }
   }
 
-  // --- SUBMIT REVIEW ---
   const submitReview = async () => {
     setSubmittingReview(true);
     try {
@@ -618,7 +629,6 @@ function SeriesContent() {
             body: JSON.stringify({ seriesId: seriesInfo.id, rating: userReview.rating, text: userReview.text })
         });
         toast({ title: "Review Saved!" });
-        // Re-fetch reviews to update average
         const res = await fetch(`/api/reviews?seriesId=${seriesInfo.id}`);
         const data = await res.json();
         setReviews(data.reviews);
@@ -776,6 +786,7 @@ function SeriesContent() {
           </div>
 
           <div className="space-y-10 min-w-0">
+              {/* FIX: Mirrored Extended UI Panels from Request Modal */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div className="flex flex-col h-full bg-background p-6 rounded-2xl border border-border shadow-sm">
                       <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">
@@ -793,6 +804,24 @@ function SeriesContent() {
                                   <div>
                                       <p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p>
                                       <p className="text-sm font-medium text-foreground">{artists.join(", ")}</p>
+                                  </div>
+                              )}
+                              {coverArtists.length > 0 && (
+                                  <div>
+                                      <p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Cover Artist</p>
+                                      <p className="text-sm font-medium text-foreground">{coverArtists.join(", ")}</p>
+                                  </div>
+                              )}
+                              {colorists.length > 0 && (
+                                  <div>
+                                      <p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Colorist</p>
+                                      <p className="text-sm font-medium text-foreground">{colorists.join(", ")}</p>
+                                  </div>
+                              )}
+                              {letterers.length > 0 && (
+                                  <div>
+                                      <p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Letterer</p>
+                                      <p className="text-sm font-medium text-foreground">{letterers.join(", ")}</p>
                                   </div>
                               )}
                           </div>
@@ -816,6 +845,28 @@ function SeriesContent() {
                               <p className="text-sm italic text-muted-foreground opacity-50 py-4 text-center w-full">No character metadata found.</p>
                           )}
                       </div>
+
+                      {teams.length > 0 && (
+                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Shield className="w-4 h-4 text-primary"/> Teams</h4>
+                              <div className="flex flex-wrap gap-1.5">
+                                  {teams.map((team: string) => (
+                                      <Badge key={team} variant="secondary" className="font-medium text-[10px] bg-primary/5 text-primary border-primary/20 hover:bg-primary/10">{team}</Badge>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
+
+                      {locations.length > 0 && (
+                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><MapPin className="w-4 h-4 text-primary"/> Locations</h4>
+                              <div className="flex flex-wrap gap-1.5">
+                                  {locations.map((loc: string) => (
+                                      <Badge key={loc} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border">{loc}</Badge>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
 
                       {genres.length > 0 && (
                           <div className="space-y-2 mt-4 pt-4 border-t border-border">
@@ -842,21 +893,20 @@ function SeriesContent() {
               </div>
 
               <div className="space-y-3">
-    <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground px-1">
-      {activeIssue ? `${activeIssue.name} Synopsis` : 'Synopsis'}
-    </h4>
-    {/* SECURITY FIX: Data is now server-side sanitized. Rendering via prose class. */}
-    <div className="text-sm leading-relaxed bg-muted/30 p-6 rounded-2xl border border-border min-h-[120px] text-foreground shadow-sm break-words">
-        {displayDescription ? (
-            <div 
-                className="prose prose-sm dark:prose-invert max-w-none"
-                dangerouslySetInnerHTML={{ __html: displayDescription }} 
-            />
-        ) : (
-            <span className="italic opacity-50">No synopsis available.</span>
-        )}
-    </div>
-</div>
+                  <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground px-1">
+                    {activeIssue ? `${activeIssue.name} Synopsis` : 'Synopsis'}
+                  </h4>
+                  <div className="text-sm leading-relaxed bg-muted/30 p-6 rounded-2xl border border-border min-h-[120px] text-foreground shadow-sm break-words">
+                      {displayDescription ? (
+                          <div 
+                              className="prose prose-sm dark:prose-invert max-w-none"
+                              dangerouslySetInnerHTML={{ __html: displayDescription }} 
+                          />
+                      ) : (
+                          <span className="italic opacity-50">No synopsis available.</span>
+                      )}
+                  </div>
+              </div>
 
               {/* --- COMMUNITY REVIEWS SECTION --- */}
               <div className="space-y-6 mt-8 pt-8 border-t border-border">

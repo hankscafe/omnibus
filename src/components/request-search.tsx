@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useSession } from "next-auth/react" 
-import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck, Tags, BookMarked } from "lucide-react"
+import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck, Tags, BookMarked, Shield, MapPin } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } from "@/components/ui/dialog"
@@ -23,9 +23,14 @@ interface SearchResult {
   siteUrl?: string;
   writers?: string[];
   artists?: string[];
+  coverArtists?: string[];
+  colorists?: string[];
+  letterers?: string[];
   characters?: string[];
   genres?: string[];
   storyArcs?: string[];
+  teams?: string[];
+  locations?: string[];
 }
 
 interface Issue {
@@ -37,9 +42,14 @@ interface Issue {
   description?: string; 
   writers?: string[];
   artists?: string[];
+  coverArtists?: string[];
+  colorists?: string[];
+  letterers?: string[];
   characters?: string[];
   genres?: string[];
   storyArcs?: string[];
+  teams?: string[];
+  locations?: string[];
 }
 
 type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
@@ -162,7 +172,7 @@ export function RequestSearch() {
             return {
                 ...prev,
                 ...data,
-                name: (data.name && data.name !== "Unknown") ? data.name : prev?.name,
+                name: data.name || prev?.name,
                 publisher: (data.publisher && data.publisher !== 'Unknown') ? data.publisher : prev?.publisher,
                 year: (data.year && data.year !== '????') ? data.year : prev?.year,
                 image: data.image || prev?.image,
@@ -237,9 +247,14 @@ export function RequestSearch() {
   };
 
   const displayDescription = getDisplayDescription();
-  const hasCreators = selectedItem && ((selectedItem.writers?.length ?? 0) > 0 || (selectedItem.artists?.length ?? 0) > 0);
+  const hasCreators = selectedItem && (
+    (selectedItem.writers?.length ?? 0) > 0 || 
+    (selectedItem.artists?.length ?? 0) > 0 ||
+    (selectedItem.coverArtists?.length ?? 0) > 0 ||
+    (selectedItem.colorists?.length ?? 0) > 0 ||
+    (selectedItem.letterers?.length ?? 0) > 0
+  );
   
-  // FIX: Extracted seriesBaseName to the main component scope
   const seriesBaseName = selectedItem?.volumeName || (selectedItem?.name ? selectedItem.name.split(' #')[0] : "Unknown");
 
   return (
@@ -372,7 +387,7 @@ export function RequestSearch() {
                                             <Button 
                                                 className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 px-1 whitespace-normal" 
                                                 variant="outline" 
-                                                onClick={() => handleRequest(selectedItem.volumeId, seriesBaseName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, undefined, selectedItem.issueNumber || "1")} 
+                                                onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, undefined, selectedItem.issueNumber || "1")} 
                                                 disabled={requestingTarget === `iss-${issueTargetName}`}
                                             >
                                                 {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
@@ -380,7 +395,7 @@ export function RequestSearch() {
                                             <Button 
                                                 className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 px-1 border-0 whitespace-normal" 
                                                 variant="outline" 
-                                                onClick={() => handleRequest(selectedItem.volumeId, seriesBaseName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, 'getcomics', selectedItem.issueNumber || "1")} 
+                                                onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, 'getcomics', selectedItem.issueNumber || "1")} 
                                                 disabled={requestingTarget === `iss-${issueTargetName}`}
                                             >
                                                 {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
@@ -414,12 +429,15 @@ export function RequestSearch() {
                                 <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
                                     {selectedItem.writers?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedItem.writers.join(", ")}</p></div>)}
                                     {selectedItem.artists?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.artists.join(", ")}</p></div>)}
+                                    {selectedItem.coverArtists?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Cover Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.coverArtists.join(", ")}</p></div>)}
+                                    {selectedItem.colorists?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Colorist</p><p className="text-sm font-medium text-foreground">{selectedItem.colorists.join(", ")}</p></div>)}
+                                    {selectedItem.letterers?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Letterer</p><p className="text-sm font-medium text-foreground">{selectedItem.letterers.join(", ")}</p></div>)}
                                 </div>
                              )}
 
                              {selectedItem.characters && selectedItem.characters.length > 0 && (
                                 <div className="space-y-2">
-                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Users className="w-4 h-4"/> Key Appearances</h4>
+                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Users className="w-4 h-4"/> Characters</h4>
                                     <div className="flex flex-wrap gap-1.5">
                                         {selectedItem.characters.map((char: string) => (
                                             <Badge key={char} variant="secondary" className="font-medium text-[10px] bg-muted text-foreground border-border hover:bg-muted/80">{char}</Badge>
@@ -428,9 +446,31 @@ export function RequestSearch() {
                                 </div>
                              )}
 
+                             {selectedItem.teams && selectedItem.teams.length > 0 && (
+                                <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Shield className="w-4 h-4 text-primary"/> Teams</h4>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {selectedItem.teams.map((team: string) => (
+                                            <Badge key={team} variant="secondary" className="font-medium text-[10px] bg-primary/5 text-primary border-primary/20 hover:bg-primary/10">{team}</Badge>
+                                        ))}
+                                    </div>
+                                </div>
+                             )}
+
+                             {selectedItem.locations && selectedItem.locations.length > 0 && (
+                                <div className="space-y-2 mt-4 pt-4 border-t border-border">
+                                    <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><MapPin className="w-4 h-4 text-primary"/> Locations</h4>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {selectedItem.locations.map((loc: string) => (
+                                            <Badge key={loc} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border">{loc}</Badge>
+                                        ))}
+                                    </div>
+                                </div>
+                             )}
+
                              {selectedItem.genres && selectedItem.genres.length > 0 && (
                                  <div className="space-y-2 mt-4 pt-4 border-t border-border">
-                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Genres & Concepts</h4>
+                                     <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Concepts</h4>
                                      <div className="flex flex-wrap gap-1.5">
                                          {selectedItem.genres.map((genre: string) => (
                                              <Badge key={genre} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:text-foreground">{genre}</Badge>
@@ -465,7 +505,6 @@ export function RequestSearch() {
                               <ScrollArea className="w-full whitespace-nowrap pb-4">
                                   <div className="flex w-max gap-4 px-1">
                                       {volumeIssues.map(issue => {
-                                          // MATCH: Use exact matching name formatting
                                           const relIssueTargetName = `${seriesBaseName} #${issue.issueNumber}`;
                                           const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, relIssueTargetName);
                                           

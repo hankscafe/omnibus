@@ -1,3 +1,4 @@
+// src/lib/importer.ts
 import fs from 'fs-extra';
 import path from 'path';
 import { prisma } from '@/lib/db';
@@ -426,9 +427,10 @@ export const Importer = {
           Logger.log(`[Importer] Metadata sync failed: ${syncErr.message}`, "warn");
       }
 
+      // FIX: Set notified to false so the user gets a fresh Bell alert that their request has completed
       await prisma.request.update({
         where: { id: requestId },
-        data: { status: 'COMPLETED', progress: 100 }
+        data: { status: 'COMPLETED', progress: 100, notified: false }
       });
 
       if (trackingHash) {
@@ -449,24 +451,63 @@ export const Importer = {
           } catch (ignoreErr) { }
       }
 
-      await DiscordNotifier.sendAlert('comic_available', {
-          title: req.activeDownloadName || series?.name || "Unknown Comic",
-          imageUrl: req.imageUrl,
-          user: req.user?.username,
-          description: series?.description,
-          publisher: series?.publisher,
-          year: series?.year?.toString()
-      }).catch(() => {});
-      
-      await Mailer.sendAlert('comic_available', {
-          title: req.activeDownloadName || series?.name || "Unknown Comic",
-          email: req.user?.email,
-          user: req.user?.username,
-          requester: req.user?.username,
-          imageUrl: req.imageUrl,
-          description: series?.description,
-          date: new Date().toLocaleString()
-      }).catch(() => {});
+      let shouldNotify = true;
+      let notificationTitle = req.activeDownloadName || series?.name || "Unknown Comic";
+      let notificationDesc = series?.description;
+
+      if (req.volumeId && req.volumeId !== "0") {
+          const activeStatuses = ['PENDING', 'DOWNLOADING', 'MANUAL_DDL', 'PENDING_APPROVAL', 'IMPORTING'];
+          const pendingInVolume = await prisma.request.count({
+              where: {
+                  userId: req.userId,
+                  volumeId: req.volumeId,
+                  status: { in: activeStatuses }
+              }
+          });
+
+          if (pendingInVolume > 0) {
+              Logger.log(`[Importer] Delaying notification for ${req.activeDownloadName}. ${pendingInVolume} issues still active in volume.`, "info");
+              shouldNotify = false;
+          } else {
+              const twoHoursBefore = new Date(req.createdAt.getTime() - 2 * 60 * 60 * 1000);
+              const twoHoursAfter = new Date(req.createdAt.getTime() + 2 * 60 * 60 * 1000);
+
+              const batchCount = await prisma.request.count({
+                  where: {
+                      userId: req.userId,
+                      volumeId: req.volumeId,
+                      status: { in: ['COMPLETED', 'IMPORTED'] },
+                      createdAt: { gte: twoHoursBefore, lte: twoHoursAfter }
+                  }
+              });
+
+              if (batchCount > 1) {
+                  notificationTitle = `${series?.name || "Series"} - ${batchCount} Issues Available!`;
+                  notificationDesc = `All ${batchCount} requested issues for ${series?.name || "this series"} have finished downloading and are now available in your library.\n\n${series?.description || ""}`;
+              }
+          }
+      }
+
+      if (shouldNotify) {
+          await DiscordNotifier.sendAlert('comic_available', {
+              title: notificationTitle,
+              imageUrl: req.imageUrl,
+              user: req.user?.username,
+              description: notificationDesc,
+              publisher: series?.publisher,
+              year: series?.year?.toString()
+          }).catch(() => {});
+          
+          await Mailer.sendAlert('comic_available', {
+              title: notificationTitle,
+              email: req.user?.email,
+              user: req.user?.username,
+              requester: req.user?.username,
+              imageUrl: req.imageUrl,
+              description: notificationDesc,
+              date: new Date().toLocaleString()
+          }).catch(() => {});
+      }
 
       Logger.log(`[Importer] Successfully imported to: ${destFolder}`, "success");
       return true;

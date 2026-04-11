@@ -1,3 +1,4 @@
+// src/components/site-header.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -7,7 +8,7 @@ import { useTheme } from "next-themes"
 import { Button } from "@/components/ui/button"
 import { 
   ShieldAlert, LogOut, User as UserIcon, Sun, Moon, Key, Loader2, 
-  Bell, Image as ImageIcon, Trophy, Wrench, Menu
+  Bell, Image as ImageIcon, Trophy, Wrench, Menu, UserPlus, AlertTriangle
 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -43,18 +44,18 @@ function NotificationBell() {
     const trophyIds = notifications.filter(n => n.type === 'trophy').map(n => n.id);
     const reportIds = notifications.filter(n => n.type === 'report').map(n => n.id);
 
+    // We clear local state instantly so Admin alerts disappear immediately visually
+    setNotifications([])
+    setOpen(false)
+
     if (comicIds.length === 0 && trophyIds.length === 0 && reportIds.length === 0) return;
 
     try {
-      const res = await fetch('/api/notifications', {
+      await fetch('/api/notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requestIds: comicIds, trophyIds, reportIds })
       })
-      if (res.ok) {
-        setNotifications([])
-        setOpen(false)
-      }
     } catch (e) { console.error("Failed to clear notifications", e) }
   }
 
@@ -87,11 +88,19 @@ function NotificationBell() {
               <p className="text-sm sm:text-xs text-muted-foreground font-medium italic">Your inbox is empty.</p>
             </div>
           ) : (
-            notifications.map((n) => (
+            notifications.map((n) => {
+              // Map links based on type
+              let targetLink = "/library";
+              if (n.type === 'trophy') targetLink = "/profile";
+              else if (n.type === 'admin_req') targetLink = "/admin";
+              else if (n.type === 'admin_user') targetLink = "/admin/users";
+              else if (n.type === 'admin_report') targetLink = "/admin/reports";
+
+              return (
               <DropdownMenuItem key={`${n.type}-${n.id}`} className="p-0 focus:bg-transparent">
-                <Link href={n.type === 'trophy' ? "/profile" : "/library"} className="w-full p-4 border-b last:border-0 border-border hover:bg-muted/50 transition-colors flex gap-3 items-center">
+                <Link href={targetLink} className="w-full p-4 border-b last:border-0 border-border hover:bg-muted/50 transition-colors flex gap-3 items-center">
                   
-                  {n.type === 'comic' ? (
+                  {n.type === 'comic' || n.type === 'admin_req' ? (
                       <div className="h-16 w-11 sm:h-14 sm:w-10 shrink-0 bg-muted rounded shadow-inner overflow-hidden border border-border flex items-center justify-center">
                         {n.imageUrl ? <img src={n.imageUrl} alt="" className="object-cover h-full w-full" /> : <ImageIcon className="h-5 w-5 sm:h-4 sm:w-4 text-muted-foreground/50" />}
                       </div>
@@ -99,10 +108,14 @@ function NotificationBell() {
                       <div className="h-12 w-12 shrink-0 bg-yellow-100 dark:bg-yellow-900/30 rounded-full shadow-inner overflow-hidden border border-yellow-400 dark:border-yellow-500/50 flex items-center justify-center">
                         {n.imageUrl ? <img src={n.imageUrl} alt="" className="object-contain h-8 w-8" /> : <Trophy className="h-6 w-6 text-yellow-600 dark:text-yellow-500" />}
                       </div>
+                  ) : n.type === 'admin_user' ? (
+                      <div className="h-12 w-12 shrink-0 bg-teal-100 dark:bg-teal-900/30 rounded-full shadow-inner overflow-hidden border border-teal-400 dark:border-teal-500/50 flex items-center justify-center">
+                        <UserPlus className="h-6 w-6 text-teal-600 dark:text-teal-500" />
+                      </div>
                   ) : (
                       // Report UI
                       <div className="h-12 w-12 shrink-0 bg-red-100 dark:bg-red-900/30 rounded-full shadow-inner overflow-hidden border border-red-400 dark:border-red-500/50 flex items-center justify-center">
-                        <Wrench className="h-6 w-6 text-red-600 dark:text-red-500" />
+                        <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-500" />
                       </div>
                   )}
                   
@@ -111,21 +124,29 @@ function NotificationBell() {
                       {n.type === 'trophy' ? `Trophy Unlocked: ${n.title}` : (n.title || 'Requested Issue')}
                     </p>
                     
-                    {n.type === 'report' && (
+                    {['report', 'admin_report', 'admin_user', 'admin_req'].includes(n.type) && (
                         <p className="text-[11px] sm:text-[10px] text-muted-foreground line-clamp-1 italic mb-1 border-l-2 border-muted pl-1">{n.description}</p>
                     )}
 
                     {n.type === 'comic' ? (
-                        <div className="flex items-center gap-1.5"><div className="h-1.5 w-1.5 rounded-full bg-green-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-green-600 tracking-widest">Available Now</span></div>
+                        ['IMPORTED', 'COMPLETED'].includes(n.status) ? (
+                            <div className="flex items-center gap-1.5"><div className="h-1.5 w-1.5 rounded-full bg-green-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-green-600 tracking-widest">Available Now</span></div>
+                        ) : (
+                            <div className="flex items-center gap-1.5"><div className="h-1.5 w-1.5 rounded-full bg-blue-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-blue-600 tracking-widest">Approved & Downloading</span></div>
+                        )
                     ) : n.type === 'trophy' ? (
                         <div className="flex items-center gap-1.5"><Trophy className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-yellow-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-yellow-600 tracking-widest">Achievement</span></div>
+                    ) : n.type === 'admin_user' ? (
+                        <div className="flex items-center gap-1.5"><UserPlus className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-teal-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-teal-600 tracking-widest">Action Required</span></div>
+                    ) : n.type === 'admin_req' ? (
+                        <div className="flex items-center gap-1.5"><Bell className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-orange-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-orange-600 tracking-widest">Needs Approval</span></div>
                     ) : (
-                        <div className="flex items-center gap-1.5"><Wrench className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-red-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-red-600 tracking-widest">Admin Reply</span></div>
+                        <div className="flex items-center gap-1.5"><Wrench className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-red-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-red-600 tracking-widest">{n.type === 'admin_report' ? 'Action Required' : 'Admin Reply'}</span></div>
                     )}
                   </div>
                 </Link>
               </DropdownMenuItem>
-            ))
+            )})
           )}
         </div>
       </DropdownMenuContent>

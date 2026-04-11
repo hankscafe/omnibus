@@ -1,3 +1,4 @@
+// src/app/api/request/route.ts
 import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
@@ -34,7 +35,6 @@ export async function POST(request: NextRequest) {
 
     if (!cvId) return NextResponse.json({ error: 'Missing ComicVine ID' }, { status: 400 });
 
-    // Force metadata recovery for Volume requests to guarantee name accuracy
     if (!name || name === "Unknown" || type === 'volume' || !publisher || publisher === "Unknown" || !year) {
         try {
             const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -108,10 +108,9 @@ export async function POST(request: NextRequest) {
           }
       });
 
-      // FIX: Trigger immediate sync to get issue-specific covers and metadata
-    syncSeriesMetadata(cvId.toString(), series.folderPath, 'COMICVINE').catch(err => {
-        Logger.log(`[Request] Background metadata sync failed: ${err.message}`, 'error');
-    });
+      syncSeriesMetadata(cvId.toString(), series.folderPath, 'COMICVINE').catch(err => {
+          Logger.log(`[Request] Background metadata sync failed: ${err.message}`, 'error');
+      });
 
       Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');
 
@@ -190,7 +189,6 @@ export async function POST(request: NextRequest) {
       });
 
     } else {
-      // Logic for single issue requests
       const searchName = type === 'issue' && body.issueNumber 
         ? `${name} #${body.issueNumber}` 
         : name;
@@ -262,15 +260,17 @@ export async function PATCH(request: NextRequest) {
 
     const skipIndexers = reqRecord.downloadLink === 'DIRECT_GETCOMICS';
 
+    // FIX: Set notified to false so the user gets a fresh Bell alert that their request is downloading
     await prisma.request.update({
       where: { id },
-      data: { status }
+      data: { status, notified: false }
     });
 
     if (status === 'PENDING') {
       let year = "";
       let publisher = "";
       let description = "";
+      let seriesNameForBatch = reqRecord.volumeId;
       
       if (reqRecord.volumeId && reqRecord.volumeId !== "0") {
          const series = await prisma.series.findFirst({ where: { metadataId: reqRecord.volumeId, metadataSource: 'COMICVINE' } });
@@ -278,30 +278,68 @@ export async function PATCH(request: NextRequest) {
              year = series.year.toString();
              publisher = series.publisher || "Unknown";
              description = series.description || "";
+             seriesNameForBatch = series.name;
          }
       }
       
       const searchName = reqRecord.activeDownloadName || "";
       Logger.log(`[Request] Admin approved request: ${searchName}`, 'info');
 
-      DiscordNotifier.sendAlert('request_approved', {
-          title: searchName || reqRecord.volumeId || "Unknown Comic",
-          imageUrl: reqRecord.imageUrl,
-          user: token.name as string,
-          description: description,
-          publisher: publisher,
-          year: year 
-      }).catch(() => {});
-      
-      Mailer.sendAlert('request_approved', { 
-          user: token.name as string, 
-          requester: reqRecord.user?.username || "Unknown",
-          title: searchName || reqRecord.volumeId || "Unknown Comic",
-          email: reqRecord.user?.email,
-          imageUrl: reqRecord.imageUrl,
-          description: description,
-          date: new Date().toLocaleString()
-      }).catch(() => {});
+      let shouldNotifyApproval = true;
+      let approvalTitle = searchName || reqRecord.volumeId || "Unknown Comic";
+      let approvalDesc = description;
+
+      if (reqRecord.volumeId && reqRecord.volumeId !== "0") {
+          const stillPendingApproval = await prisma.request.count({
+              where: {
+                  userId: reqRecord.userId,
+                  volumeId: reqRecord.volumeId,
+                  status: 'PENDING_APPROVAL'
+              }
+          });
+
+          if (stillPendingApproval > 0) {
+              shouldNotifyApproval = false;
+          } else {
+              const twoHoursBefore = new Date(reqRecord.createdAt.getTime() - 2 * 60 * 60 * 1000);
+              const twoHoursAfter = new Date(reqRecord.createdAt.getTime() + 2 * 60 * 60 * 1000);
+
+              const batchApprovedCount = await prisma.request.count({
+                  where: {
+                      userId: reqRecord.userId,
+                      volumeId: reqRecord.volumeId,
+                      status: { not: 'PENDING_APPROVAL' }, 
+                      createdAt: { gte: twoHoursBefore, lte: twoHoursAfter }
+                  }
+              });
+
+              if (batchApprovedCount > 1) {
+                  approvalTitle = `${seriesNameForBatch} - ${batchApprovedCount} Issues Approved`;
+                  approvalDesc = `An admin has approved your request for ${batchApprovedCount} issues of ${seriesNameForBatch}. They will begin downloading shortly.\n\n${description}`;
+              }
+          }
+      }
+
+      if (shouldNotifyApproval) {
+          DiscordNotifier.sendAlert('request_approved', {
+              title: approvalTitle,
+              imageUrl: reqRecord.imageUrl,
+              user: token.name as string,
+              description: approvalDesc,
+              publisher: publisher,
+              year: year 
+          }).catch(() => {});
+          
+          Mailer.sendAlert('request_approved', { 
+              user: token.name as string, 
+              requester: reqRecord.user?.username || "Unknown",
+              title: approvalTitle,
+              email: reqRecord.user?.email,
+              imageUrl: reqRecord.imageUrl,
+              description: approvalDesc,
+              date: new Date().toLocaleString()
+          }).catch(() => {});
+      }
 
       const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
       

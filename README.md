@@ -111,7 +111,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
   * Request Pipeline Badges:
     * 🟠 Requested (Orange with Clock Icon): You have requested this item. Omnibus has added it to the queue and is actively searching for a valid download source.
     * 🟡 Pending Approval (Yellow with Clock Icon): You have requested this item, but your server requires an Admin to manually approve the request before the search begins.
-* **Smart Requests & Automation:** Send requests directly to your download queue. Omnibus searches your connected indexers (Prowlarr) and gracefully falls back to direct downloads (GetComics) if torrents/usenet fail.
+* **Smart Requests & Automation:** Send requests directly to your download queue. Omnibus searches your connected indexers (Prowlarr) and gracefully falls back to direct downloads (GetComics) and 3rd-party file hosters if torrents/usenet fail.
 * **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
 * **Unreleased Badges:** When a request is made Omnibus will check ComicVine for the issues release date and if it is not released it will tag it as UNRELEASED.  As the Monitor Series job runs it will also check items tagged as UNRELEASED and update it as available once it is availalbe, allowing future issues to be automatically downloaded.
 * **Admin Action Alerts:** Admins get a top-level heads-up display alerting them of pending user approvals, manual download interventions, and broken file reports.
@@ -140,7 +140,7 @@ A meticulously organized, highly performant view of your physical files, built t
 * **Embedded Metadata (ComicInfo.xml):** Omnibus doesn't just read metadata—it writes it. Omnibus can automatically generate and embed standard `ComicInfo.xml` files directly into your `.cbz` archives, ensuring your metadata travels with your files.
 * **Dual Megadata Engines:** Omnibus reads embedded ComicInfo.xml files inside your archives and syncs with the ComicVine API to pull high-res covers, synopses, and creator credits.
 * **Multi-Library Routing:** Map distinct folders for standard Comics and Manga. Omnibus automatically detects Manga based on publishers, AniList cross-referencing, and tags to route them to the correct directory.
-* **Automated File Standardization:** * Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
+* **Automated File Standardization:** Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
 * **Deep Filtering & Sorting:** Filter by Publisher, Genre, Format, Era (1980s, 1990s, etc.), and Read Status.
   * Try the "Surprise Me" button for a randomized library shuffle when you don't know what to read!
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.
@@ -294,6 +294,8 @@ Complete, granular control over your instance, your users, and your underlying a
 
 * **High-Performance Architecture:** Built to handle massive terabyte-scale libraries. Features an optimized OPDS feed, asynchronous streaming cipher engines for backups, and B-Tree indexed database lookups.
 * **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
+* **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, and Terabox. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
+* **FlareSolverr Integration:** Route requests through a FlareSolverr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics.
 * **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries ComicVine, and suggests the correct metadata linkage so you can clean up messy archives in seconds.
 * **Deep Diagnostics Engine:**
   * Ghost Records: Find and purge database entries pointing to files you deleted outside of Omnibus.
@@ -307,12 +309,16 @@ Complete, granular control over your instance, your users, and your underlying a
   2. Renames the file to your customized standard format.
   3. Moves it to the correct publisher/series directory on your NAS.
   4. Triggers a local library scan to make it instantly readable.
-* **User & Role Management:** * Create independent accounts for friends and family so everyone has their own reading progress.
+* **User & Role Management:** Create independent accounts for friends and family so everyone has their own reading progress.
   * Admin or User roles
   * Users can be assigned auto-approval permission and download permission
 * **Library Path Mapping:** Omnibus supports multiple libraries to easily map multiple root directories from your NAS (e.g., separate folders for `/comics`, `/manga`, and `/magazines`).
+* **Alerts & Notifications:**
+  * **Discord Webhooks:** Configure webhooks to send server alerts to your Discord channels when comics are requested, approved, or finish downloading.
+  * **SMTP Email Notifications:** Configure an SMTP server to send beautiful, customizable HTML emails for account approvals, password resets, request completions, and a Weekly Digest of newly added comics.
 * **API & Service Configuration:** Securely plug in your ComicVine API keys, Indexer credentials, and Download Client details.
 * [**External API Integrations:**](https://github.com/hankscafe/omnibus/blob/main/docs/API.md) Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.
+* **Safe Configuration:** Dual-guard unsaved changes protection to ensure admins never accidentally lose their configuration progress.
 * **Scheduled Tasks (Cron):** Configure how often Omnibus should scan your disk for new files, refresh metadata, or check indexers for missing requested issues.
 * **Live System Logs:** A built-in log viewer to easily troubleshoot API limits, failed downloads, or matching errors.
 
@@ -351,9 +357,9 @@ services:
     environment:
       - TZ=America/New_York
       
-      # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., https://omnibus.mydomain.com)
-      # or your NAS IP (e.g., http://192.168.1.100:3000)
-      - NEXTAUTH_URL=http://192.168.1.100:3000
+      # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., [https://omnibus.mydomain.com](https://omnibus.mydomain.com))
+      # or your NAS IP (e.g., [http://192.168.1.100:3000](http://192.168.1.100:3000))
+      - NEXTAUTH_URL=[http://192.168.1.100:3000](http://192.168.1.100:3000)
       
       # REQUIRED: Generate a random string for security
       # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key. !!DO NOT LOSE THIS!!

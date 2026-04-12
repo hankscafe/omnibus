@@ -1,4 +1,3 @@
-// src/app/admin/settings/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -78,7 +77,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("comicvine")
   
   const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean, text: string } | null }>({
-    comicvine: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null
+    comicvine: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null, flaresolverr: null
   })
   
   const [refreshing, setRefreshing] = useState(false)
@@ -119,7 +118,7 @@ export default function SettingsPage() {
   
   const [config, setConfig] = useState<any>({
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", cv_api_key: "",
-    remote_path_mapping: "", local_path_mapping: "",
+    remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     download_retry_delay: "5", 
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
@@ -913,6 +912,24 @@ export default function SettingsPage() {
                     <CardDescription className="text-muted-foreground">Configure custom HTTP headers for all outgoing requests and manage connection timeouts/retries.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
+                    {/* --- ADDED FLARESOLVERR UI HERE --- */}
+                    <div className="space-y-4 pb-6 border-b border-border">
+                        <Label className="text-base font-bold text-foreground">Cloudflare Bypass (FlareSolverr)</Label>
+                        <p className="text-[11px] text-muted-foreground mt-1">If GetComics starts blocking your automated searches with a 403 Forbidden error, you can route requests through a FlareSolverr container to bypass the protection.</p>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                            <Input
+                                placeholder="http://192.168.1.100:8191"
+                                value={config.flaresolverr_url || ""}
+                                onChange={e => setConfig({...config, flaresolverr_url: e.target.value})}
+                                className="h-12 sm:h-10 bg-background border-border text-foreground flex-1 font-mono text-sm"
+                            />
+                            <Button variant="outline" onClick={() => handleTest('flaresolverr')} disabled={!!testing} className="h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground">
+                                {testing === 'flaresolverr' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 animate-spin text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test FlareSolverr
+                            </Button>
+                        </div>
+                        <StatusBox result={testResults.flaresolverr} />
+                    </div>
+
                     <div className="grid gap-2 bg-muted/30 p-4 rounded-lg border border-border">
                         <Label className="text-base font-bold text-foreground">Automated Download Retry Delay (Minutes)</Label>
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
@@ -1316,7 +1333,7 @@ export default function SettingsPage() {
 
                     {generatedKey && (
                         <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 mt-4 animate-in fade-in slide-in-from-top-2 w-full">
-                            <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><X className="w-4 h-4"/></button>
+                            <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><XCircle className="w-4 h-4"/></button>
                             <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won't be shown again.</span></p>
                             <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2 w-full">
                                 <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800 text-[11px] sm:text-xs select-all w-full min-w-0 break-all">

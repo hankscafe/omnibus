@@ -1,3 +1,4 @@
+// src/lib/download-clients.ts
 import axios from 'axios';
 import FormData from 'form-data';
 import { prisma } from '@/lib/db';
@@ -20,11 +21,8 @@ async function getNetworkHeaders() {
 export const DownloadService = {
   async addDownload(client: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
     const cleanUrl = client.url.replace(/\/$/, '');
-    
-    // NATIVE DB FIX: Get the primary category (the first one before any commas)
     const categoryString = client.category || 'comics';
     const primaryCategory = categoryString.split(',')[0].trim();
-    
     const networkHeaders = await getNetworkHeaders();
 
     const baseConfig = {
@@ -51,7 +49,6 @@ export const DownloadService = {
         if (fileBuffer) form.append('torrents', fileBuffer, 'comic.torrent');
         else form.append('urls', downloadUrl);
         form.append('category', primaryCategory);
-        
         if (seedTimeLimit > 0) form.append('seeding_time_limit', seedTimeLimit.toString());
         if (seedRatio > 0) form.append('ratio_limit', seedRatio.toString()); 
         
@@ -115,9 +112,11 @@ export const DownloadService = {
           let response: any;
           let attempt = 0;
           const maxAttempts = 3;
+          let abortController = new AbortController();
 
           while (attempt < maxAttempts) {
               attempt++;
+              abortController = new AbortController(); // Reset controller on new attempt
               try {
                   response = await axios({ 
                       method: 'get', 
@@ -128,7 +127,8 @@ export const DownloadService = {
                           'Accept': 'application/zip, application/x-rar-compressed, application/octet-stream, */*',
                           'Referer': 'https://getcomics.org/' 
                       },
-                      timeout: 60000 
+                      timeout: 60000,
+                      signal: abortController.signal // Bind the Abort Controller here
                   });
                   break; 
               } catch (err: any) {
@@ -149,7 +149,20 @@ export const DownloadService = {
           let downloadedBytes = 0;
           let lastUpdate = 0;
 
+          // --- FIX: Initialize stallTimer as null to satisfy TypeScript strict mode ---
+          let stallTimer: NodeJS.Timeout | null = null;
+          const resetStallTimer = () => {
+              if (stallTimer) clearTimeout(stallTimer);
+              stallTimer = setTimeout(() => {
+                  Logger.log(`[Internal DL] Data stream stalled for 45 seconds. Killing connection to trigger retry.`, 'error');
+                  abortController.abort(new Error("Download stalled for 45 seconds"));
+              }, 45000);
+          };
+
+          resetStallTimer(); // Initialize watchdog immediately after connection
+
           response.data.on('data', (chunk: Buffer) => {
+              resetStallTimer(); // Reset the watchdog every time data flows
               downloadedBytes += chunk.length;
               if (totalLength) {
                   const percent = Math.round((downloadedBytes / parseInt(totalLength)) * 100);
@@ -161,7 +174,14 @@ export const DownloadService = {
               }
           });
 
-          await pipeline(response.data, writer);
+          try {
+              // Pipe the data into the file stream
+              await pipeline(response.data, writer);
+          } finally {
+              // Ensure the timer is disabled when the download completes or fails naturally
+              if (stallTimer) clearTimeout(stallTimer); 
+          }
+          // ---------------------------------
 
           const stats = fs.statSync(partFilePath);
           if (stats.size < 500000) {
@@ -224,7 +244,6 @@ export const DownloadService = {
         const cleanUrl = client.url?.replace(/\/$/, '');
         if (!cleanUrl) continue;
 
-        // IN-MEMORY FILTER SETUP
         const categoryString = client.category || 'comics';
         const allowedCategories = categoryString.toLowerCase().split(',').map(c => c.trim());
         const isAllowedCategory = (cat: string) => {
@@ -239,7 +258,6 @@ export const DownloadService = {
           );
           const cookie = loginRes.headers['set-cookie'];
           
-          // FETCH ALL, THEN FILTER
           const listRes = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
             params: { filter: 'all' },
             headers: { Cookie: cookie, ...baseHeaders },
@@ -260,7 +278,6 @@ export const DownloadService = {
             const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size"], {}], id: 2 }, { headers: { ...baseHeaders, Cookie: cookie }, timeout: 15000 });
             if (listRes.data.result?.torrents) {
                 const torrents = listRes.data.result.torrents;
-                // Deluge labels require plugin, bypassing filter for Deluge
                 allDownloads.push(...Object.keys(torrents).map(hash => ({
                     id: hash, name: torrents[hash].name, progress: torrents[hash].progress.toFixed(1),
                     status: torrents[hash].state, clientName: client.name, size: (torrents[hash].total_size / 1024 / 1024).toFixed(2) + " MB"
@@ -282,7 +299,7 @@ export const DownloadService = {
                 allDownloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
             }
         }
-      } catch (err) { /* Silent fail for individual client timeout */ }
+      } catch (err) { }
     }
     return allDownloads;
   }

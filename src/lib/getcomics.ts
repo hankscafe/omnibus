@@ -1,7 +1,43 @@
+// src/lib/getcomics.ts
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
+import { prisma } from './db';
+
+// --- NEW: FlareSolverr 403-Bypass Helper ---
+async function fetchGetComicsHtml(url: string) {
+    let flareUrl = "";
+    try {
+        const setting = await prisma.systemSetting.findUnique({ where: { key: 'flaresolverr_url' } });
+        if (setting?.value) flareUrl = setting.value.replace(/\/$/, "");
+    } catch(e) {}
+
+    try {
+        const { data } = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            timeout: 15000
+        });
+        return data;
+    } catch (err: any) {
+        if (err.response?.status === 403 && flareUrl) {
+            Logger.log(`[GetComics] 403 Forbidden detected. Attempting Cloudflare bypass via FlareSolverr...`, 'warn');
+            const targetUrl = flareUrl.endsWith('/v1') ? flareUrl : `${flareUrl}/v1`;
+            
+            const flareRes = await axios.post(targetUrl, {
+                cmd: 'request.get',
+                url: url,
+                maxTimeout: 60000
+            }, { headers: { 'Content-Type': 'application/json' }, timeout: 65000 });
+            
+            if (flareRes.data?.solution?.response) {
+                Logger.log(`[GetComics] FlareSolverr bypass successful!`, 'success');
+                return flareRes.data.solution.response;
+            }
+        }
+        throw err;
+    }
+}
 
 export const GetComicsService = {
   async search(query: string, isInteractive: boolean = false, isManga: boolean = false) {
@@ -30,7 +66,7 @@ export const GetComicsService = {
                 Logger.log(`[GetComics] Search failed for "${q}": ${e.message}`, 'warn');
                 retries--;
                 if (retries === 0) break;
-                await new Promise(r => setTimeout(r, 2000));
+                await new Promise(r => setTimeout(r, 3000));
             }
         }
     }
@@ -40,11 +76,11 @@ export const GetComicsService = {
   async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false) {
     const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
     
-    const { data } = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      timeout: 15000
-    });
+    // --- NEW: Rate-Limit Throttling (2.5s Delay) ---
+    Logger.log(`[GetComics] Rate-limit throttle: Delaying search for 2.5s...`, 'info');
+    await new Promise(resolve => setTimeout(resolve, 2500));
 
+    const data = await fetchGetComicsHtml(url);
     const $ = cheerio.load(data);
     const results: any[] = [];
     
@@ -53,12 +89,14 @@ export const GetComicsService = {
 
     let reqNumMatch = cleanOriginal.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+    if (reqNum === null) {
+        let noYearQuery = cleanOriginal.replace(/\b(19|20)\d{2}\b/g, '');
+        const fallbacks = [...noYearQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+        if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+    }
 
     const reqYearMatch = cleanOriginal.match(/\b(19|20)\d{2}\b/);
     const reqYear = reqYearMatch ? reqYearMatch[1] : null;
-
-    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
-    const significantWords = queryWords.filter(w => !stopWords.includes(w) && w.length > 2 && w !== reqYear);
 
     $('article, .post').each((i, el) => {
       const titleEl = $(el).find('h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a').first();
@@ -71,23 +109,56 @@ export const GetComicsService = {
       let isRelevant = true;
 
       if (!isInteractive) {
-          if (reqYear && !titleLower.includes(reqYear)) isRelevant = false;
+          const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
+          if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
+
+          const isLookingForOmnibus = queryWords.some(w => tpbTerms.includes(w));
+          if (reqNum !== null && !isLookingForOmnibus) {
+              if (tpbTerms.some(term => titleLower.includes(term))) {
+                  isRelevant = false;
+              }
+          }
 
           if (isRelevant) {
-              for (const word of significantWords) {
-                  if (!titleLower.includes(word)) {
-                      isRelevant = false;
-                      break;
+              let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+              
+              let strippedForNumbers = cleanTor;
+              if (!isManga) {
+                  strippedForNumbers = strippedForNumbers.replace(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
+                  strippedForNumbers = strippedForNumbers.replace(/(?:book\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
+              }
+
+              let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+              let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+              if (torNum === null) {
+                  const fallbacks = [...strippedForNumbers.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
+                  if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+              }
+
+              if (reqNum !== null) {
+                  if (torNum !== null && torNum !== reqNum) isRelevant = false;
+                  if (torNum === null) {
+                      isRelevant = false; 
                   }
               }
           }
 
-          if (isRelevant && reqNum !== null) {
-              let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})\)/g, '');
-              const fallbacks = [...cleanTor.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-              let torNum = fallbacks.length > 0 ? parseFloat(fallbacks[fallbacks.length - 1][1]) : null;
-              
-              if (torNum !== null && torNum !== reqNum) isRelevant = false;
+          if (isRelevant) {
+              const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+              const torYear = torYearMatch ? torYearMatch[1] : null;
+
+              if (reqYear && torYear && reqYear !== torYear) {
+                  isRelevant = false;
+              }
+          }
+
+          if (isRelevant) {
+              for (let w of queryWords) {
+                  if (!/^\d+$/.test(w) && !titleLower.includes(w)) {
+                      isRelevant = false;
+                      break;
+                  }
+              }
           }
       }
 
@@ -103,10 +174,11 @@ export const GetComicsService = {
 
   async scrapeDeepLink(articleUrl: string): Promise<{ url: string, isDirect: boolean }> {
       try {
-          const { data } = await axios.get(articleUrl, { 
-              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-              timeout: 10000
-          });
+          // --- NEW: Rate-Limit Throttling (2.5s Delay) ---
+          Logger.log(`[GetComics] Rate-limit throttle: Delaying scrape for 2.5s...`, 'info');
+          await new Promise(resolve => setTimeout(resolve, 2500));
+
+          const data = await fetchGetComicsHtml(articleUrl);
           const $ = cheerio.load(data);
 
           let bestLink: string | null = null;

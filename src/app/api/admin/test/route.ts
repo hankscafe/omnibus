@@ -216,6 +216,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: `Connected to Prowlarr (${res.data.length} indexers).` });
     }
 
+    // --- FLARESOLVERR TEST ---
+    if (type === 'flaresolverr') {
+        const url = config.flaresolverr_url?.replace(/\/$/, '');
+        if (!url) return NextResponse.json({ success: false, message: 'Missing FlareSolverr URL' });
+
+        const res = await axios.get(url, { timeout: 10000 });
+        if (res.data && res.data.msg) {
+            return NextResponse.json({ success: true, message: `FlareSolverr Connected! (v${res.data.version || 'Unknown'})` });
+        }
+        return NextResponse.json({ success: true, message: 'FlareSolverr is reachable.' });
+    }
+
     // --- MAPPING LOGIC ---
     if (type === 'mapping') {
         const { remote, local } = config;

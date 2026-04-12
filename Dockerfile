@@ -10,7 +10,8 @@ RUN apk update && apk upgrade --no-cache && \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# ADDED: --legacy-peer-deps to ignore next-auth's request for v7 of nodemailer
+RUN npm ci --legacy-peer-deps
 
 COPY . .
 
@@ -26,7 +27,6 @@ RUN find .next/standalone/node_modules -type d -name "brace-expansion" -exec rm 
 RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {} + || true
 
 # Force secure versions into the standalone folder
-# CHANGED: nodemailer@8.0.4 to nodemailer@latest to resolve GHSA-vvjj-xcjg-gr5g
 RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@latest --no-save --legacy-peer-deps
 
 

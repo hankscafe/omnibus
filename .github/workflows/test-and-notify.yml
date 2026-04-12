@@ -20,7 +20,8 @@ jobs:
           node-version: '22'
 
       - name: Install Dependencies
-        run: npm ci
+        # ADDED: --legacy-peer-deps to fix the ERESOLVE nodemailer conflict
+        run: npm ci --legacy-peer-deps
 
       # --- 1. CHANGED TO BUILD INSTEAD OF TEST ---
       # This verifies that your Next.js app compiles without errors

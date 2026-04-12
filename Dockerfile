@@ -4,8 +4,9 @@ FROM node:22-alpine AS builder
 # Safely update npm to the latest version for the BUILD stage only
 RUN corepack enable && corepack prepare npm@latest --activate
 
-# Build-time dependencies
-RUN apk update && apk add --no-cache libc6-compat openssl
+# Build-time dependencies (Upgraded to patch musl/openssl vulnerabilities)
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache libc6-compat openssl
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -25,15 +26,15 @@ RUN find .next/standalone/node_modules -type d -name "brace-expansion" -exec rm 
 RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {} + || true
 
 # Force secure versions into the standalone folder
-# Added --legacy-peer-deps to ignore next-auth's request for v7 of nodemailer
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@8.0.4 --no-save --legacy-peer-deps
+# CHANGED: nodemailer@8.0.4 to nodemailer@latest to resolve GHSA-vvjj-xcjg-gr5g
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@latest --no-save --legacy-peer-deps
 
 
 # --- Stage 2: Final Production Image ---
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-# VITAL: Apply OS patches (Busybox Edge) in the final stage
+# VITAL: Apply OS patches (Busybox Edge) in the final stage to resolve Alpine vulnerabilities
 RUN apk update && apk upgrade --no-cache && \
     apk add --no-cache busybox --repository=http://dl-cdn.alpinelinux.org/alpine/edge/main && \
     apk add --no-cache libc6-compat openssl

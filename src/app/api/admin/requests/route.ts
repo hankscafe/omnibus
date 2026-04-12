@@ -43,6 +43,7 @@ export async function GET(request: Request) {
 
       return {
         id: req.id,
+        userId: req.userId, // <-- FIXED: Added missing userId back into the payload
         seriesName: series ? `${series.name}${issueNumberStr} (${series.year})` : (req.activeDownloadName || `Volume ${req.volumeId}`), 
         userName: req.user?.username || 'System',
         createdAt: req.createdAt,
@@ -64,7 +65,6 @@ export async function GET(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    // --- NEW: Add Session Fetching for the Audit Log ---
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
     const userId = session?.user ? (session.user as any).id : 'System';
@@ -82,7 +82,6 @@ export async function DELETE(request: Request) {
 
     if (idsToDelete.length === 0) return NextResponse.json({ error: "Missing IDs" }, { status: 400 });
 
-    // Fetch the items before deleting them so we can log their names
     const requestsToDelete = await prisma.request.findMany({
         where: { id: { in: idsToDelete } }
     });
@@ -104,7 +103,6 @@ export async function DELETE(request: Request) {
     await cleanupGhostSeries(idsToDelete).catch(err => Logger.log(`[Requests API] Cleanup failed: ${err.message}`, 'warn'));
     await prisma.request.deleteMany({ where: { id: { in: idsToDelete } } });
     
-    // --- NEW: LOG REQUEST DELETIONS ---
     await AuditLogger.log('DELETE_REQUEST', { 
         requestIds: idsToDelete,
         titles: requestsToDelete.map(r => r.activeDownloadName || r.volumeId)

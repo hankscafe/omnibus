@@ -138,11 +138,11 @@ export default function RequestsPage() {
   const fetchRequests = async () => {
     if (!session?.user?.id) return;
     try {
-      const res = await fetch('/api/admin/requests')
+      // --- FIXED: Hit the user-facing request endpoint ---
+      const res = await fetch('/api/request')
       if (res.ok) {
         const data = await res.json()
-        const userRequests = data.filter((r: any) => r.userId === session.user.id);
-        setRequests(userRequests)
+        setRequests(data) // Backend automatically filters this now
       }
     } catch (e) {
       toast({ title: "Error", description: "Could not load requests.", variant: "destructive" })

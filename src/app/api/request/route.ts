@@ -15,6 +15,54 @@ import { syncSeriesMetadata } from '@/lib/metadata-fetcher';
 
 export const dynamic = 'force-dynamic';
 
+// --- NEW: Secure User-Facing GET Route ---
+export async function GET(request: NextRequest) {
+  const token = await getToken({ req: request });
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const userId = (token.id || token.sub) as string;
+
+  try {
+    const requests = await prisma.request.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const volumeIds = Array.from(new Set(requests.map(r => r.volumeId)));
+    const seriesList = await prisma.series.findMany({ 
+        where: { metadataId: { in: volumeIds }, metadataSource: 'COMICVINE' } 
+    });
+
+    const formattedRequests = requests.map(req => {
+      const series = seriesList.find(s => s.metadataId === req.volumeId);
+      let issueNumberStr = "";
+      if (req.activeDownloadName) {
+          const match = req.activeDownloadName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+          if (match) issueNumberStr = ` Issue #${match[1].padStart(3, '0')}`;
+      }
+
+      return {
+        id: req.id,
+        userId: req.userId,
+        seriesName: series ? `${series.name}${issueNumberStr} (${series.year})` : (req.activeDownloadName || `Volume ${req.volumeId}`), 
+        userName: token.name || 'User',
+        createdAt: req.createdAt,
+        updatedAt: req.updatedAt,
+        status: req.status,
+        progress: req.progress, 
+        downloadLink: req.downloadLink,
+        imageUrl: req.imageUrl && req.imageUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(req.imageUrl)}` : req.imageUrl,
+        retryCount: req.retryCount || 0 
+      };
+    });
+
+    return NextResponse.json(formattedRequests);
+  } catch (error: any) {
+    Logger.log(`[User Requests API] Fetch Error: ${error.message}`, 'error');
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
 export async function POST(request: NextRequest) {
   const token = await getToken({ req: request });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -260,7 +308,6 @@ export async function PATCH(request: NextRequest) {
 
     const skipIndexers = reqRecord.downloadLink === 'DIRECT_GETCOMICS';
 
-    // FIX: Set notified to false so the user gets a fresh Bell alert that their request is downloading
     await prisma.request.update({
       where: { id },
       data: { status, notified: false }

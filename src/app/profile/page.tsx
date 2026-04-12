@@ -257,11 +257,11 @@ export default function ProfilePage() {
       const profRes = await fetch('/api/user/profile')
       if (profRes.ok) setProfile(await profRes.json())
 
-      const reqRes = await fetch('/api/admin/requests')
+      // --- FIXED: Hit the user-facing request endpoint ---
+      const reqRes = await fetch('/api/request')
       if (reqRes.ok) {
         const data = await reqRes.json()
-        const userRequests = data.filter((r: any) => r.userId === session.user.id);
-        setRecentReqs(userRequests.slice(0, 5));
+        setRecentReqs(data.slice(0, 5)); // Backend automatically filters this now
       }
 
       const listRes = await fetch('/api/reading-lists')

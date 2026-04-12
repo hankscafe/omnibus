@@ -139,6 +139,7 @@ function LibraryContent() {
   const [bulkDeleteFiles, setBulkDeleteFiles] = useState(false);
 
   const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [repackModalOpen, setRepackModalOpen] = useState(false);
   const [renamePattern, setRenamePattern] = useState("{Series} ({Year}) - #{Issue}");
 
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
@@ -623,6 +624,30 @@ function LibraryContent() {
       } catch (e) { toastRef.current({ title: "Error", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
+  const handleBulkRepack = async () => {
+      setIsBulkProcessing(true);
+      try {
+          const res = await fetch('/api/library/repack', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ seriesIds: Array.from(selectedSeries) })
+          });
+          if (res.ok) {
+              toastRef.current({ title: "Job Queued", description: "Internal repacking started in the background. Check System Logs for progress." });
+              setRepackModalOpen(false); 
+              setSelectedSeries(new Set()); 
+              setIsSelectionMode(false);
+          } else {
+              const data = await res.json(); 
+              toastRef.current({ title: "Repack Failed", description: data.error, variant: "destructive" });
+          }
+      } catch (e) { 
+          toastRef.current({ title: "Error", variant: "destructive" }); 
+      } finally { 
+          setIsBulkProcessing(false); 
+      }
+  }
+
   const handleBulkDelete = async () => {
       setIsBulkProcessing(true);
       try {
@@ -1097,6 +1122,9 @@ function LibraryContent() {
                           <DropdownMenuItem onClick={() => setRenameModalOpen(true)} className="cursor-pointer font-medium h-10 sm:h-8 hover:bg-muted">
                               <FileEdit className="w-4 h-4 mr-2 text-indigo-500" /> Standardize File Names
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setRepackModalOpen(true)} className="cursor-pointer font-medium h-10 sm:h-8 hover:bg-muted">
+                              <Layers className="w-4 h-4 mr-2 text-teal-500" /> Standardize Internal Pages
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={handleBulkRefresh} className="cursor-pointer font-medium h-10 sm:h-8 hover:bg-muted">
                               <RefreshCw className="w-4 h-4 mr-2 text-orange-500" /> Refresh Metadata
                           </DropdownMenuItem>
@@ -1210,6 +1238,26 @@ function LibraryContent() {
                 </Button>
             </DialogFooter>
         </DialogContent>
+      </Dialog>
+
+      {/* INTERNAL PAGE REPACKER MODAL */}
+      <Dialog open={repackModalOpen} onOpenChange={setRepackModalOpen}>
+          <DialogContent className="sm:max-w-[450px] w-[95%] bg-background border-border rounded-xl">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2"><Layers className="w-5 h-5 text-teal-500"/> Standardize Internal Pages</DialogTitle>
+                  <DialogDescription className="pt-2">
+                      This will extract all issues in the <strong>{selectedSeries.size}</strong> selected series, rename the internal image files sequentially (e.g. <code>page_0001.jpg</code>), and repack them into clean <code>.cbz</code> files.
+                      <br/><br/>
+                      <strong className="text-foreground">Note:</strong> This process is CPU/disk intensive and will run in the background. Check System Logs for progress.
+                  </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="flex gap-2 sm:gap-0">
+                  <Button variant="outline" onClick={() => setRepackModalOpen(false)} disabled={isBulkProcessing} className="h-12 sm:h-10 border-border hover:bg-muted">Cancel</Button>
+                  <Button className="bg-teal-600 hover:bg-teal-700 text-white font-bold h-12 sm:h-10" onClick={handleBulkRepack} disabled={isBulkProcessing}>
+                      {isBulkProcessing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Layers className="w-5 h-5 mr-2" />} Start Repacking
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
       </Dialog>
 
       <Dialog open={bulkDeleteModalOpen} onOpenChange={setBulkDeleteModalOpen}>

@@ -292,6 +292,47 @@ export function initWorker() {
                     break;
                 }
 
+                case 'REPACK_ARCHIVES': {
+                    const { seriesIds } = job.data;
+                    const { repackArchive } = await import('@/lib/converter');
+                    
+                    let successCount = 0;
+                    let failCount = 0;
+
+                    const issues = await prisma.issue.findMany({
+                        where: { seriesId: { in: seriesIds }, filePath: { not: null } },
+                        include: { series: true }
+                    });
+
+                    if (issues.length === 0) {
+                        await prisma.jobLog.create({
+                            data: { jobType: 'REPACK_ARCHIVES', status: 'COMPLETED', durationMs: Date.now() - startTime, message: "No valid files found to repack." }
+                        });
+                        break;
+                    }
+
+                    let currentIdx = 0;
+                    for (const issue of issues) {
+                        if (issue.filePath) {
+                            const ok = await repackArchive(issue.filePath);
+                            if (ok) successCount++;
+                            else failCount++;
+                        }
+                        currentIdx++;
+                        await job.updateProgress(Math.round((currentIdx / issues.length) * 100));
+                    }
+
+                    await prisma.jobLog.create({
+                        data: {
+                            jobType: 'REPACK_ARCHIVES',
+                            status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
+                            durationMs: Date.now() - startTime,
+                            message: `Internal repack complete. Processed ${successCount} archives successfully. Failed: ${failCount}.`
+                        }
+                    });
+                    break;
+                }
+
                 case 'LIBRARY_SCAN': {
                     await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
                     

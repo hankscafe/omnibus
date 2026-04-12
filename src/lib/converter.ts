@@ -15,7 +15,6 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
 
     const cbzPath = cbrPath.replace(/\.(cbr|rar)$/i, '.cbz');
     
-    // --- FIX: Defaults to /cache to align with standard Docker setups ---
     const baseTempDir = process.env.OMNIBUS_CACHE_DIR || '/cache';
     const tempDir = path.join(baseTempDir, `cbr_${crypto.randomBytes(8).toString('hex')}`);
 
@@ -23,10 +22,9 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         await fs.ensureDir(tempDir);
         Logger.log(`[Converter] Starting conversion for: ${path.basename(cbrPath)}`, 'info');
 
-        // 1. Setup WASM Extractor
         const options: any = { 
             filepath: cbrPath,
-            targetPath: tempDir // Extractor will now dump files into the mapped cache volume
+            targetPath: tempDir 
         };
         
         const wasmPath = path.join(process.cwd(), 'node_modules', 'node-unrar-js', 'esm', 'js', 'unrar.wasm');
@@ -36,14 +34,9 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         }
 
         const extractor = await createExtractorFromFile(options);
-        
-        // 2. Extract ALL files to the temp directory
         const extracted = extractor.extract(); 
-        
-        // Consume the generator to physically write the files to the disk
         Array.from((extracted.files as any) || []);
 
-        // 3. Find all extracted images recursively
         const allImages: string[] = [];
 
         async function findImages(currentDir: string) {
@@ -64,30 +57,24 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
             throw new Error("Archive contained no valid images after extraction.");
         }
 
-        // Sort naturally (page 1, page 2, page 10)
         allImages.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-        // 4. Create a brand new, flat CBZ
         const zip = new AdmZip();
-        let imageCount = 0;
+        let imageCount = 1; // Start at 1 for cleaner naming
 
         for (const imgPath of allImages) {
             const ext = path.extname(imgPath);
-            // Rename files sequentially to avoid collisions from nested folders
             const newName = `page_${imageCount.toString().padStart(4, '0')}${ext}`;
             zip.addLocalFile(imgPath, "", newName);
             imageCount++;
         }
 
-        // 5. Save the CBZ to disk
         zip.writeZip(cbzPath);
 
-        // 6. Delete the old CBR to save space
         if (fs.existsSync(cbrPath)) {
             await fs.remove(cbrPath);
         }
 
-        // 7. Update the Database seamlessly if it already exists in the library
         const existingIssue = await prisma.issue.findFirst({ where: { filePath: cbrPath } });
         if (existingIssue) {
             await prisma.issue.update({
@@ -96,14 +83,98 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
             });
         }
 
-        Logger.log(`[Converter] Success: Flattened ${imageCount} pages into ${path.basename(cbzPath)}`, 'success');
+        Logger.log(`[Converter] Success: Flattened ${imageCount - 1} pages into ${path.basename(cbzPath)}`, 'success');
         return cbzPath;
 
     } catch (error: unknown) {
         Logger.log(`[Converter] Failed to convert ${path.basename(cbrPath)}: ${getErrorMessage(error)}`, 'error');
         return null;
     } finally {
-        // ALWAYS clean up the temporary directory to prevent bloat on the mapped volume
+        if (fs.existsSync(tempDir)) {
+            await fs.remove(tempDir).catch(() => {});
+        }
+    }
+}
+
+export async function repackArchive(filePath: string): Promise<boolean> {
+    if (!filePath || !fs.existsSync(filePath)) return false;
+
+    const ext = path.extname(filePath).toLowerCase();
+
+    // If it's a CBR, route it to the existing converter which inherently repacks and renames
+    if (ext === '.cbr' || ext === '.rar') {
+        const newPath = await convertCbrToCbz(filePath);
+        return !!newPath;
+    }
+
+    if (ext !== '.cbz' && ext !== '.zip') return false;
+
+    const baseTempDir = process.env.OMNIBUS_CACHE_DIR || '/cache';
+    const tempDir = path.join(baseTempDir, `repack_${crypto.randomBytes(8).toString('hex')}`);
+
+    try {
+        await fs.ensureDir(tempDir);
+        Logger.log(`[Repacker] Starting internal repack for: ${path.basename(filePath)}`, 'info');
+
+        const zip = new AdmZip(filePath);
+
+        // Extract all to temp dir
+        zip.extractAllTo(tempDir, true);
+
+        // Find all images, ignoring macOS hidden files
+        const allImages: string[] = [];
+
+        async function findImages(currentDir: string) {
+            const items = await fs.readdir(currentDir, { withFileTypes: true });
+            for (const item of items) {
+                const fullPath = path.join(currentDir, item.name);
+                if (item.isDirectory()) {
+                    await findImages(fullPath);
+                } else if (item.name.match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i) && !item.name.toLowerCase().includes('__macosx')) {
+                    allImages.push(fullPath);
+                }
+            }
+        }
+
+        await findImages(tempDir);
+
+        if (allImages.length === 0) {
+            throw new Error("Archive contained no valid images after extraction.");
+        }
+
+        // Sort naturally
+        allImages.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+        // Create a brand new, flat CBZ
+        const newZip = new AdmZip();
+        let imageCount = 1;
+
+        for (const imgPath of allImages) {
+            const imgExt = path.extname(imgPath);
+            // Rename files sequentially to avoid collisions from nested folders
+            const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;
+            newZip.addLocalFile(imgPath, "", newName);
+            imageCount++;
+        }
+
+        // Preserve ComicInfo.xml if it exists
+        const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
+        if (fs.existsSync(comicInfoPath)) {
+            newZip.addLocalFile(comicInfoPath, "", "ComicInfo.xml");
+        }
+
+        // Save the CBZ safely back to disk
+        const tmpOut = `${filePath}.tmp`;
+        newZip.writeZip(tmpOut);
+        await fs.move(tmpOut, filePath, { overwrite: true });
+
+        Logger.log(`[Repacker] Success: Flattened and renamed ${imageCount - 1} pages in ${path.basename(filePath)}`, 'success');
+        return true;
+
+    } catch (error: unknown) {
+        Logger.log(`[Repacker] Failed to repack ${path.basename(filePath)}: ${getErrorMessage(error)}`, 'error');
+        return false;
+    } finally {
         if (fs.existsSync(tempDir)) {
             await fs.remove(tempDir).catch(() => {});
         }

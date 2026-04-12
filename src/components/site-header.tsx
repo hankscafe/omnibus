@@ -26,9 +26,16 @@ function NotificationBell() {
 
   const fetchNotifications = async () => {
     try {
-      const res = await fetch('/api/notifications')
-      if (res.ok) setNotifications(await res.json())
-    } catch (e) { console.error("Notification fetch failed", e) }
+      const res = await fetch('/api/notifications');
+      const contentType = res.headers.get("content-type");
+      
+      // Only attempt to parse if the response is successful AND is actually JSON
+      if (res.ok && contentType && contentType.includes("application/json")) {
+          setNotifications(await res.json());
+      }
+    } catch (e) { 
+      // Silently ignore background network drops to prevent console spam
+    }
   }
 
   const NOTIFICATION_POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
@@ -56,7 +63,9 @@ function NotificationBell() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requestIds: comicIds, trophyIds, reportIds })
       })
-    } catch (e) { console.error("Failed to clear notifications", e) }
+    } catch (e) { 
+      // Silently ignore network errors on clear
+    }
   }
 
   return (

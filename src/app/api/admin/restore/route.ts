@@ -79,6 +79,7 @@ export async function POST(request: Request) {
             await restoreTable(backup.data.collectionItems, tx.collectionItem);
             await restoreTable(backup.data.readingListItems, tx.readingListItem);
             await restoreTable(backup.data.issueReports, tx.issueReport);
+            await restoreTable(backup.data.digestHistory, tx.digestHistory);
         }, { timeout: 30000 });
 
         await AuditLogger.log('DATABASE_RESTORE', { message: "State overwritten from backup." }, (session.user as any).id);

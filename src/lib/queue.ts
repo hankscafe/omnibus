@@ -204,7 +204,8 @@ export function initWorker() {
                         { name: 'collectionItems', model: prisma.collectionItem },
                         { name: 'readingListItems', model: prisma.readingListItem },
                         { name: 'userTrophies', model: prisma.userTrophy },
-                        { name: 'issueReports', model: prisma.issueReport }
+                        { name: 'issueReports', model: prisma.issueReport },
+                        { name: 'digestHistory', model: prisma.digestHistory }
                     ];
 
                     let firstTable = true;
@@ -643,15 +644,55 @@ export function initWorker() {
 
                     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
                     
-                    const newIssues = await prisma.issue.findMany({
+                    // 1. Fetch potential candidates based on DB creation
+                    const candidateIssues = await prisma.issue.findMany({
                         where: { createdAt: { gte: sevenDaysAgo }, filePath: { not: null } },
                         include: { series: true },
                         orderBy: { series: { name: 'asc' } }
                     });
 
-                    if (newIssues.length === 0) {
+                    if (candidateIssues.length === 0) {
                         await prisma.jobLog.create({
                             data: { jobType: 'WEEKLY_DIGEST', status: 'COMPLETED', durationMs: Date.now() - startTime, message: "Skipped: No new issues added in the last 7 days." }
+                        });
+                        break;
+                    }
+
+                    // 2. Relational Database Ledger tracking
+                    // Clean up history older than 14 days to prevent infinite table growth
+                    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+                    await prisma.digestHistory.deleteMany({
+                        where: { sentAt: { lt: fourteenDaysAgo } }
+                    });
+
+                    // Purge the old, slow JSON string setting if it exists from the previous implementation
+                    await prisma.systemSetting.deleteMany({ where: { key: 'weekly_digest_history' } });
+
+                    // Fetch the remaining ledger
+                    const digestHistory = await prisma.digestHistory.findMany({
+                        select: { seriesId: true, issueNum: true }
+                    });
+                    
+                    const sentSet = new Set(digestHistory.map(h => `${h.seriesId}_${h.issueNum}`));
+
+                    const newIssues = [];
+                    const recordsToSave = [];
+
+                    for (const issue of candidateIssues) {
+                        const key = `${issue.seriesId}_${issue.number}`;
+                        
+                        if (!sentSet.has(key)) {
+                            newIssues.push(issue);
+                            recordsToSave.push({
+                                seriesId: issue.seriesId,
+                                issueNum: issue.number
+                            });
+                        }
+                    }
+
+                    if (newIssues.length === 0) {
+                        await prisma.jobLog.create({
+                            data: { jobType: 'WEEKLY_DIGEST', status: 'COMPLETED', durationMs: Date.now() - startTime, message: "Skipped: All recent database entries have already been emailed in previous digests." }
                         });
                         break;
                     }
@@ -677,12 +718,29 @@ export function initWorker() {
                         targetMap[sId].issues.push(issueTag);
                     }
 
-                    // Format numbers sequentially
-                    for (const s in comicsMap) {
-                        comicsMap[s].issues = [...new Set(comicsMap[s].issues)].sort((a: any, b: any) => parseFloat(a.replace('#','')) - parseFloat(b.replace('#','')));
-                    }
-                    for (const s in mangaMap) {
-                        mangaMap[s].issues = [...new Set(mangaMap[s].issues)].sort((a: any, b: any) => parseFloat(a.replace('#','')) - parseFloat(b.replace('#','')));
+                    // Format numbers sequentially and CAP at 15 per series
+                    const formatIssueList = (issuesArr: string[]) => {
+                        let sorted = [...new Set(issuesArr)].sort((a: any, b: any) => parseFloat(a.replace('#','')) - parseFloat(b.replace('#','')));
+                        if (sorted.length > 15) {
+                            const remainder = sorted.length - 15;
+                            sorted = sorted.slice(0, 15);
+                            sorted.push(`...and ${remainder} more`);
+                        }
+                        return sorted;
+                    };
+
+                    for (const s in comicsMap) { comicsMap[s].issues = formatIssueList(comicsMap[s].issues); }
+                    for (const s in mangaMap) { mangaMap[s].issues = formatIssueList(mangaMap[s].issues); }
+
+                    // Cap the entire digest to 15 series to avoid Gmail rejecting massive emails
+                    const MAX_DIGEST_SERIES = 15;
+                    let finalComics = Object.values(comicsMap);
+                    let finalManga = Object.values(mangaMap);
+                    
+                    if (finalComics.length + finalManga.length > MAX_DIGEST_SERIES) {
+                        Logger.log(`[Queue] Capping digest to 15 series to prevent email server rejection.`, 'warn');
+                        finalComics = finalComics.slice(0, 10);
+                        finalManga = finalManga.slice(0, 5);
                     }
 
                     const users = await prisma.user.findMany({ 
@@ -692,11 +750,21 @@ export function initWorker() {
                     const toEmails = users.map(u => u.email);
 
                     if (toEmails.length > 0) {
-                        await Mailer.sendWeeklyDigest(toEmails, Object.values(comicsMap), Object.values(mangaMap));
+                        await Mailer.sendWeeklyDigest(toEmails, finalComics, finalManga);
+                        
+                        // Save the new items to the database ledger
+                        // SQLite doesn't support skipDuplicates in createMany, so we loop and catch collisions
+                        if (recordsToSave.length > 0) {
+                            for (const record of recordsToSave) {
+                                await prisma.digestHistory.create({
+                                    data: record
+                                }).catch(() => {}); // Safely ignore if it was already inserted
+                            }
+                        }
                     }
 
                     await prisma.jobLog.create({
-                        data: { jobType: 'WEEKLY_DIGEST', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Sent weekly digest to ${toEmails.length} users.` }
+                        data: { jobType: 'WEEKLY_DIGEST', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Sent weekly digest to ${toEmails.length} users containing ${newIssues.length} unique new issues.` }
                     });
                     break;
                 }

@@ -2,6 +2,7 @@
 import { prisma } from './db';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
+import crypto from 'crypto'; 
 
 const DEFAULT_TEMPLATES: Record<string, string> = {
     account_approved: `<h2 style="color: #f8fafc; margin-top: 0;">Welcome aboard!</h2>\n<p>Hello <strong>{{user}}</strong>,</p>\n<p>Your account has been approved by an administrator. You can now log in to your Omnibus library and begin reading.</p>`,
@@ -49,7 +50,6 @@ export const Mailer = {
      return admins.map(a => a.email);
   },
 
-  // Base HTML template formatted to match the Omnibus dark slate theme and Login Header
   getBaseTemplate(content: string) {
     return `
     <!DOCTYPE html>
@@ -150,7 +150,7 @@ export const Mailer = {
                  content = await this.getTemplate('pending_account', variables);
                  break;
              default:
-                 return; // Unhandled event
+                 return; 
          }
 
          if (to.length === 0) return;
@@ -169,9 +169,12 @@ export const Mailer = {
      }
   },
 
-  // Exposes HTML building for both the Test UI route and the actual automated Queue
-  async buildWeeklyDigestHtml(comics: any[], manga: any[]) {
+  async buildWeeklyDigestPayload(comics: any[], manga: any[]) {
       const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+      const attachments: any[] = [];
+      
+      let fs: any; // FIX: Explicitly typed as any
+      try { fs = await import('fs'); } catch(e) {}
 
       const buildGrid = (items: any[], accentColor: string) => {
           let html = '';
@@ -179,9 +182,32 @@ export const Mailer = {
               const item1 = items[i];
               const item2 = items[i + 1];
               
-              const renderItem = (item: any) => {
+              const renderItem = (item: any, indexOffset: number) => {
                   if (!item) return `<td width="48%" valign="top" style="padding: 15px;"></td>`;
-                  const finalCover = item.coverUrl ? (item.coverUrl.startsWith('http') ? item.coverUrl : `${baseUrl}${item.coverUrl}`) : `${baseUrl}/favicon.ico`;
+                  
+                  let finalCover = `${baseUrl}/favicon.ico`;
+
+                  if (item.coverUrl) {
+                      if (item.coverUrl.startsWith('http') && !item.coverUrl.includes('/api/library/cover')) {
+                          finalCover = item.coverUrl;
+                      } else if (item.coverUrl.includes('?path=') && fs) {
+                          const localPath = decodeURIComponent(item.coverUrl.split('?path=')[1]);
+                          if (fs.existsSync(localPath)) {
+                              // Ensure CID and filename are completely unique to prevent email client deduplication
+                              const cid = `cover_${crypto.randomBytes(4).toString('hex')}`;
+                              attachments.push({
+                                  filename: `${cid}.jpg`,
+                                  path: localPath,
+                                  cid: cid,
+                                  contentDisposition: 'inline'
+                              });
+                              finalCover = `cid:${cid}`;
+                          }
+                      } else {
+                           finalCover = `${baseUrl}${item.coverUrl}`;
+                      }
+                  }
+
                   let desc = item.description || "No synopsis available.";
                   desc = desc.replace(/(<([^>]+)>)/gi, "");
                   if (desc.length > 120) desc = desc.substring(0, 117) + '...';
@@ -209,9 +235,9 @@ export const Mailer = {
               html += `
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 15px;">
                   <tr>
-                      ${renderItem(item1)}
+                      ${renderItem(item1, 0)}
                       <td width="4%"></td>
-                      ${renderItem(item2)}
+                      ${renderItem(item2, 1)}
                   </tr>
               </table>`;
           }
@@ -233,7 +259,10 @@ export const Mailer = {
           manga_html: mangaHtml
       });
 
-      return this.getBaseTemplate(content);
+      return { 
+          html: this.getBaseTemplate(content), 
+          attachments 
+      };
   },
 
   async sendWeeklyDigest(toEmails: string[], comics: any[], manga: any[]) {
@@ -241,16 +270,17 @@ export const Mailer = {
           const mailConfig = await this.getTransporter();
           if (!mailConfig || toEmails.length === 0) return;
 
-          const htmlContent = await this.buildWeeklyDigestHtml(comics, manga);
+          const payload = await this.buildWeeklyDigestPayload(comics, manga);
 
           await mailConfig.transporter.sendMail({
               from: `"Omnibus" <${mailConfig.from}>`,
               to: toEmails.join(', '),
               subject: "Omnibus - Weekly Library Digest",
-              html: htmlContent
+              html: payload.html,
+              attachments: payload.attachments
           });
 
-          Logger.log(`[Mailer] Sent Weekly Digest to ${toEmails.length} users`, 'success');
+          Logger.log(`[Mailer] Sent Weekly Digest to ${toEmails.length} users with ${payload.attachments.length} images attached.`, 'success');
       } catch (error) {
           Logger.log(`[Mailer] Error sending weekly digest: ${getErrorMessage(error)}`, 'error');
       }

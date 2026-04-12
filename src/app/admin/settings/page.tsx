@@ -1440,14 +1440,14 @@ export default function SettingsPage() {
               {config.smtp_enabled === "true" && (
                   <div className="grid gap-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="grid gap-2"><Label>SMTP Host</Label><Input value={config.smtp_host} onChange={e => updateForm('smtp_host', e.target.value)} placeholder="smtp.gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
-                          <div className="grid gap-2"><Label>SMTP Port</Label><Input value={config.smtp_port} onChange={e => updateForm('smtp_port', e.target.value)} placeholder="587" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Host</Label><Input value={config.smtp_host} onChange={e => setConfig({...config, smtp_host: e.target.value})} placeholder="smtp.gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Port</Label><Input value={config.smtp_port} onChange={e => setConfig({...config, smtp_port: e.target.value})} placeholder="587" className="bg-muted/20 border-border text-foreground" /></div>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="grid gap-2"><Label>SMTP Username</Label><Input value={config.smtp_user} onChange={e => updateForm('smtp_user', e.target.value)} placeholder="user@gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
-                          <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={config.smtp_pass} onChange={e => updateForm('smtp_pass', e.target.value)} placeholder="App Password" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Username</Label><Input value={config.smtp_user} onChange={e => setConfig({...config, smtp_user: e.target.value})} placeholder="user@gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={config.smtp_pass} onChange={e => setConfig({...config, smtp_pass: e.target.value})} placeholder="App Password" className="bg-muted/20 border-border text-foreground" /></div>
                       </div>
-                      <div className="grid gap-2"><Label>From Email Address</Label><Input value={config.smtp_from} onChange={e => updateForm('smtp_from', e.target.value)} placeholder="omnibus@yourdomain.com" className="bg-muted/20 border-border text-foreground" /></div>
+                      <div className="grid gap-2"><Label>From Email Address</Label><Input value={config.smtp_from} onChange={e => setConfig({...config, smtp_from: e.target.value})} placeholder="omnibus@yourdomain.com" className="bg-muted/20 border-border text-foreground" /></div>
                       
                       <div className="border-t border-border pt-4 flex flex-col sm:flex-row gap-2">
                           <Input id="smtp-test-email" placeholder="Send test email to..." className="bg-muted/20 border-border max-w-xs text-foreground flex-1 sm:flex-none" />
@@ -1487,7 +1487,7 @@ export default function SettingsPage() {
                         <Switch 
                             id="oidc-toggle"
                             checked={config.oidc_enabled === "true"} 
-                            onCheckedChange={(c) => updateForm('oidc_enabled', c)} 
+                            onCheckedChange={(c) => setConfig({...config, oidc_enabled: c ? "true" : "false"})} 
                             className="scale-110 sm:scale-100"
                         />
                         <Label htmlFor="oidc-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable OIDC Authentication</Label>
@@ -1499,7 +1499,7 @@ export default function SettingsPage() {
                             <Input 
                                 placeholder="https://auth.yourdomain.com" 
                                 value={config.oidc_issuer || ""} 
-                                onChange={e => updateForm('oidc_issuer', e.target.value)} 
+                                onChange={e => setConfig({...config, oidc_issuer: e.target.value})} 
                                 className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                             />
                             <p className="text-[11px] text-muted-foreground">The base URL of your identity provider.</p>
@@ -1510,7 +1510,7 @@ export default function SettingsPage() {
                                 <Label className="text-foreground font-semibold">Client ID</Label>
                                 <Input 
                                     value={config.oidc_client_id || ""} 
-                                    onChange={e => updateForm('oidc_client_id', e.target.value)} 
+                                    onChange={e => setConfig({...config, oidc_client_id: e.target.value})} 
                                     className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                                 />
                             </div>
@@ -1519,7 +1519,7 @@ export default function SettingsPage() {
                                 <Input 
                                     type="password"
                                     value={config.oidc_client_secret || ""} 
-                                    onChange={e => updateForm('oidc_client_secret', e.target.value)} 
+                                    onChange={e => setConfig({...config, oidc_client_secret: e.target.value})} 
                                     className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                                 />
                             </div>
@@ -1738,6 +1738,7 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              {/* --- CUSTOM USERNAME AND AVATAR INPUTS --- */}
               <div className="grid sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label className="text-xs font-bold uppercase text-muted-foreground">Bot Username (Optional)</Label>

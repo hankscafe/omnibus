@@ -66,7 +66,8 @@ export async function GET() {
                     { name: 'collectionItems', model: prisma.collectionItem },
                     { name: 'readingListItems', model: prisma.readingListItem },
                     { name: 'userTrophies', model: prisma.userTrophy },
-                    { name: 'issueReports', model: prisma.issueReport }
+                    { name: 'issueReports', model: prisma.issueReport },
+                    { name: 'digestHistory', model: prisma.digestHistory }
                 ];
 
                 let firstTable = true;

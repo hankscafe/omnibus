@@ -107,13 +107,14 @@ export async function POST(request: Request) {
             ];
 
             // Use the mailer to generate the actual template so we test exactly what users see
-            const htmlContent = await Mailer.buildWeeklyDigestHtml(dummyComics, dummyManga);
+            const payload = await Mailer.buildWeeklyDigestPayload(dummyComics, dummyManga);
 
             await transporter.sendMail({
                 from: smtp_from || 'omnibus@localhost',
                 to: test_email,
                 subject: "Omnibus Weekly Digest (Test)",
-                html: htmlContent
+                html: payload.html,
+                attachments: payload.attachments
             });
 
             return NextResponse.json({ success: true, message: `Weekly digest test sent to ${test_email}` });

@@ -8,6 +8,7 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import { DiscordNotifier } from './discord';
 import { getErrorMessage } from './utils/error';
+import { HosterEngine } from './hosters';
 
 async function getNetworkHeaders() {
     const customHeaders = await prisma.customHeader.findMany();
@@ -21,8 +22,11 @@ async function getNetworkHeaders() {
 export const DownloadService = {
   async addDownload(client: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
     const cleanUrl = client.url.replace(/\/$/, '');
+    
+    // NATIVE DB FIX: Get the primary category (the first one before any commas)
     const categoryString = client.category || 'comics';
     const primaryCategory = categoryString.split(',')[0].trim();
+    
     const networkHeaders = await getNetworkHeaders();
 
     const baseConfig = {
@@ -49,6 +53,7 @@ export const DownloadService = {
         if (fileBuffer) form.append('torrents', fileBuffer, 'comic.torrent');
         else form.append('urls', downloadUrl);
         form.append('category', primaryCategory);
+        
         if (seedTimeLimit > 0) form.append('seeding_time_limit', seedTimeLimit.toString());
         if (seedRatio > 0) form.append('ratio_limit', seedRatio.toString()); 
         
@@ -80,16 +85,18 @@ export const DownloadService = {
     }
   },
 
-  async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string) {
+  async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string, hoster?: string) {
       const { Importer } = await import('./importer');
       
       const extMatch = url.split(/[#?]/)[0].split('.').pop();
       const ext = (extMatch && extMatch.length <= 4) ? extMatch : 'cbz';
-      const finalFilename = filename.toLowerCase().endsWith(`.${ext}`) ? filename : `${filename}.${ext}`;
+      let finalFilename = filename.toLowerCase().endsWith(`.${ext}`) ? filename : `${filename}.${ext}`;
       
       const getComicsFolder = path.join(targetPath, 'GetComics');
-      const filePath = path.join(getComicsFolder, finalFilename);
-      const partFilePath = `${filePath}.part`; 
+      let filePath = path.join(getComicsFolder, finalFilename);
+      let partFilePath = `${filePath}.part`; 
+
+      let finalDownloadUrl = url;
 
       try {
           try {
@@ -97,6 +104,37 @@ export const DownloadService = {
                   fs.mkdirSync(getComicsFolder, { recursive: true });
               }
           } catch (mkdirErr: any) {}
+
+          let resolvedHoster: any = null;
+          
+          // --- HOSTER RESOLUTION INTERCEPT ---
+          if (hoster && hoster !== 'getcomics' && hoster !== 'unknown') {
+              await prisma.request.update({
+                  where: { id: requestId },
+                  data: { status: 'DOWNLOADING', progress: 0 }
+              });
+
+              resolvedHoster = await HosterEngine.resolveLink(url, hoster);
+              
+              if (resolvedHoster.success) {
+                  if (resolvedHoster.directUrl) {
+                      finalDownloadUrl = resolvedHoster.directUrl;
+                      Logger.log(`[Internal DL] Successfully resolved ${hoster} to direct stream URL.`, 'success');
+                  } else if (resolvedHoster.isMegaStream) {
+                      Logger.log(`[Internal DL] Successfully resolved Mega folder/file.`, 'success');
+                  }
+                  
+                  if (resolvedHoster.fileName) {
+                      const newExtMatch = resolvedHoster.fileName.split('.').pop();
+                      const newExt = (newExtMatch && newExtMatch.length <= 4) ? newExtMatch : 'cbz';
+                      finalFilename = filename.toLowerCase().endsWith(`.${newExt}`) ? filename : `${filename}.${newExt}`;
+                      filePath = path.join(getComicsFolder, finalFilename);
+                      partFilePath = `${filePath}.part`;
+                  }
+              } else {
+                  throw new Error(`Failed to resolve ${hoster} link: ${resolvedHoster.error}`);
+              }
+          }
 
           if (fs.existsSync(partFilePath)) {
               try { fs.unlinkSync(partFilePath); } catch (e) {}
@@ -113,24 +151,39 @@ export const DownloadService = {
           let attempt = 0;
           const maxAttempts = 3;
           let abortController = new AbortController();
+          
+          let megaStream: any = null;
 
           while (attempt < maxAttempts) {
               attempt++;
-              abortController = new AbortController(); // Reset controller on new attempt
+              abortController = new AbortController(); 
               try {
-                  response = await axios({ 
-                      method: 'get', 
-                      url, 
-                      responseType: 'stream', 
-                      headers: { 
+                  // --- NEW MEGAJS BYPASS ---
+                  if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
+                      megaStream = resolvedHoster.megaFileNode.download();
+                      break;
+                  } else {
+                      const requestHeaders: any = { 
                           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                           'Accept': 'application/zip, application/x-rar-compressed, application/octet-stream, */*',
                           'Referer': 'https://getcomics.org/' 
-                      },
-                      timeout: 60000,
-                      signal: abortController.signal // Bind the Abort Controller here
-                  });
-                  break; 
+                      };
+                      
+                      // Inject custom hoster headers (like Pixeldrain Auth)
+                      if (resolvedHoster?.headers) {
+                          Object.assign(requestHeaders, resolvedHoster.headers);
+                      }
+
+                      response = await axios({ 
+                          method: 'get', 
+                          url: finalDownloadUrl, 
+                          responseType: 'stream', 
+                          headers: requestHeaders,
+                          timeout: 60000,
+                          signal: abortController.signal
+                      });
+                      break; 
+                  }
               } catch (err: any) {
                   if (attempt >= maxAttempts) throw err; 
                   const status = err.response?.status;
@@ -139,33 +192,45 @@ export const DownloadService = {
               }
           }
 
-          const contentType = (response.headers['content-type'] || '').toLowerCase();
-          if (contentType.includes('text/html')) {
-              throw new Error("Download URL returned an HTML webpage instead of a comic file.");
+          if (response && !resolvedHoster?.isMegaStream) {
+              const contentType = (response.headers['content-type'] || '').toLowerCase();
+              if (contentType.includes('text/html')) {
+                  throw new Error("Download URL returned an HTML webpage instead of a comic file.");
+              }
           }
 
           const writer = fs.createWriteStream(partFilePath);
-          const totalLength = response.headers['content-length'];
+          
+          let totalLength = 0;
+          if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
+              totalLength = resolvedHoster.megaFileNode.size;
+          } else if (response?.headers) {
+              totalLength = parseInt(response.headers['content-length'] || '0');
+          }
+
           let downloadedBytes = 0;
           let lastUpdate = 0;
 
-          // --- FIX: Initialize stallTimer as null to satisfy TypeScript strict mode ---
           let stallTimer: NodeJS.Timeout | null = null;
           const resetStallTimer = () => {
               if (stallTimer) clearTimeout(stallTimer);
               stallTimer = setTimeout(() => {
                   Logger.log(`[Internal DL] Data stream stalled for 45 seconds. Killing connection to trigger retry.`, 'error');
                   abortController.abort(new Error("Download stalled for 45 seconds"));
+                  if (megaStream) megaStream.destroy(new Error("Download stalled"));
               }, 45000);
           };
 
-          resetStallTimer(); // Initialize watchdog immediately after connection
+          resetStallTimer(); 
 
-          response.data.on('data', (chunk: Buffer) => {
-              resetStallTimer(); // Reset the watchdog every time data flows
+          // Combine the two possible streams
+          const dataStream = megaStream || response.data;
+
+          dataStream.on('data', (chunk: Buffer) => {
+              resetStallTimer(); 
               downloadedBytes += chunk.length;
               if (totalLength) {
-                  const percent = Math.round((downloadedBytes / parseInt(totalLength)) * 100);
+                  const percent = Math.round((downloadedBytes / totalLength) * 100);
                   const now = Date.now();
                   if (percent % 5 === 0 && now - lastUpdate > 2000) {
                       lastUpdate = now;
@@ -176,12 +241,10 @@ export const DownloadService = {
 
           try {
               // Pipe the data into the file stream
-              await pipeline(response.data, writer);
+              await pipeline(dataStream, writer);
           } finally {
-              // Ensure the timer is disabled when the download completes or fails naturally
               if (stallTimer) clearTimeout(stallTimer); 
           }
-          // ---------------------------------
 
           const stats = fs.statSync(partFilePath);
           if (stats.size < 500000) {

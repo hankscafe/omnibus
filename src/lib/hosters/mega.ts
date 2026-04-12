@@ -1,0 +1,58 @@
+// src/lib/hosters/mega.ts
+import { File } from 'megajs';
+import { Logger } from '../logger';
+
+export async function resolveMega(url: string, account?: any) {
+    try {
+        Logger.log(`[Mega] Initializing decryption for: ${url}`, 'info');
+        
+        const node = File.fromURL(url);
+        await node.loadAttributes();
+
+        // If it's a single file, just return its node stream
+        if (!node.directory) {
+            return { 
+                success: true, 
+                isMegaStream: true,
+                megaFileNode: node,
+                fileName: node.name
+            };
+        }
+
+        // If it's a folder, we need to search inside it for the comic archive
+        let targetFile: any = null;
+        let largestSize = 0;
+
+        for (const child of node.children || []) {
+            if (child.directory) continue;
+            
+            const ext = child.name?.toLowerCase().split('.').pop();
+            if (['cbz', 'cbr', 'zip', 'rar'].includes(ext || '')) {
+                // FIX: Fallback to 0 if the size is undefined to satisfy TypeScript
+                const childSize = child.size || 0;
+                
+                // Grab the largest valid archive in the folder
+                if (childSize > largestSize) {
+                    largestSize = childSize;
+                    targetFile = child;
+                }
+            }
+        }
+
+        if (!targetFile) {
+            return { success: false, error: "No comic files (.cbz, .cbr) found inside the Mega folder." };
+        }
+
+        Logger.log(`[Mega] Found file inside decrypted folder: ${targetFile.name}`, 'info');
+        
+        return { 
+            success: true, 
+            isMegaStream: true,
+            megaFileNode: targetFile,
+            fileName: targetFile.name
+        };
+
+    } catch (error: any) {
+        return { success: false, error: `Mega Error: ${error.message}` };
+    }
+}

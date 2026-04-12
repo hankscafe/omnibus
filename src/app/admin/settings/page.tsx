@@ -1,6 +1,8 @@
+// src/app/admin/settings/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -8,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
-  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit
+  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit, Server, ArrowUp, ArrowDown
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -18,6 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
 // --- Types ---
 interface LibraryConfig { id: string; name: string; path: string; isManga: boolean; isDefault: boolean; }
@@ -46,9 +49,29 @@ interface WebhookConfig {
     botUsername?: string;
     botAvatarUrl?: string;
 }
+interface HosterAccountConfig {
+    id: string;
+    name: string;
+    hoster: string;
+    username?: string;
+    password?: string;
+    apiKey?: string;
+    isActive: boolean;
+}
 
+// --- Constants & Global Mappings ---
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
 const RECOMMENDED_KEYWORDS = "weekly young, young animal, weekly shonen, monthly shonen, gee-whiz, manga, hentai, doujinshi, shoujo, seinen, shojo, josei, gaze, lustiges taschenbuch enten-edition, les tuniques bleues, big comic superior, Creature Girls: A Hands-On Field Journal In Another World, Young King Bull, weekly playboy, big comic spirits, Young Champion Retsu, Big Comic Zōkan, Monthly Young Magazine, Comic Zenon, shonen sunday s, Chira Chiller";
+
+const hosterDisplayNames: Record<string, string> = {
+    'mediafire': 'MediaFire',
+    'getcomics': 'GetComics (Direct)',
+    'mega': 'Mega',
+    'pixeldrain': 'Pixeldrain',
+    'rootz': 'Rootz',
+    'vikingfile': 'VikingFile',
+    'terabox': 'Terabox'
+};
 
 const DISCORD_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
@@ -71,6 +94,7 @@ const DISCORD_EVENTS = [
 
 export default function SettingsPage() {
   const { data: session } = useSession()
+  const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null)
@@ -93,6 +117,12 @@ export default function SettingsPage() {
   const [customAcronyms, setCustomAcronyms] = useState<AcronymConfig[]>([]) 
   const [envPaths, setEnvPaths] = useState<any>({})
   
+  // Hoster States
+  const [configuredHosters, setConfiguredHosters] = useState<HosterAccountConfig[]>([])
+  const [hosterPriority, setHosterPriority] = useState<string[]>(['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'])
+  const [hosterModalOpen, setHosterModalOpen] = useState(false)
+  const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null)
+
   // API Keys / Users States
   const [apiKeys, setApiKeys] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
@@ -109,7 +139,7 @@ export default function SettingsPage() {
   })
 
   const [clientModalOpen, setClientModalOpen] = useState(false)
-  const [editingClient, setEditingClient] = useState<ClientConfig | null>(null)
+  const [editingClient, setEditingClient] = useState<any>(null)
 
   const [webhookModalOpen, setWebhookModalOpen] = useState(false)
   const [editingWebhook, setEditingWebhook] = useState<WebhookConfig | null>(null)
@@ -126,12 +156,83 @@ export default function SettingsPage() {
     smtp_enabled: "false", smtp_host: "", smtp_port: "", smtp_user: "", smtp_pass: "", smtp_from: ""
   })
 
+  // --- UNSAVED CHANGES STATES ---
+  const [isDataLoaded, setIsDataLoaded] = useState(false)
+  const [initialStateHash, setInitialStateHash] = useState("")
+  const [unsavedModalOpen, setUnsavedModalOpen] = useState(false)
+  const [pendingNavigation, setPendingNavigation] = useState<string | null>(null)
+
+  // Generate a hash of the current interactive settings to compare against the baseline
+  const currentStateString = JSON.stringify({
+      config, configuredLibraries, configuredIndexers, configuredClients,
+      configuredHosters, configuredWebhooks, customHeaders, customAcronyms, hosterPriority
+  });
+
+  const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
+
+  useEffect(() => {
+      // Capture the baseline state exactly once after initial data fetch is fully settled
+      if (isDataLoaded && initialStateHash === "") {
+          setInitialStateHash(currentStateString);
+      }
+  }, [isDataLoaded, currentStateString, initialStateHash]);
+
+  // 1. Browser Tab Close/Refresh Guard
+  useEffect(() => {
+      const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+          if (hasUnsavedChanges) {
+              e.preventDefault();
+              e.returnValue = '';
+          }
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  // 2. Next.js Internal Link Interceptor
+  useEffect(() => {
+      const handleClick = (e: MouseEvent) => {
+          if (!hasUnsavedChanges) return;
+          
+          const target = e.target as HTMLElement;
+          const anchor = target.closest('a');
+          
+          if (anchor && anchor.href) {
+              const url = new URL(anchor.href);
+              
+              // If it's an internal link navigating away from the Settings page
+              if (url.origin === window.location.origin && url.pathname !== window.location.pathname) {
+                  // Allow native downloads or new tabs to process normally
+                  if (anchor.hasAttribute('download') || anchor.target === '_blank') return;
+                  
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPendingNavigation(url.pathname + url.search);
+                  setUnsavedModalOpen(true);
+              }
+          }
+      };
+      
+      // Capture phase guarantees we intercept the click before Next.js Link routing executes
+      document.addEventListener('click', handleClick, { capture: true });
+      return () => document.removeEventListener('click', handleClick, { capture: true });
+  }, [hasUnsavedChanges]);
+
+  // --- Helper for Client Editing ---
+  const updateEditingClient = (key: string, value: any) => {
+    setEditingClient((prev: any) => ({ ...prev, [key]: value }));
+    if (testResults['clients'] !== null) {
+        setTestResults(prev => ({ ...prev, clients: null }));
+    }
+  };
+
   useEffect(() => {
     fetch('/api/admin/config').then(res => res.json()).then(data => {
         setConfiguredLibraries(data.libraries || []);
         setConfiguredClients(data.downloadClients || []);
         setConfiguredWebhooks(data.discordWebhooks || []);
         setConfiguredIndexers(data.indexers || []);
+        setConfiguredHosters(data.hosterAccounts || []);
         setEnvPaths(data.envPaths || {});
         
         const parsedHeaders = (data.customHeaders || []).map((h: any) => ({ ...h, id: h.id || `tmp_${Math.random()}` }));
@@ -156,15 +257,37 @@ export default function SettingsPage() {
         const newConfig: any = { ...config };
         if (Array.isArray(data.settings)) {
             data.settings.forEach((item: any) => { 
-                if (item.key !== 'omnibus_api_key') {
+                if (item.key !== 'omnibus_api_key' && item.key !== 'hoster_priority') {
                     newConfig[item.key] = item.value;
                 }
             });
+
+            const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
+            const defaultHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'];
+            
+            if (hpSetting?.value) {
+                try { 
+                    const savedHosters = JSON.parse(hpSetting.value);
+                    const mergedHosters = [...savedHosters];
+                    defaultHosters.forEach(h => {
+                        if (!mergedHosters.includes(h)) mergedHosters.push(h);
+                    });
+                    setHosterPriority(mergedHosters); 
+                } catch(e) {
+                    setHosterPriority(defaultHosters);
+                }
+            } else {
+                setHosterPriority(defaultHosters);
+            }
         }
 
         if (!newConfig.download_retry_delay) newConfig.download_retry_delay = "5";
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
+        
         setConfig(newConfig);
+
+        // Allow React state updates to completely flush and settle before capturing the clean baseline hash
+        setTimeout(() => setIsDataLoaded(true), 500);
     })
 
     fetch('/api/admin/users').then(res => res.json()).then(data => {
@@ -191,38 +314,46 @@ export default function SettingsPage() {
   };
 
   const handleSave = async () => {
-  setLoading(true);
+    setLoading(true);
 
-  const payload = { 
-      settings: config,
-      libraries: configuredLibraries,
-      indexers: configuredIndexers, 
-      customHeaders: customHeaders,
-      searchAcronyms: customAcronyms, 
-      downloadClients: configuredClients,
-      discordWebhooks: configuredWebhooks
-  }
-
-  try {
-    const res = await fetch('/api/admin/config', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify(payload) 
-    })
-    
-    if (res.ok) {
-        toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
-        fetch('/api/admin/jobs/trigger', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ job: 'popular' })
-        }).catch(() => {});
+    const payload = { 
+        settings: {
+            ...config,
+            hoster_priority: JSON.stringify(hosterPriority)
+        },
+        libraries: configuredLibraries,
+        indexers: configuredIndexers, 
+        customHeaders: customHeaders,
+        searchAcronyms: customAcronyms, 
+        downloadClients: configuredClients,
+        hosterAccounts: configuredHosters,
+        discordWebhooks: configuredWebhooks
     }
-  } finally { 
-    setLoading(false) 
-  }
-}
 
+    try {
+        const res = await fetch('/api/admin/config', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(payload) 
+        })
+        
+        if (res.ok) {
+            // Reset the dirty state tracking so the warning disappears
+            setInitialStateHash(currentStateString);
+            
+            toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
+            fetch('/api/admin/jobs/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job: 'popular' })
+            }).catch(() => {});
+        }
+    } finally { 
+        setLoading(false) 
+    }
+  }
+
+  // --- Library Methods ---
   const addLibrary = () => {
     setConfiguredLibraries([...configuredLibraries, {
         id: `tmp_${Date.now()}`, name: "", path: "", isManga: false, isDefault: configuredLibraries.length === 0
@@ -239,6 +370,42 @@ export default function SettingsPage() {
     }));
   }
 
+  // --- Hoster Methods ---
+  const moveHosterPriority = (index: number, direction: -1 | 1) => {
+      const newPriority = [...hosterPriority];
+      const temp = newPriority[index];
+      newPriority[index] = newPriority[index + direction];
+      newPriority[index + direction] = temp;
+      setHosterPriority(newPriority);
+  }
+
+  const openHosterSetup = (hosterName: string) => {
+      setEditingHoster({
+          id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
+          name: hosterDisplayNames[hosterName] || hosterName,
+          hoster: hosterName,
+          username: "", password: "", apiKey: "",
+          isActive: true
+      });
+      setHosterModalOpen(true);
+  }
+
+  const saveHosterInState = () => {
+      if (!editingHoster) return;
+      setConfiguredHosters(prev => {
+          const filtered = prev.filter(c => c.id !== editingHoster.id);
+          return [...filtered, editingHoster];
+      });
+      setHosterModalOpen(false);
+      toast({ title: "Account Added", description: "Remember to click 'Save All Changes' above." });
+  }
+
+  const deleteHoster = (id: string) => {
+      setConfiguredHosters(prev => prev.filter(c => c.id !== id));
+      toast({ title: "Account Removed" });
+  }
+
+  // --- Other Methods ---
   const applyRecommendedFilters = () => {
       setConfig((prev: any) => ({
           ...prev,
@@ -329,7 +496,7 @@ export default function SettingsPage() {
     setEditingWebhook({
       ...editingWebhook,
       events: hasEvent 
-        ? editingWebhook.events.filter(e => e !== eventId) 
+        ? editingWebhook.events.filter((e: string) => e !== eventId) 
         : [...editingWebhook.events, eventId]
     })
   }
@@ -487,7 +654,15 @@ export default function SettingsPage() {
             <Link href="/admin"><Button variant="ghost" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 hover:bg-muted text-foreground"><ArrowLeft className="w-5 h-5" /></Button></Link>
             <h1 className="text-2xl sm:text-3xl font-bold text-foreground">System Settings</h1>
         </div>
-        <Button onClick={handleSave} disabled={loading} size="lg" className="w-full sm:w-auto h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground"><Save className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />Save All Changes</Button>
+        <Button 
+            onClick={handleSave} 
+            disabled={loading} 
+            size="lg" 
+            className={`w-full sm:w-auto h-12 sm:h-10 font-bold transition-all duration-300 shadow-md ${hasUnsavedChanges ? 'bg-amber-500 hover:bg-amber-600 text-white shadow-[0_0_15px_rgba(245,158,11,0.5)]' : 'bg-primary hover:bg-primary/90 text-primary-foreground'}`}
+        >
+            <Save className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />
+            {hasUnsavedChanges ? "Save Unsaved Changes" : "Save All Changes"}
+        </Button>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full space-y-6">
@@ -496,6 +671,7 @@ export default function SettingsPage() {
           <TabsTrigger value="comicvine" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">ComicVine</TabsTrigger>
           <TabsTrigger value="indexers" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Indexers</TabsTrigger>
           <TabsTrigger value="clients" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Clients</TabsTrigger>
+          <TabsTrigger value="hosters" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">File Hosters</TabsTrigger>
           <TabsTrigger value="paths" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Paths</TabsTrigger>
           <TabsTrigger value="network" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Network</TabsTrigger>
           <TabsTrigger value="filters" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Filters</TabsTrigger>
@@ -670,6 +846,84 @@ export default function SettingsPage() {
             </Card>
         </TabsContent>
 
+        {/* 3.5 FILE HOSTERS (NEW) */}
+        <TabsContent value="hosters">
+            <Card className="shadow-sm border-border bg-background">
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Server className="w-5 h-5 text-primary" /> Third-Party File Hosters</CardTitle>
+                    <CardDescription className="text-muted-foreground">Manage priority and add premium credentials for third-party file hosters (like MediaFire or Mega).</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-10">
+                    
+                    {/* Priority List */}
+                    <div className="space-y-4">
+                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Hoster Priority</h3>
+                        <p className="text-xs text-muted-foreground">If multiple hosters are available for a comic, Omnibus will prioritize them in this order.</p>
+                        
+                        <div className="border border-border rounded-lg bg-muted/20 p-2 space-y-1">
+                            {hosterPriority.map((hoster, idx) => (
+                                <div key={hoster} className="flex items-center justify-between p-3 bg-background border border-border rounded shadow-sm">
+                                    <div className="flex items-center gap-3">
+                                        <Badge variant="secondary" className="font-mono text-[10px] w-6 justify-center bg-muted">{idx + 1}</Badge>
+                                        <span className="font-bold text-foreground">{hosterDisplayNames[hoster] || hoster}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === 0} onClick={() => moveHosterPriority(idx, -1)}>
+                                            <ArrowUp className="w-4 h-4" />
+                                        </Button>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === hosterPriority.length - 1} onClick={() => moveHosterPriority(idx, 1)}>
+                                            <ArrowDown className="w-4 h-4" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Hoster Accounts */}
+                    <div className="space-y-4">
+                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Hoster Accounts (Optional)</h3>
+                        <p className="text-xs text-muted-foreground mb-4">Add your free or premium credentials to bypass bandwidth limits.</p>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                            {['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].map(type => {
+                                const isAdded = configuredHosters.some(c => c.hoster === type);
+                                return (
+                                    <Button key={type} variant="outline" className={`h-12 font-bold ${isAdded ? 'border-primary text-primary bg-primary/5' : ''}`} onClick={() => !isAdded && openHosterSetup(type)}>
+                                        {isAdded && <CheckCircle2 className="w-4 h-4 mr-2" />}
+                                        {hosterDisplayNames[type] || type}
+                                    </Button>
+                                )
+                            })}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {configuredHosters.length === 0 ? (
+                                <div className="col-span-1 sm:col-span-2 text-center py-10 border-2 border-dashed border-border rounded-xl text-muted-foreground">No hoster accounts configured.</div>
+                            ) : (
+                                configuredHosters.map((hoster) => (
+                                    <Card key={hoster.id} className="shadow-sm border-border bg-background">
+                                        <CardContent className="p-4 space-y-3">
+                                            <div className="flex justify-between items-start">
+                                                <div className="space-y-1 min-w-0 pr-2">
+                                                    <p className="font-bold text-lg sm:text-base truncate text-foreground">{hoster.name}</p>
+                                                    <Badge variant="secondary" className="bg-primary/10 text-primary">{hoster.username || "API Key Linked"}</Badge>
+                                                </div>
+                                                <div className="flex gap-1 shrink-0">
+                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => {setEditingHoster(hoster); setHosterModalOpen(true)}}><Settings className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
+                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteHoster(hoster.id)}><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        </TabsContent>
+
         {/* 4. PATHS, ROUTING & MEDIA MANAGEMENT */}
         <TabsContent value="paths" className="space-y-6">
             <Card className="shadow-sm border-border bg-background">
@@ -728,7 +982,7 @@ export default function SettingsPage() {
 
                     <div className="border-t border-border my-4" />
                     <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('paths')} disabled={!!testing}>
-                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
+                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
                     </Button>
                     <StatusBox result={testResults.paths} />
 
@@ -826,7 +1080,7 @@ export default function SettingsPage() {
                             </div>
                         </div>
 
-                        {/* --- THE FIX: DOCKER VOLUME BINDINGS UI --- */}
+                        {/* --- DOCKER VOLUME BINDINGS UI --- */}
                         <div className="grid gap-2 pt-6 border-t border-border mt-4">
                             <Label className="text-foreground font-semibold text-lg flex items-center gap-2"><Database className="w-4 h-4 text-primary"/> Environment Paths (System Defaults)</Label>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-2">
@@ -855,7 +1109,6 @@ export default function SettingsPage() {
                                 These paths are configured via Environment Variables (<code className="text-foreground font-bold">DATABASE_URL</code>, <code className="text-foreground font-bold">OMNIBUS_BACKUPS_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_CACHE_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_LOGS_DIR</code>) in your Docker setup. 
                             </p>
                         </div>
-                        {/* ------------------------------------------- */}
                     </div>
 
                 </CardContent>
@@ -912,7 +1165,7 @@ export default function SettingsPage() {
                     <CardDescription className="text-muted-foreground">Configure custom HTTP headers for all outgoing requests and manage connection timeouts/retries.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    {/* --- ADDED FLARESOLVERR UI HERE --- */}
+                    {/* --- FLARESOLVERR UI --- */}
                     <div className="space-y-4 pb-6 border-b border-border">
                         <Label className="text-base font-bold text-foreground">Cloudflare Bypass (FlareSolverr)</Label>
                         <p className="text-[11px] text-muted-foreground mt-1">If GetComics starts blocking your automated searches with a 403 Forbidden error, you can route requests through a FlareSolverr container to bypass the protection.</p>
@@ -923,8 +1176,8 @@ export default function SettingsPage() {
                                 onChange={e => setConfig({...config, flaresolverr_url: e.target.value})}
                                 className="h-12 sm:h-10 bg-background border-border text-foreground flex-1 font-mono text-sm"
                             />
-                            <Button variant="outline" onClick={() => handleTest('flaresolverr')} disabled={!!testing} className="h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground">
-                                {testing === 'flaresolverr' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 animate-spin text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test FlareSolverr
+                            <Button variant="outline" onClick={() => handleTest('flaresolverr', { flaresolverr_url: config.flaresolverr_url })} disabled={!!testing} className="h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground">
+                                {testing === 'flaresolverr' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test FlareSolverr
                             </Button>
                         </div>
                         <StatusBox result={testResults.flaresolverr} />
@@ -967,7 +1220,7 @@ export default function SettingsPage() {
                                     <Input placeholder="Header Name" value={h.key} onChange={e => updateHeader(i, 'key', e.target.value)} className="h-12 sm:h-10 bg-background border-border text-foreground" />
                                     <div className="flex gap-2 w-full">
                                       <Input type="password" placeholder="Header Value" value={h.value} onChange={e => updateHeader(i, 'value', e.target.value)} className="h-12 sm:h-10 flex-1 bg-background border-border text-foreground" />
-                                      <Button variant="ghost" size="icon" onClick={() => removeHeader(h.id!)} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200"><Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
+                                      <Button variant="ghost" size="icon" onClick={() => removeHeader(h.id!)} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200"><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
                                     </div>
                                 </div>
                             ))}
@@ -1057,9 +1310,7 @@ export default function SettingsPage() {
                                           onChange={e => { const a = [...customAcronyms]; a[i].value = e.target.value; setCustomAcronyms(a); }} 
                                           className="h-12 sm:h-10 flex-1 bg-background border-border font-mono text-sm text-foreground" 
                                       />
-                                      <Button variant="ghost" size="icon" onClick={() => setCustomAcronyms(customAcronyms.filter(c => c.id !== ac.id))} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200">
-                                          <Trash2 className="h-5 w-5 sm:h-4 sm:w-4"/>
-                                      </Button>
+                                      <Button variant="ghost" size="icon" onClick={() => setCustomAcronyms(customAcronyms.filter(c => c.id !== ac.id))} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200"><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
                                     </div>
                                 </div>
                             ))}
@@ -1189,14 +1440,14 @@ export default function SettingsPage() {
               {config.smtp_enabled === "true" && (
                   <div className="grid gap-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="grid gap-2"><Label>SMTP Host</Label><Input value={config.smtp_host} onChange={e => setConfig({...config, smtp_host: e.target.value})} placeholder="smtp.gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
-                          <div className="grid gap-2"><Label>SMTP Port</Label><Input value={config.smtp_port} onChange={e => setConfig({...config, smtp_port: e.target.value})} placeholder="587" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Host</Label><Input value={config.smtp_host} onChange={e => updateForm('smtp_host', e.target.value)} placeholder="smtp.gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Port</Label><Input value={config.smtp_port} onChange={e => updateForm('smtp_port', e.target.value)} placeholder="587" className="bg-muted/20 border-border text-foreground" /></div>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="grid gap-2"><Label>SMTP Username</Label><Input value={config.smtp_user} onChange={e => setConfig({...config, smtp_user: e.target.value})} placeholder="user@gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
-                          <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={config.smtp_pass} onChange={e => setConfig({...config, smtp_pass: e.target.value})} placeholder="App Password" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Username</Label><Input value={config.smtp_user} onChange={e => updateForm('smtp_user', e.target.value)} placeholder="user@gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                          <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={config.smtp_pass} onChange={e => updateForm('smtp_pass', e.target.value)} placeholder="App Password" className="bg-muted/20 border-border text-foreground" /></div>
                       </div>
-                      <div className="grid gap-2"><Label>From Email Address</Label><Input value={config.smtp_from} onChange={e => setConfig({...config, smtp_from: e.target.value})} placeholder="omnibus@yourdomain.com" className="bg-muted/20 border-border text-foreground" /></div>
+                      <div className="grid gap-2"><Label>From Email Address</Label><Input value={config.smtp_from} onChange={e => updateForm('smtp_from', e.target.value)} placeholder="omnibus@yourdomain.com" className="bg-muted/20 border-border text-foreground" /></div>
                       
                       <div className="border-t border-border pt-4 flex flex-col sm:flex-row gap-2">
                           <Input id="smtp-test-email" placeholder="Send test email to..." className="bg-muted/20 border-border max-w-xs text-foreground flex-1 sm:flex-none" />
@@ -1236,7 +1487,7 @@ export default function SettingsPage() {
                         <Switch 
                             id="oidc-toggle"
                             checked={config.oidc_enabled === "true"} 
-                            onCheckedChange={(c) => setConfig({...config, oidc_enabled: c ? "true" : "false"})} 
+                            onCheckedChange={(c) => updateForm('oidc_enabled', c)} 
                             className="scale-110 sm:scale-100"
                         />
                         <Label htmlFor="oidc-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable OIDC Authentication</Label>
@@ -1248,7 +1499,7 @@ export default function SettingsPage() {
                             <Input 
                                 placeholder="https://auth.yourdomain.com" 
                                 value={config.oidc_issuer || ""} 
-                                onChange={e => setConfig({...config, oidc_issuer: e.target.value})} 
+                                onChange={e => updateForm('oidc_issuer', e.target.value)} 
                                 className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                             />
                             <p className="text-[11px] text-muted-foreground">The base URL of your identity provider.</p>
@@ -1259,7 +1510,7 @@ export default function SettingsPage() {
                                 <Label className="text-foreground font-semibold">Client ID</Label>
                                 <Input 
                                     value={config.oidc_client_id || ""} 
-                                    onChange={e => setConfig({...config, oidc_client_id: e.target.value})} 
+                                    onChange={e => updateForm('oidc_client_id', e.target.value)} 
                                     className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                                 />
                             </div>
@@ -1268,7 +1519,7 @@ export default function SettingsPage() {
                                 <Input 
                                     type="password"
                                     value={config.oidc_client_secret || ""} 
-                                    onChange={e => setConfig({...config, oidc_client_secret: e.target.value})} 
+                                    onChange={e => updateForm('oidc_client_secret', e.target.value)} 
                                     className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
                                 />
                             </div>
@@ -1333,7 +1584,7 @@ export default function SettingsPage() {
 
                     {generatedKey && (
                         <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 mt-4 animate-in fade-in slide-in-from-top-2 w-full">
-                            <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><XCircle className="w-4 h-4"/></button>
+                            <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><X className="w-4 h-4"/></button>
                             <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won't be shown again.</span></p>
                             <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2 w-full">
                                 <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800 text-[11px] sm:text-xs select-all w-full min-w-0 break-all">
@@ -1416,6 +1667,36 @@ export default function SettingsPage() {
       </Tabs>
 
       {/* --- MODALS --- */}
+
+      {/* HOSTER MODAL */}
+      <Dialog open={hosterModalOpen} onOpenChange={setHosterModalOpen}>
+        <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl shadow-2xl transition-colors duration-300">
+            <DialogHeader><DialogTitle className="text-foreground">Configure {editingHoster?.name}</DialogTitle></DialogHeader>
+            {editingHoster && (
+                <div className="grid gap-4 py-4">
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">Account Username (Optional)</Label>
+                        <Input value={editingHoster.username || ""} onChange={e => setEditingHoster({...editingHoster, username: e.target.value})} placeholder="email@example.com" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">Account Password (Optional)</Label>
+                        <Input type="password" value={editingHoster.password || ""} onChange={e => setEditingHoster({...editingHoster, password: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">API / Session Key (Optional)</Label>
+                        <Input type="password" value={editingHoster.apiKey || ""} onChange={e => setEditingHoster({...editingHoster, apiKey: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-2">
+                        Providing credentials allows Omnibus to bypass guest bandwidth limits on supported file hosters. Leave blank to attempt anonymous downloads.
+                    </p>
+                </div>
+            )}
+            <DialogFooter className="gap-2 sm:gap-0">
+                <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setHosterModalOpen(false)}>Cancel</Button>
+                <Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveHosterInState}>Save Account</Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
       {/* WEBHOOK MODAL */}
       <Dialog open={webhookModalOpen} onOpenChange={setWebhookModalOpen}>
@@ -1457,7 +1738,6 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              {/* --- NEW: CUSTOM USERNAME AND AVATAR INPUTS --- */}
               <div className="grid sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label className="text-xs font-bold uppercase text-muted-foreground">Bot Username (Optional)</Label>
@@ -1478,7 +1758,6 @@ export default function SettingsPage() {
                     />
                   </div>
               </div>
-              {/* ------------------------------------------------ */}
 
               <div className="space-y-3 pt-4 border-t border-border">
                 <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
@@ -1524,12 +1803,12 @@ export default function SettingsPage() {
                 <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
                         <Label className="text-foreground font-semibold">Server URL</Label>
-                        <Input value={editingClient.url} onChange={e => setEditingClient({...editingClient, url: e.target.value})} placeholder="http://192.168.1.100:8080" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                        <Input value={editingClient.url} onChange={e => updateEditingClient('url', e.target.value)} placeholder="http://192.168.1.100:8080" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
                     </div>
 
                     <div className="grid gap-2">
                         <Label className="text-foreground font-semibold">Download Category / Label</Label>
-                        <Input value={editingClient.category || ""} onChange={e => setEditingClient({...editingClient, category: e.target.value})} placeholder="e.g. comics, manga" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                        <Input value={editingClient.category || ""} onChange={e => updateEditingClient('category', e.target.value)} placeholder="e.g. comics, manga" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
                         <p className="text-[11px] text-muted-foreground">Comma-separated list of categories to track. New downloads use the first one. <strong className="text-orange-500">Categories MUST exist in your client!</strong></p>
                     </div>
 
@@ -1541,11 +1820,11 @@ export default function SettingsPage() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div className="grid gap-2">
                                 <Label className="text-[11px] text-muted-foreground">Remote Path (Client)</Label>
-                                <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.remotePath || ""} onChange={e => setEditingClient({...editingClient, remotePath: e.target.value})} placeholder="/downloads/comics" />
+                                <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.remotePath || ""} onChange={e => updateEditingClient('remotePath', e.target.value)} placeholder="/downloads/comics" />
                             </div>
                             <div className="grid gap-2">
                                 <Label className="text-[11px] text-muted-foreground">Local Path (Omnibus)</Label>
-                                <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.localPath || ""} onChange={e => setEditingClient({...editingClient, localPath: e.target.value})} placeholder="/data/downloads" />
+                                <Input className="h-12 sm:h-10 text-xs font-mono bg-background border-border text-foreground" value={editingClient.localPath || ""} onChange={e => updateEditingClient('localPath', e.target.value)} placeholder="/data/downloads" />
                             </div>
                         </div>
                         <p className="text-[10px] text-muted-foreground mt-2">
@@ -1555,22 +1834,26 @@ export default function SettingsPage() {
 
                     {['qbit', 'deluge', 'nzbget'].includes(editingClient.type) && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 border-t border-border pt-4">
-                            <div className="grid gap-2"><Label className="text-foreground font-semibold">User</Label><Input value={editingClient.user} onChange={e => setEditingClient({...editingClient, user: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
-                            <div className="grid gap-2"><Label className="text-foreground font-semibold">Pass</Label><Input type="password" value={editingClient.pass} onChange={e => setEditingClient({...editingClient, pass: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                            <div className="grid gap-2"><Label className="text-foreground font-semibold">User</Label><Input value={editingClient.user} onChange={e => updateEditingClient('user', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                            <div className="grid gap-2"><Label className="text-foreground font-semibold">Pass</Label><Input type="password" value={editingClient.pass} onChange={e => updateEditingClient('pass', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                         </div>
                     )}
                     {['sab'].includes(editingClient.type) && (
-                        <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => setEditingClient({...editingClient, apiKey: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                        <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => updateEditingClient('apiKey', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                     )}
                     <div className="border-t border-border pt-4">
                         <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" onClick={() => handleTest('clients', { clientType: editingClient.type, ...editingClient })} disabled={!!testing}>
-                            {testing === 'clients' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
+                            {testing === 'clients' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} 
+                            {testResults['clients']?.success ? "Connection Verified!" : "Test Connection"}
                         </Button>
                         <StatusBox result={testResults.clients} />
                     </div>
                 </div>
             )}
-            <DialogFooter className="gap-2 sm:gap-0"><Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setClientModalOpen(false)}>Cancel</Button><Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveClientInState}>Save Settings</Button></DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0">
+                <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setClientModalOpen(false)}>Cancel</Button>
+                <Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveClientInState}>Save Settings</Button>
+            </DialogFooter>
         </DialogContent>
       </Dialog>
       
@@ -1602,9 +1885,34 @@ export default function SettingsPage() {
                     <Label htmlFor="rss" className="cursor-pointer font-bold ml-2 text-foreground group-hover:text-primary transition-colors">Enable RSS Monitoring</Label>
                 </div>
             </div>
-            <DialogFooter className="gap-2 sm:gap-0"><Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setIndexerModalOpen(false)}>Cancel</Button><Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveIndexerConfig}>Save Settings</Button></DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0">
+                <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setIndexerModalOpen(false)}>Cancel</Button>
+                <Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveIndexerConfig}>Save Settings</Button>
+            </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* --- UNSAVED CHANGES DIALOG --- */}
+      <ConfirmationDialog 
+        isOpen={unsavedModalOpen}
+        onClose={() => {
+            setUnsavedModalOpen(false);
+            setPendingNavigation(null);
+        }}
+        onConfirm={() => {
+            setUnsavedModalOpen(false);
+            setInitialStateHash(currentStateString); // Trick the dirty state tracker
+            if (pendingNavigation) {
+                router.push(pendingNavigation);
+            }
+        }}
+        title="Unsaved Changes"
+        description="You have unsaved changes on this page. If you leave now, all your recent modifications will be lost. Are you sure you want to leave?"
+        confirmText="Discard Changes & Leave"
+        cancelText="Stay on Page"
+        variant="destructive"
+      />
+
     </div>
   )
 }

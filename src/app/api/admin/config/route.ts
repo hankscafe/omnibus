@@ -11,8 +11,8 @@ const SENSITIVE_KEYS = [
     'cv_api_key', 
     'prowlarr_key', 
     'oidc_client_secret', 
-    'discord_webhooks', // Legacy flat key
-    'omnibus_api_key',  // Legacy flat key
+    'discord_webhooks', 
+    'omnibus_api_key',  
     'smtp_pass'         
 ];
 
@@ -36,7 +36,6 @@ export async function GET(request: Request) {
   // 2. Fetch the native relational data
   const libraries = await prisma.library.findMany();
   
-  // Obfuscate passwords and API keys within Download Clients
   const rawClients = await prisma.downloadClient.findMany();
   const clients = rawClients.map(c => ({
       ...c,
@@ -44,18 +43,24 @@ export async function GET(request: Request) {
       apiKey: c.apiKey ? '********' : null
   }));
 
+  // --- NEW: Fetch and obfuscate Hoster Accounts ---
+  const rawHosters = await prisma.hosterAccount.findMany();
+  const hosterAccounts = rawHosters.map(h => ({
+      ...h,
+      password: h.password ? '********' : null,
+      apiKey: h.apiKey ? '********' : null
+  }));
+
   const indexers = await prisma.indexer.findMany();
   const headers = await prisma.customHeader.findMany();
   const acronyms = await prisma.searchAcronym.findMany();
   
-  // Parse webhook events from the DB string back into a native array for the frontend
   const webhooksRaw = await prisma.discordWebhook.findMany();
   const webhooks = webhooksRaw.map(w => ({
       ...w,
       events: typeof w.events === 'string' ? JSON.parse(w.events) : w.events
   }));
 
-  // --- THE FIX: EXPOSE DOCKER PATHS (Updated to include Database URL) ---
   const envPaths = {
       DATABASE_URL: (process.env.DATABASE_URL || 'file:./omnibus.db').replace(/:.*@/, ':****@'),
       OMNIBUS_BACKUPS_DIR: process.env.OMNIBUS_BACKUPS_DIR || '/backups',
@@ -63,11 +68,11 @@ export async function GET(request: Request) {
       OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs'
   };
 
-  // 3. Return cleanly structured data
   return NextResponse.json({
       settings,
       libraries,
       downloadClients: clients,
+      hosterAccounts, // <-- Injected
       discordWebhooks: webhooks,
       indexers,
       customHeaders: headers,
@@ -81,8 +86,6 @@ export async function POST(request: Request) {
     const setupStatus = await prisma.systemSetting.findUnique({ where: { key: 'setup_complete' } });
     const isSetupComplete = setupStatus?.value === 'true';
 
-    // FIX: Only enforce session check if setup is already done.
-    // This allows the Setup Wizard to perform the first save.
     let userId: string | null = null;
 
     if (isSetupComplete) {
@@ -93,7 +96,6 @@ export async function POST(request: Request) {
         }
         userId = (session.user as any).id;
     } else {
-        // Double-check as a fallback: if setup isn't complete, ensure at least one user exists
         const userCount = await prisma.user.count();
         if (userCount === 0) {
              return NextResponse.json({ error: "Admin account must be created first." }, { status: 400 });
@@ -102,24 +104,21 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     
-    // Explicitly destructure the native objects from the payload
     const {
         settings,
         libraries, 
         downloadClients, 
+        hosterAccounts, // <-- Destructured
         discordWebhooks,
         indexers, 
         customHeaders, 
         searchAcronyms
     } = body;
 
-    // Run everything in a massive transaction so it all succeeds or fails together
     await prisma.$transaction(async (tx) => {
         
-        // 1. Update Flat Key-Value Settings
         if (settings) {
             for (const [key, value] of Object.entries(settings)) {
-                // --- SECURITY FIX: Skip writing obfuscated tokens to prevent overwriting secrets ---
                 if (value === '********') continue;
 
                 const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value ?? "");
@@ -131,29 +130,24 @@ export async function POST(request: Request) {
             }
         }
 
-        // 2. Native Relational Array Sync Engine
         const syncTable = async (model: any, data: any[], pk: string = 'id') => {
             if (!data || !Array.isArray(data)) return;
             
             const existing = await model.findMany();
             
-            // Ignore temporary frontend IDs when checking what to delete
             const incomingIds = data
                 .map(d => d[pk])
                 .filter(id => id !== undefined && id !== null && !(typeof id === 'string' && (id.startsWith('tmp_') || id.startsWith('0.'))));
             
-            // Delete removed items
             const toDelete = existing.filter((e: any) => !incomingIds.includes(e[pk]));
             if (toDelete.length > 0) {
                 await model.deleteMany({ where: { [pk]: { in: toDelete.map((e:any) => e[pk]) } } });
             }
 
-            // Create or Update items
             for (const item of data) {
                 const isTempId = typeof item[pk] === 'string' && (item[pk].startsWith('tmp_') || item[pk].startsWith('0.'));
                 const { [pk]: idField, ...rest } = item;
                 
-                // --- SECURITY FIX: Remove obfuscated keys so Prisma ignores them in the update
                 for (const k in rest) {
                     if (rest[k] === '********') {
                         delete rest[k];
@@ -174,12 +168,12 @@ export async function POST(request: Request) {
 
         if (libraries) await syncTable(tx.library, libraries);
         if (downloadClients) await syncTable(tx.downloadClient, downloadClients);
+        if (hosterAccounts) await syncTable(tx.hosterAccount, hosterAccounts); // <-- Synced
         if (indexers) await syncTable(tx.indexer, indexers);
         if (customHeaders) await syncTable(tx.customHeader, customHeaders);
         if (searchAcronyms) await syncTable(tx.searchAcronym, searchAcronyms, 'key');
 
         if (discordWebhooks) {
-            // Stringify the events array for the database column
             const parsedHooks = discordWebhooks.map((w: any) => ({
                 ...w,
                 events: JSON.stringify(w.events || [])
@@ -188,7 +182,6 @@ export async function POST(request: Request) {
         }
     });
 
-    // --- AUDIT LOG ---
     if (isSetupComplete) {
         await AuditLogger.log('UPDATE_SYSTEM_CONFIG', {
             message: "System configuration and integrations updated.",
@@ -199,8 +192,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
     Logger.log(`Settings Save Error: ${getErrorMessage(error)}`, 'error');
-
-    // --- SECURITY FIX: Replaced error.message with a generic string ---
     return NextResponse.json({ error: "Failed to save configuration. Please check the server logs." }, { status: 500 });
   }
 }

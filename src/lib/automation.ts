@@ -1,3 +1,4 @@
+// src/lib/automation.ts
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
@@ -16,22 +17,19 @@ export async function searchAndDownload(requestId: string, name: string, year: s
   const acronyms = await getCustomAcronyms();
   const queries = generateSearchQueries(name, year, acronyms, isManga);
   
-  Logger.log(`[Automation] Generated ${queries.length} search variations for: ${name}`, 'info');
-
   Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
   let getComicsResults: any[] = [];
   for (const query of queries) {
-      Logger.log(`[Automation] [GetComics] Trying variation: "${query}"`, 'info');
       getComicsResults = await GetComicsService.search(query, false, isManga);
       if (getComicsResults.length > 0) break;
   }
   
   if (getComicsResults.length > 0) {
-    Logger.log(`[Automation] [GetComics] Found ${getComicsResults.length} potential matches.`, 'success');
     const best = getComicsResults[0];
-    const { url, isDirect } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+    const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
     
-    if (isDirect) {
+    // --- UPDATED HOSTER WHITELIST ---
+    if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
       const settings = await prisma.systemSetting.findMany();
       const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
       const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
@@ -41,7 +39,7 @@ export async function searchAndDownload(requestId: string, name: string, year: s
         data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
       });
 
-      DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId)
+      DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
         .then(async (success) => {
             if (success) {
                 await new Promise(r => setTimeout(r, 2000));
@@ -50,9 +48,9 @@ export async function searchAndDownload(requestId: string, name: string, year: s
         })
         .catch(e => Logger.log(getErrorMessage(e), 'error'));
       
-      return; // EXIT: Found an automated path on GetComics
+      return; 
     } else {
-      Logger.log(`[Automation] [GetComics] Best match was a hoster link. Saved to Manual Queue.`, 'warn');
+      Logger.log(`[Automation] [GetComics] Best match was an unsupported hoster (${hoster}). Saved to Manual Queue.`, 'warn');
       await prisma.request.update({
         where: { id: requestId },
         data: { status: 'MANUAL_DDL', downloadLink: url }
@@ -93,12 +91,11 @@ export async function searchAndDownload(requestId: string, name: string, year: s
             where: { id: requestId },
             data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash }
           });
-          return; // Exit: Successfully handled via Prowlarr
+          return; 
         }
       }
   }
 
-  // Final check: if neither source found a direct download, mark as STALLED if not already MANUAL_DDL
   const currentReq = await prisma.request.findUnique({ where: { id: requestId } });
   if (currentReq?.status !== 'MANUAL_DDL' && currentReq?.status !== 'DOWNLOADING') {
       Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');

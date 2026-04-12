@@ -1,3 +1,4 @@
+// src/app/api/request/manual/route.ts
 import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
@@ -117,8 +118,10 @@ export async function POST(request: NextRequest) {
         } 
         else if (source === 'getcomics') {
             if (searchResult && searchResult.downloadUrl) {
-                const { url, isDirect } = await GetComicsService.scrapeDeepLink(searchResult.downloadUrl);
-                if (isDirect) {
+                // --- HOSTER UPDATE: Pull hoster and pass it to Downloader ---
+                const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(searchResult.downloadUrl);
+                
+                if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
                     const safeTitle = searchResult.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
                     const settings = await prisma.systemSetting.findMany();
                     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -128,7 +131,8 @@ export async function POST(request: NextRequest) {
                       data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
                     });
 
-                    DownloadService.downloadDirectFile(url, safeTitle, config.download_path, newReq.id)
+                    // Passes the 'hoster' variable dynamically
+                    DownloadService.downloadDirectFile(url, safeTitle, config.download_path, newReq.id, hoster)
                         .then(async (success) => {
                             if (success) {
                                 await new Promise(r => setTimeout(r, 2000));
@@ -137,6 +141,7 @@ export async function POST(request: NextRequest) {
                         })
                         .catch(e => Logger.log(getErrorMessage(e), 'error'));
                 } else {
+                    Logger.log(`[Manual Request] Best match was an unsupported hoster (${hoster}). Saved to Manual Queue.`, 'warn');
                     await prisma.request.update({
                       where: { id: newReq.id },
                       data: { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: searchResult.title }

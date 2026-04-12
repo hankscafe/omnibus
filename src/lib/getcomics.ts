@@ -76,7 +76,6 @@ export const GetComicsService = {
   async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false) {
     const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
     
-    // --- NEW: Rate-Limit Throttling (2.5s Delay) ---
     Logger.log(`[GetComics] Rate-limit throttle: Delaying search for 2.5s...`, 'info');
     await new Promise(resolve => setTimeout(resolve, 2500));
 
@@ -172,17 +171,15 @@ export const GetComicsService = {
     return results.sort((a, b) => a.title.length - b.title.length);
   },
 
-  async scrapeDeepLink(articleUrl: string): Promise<{ url: string, isDirect: boolean }> {
+  async scrapeDeepLink(articleUrl: string): Promise<{ url: string, isDirect: boolean, hoster: string }> {
       try {
-          // --- NEW: Rate-Limit Throttling (2.5s Delay) ---
           Logger.log(`[GetComics] Rate-limit throttle: Delaying scrape for 2.5s...`, 'info');
           await new Promise(resolve => setTimeout(resolve, 2500));
 
           const data = await fetchGetComicsHtml(articleUrl);
           const $ = cheerio.load(data);
 
-          let bestLink: string | null = null;
-          let isDirect = false;
+          let foundLinks: { url: string, isDirect: boolean, hoster: string }[] = [];
 
           const decodeLink = (rawHref: string): string | null => {
             if (!rawHref) return null;
@@ -195,42 +192,81 @@ export const GetComicsService = {
             return rawHref; 
           };
 
+          const getHosterFromUrl = (url: string, isMainServerBtn: boolean) => {
+              if (isMainServerBtn) return 'getcomics';
+              if (url.includes('mediafire.com')) return 'mediafire';
+              if (url.includes('mega.nz') || url.includes('mega.co.nz')) return 'mega';
+              if (url.includes('pixeldrain.com')) return 'pixeldrain';
+              if (url.includes('terabox.com') || url.includes('teraboxapp.com')) return 'terabox';
+              if (url.includes('rootz')) return 'rootz';
+              if (url.includes('vikingfile')) return 'vikingfile';
+              if (url.includes('zippyshare.com')) return 'zippyshare';
+              if (url.includes('userscloud.com')) return 'userscloud';
+              return 'unknown';
+          };
+
           $('a').each((i, el) => {
               const text = $(el).text().toLowerCase();
               const titleAttr = ($(el).attr('title') || "").toLowerCase();
-              const href = $(el).attr('href') || "";
-              
-              if (!href.includes('go.php') && !text.includes('download') && !titleAttr.includes('download')) {
-                  return; 
-              }
+              const rawHref = $(el).attr('href') || "";
 
-              const decoded = decodeLink(href);
+              const decoded = decodeLink(rawHref);
               if (!decoded) return;
 
-              const isMainServer = 
-                  text.includes('main server') || titleAttr.includes('main server') || 
-                  text.includes('download now') || titleAttr.includes('download now') ||
-                  text.includes('direct download');
+              const isMainServerBtn = text.includes('main server') || titleAttr.includes('main server') || text.includes('download now') || text.includes('direct download');
               
-              const isThirdParty = decoded.includes('mediafire.com') || decoded.includes('mega.nz') || decoded.includes('zippyshare.com') || decoded.includes('userscloud.com');
+              if (isMainServerBtn && !rawHref.includes('go.php') && !decoded.match(/\.(cbz|cbr|zip)$/i)) {
+                  return;
+              }
 
-              if ((isMainServer || decoded.match(/\.(cbz|cbr|zip)$/i)) && !isThirdParty) {
-                  bestLink = decoded;
-                  isDirect = true;
-                  return false; 
-              } 
-              else if (!bestLink) {
-                  bestLink = decoded;
-                  isDirect = !isThirdParty; 
+              const hoster = getHosterFromUrl(decoded, isMainServerBtn);
+
+              if (hoster !== 'unknown') {
+                  foundLinks.push({ 
+                      url: decoded, 
+                      isDirect: hoster === 'getcomics', 
+                      hoster 
+                  });
               }
           });
 
-          if (bestLink) return { url: bestLink, isDirect };
-          return { url: articleUrl, isDirect: false };
+          if (foundLinks.length === 0) {
+              return { url: articleUrl, isDirect: false, hoster: 'unknown' };
+          }
+
+          // --- PRIORITY SORTING ---
+          const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
+          let priorityList = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox']; 
+          if (setting?.value) {
+              try { priorityList = JSON.parse(setting.value); } catch (e) {}
+          }
+
+          const foundHosterNames = [...new Set(foundLinks.map(l => l.hoster))];
+          Logger.log(`[GetComics] Found ${foundLinks.length} links. Available Hosters: ${foundHosterNames.join(', ')}`, 'info');
+
+          foundLinks.sort((a, b) => {
+              const idxA = priorityList.indexOf(a.hoster);
+              const idxB = priorityList.indexOf(b.hoster);
+              if (idxA === -1 && idxB === -1) return 0;
+              if (idxA === -1) return 1;
+              if (idxB === -1) return -1;
+              return idxA - idxB;
+          });
+
+          const selectedHoster = foundLinks[0].hoster;
+          const topPriority = priorityList[0];
+
+          if (selectedHoster !== topPriority) {
+              Logger.log(`[GetComics] Preferred hoster '${topPriority}' not found on page. Falling back to next available: '${selectedHoster}'`, 'warn');
+          } else {
+              Logger.log(`[GetComics] Successfully selected top priority hoster: ${selectedHoster}`, 'success');
+          }
+
+          return foundLinks[0];
 
       } catch (error: unknown) {
           Logger.log(`[GetComics Scrape] Failed to parse deep link: ${getErrorMessage(error)}`, 'error');
-          return { url: articleUrl, isDirect: false };
+          return { url: articleUrl, isDirect: false, hoster: 'unknown' };
       }
   }
 };

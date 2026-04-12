@@ -462,3 +462,15 @@ model AuditLog {
   @@index([userId])
   @@index([action])
 }
+
+model HosterAccount {
+  id        String   @id @default(cuid())
+  name      String
+  hoster    String   // e.g., 'mega', 'mediafire', 'pixeldrain'
+  username  String?
+  password  String?
+  apiKey    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

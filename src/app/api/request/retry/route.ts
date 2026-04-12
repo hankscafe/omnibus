@@ -1,3 +1,4 @@
+// src/app/api/request/retry/route.ts
 import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
@@ -29,7 +30,6 @@ export async function POST(request: NextRequest) {
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
         const safeTitle = (req.activeDownloadName || "comic").replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
 
-        // --- FIX: Fetch series context to define 'year' and 'isManga' for fuzzy search ---
         let year = "";
         let isManga = false;
         if (req.volumeId && req.volumeId !== "0") {
@@ -46,15 +46,16 @@ export async function POST(request: NextRequest) {
         if (req.downloadLink && req.downloadLink.includes('getcomics.org') && !req.downloadLink.match(/\.(cbz|cbr|zip)$/i)) {
             Logger.log(`[Retry] Scraping fresh link for: ${req.downloadLink}`, 'info');
             
-            const { url, isDirect } = await GetComicsService.scrapeDeepLink(req.downloadLink);
+            // --- HOSTER UPDATE: Pull hoster and pass it to Downloader ---
+            const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(req.downloadLink);
             
-            if (isDirect) {
+            if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
                 await prisma.request.update({
                     where: { id },
                     data: { status: 'DOWNLOADING', retryCount: 0, progress: 0 }
                 });
 
-                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, req.id)
+                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, req.id, hoster)
                     .then(async (success) => {
                         if (success) {
                             await new Promise(r => setTimeout(r, 2000));
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
                     })
                     .catch(() => {});
                 
-                return NextResponse.json({ success: true, message: "Fresh link found, download started." });
+                return NextResponse.json({ success: true, message: `Fresh link found via ${hoster === 'getcomics' ? 'Direct' : hoster}, download started.` });
             }
         }
 
@@ -84,7 +85,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: true });
         } 
         
-        // 3. Recovery Fuzzy Search (Uses the variables defined above)
+        // 3. Recovery Fuzzy Search
         Logger.log(`[Retry] No link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
         
         const acronyms = await getCustomAcronyms();
@@ -98,20 +99,19 @@ export async function POST(request: NextRequest) {
         
         if (results.length > 0) {
             const best = results[0];
-            const { url, isDirect } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
             
-            if (isDirect) {
-                // Variable is declared correctly here
+            // --- HOSTER UPDATE: Pull hoster and pass it to Downloader ---
+            const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+            
+            if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
                 const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
 
                 await prisma.request.update({
                     where: { id },
-                    // FIX: Changed safeSearchSearchTitle to safeSearchTitle
                     data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeSearchTitle }
                 });
 
-                // FIX: Changed safeSearchSearchTitle to safeSearchTitle
-                DownloadService.downloadDirectFile(url, safeSearchTitle, config.download_path, req.id)
+                DownloadService.downloadDirectFile(url, safeSearchTitle, config.download_path, req.id, hoster)
                     .then(async (success) => {
                         if (success) {
                             await new Promise(r => setTimeout(r, 2000));
@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
                         }
                     })
                     .catch(() => {});
-                return NextResponse.json({ success: true, message: "Link recovered and download started." });
+                return NextResponse.json({ success: true, message: `Link recovered via ${hoster === 'getcomics' ? 'Direct' : hoster} and download started.` });
             }
         }
 

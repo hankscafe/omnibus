@@ -1,3 +1,4 @@
+// src/app/api/library/match-series/route.ts
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
@@ -89,17 +90,7 @@ export async function POST(request: Request) {
     const pubDir = path.dirname(newFolderPath);
     if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
 
-    const existingOldSeries = await prisma.series.findMany({
-        where: { metadataId: targetMetaId, metadataSource: targetSource }
-    });
-
-    for (const old of existingOldSeries) {
-        await prisma.series.update({
-            where: { id: old.id },
-            data: { metadataId: `unmatched_${Math.random()}`, metadataSource: 'LOCAL' }
-        }).catch(() => {});
-    }
-
+    // --- REBUILT MERGE AND UPDATE LOGIC ---
     let existingRecord = await prisma.series.findUnique({
         where: { 
             metadataSource_metadataId: { 
@@ -109,11 +100,9 @@ export async function POST(request: Request) {
         }
     });
 
-    if (!existingRecord) {
-        existingRecord = await prisma.series.findFirst({
-            where: { folderPath: oldFolderPath }
-        });
-    }
+    const unmatchedRecord = await prisma.series.findFirst({
+        where: { folderPath: oldFolderPath }
+    });
 
     const updateData = {
         cvId: parseInt(targetMetaId), 
@@ -131,10 +120,33 @@ export async function POST(request: Request) {
     };
 
     if (existingRecord) {
-        // ... (existing issue cleanup and series update logic)
+        // A series with this CV ID already exists! Merge the unmatched folder into it.
+        if (unmatchedRecord && unmatchedRecord.id !== existingRecord.id) {
+            // Reassign all issues from the unmatched series to the matched series
+            await prisma.issue.updateMany({
+                where: { seriesId: unmatchedRecord.id },
+                data: { seriesId: existingRecord.id }
+            });
+            // Delete the now-empty unmatched series record
+            await prisma.series.delete({ where: { id: unmatchedRecord.id } }).catch(() => {});
+        }
+        
+        // Update the existing series with fresh data
+        existingRecord = await prisma.series.update({
+            where: { id: existingRecord.id },
+            data: updateData
+        });
+    } else if (unmatchedRecord) {
+        // No existing match, so we just upgrade the unmatched record
+        existingRecord = await prisma.series.update({
+            where: { id: unmatchedRecord.id },
+            data: updateData
+        });
     } else {
+        // Nothing exists, create fresh
         existingRecord = await prisma.series.create({ data: updateData });
     }
+    // ---------------------------------------
 
     DiscordNotifier.sendAlert('metadata_match', { 
         title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 

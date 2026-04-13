@@ -4,7 +4,10 @@ FROM node:22-alpine AS builder
 # Safely update npm to the latest version for the BUILD stage only
 RUN corepack enable && corepack prepare npm@latest --activate
 
-# Build-time dependencies (Upgraded to patch musl/openssl vulnerabilities)
+# Cache-busting argument (Overridden by GitHub Actions to force fresh patch pull)
+ARG CACHEBUST=1
+
+# Build-time dependencies (Standard stable repo)
 RUN apk update && apk upgrade --no-cache && \
     apk add --no-cache libc6-compat openssl
 
@@ -34,10 +37,12 @@ RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nod
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-# VITAL: Apply OS patches (Busybox Edge) in the final stage to resolve Alpine vulnerabilities
+# Cache-busting argument for the final stage
+ARG CACHEBUST=1
+
+# Apply OS patches (Standard stable repo)
 RUN apk update && apk upgrade --no-cache && \
-    apk add --no-cache busybox --repository=http://dl-cdn.alpinelinux.org/alpine/edge/main && \
-    apk add --no-cache libc6-compat openssl
+    apk add --no-cache busybox libc6-compat openssl
 
 # --- THE CLEANUP CRUSHER ---
 # Omnibus runs via 'node server.js'. It does NOT need npm at runtime.

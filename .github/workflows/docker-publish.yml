@@ -94,6 +94,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            CACHEBUST=${{ github.run_id }}
 
       # Automatically sync the README-docker.md to Docker Hub
       - name: Update Docker Hub Description

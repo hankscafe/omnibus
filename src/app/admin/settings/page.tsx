@@ -98,10 +98,12 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState("comicvine")
+  
+  // Start on the consolidated Metadata tab
+  const [activeTab, setActiveTab] = useState("metadata")
   
   const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean, text: string } | null }>({
-    comicvine: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null, flaresolverr: null
+    comicvine: null, metron: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null, flaresolverr: null
   })
   
   const [refreshing, setRefreshing] = useState(false)
@@ -119,7 +121,15 @@ export default function SettingsPage() {
   
   // Hoster States
   const [configuredHosters, setConfiguredHosters] = useState<HosterAccountConfig[]>([])
-  const [hosterPriority, setHosterPriority] = useState<string[]>(['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'])
+  const [hosterPriority, setHosterPriority] = useState<{hoster: string, enabled: boolean}[]>([
+      { hoster: 'mediafire', enabled: true },
+      { hoster: 'getcomics', enabled: true },
+      { hoster: 'mega', enabled: true },
+      { hoster: 'pixeldrain', enabled: true },
+      { hoster: 'rootz', enabled: true },
+      { hoster: 'vikingfile', enabled: true },
+      { hoster: 'terabox', enabled: true }
+  ])
   const [hosterModalOpen, setHosterModalOpen] = useState(false)
   const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null)
 
@@ -148,6 +158,7 @@ export default function SettingsPage() {
   
   const [config, setConfig] = useState<any>({
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", cv_api_key: "",
+    metron_user: "", metron_pass: "", // Included Metron state
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     download_retry_delay: "5", 
@@ -162,7 +173,6 @@ export default function SettingsPage() {
   const [unsavedModalOpen, setUnsavedModalOpen] = useState(false)
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null)
 
-  // Generate a hash of the current interactive settings to compare against the baseline
   const currentStateString = JSON.stringify({
       config, configuredLibraries, configuredIndexers, configuredClients,
       configuredHosters, configuredWebhooks, customHeaders, customAcronyms, hosterPriority
@@ -171,13 +181,11 @@ export default function SettingsPage() {
   const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
 
   useEffect(() => {
-      // Capture the baseline state exactly once after initial data fetch is fully settled
       if (isDataLoaded && initialStateHash === "") {
           setInitialStateHash(currentStateString);
       }
   }, [isDataLoaded, currentStateString, initialStateHash]);
 
-  // 1. Browser Tab Close/Refresh Guard
   useEffect(() => {
       const handleBeforeUnload = (e: BeforeUnloadEvent) => {
           if (hasUnsavedChanges) {
@@ -189,22 +197,15 @@ export default function SettingsPage() {
       return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
 
-  // 2. Next.js Internal Link Interceptor
   useEffect(() => {
       const handleClick = (e: MouseEvent) => {
           if (!hasUnsavedChanges) return;
-          
           const target = e.target as HTMLElement;
           const anchor = target.closest('a');
-          
           if (anchor && anchor.href) {
               const url = new URL(anchor.href);
-              
-              // If it's an internal link navigating away from the Settings page
               if (url.origin === window.location.origin && url.pathname !== window.location.pathname) {
-                  // Allow native downloads or new tabs to process normally
                   if (anchor.hasAttribute('download') || anchor.target === '_blank') return;
-                  
                   e.preventDefault();
                   e.stopPropagation();
                   setPendingNavigation(url.pathname + url.search);
@@ -212,13 +213,10 @@ export default function SettingsPage() {
               }
           }
       };
-      
-      // Capture phase guarantees we intercept the click before Next.js Link routing executes
       document.addEventListener('click', handleClick, { capture: true });
       return () => document.removeEventListener('click', handleClick, { capture: true });
   }, [hasUnsavedChanges]);
 
-  // --- Helper for Client Editing ---
   const updateEditingClient = (key: string, value: any) => {
     setEditingClient((prev: any) => ({ ...prev, [key]: value }));
     if (testResults['clients'] !== null) {
@@ -263,14 +261,27 @@ export default function SettingsPage() {
             });
 
             const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
-            const defaultHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'];
+            const defaultHosters = [
+                { hoster: 'mediafire', enabled: true },
+                { hoster: 'getcomics', enabled: true },
+                { hoster: 'mega', enabled: true },
+                { hoster: 'pixeldrain', enabled: true },
+                { hoster: 'rootz', enabled: true },
+                { hoster: 'vikingfile', enabled: true },
+                { hoster: 'terabox', enabled: true }
+            ];
             
             if (hpSetting?.value) {
                 try { 
                     const savedHosters = JSON.parse(hpSetting.value);
-                    const mergedHosters = [...savedHosters];
-                    defaultHosters.forEach(h => {
-                        if (!mergedHosters.includes(h)) mergedHosters.push(h);
+                    let mergedHosters: any[] = [];
+                    if (savedHosters.length > 0 && typeof savedHosters[0] === 'string') {
+                        mergedHosters = savedHosters.map((h: string) => ({ hoster: h, enabled: true }));
+                    } else {
+                        mergedHosters = [...savedHosters];
+                    }
+                    defaultHosters.forEach(dh => {
+                        if (!mergedHosters.some(mh => mh.hoster === dh.hoster)) mergedHosters.push(dh);
                     });
                     setHosterPriority(mergedHosters); 
                 } catch(e) {
@@ -285,8 +296,6 @@ export default function SettingsPage() {
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
         
         setConfig(newConfig);
-
-        // Allow React state updates to completely flush and settle before capturing the clean baseline hash
         setTimeout(() => setIsDataLoaded(true), 500);
     })
 
@@ -338,9 +347,7 @@ export default function SettingsPage() {
         })
         
         if (res.ok) {
-            // Reset the dirty state tracking so the warning disappears
             setInitialStateHash(currentStateString);
-            
             toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
             fetch('/api/admin/jobs/trigger', {
                 method: 'POST',
@@ -379,6 +386,12 @@ export default function SettingsPage() {
       setHosterPriority(newPriority);
   }
 
+  const toggleHosterEnabled = (index: number) => {
+      const newPriority = [...hosterPriority];
+      newPriority[index].enabled = !newPriority[index].enabled;
+      setHosterPriority(newPriority);
+  }
+
   const openHosterSetup = (hosterName: string) => {
       setEditingHoster({
           id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
@@ -405,7 +418,6 @@ export default function SettingsPage() {
       toast({ title: "Account Removed" });
   }
 
-  // --- Other Methods ---
   const applyRecommendedFilters = () => {
       setConfig((prev: any) => ({
           ...prev,
@@ -668,7 +680,7 @@ export default function SettingsPage() {
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full space-y-6">
         
         <TabsList className="flex w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] h-auto bg-muted border border-border gap-1 p-1 justify-start lg:justify-center">
-          <TabsTrigger value="comicvine" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">ComicVine</TabsTrigger>
+          <TabsTrigger value="metadata" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Metadata</TabsTrigger>
           <TabsTrigger value="indexers" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Indexers</TabsTrigger>
           <TabsTrigger value="clients" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Clients</TabsTrigger>
           <TabsTrigger value="hosters" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">File Hosters</TabsTrigger>
@@ -680,24 +692,51 @@ export default function SettingsPage() {
           <TabsTrigger value="sso" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">SSO</TabsTrigger>
         </TabsList>
 
-        {/* 1. COMICVINE */}
-        <TabsContent value="comicvine">
+        {/* 1. METADATA PROVIDERS */}
+        <TabsContent value="metadata">
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-foreground"><Key className="w-5 h-5 text-primary" /> ComicVine Integration</CardTitle>
-                    <CardDescription className="text-muted-foreground">ComicVine is the primary source of metadata for Omnibus. It provides high-resolution covers, series descriptions, and release dates.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Database className="w-5 h-5 text-primary" /> Metadata Providers</CardTitle>
+                    <CardDescription className="text-muted-foreground">Configure the sources used to automatically pull covers, synopses, and creator credits for your library.</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="grid gap-2">
-                        <Label className="text-foreground font-semibold">ComicVine API Key</Label>
-                        <Input type="password" value={config.cv_api_key || ""} onChange={(e) => setConfig({...config, cv_api_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
+                <CardContent className="space-y-8">
+                    
+                    <div className="space-y-4">
+                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2 border-b border-border pb-2"><Key className="w-4 h-4 text-primary" /> ComicVine Integration</h3>
+                        <div className="grid gap-2">
+                            <Label className="text-foreground font-semibold">ComicVine API Key <span className="text-red-500">*</span></Label>
+                            <Input type="password" value={config.cv_api_key || ""} onChange={(e) => setConfig({...config, cv_api_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
+                        </div>
+                        <p className="text-[0.8rem] text-muted-foreground">Get your free API Key from <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80 transition-colors">ComicVine.com/api</a>.</p>
+                        
+                        <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('comicvine')} disabled={!!testing}>
+                            {testing === 'comicvine' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
+                        </Button>
+                        <StatusBox result={testResults.comicvine} />
                     </div>
-                    <p className="text-[0.8rem] text-muted-foreground">Get your free API Key from <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80 transition-colors">ComicVine.com/api</a>.</p>
-                    <div className="border-t border-border my-4" />
-                    <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('comicvine')} disabled={!!testing}>
-                        {testing === 'comicvine' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
-                    </Button>
-                    <StatusBox result={testResults.comicvine} />
+
+                    <div className="space-y-4 pt-4">
+                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2 border-b border-border pb-2"><Database className="w-4 h-4 text-primary" /> Metron.Cloud Integration (Optional)</h3>
+                        <p className="text-[0.8rem] text-muted-foreground">Metron is an open-source alternative to ComicVine.</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid gap-2">
+                                <Label className="text-foreground font-semibold">Metron Username</Label>
+                                <Input value={config.metron_user || ""} onChange={(e) => setConfig({...config, metron_user: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
+                            </div>
+                            <div className="grid gap-2">
+                                <Label className="text-foreground font-semibold">Metron Password</Label>
+                                <Input type="password" value={config.metron_pass || ""} onChange={(e) => setConfig({...config, metron_pass: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
+                            </div>
+                        </div>
+                        
+                        {/* --- NEW METRON TEST BUTTON --- */}
+                        <div className="border-t border-border my-4" />
+                        <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('metron')} disabled={!!testing}>
+                            {testing === 'metron' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
+                        </Button>
+                        <StatusBox result={testResults.metron} />
+                    </div>
+
                 </CardContent>
             </Card>
         </TabsContent>
@@ -846,7 +885,7 @@ export default function SettingsPage() {
             </Card>
         </TabsContent>
 
-        {/* 3.5 FILE HOSTERS (NEW) */}
+        {/* 3.5 FILE HOSTERS */}
         <TabsContent value="hosters">
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
@@ -858,22 +897,36 @@ export default function SettingsPage() {
                     {/* Priority List */}
                     <div className="space-y-4">
                         <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Hoster Priority</h3>
-                        <p className="text-xs text-muted-foreground">If multiple hosters are available for a comic, Omnibus will prioritize them in this order.</p>
+                        <p className="text-xs text-muted-foreground">If multiple hosters are available for a comic, Omnibus will prioritize them in this order. You can also disable hosters you do not want to use.</p>
                         
                         <div className="border border-border rounded-lg bg-muted/20 p-2 space-y-1">
-                            {hosterPriority.map((hoster, idx) => (
-                                <div key={hoster} className="flex items-center justify-between p-3 bg-background border border-border rounded shadow-sm">
+                            {hosterPriority.map((item, idx) => (
+                                <div key={item.hoster} className={`flex items-center justify-between p-3 bg-background border border-border rounded shadow-sm transition-opacity ${!item.enabled ? 'opacity-50' : ''}`}>
                                     <div className="flex items-center gap-3">
                                         <Badge variant="secondary" className="font-mono text-[10px] w-6 justify-center bg-muted">{idx + 1}</Badge>
-                                        <span className="font-bold text-foreground">{hosterDisplayNames[hoster] || hoster}</span>
+                                        <span className={`font-bold ${!item.enabled ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                                            {hosterDisplayNames[item.hoster] || item.hoster}
+                                        </span>
                                     </div>
-                                    <div className="flex items-center gap-1">
-                                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === 0} onClick={() => moveHosterPriority(idx, -1)}>
-                                            <ArrowUp className="w-4 h-4" />
-                                        </Button>
-                                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === hosterPriority.length - 1} onClick={() => moveHosterPriority(idx, 1)}>
-                                            <ArrowDown className="w-4 h-4" />
-                                        </Button>
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-2 mr-2 sm:border-r sm:border-border sm:pr-3">
+                                            <Switch 
+                                                checked={item.enabled} 
+                                                onCheckedChange={() => toggleHosterEnabled(idx)} 
+                                                className="scale-90 sm:scale-100"
+                                            />
+                                            <Label className="text-xs font-bold cursor-pointer hidden sm:block" onClick={() => toggleHosterEnabled(idx)}>
+                                                {item.enabled ? "Enabled" : "Disabled"}
+                                            </Label>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === 0} onClick={() => moveHosterPriority(idx, -1)}>
+                                                <ArrowUp className="w-4 h-4" />
+                                            </Button>
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === hosterPriority.length - 1} onClick={() => moveHosterPriority(idx, 1)}>
+                                                <ArrowDown className="w-4 h-4" />
+                                            </Button>
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -1419,7 +1472,6 @@ export default function SettingsPage() {
                         Configure an SMTP server to send email notifications for approvals and fulfilled requests.
                       </CardDescription>
                   </div>
-                  {/* --- NEW BUTTON --- */}
                   <Button variant="outline" size="sm" asChild className="h-12 sm:h-9 font-bold border-border hover:bg-muted text-foreground transition-colors w-full sm:w-auto">
                       <Link href="/admin/email-templates">
                           <FileEdit className="w-4 h-4 mr-2 text-primary" /> Customize Templates
@@ -1584,7 +1636,7 @@ export default function SettingsPage() {
 
                     {generatedKey && (
                         <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 mt-4 animate-in fade-in slide-in-from-top-2 w-full">
-                            <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><X className="w-4 h-4"/></button>
+                            <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><XCircle className="w-4 h-4"/></button>
                             <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won't be shown again.</span></p>
                             <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2 w-full">
                                 <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800 text-[11px] sm:text-xs select-all w-full min-w-0 break-all">

@@ -170,6 +170,7 @@ export const Importer = {
                     data: {
                         metadataId: data.id.toString(),
                         metadataSource: 'COMICVINE',
+                        matchState: 'MATCHED',
                         name: data.name,
                         year: parseInt(data.start_year) || 0,
                         publisher: data.publisher?.name || "Other",
@@ -374,8 +375,10 @@ export const Importer = {
              where: { seriesId: series.id, number: issueNum }
          });
 
-         const targetMetaId = xmlMeta?.cvId ? xmlMeta.cvId.toString() : `unmatched_${Math.random()}`;
-         const targetMetaSource = xmlMeta?.cvId ? 'COMICVINE' : 'LOCAL';
+         // --- CRITICAL FIX: Ensure the correct Match State and cvIssueId are injected! ---
+         const targetMetaId = xmlMeta?.cvIssueId ? xmlMeta.cvIssueId.toString() : `unmatched_${Math.random()}`;
+         const targetMetaSource = xmlMeta?.cvIssueId ? 'COMICVINE' : 'LOCAL';
+         const matchState = xmlMeta?.cvIssueId ? 'MATCHED' : 'UNMATCHED';
 
          if (existingIssue) {
              await prisma.issue.update({
@@ -389,6 +392,9 @@ export const Importer = {
                      writers: existingIssue.writers && existingIssue.writers !== "[]" ? existingIssue.writers : writersStr,
                      artists: existingIssue.artists && existingIssue.artists !== "[]" ? existingIssue.artists : artistsStr,
                      characters: existingIssue.characters && existingIssue.characters !== "[]" ? existingIssue.characters : charsStr,
+                     metadataId: existingIssue.metadataId?.startsWith('unmatched') ? targetMetaId : existingIssue.metadataId,
+                     metadataSource: existingIssue.metadataSource === 'LOCAL' ? targetMetaSource : existingIssue.metadataSource,
+                     matchState: existingIssue.matchState === 'UNMATCHED' ? matchState : existingIssue.matchState
                  }
              });
          } else {
@@ -397,6 +403,7 @@ export const Importer = {
                      seriesId: series.id, 
                      metadataId: targetMetaId,
                      metadataSource: targetMetaSource,
+                     matchState: matchState,
                      number: issueNum, 
                      status: 'DOWNLOADED', 
                      filePath: finalPath, 
@@ -427,7 +434,6 @@ export const Importer = {
           Logger.log(`[Importer] Metadata sync failed: ${syncErr.message}`, "warn");
       }
 
-      // FIX: Set notified to false so the user gets a fresh Bell alert that their request has completed
       await prisma.request.update({
         where: { id: requestId },
         data: { status: 'COMPLETED', progress: 100, notified: false }

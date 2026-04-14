@@ -1,3 +1,4 @@
+// src/app/api/library/update/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -5,6 +6,7 @@ import path from 'path';
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { omnibusQueue } from '@/lib/queue'; // <-- NEW
 
 export async function POST(request: Request) {
   try {
@@ -74,7 +76,6 @@ export async function POST(request: Request) {
                 folderPath: activePath,
                 monitored: parsedMonitored,
                 isManga: parsedIsManga, 
-                // --- SCHEMA FIX: Map updated IDs stringly ---
                 metadataId: parsedCvId !== null ? parsedCvId.toString() : existingRecord.metadataId,
                 metadataSource: 'COMICVINE',
                 libraryId: targetLib.id
@@ -101,8 +102,15 @@ export async function POST(request: Request) {
             }
         }
 
+        // --- NEW: Trigger instant XML embedding to reflect these manual changes ---
+        try {
+            await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: existingRecord.id }, {
+                jobId: `EMBED_META_${existingRecord.id}_${Date.now()}`
+            });
+            Logger.log(`[Metadata] Queued XML injection for manually edited series: ${cleanName}`, 'info');
+        } catch (e) {}
+
     } else if (parsedCvId) {
-        // --- SCHEMA FIX: Use the compound key ---
         await prisma.series.upsert({
             where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: parsedCvId.toString() } },
             update: {
@@ -110,7 +118,7 @@ export async function POST(request: Request) {
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
             },
             create: {
-                metadataId: parsedCvId.toString(), metadataSource: 'COMICVINE', name: cleanName, year: parsedYear, publisher: publisher || null,
+                metadataId: parsedCvId.toString(), metadataSource: 'COMICVINE', matchState: 'MATCHED', name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
             }
         });

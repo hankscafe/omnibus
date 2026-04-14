@@ -230,19 +230,40 @@ export const GetComicsService = {
               }
           });
 
+          // --- PRIORITY SORTING & FILTERING ---
+          const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
+          let priorityList = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'];
+          let disabledHosters: string[] = [];
+
+          if (setting?.value) {
+              try {
+                  const parsed = JSON.parse(setting.value);
+                  if (parsed.length > 0) {
+                      if (typeof parsed[0] === 'string') {
+                          priorityList = parsed;
+                      } else if (typeof parsed[0] === 'object') {
+                          priorityList = parsed.map((p: any) => p.hoster);
+                          disabledHosters = parsed.filter((p: any) => !p.enabled).map((p: any) => p.hoster);
+                      }
+                  }
+              } catch (e) {}
+          }
+
+          // Filter out disabled hosters FIRST
+          if (disabledHosters.length > 0) {
+              const beforeCount = foundLinks.length;
+              foundLinks = foundLinks.filter(l => !disabledHosters.includes(l.hoster));
+              if (foundLinks.length < beforeCount) {
+                  Logger.log(`[GetComics] Ignored ${beforeCount - foundLinks.length} links from disabled hosters.`, 'info');
+              }
+          }
+
           if (foundLinks.length === 0) {
               return { url: articleUrl, isDirect: false, hoster: 'unknown' };
           }
 
-          // --- PRIORITY SORTING ---
-          const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
-          let priorityList = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox']; 
-          if (setting?.value) {
-              try { priorityList = JSON.parse(setting.value); } catch (e) {}
-          }
-
           const foundHosterNames = [...new Set(foundLinks.map(l => l.hoster))];
-          Logger.log(`[GetComics] Found ${foundLinks.length} links. Available Hosters: ${foundHosterNames.join(', ')}`, 'info');
+          Logger.log(`[GetComics] Found ${foundLinks.length} valid links. Available Hosters: ${foundHosterNames.join(', ')}`, 'info');
 
           foundLinks.sort((a, b) => {
               const idxA = priorityList.indexOf(a.hoster);
@@ -254,10 +275,10 @@ export const GetComicsService = {
           });
 
           const selectedHoster = foundLinks[0].hoster;
-          const topPriority = priorityList[0];
+          const topPriority = priorityList.filter(h => !disabledHosters.includes(h))[0];
 
           if (selectedHoster !== topPriority) {
-              Logger.log(`[GetComics] Preferred hoster '${topPriority}' not found on page. Falling back to next available: '${selectedHoster}'`, 'warn');
+              Logger.log(`[GetComics] Preferred hoster '${topPriority}' not found. Falling back to next available: '${selectedHoster}'`, 'warn');
           } else {
               Logger.log(`[GetComics] Successfully selected top priority hoster: ${selectedHoster}`, 'success');
           }

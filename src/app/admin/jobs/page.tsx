@@ -252,7 +252,7 @@ export default function ScheduledJobsPage() {
         <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
             <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg text-foreground"><RefreshCw className="w-5 h-5 text-primary" /> Deep Metadata Sync</CardTitle>
-                <CardDescription className="text-muted-foreground">Re-syncs series with ComicVine to update covers and info.</CardDescription>
+                <CardDescription className="text-muted-foreground">Re-syncs series with ComicVine or Metron to update covers and info.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
                 <Select value={metadataSyncSchedule} onValueChange={setMetadataSyncSchedule}>

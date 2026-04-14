@@ -1,3 +1,4 @@
+// src/app/api/search/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -6,7 +7,7 @@ import { prisma } from '@/lib/db';
 import { ComicVineVolume, FormattedSearchResult } from '@/types'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { MangaDexProvider } from '@/lib/metadata/providers/mangadex';
+import { MetronProvider } from '@/lib/metadata/providers/metron';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -23,16 +24,16 @@ export async function GET(request: Request) {
   }
 
   try {
-    if (provider === 'MANGADEX') {
-        const md = new MangaDexProvider();
-        const mdResults = await md.searchSeries(query);
-        const results = mdResults.map(r => ({
+    if (provider === 'METRON') {
+        const metron = new MetronProvider();
+        const mdResults = await metron.searchSeries(query);
+        const results = mdResults.map((r: any) => ({
             id: r.sourceId,
             name: r.name,
             year: r.year,
             publisher: r.publisher,
             count: 0,
-            image: r.coverUrl ? `/api/library/cover?path=${encodeURIComponent(r.coverUrl)}` : null, // FIX
+            image: r.coverUrl ? `/api/library/cover?path=${encodeURIComponent(r.coverUrl)}` : null, 
             description: r.description || "No description available."
         }));
         return NextResponse.json({ results, hasMore: false }); 
@@ -64,7 +65,6 @@ export async function GET(request: Request) {
          if (desc.length > 500) desc = desc.substring(0, 500) + '...';
       }
 
-      // --- FIX: Proxies external ComicVine image immediately ---
       const rawImage = vol.image?.medium_url || vol.image?.small_url || vol.image?.super_url || null;
 
       return {

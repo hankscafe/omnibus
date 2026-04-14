@@ -255,10 +255,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'ComicVine Connected!' });
     }
 
+    // --- METRON.CLOUD ---
+    if (type === 'metron') {
+      const user = config.metron_user;
+      const pass = await getRealValue('metron_pass', config.metron_pass);
+
+      if (!user || !pass) return NextResponse.json({ success: false, message: 'Missing Username or Password' });
+      
+      await axios.get(`https://metron.cloud/api/series/`, {
+        auth: { username: user, password: pass },
+        timeout: 10000
+      });
+      return NextResponse.json({ success: true, message: 'Metron.Cloud Connected!' });
+    }
+
     return NextResponse.json({ success: false, message: 'Unknown test type' });
 
   } catch (error: unknown) {
     const msg = getErrorMessage(error) || "Connection Failed";
+    // Check for specific Metron 401 Unauthorized
+    if ((error as any)?.response?.status === 401 && type === 'metron') {
+        return NextResponse.json({ success: false, message: "Invalid Metron.Cloud credentials.", code: "UNAUTHORIZED" });
+    }
     return NextResponse.json({ success: false, message: msg, code: "CONNECTION_ERROR" });
   }
 }

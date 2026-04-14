@@ -361,22 +361,41 @@ export function initWorker() {
                 case 'METADATA_SYNC': {
                     await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
                     const { syncSeriesMetadata } = await import('@/lib/metadata-fetcher');
-                    const allSeries = await prisma.series.findMany({ where: { metadataId: { not: null } } });
+                    
+                    const seriesToSync = await prisma.series.findMany({ 
+                        where: { metadataId: { not: null } },
+                        orderBy: { updatedAt: 'asc' }, 
+                        take: 50 
+                    });
 
                     let successCount = 0;
                     let failCount = 0;
-                    let details = `Started Manual Metadata Sync for ${allSeries.length} series.\n\n`;
+                    let details = `Started Background Metadata Sync for ${seriesToSync.length} series (Chunked to prevent API bans).\n\n`;
 
-                    for (const series of allSeries) {
+                    for (const series of seriesToSync) {
                         try {
                             if (!series.metadataId) continue;
                             await syncSeriesMetadata(series.metadataId, series.folderPath, series.metadataSource);
+                            
+                            await prisma.series.update({
+                                where: { id: series.id },
+                                data: { updatedAt: new Date() }
+                            });
+
                             successCount++;
                             details += `[OK] Synced: ${series.name}\n`;
+                            
+                            await new Promise(r => setTimeout(r, 4000));
                         } catch (e: any) {
                             failCount++;
                             details += `[FAIL] ${series.name} - ${e.message}\n`;
-                            await prisma.jobLog.create({ data: { jobType: 'METADATA_SYNC', status: 'FAILED', relatedItem: series.name, message: e.message } });
+                            
+                            await prisma.series.update({
+                                where: { id: series.id },
+                                data: { updatedAt: new Date() }
+                            });
+
+                            await new Promise(r => setTimeout(r, 4000));
                         }
                     }
 
@@ -396,8 +415,22 @@ export function initWorker() {
                     await prisma.systemSetting.upsert({ where: { key: 'last_embed_sync' }, update: { value: nowStr }, create: { key: 'last_embed_sync', value: nowStr } });
                     const { writeComicInfo } = await import('@/lib/metadata-writer');
                     
+                    const whereClause: any = { 
+                        filePath: { endsWith: '.cbz' }
+                    };
+                    
+                    // Allow explicit targeting (which bypasses the metadata source requirement)
+                    if (job.data.seriesId) {
+                        whereClause.seriesId = job.data.seriesId;
+                    } else if (job.data.issueIds && Array.isArray(job.data.issueIds)) {
+                        whereClause.id = { in: job.data.issueIds };
+                    } else {
+                        // For general scheduled sweeps, only process matched sources
+                        whereClause.series = { metadataSource: { in: ['COMICVINE', 'METRON'] } };
+                    }
+
                     const issues = await prisma.issue.findMany({
-                        where: { filePath: { endsWith: '.cbz' }, series: { metadataSource: 'COMICVINE' } }
+                        where: whereClause
                     });
 
                     let successCount = 0;
@@ -432,7 +465,7 @@ export function initWorker() {
                     });
                     const monitoredCvIds = monitoredSeries.filter(s => s.metadataSource === 'COMICVINE' && s.metadataId).map(s => parseInt(s.metadataId!));
 
-                    const allRequests = await prisma.request.findMany(); // Fetch all requests to check for duplicates
+                    const allRequests = await prisma.request.findMany(); 
 
                     const unreleasedRequests = allRequests.filter(r => r.status === 'UNRELEASED');
                     const unreleasedVolumeIds = unreleasedRequests.map(r => parseInt(r.volumeId)).filter(id => !isNaN(id));
@@ -455,7 +488,6 @@ export function initWorker() {
                             const seriesYear = seriesRecord?.year?.toString() || new Date().getFullYear().toString();
                             const isManga = seriesRecord ? (seriesRecord as any).isManga : false;
 
-                            // Fetch CV Issues for this volume
                             const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
                                 params: { 
                                     api_key: cvApiKey, format: 'json', filter: `volume:${cvId}`, 
@@ -471,7 +503,6 @@ export function initWorker() {
                                 const cvNum = parseFloat(cvIssue.issue_number);
                                 if (isNaN(cvNum)) continue;
 
-                                // 1. DATABASE CHECK: Does this specific number exist in the library?
                                 const alreadyInLibrary = seriesRecord?.issues.some(i => 
                                     parseFloat(i.number) === cvNum && i.filePath && i.filePath.length > 0
                                 );
@@ -479,7 +510,6 @@ export function initWorker() {
 
                                 const searchName = `${seriesName} #${cvIssue.issue_number}`;
                                 
-                                // 2. REQUEST CHECK: Is there already a request (Pending or Downloading) for this number?
                                 const alreadyReq = allRequests.find(r => {
                                     if (r.volumeId !== cvId.toString()) return false;
                                     if (r.activeDownloadName === searchName) return true;
@@ -492,7 +522,6 @@ export function initWorker() {
                                 const issueYear = (cvIssue.store_date || cvIssue.cover_date || seriesYear).split('-')[0];
 
                                 if (alreadyReq) {
-                                    // If it was UNRELEASED and is now out, upgrade it
                                     if (alreadyReq.status === 'UNRELEASED' && isReleased) {
                                         details += `[UPGRADE] ${searchName} is now released. Triggering search...\n`;
                                         await prisma.request.update({ where: { id: alreadyReq.id }, data: { status: 'PENDING' } });
@@ -502,7 +531,6 @@ export function initWorker() {
                                     continue; 
                                 }
 
-                                // 3. MONITOR NEW ISSUE: Only create if definitively not in Library or Requests
                                 if (isMonitored) {
                                     const issueStatus = isReleased ? 'PENDING' : 'UNRELEASED';
                                     details += `[NEW] Found ${cvIssue.issue_number} (${issueStatus}): ${searchName}\n`;
@@ -685,7 +713,6 @@ export function initWorker() {
 
                     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
                     
-                    // 1. Fetch potential candidates based on DB creation
                     const candidateIssues = await prisma.issue.findMany({
                         where: { createdAt: { gte: sevenDaysAgo }, filePath: { not: null } },
                         include: { series: true },
@@ -699,17 +726,13 @@ export function initWorker() {
                         break;
                     }
 
-                    // 2. Relational Database Ledger tracking
-                    // Clean up history older than 14 days to prevent infinite table growth
                     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
                     await prisma.digestHistory.deleteMany({
                         where: { sentAt: { lt: fourteenDaysAgo } }
                     });
 
-                    // Purge the old, slow JSON string setting if it exists from the previous implementation
                     await prisma.systemSetting.deleteMany({ where: { key: 'weekly_digest_history' } });
 
-                    // Fetch the remaining ledger
                     const digestHistory = await prisma.digestHistory.findMany({
                         select: { seriesId: true, issueNum: true }
                     });
@@ -759,7 +782,6 @@ export function initWorker() {
                         targetMap[sId].issues.push(issueTag);
                     }
 
-                    // Format numbers sequentially and CAP at 15 per series
                     const formatIssueList = (issuesArr: string[]) => {
                         let sorted = [...new Set(issuesArr)].sort((a: any, b: any) => parseFloat(a.replace('#','')) - parseFloat(b.replace('#','')));
                         if (sorted.length > 15) {
@@ -773,7 +795,6 @@ export function initWorker() {
                     for (const s in comicsMap) { comicsMap[s].issues = formatIssueList(comicsMap[s].issues); }
                     for (const s in mangaMap) { mangaMap[s].issues = formatIssueList(mangaMap[s].issues); }
 
-                    // Cap the entire digest to 15 series to avoid Gmail rejecting massive emails
                     const MAX_DIGEST_SERIES = 15;
                     let finalComics = Object.values(comicsMap);
                     let finalManga = Object.values(mangaMap);
@@ -793,13 +814,11 @@ export function initWorker() {
                     if (toEmails.length > 0) {
                         await Mailer.sendWeeklyDigest(toEmails, finalComics, finalManga);
                         
-                        // Save the new items to the database ledger
-                        // SQLite doesn't support skipDuplicates in createMany, so we loop and catch collisions
                         if (recordsToSave.length > 0) {
                             for (const record of recordsToSave) {
                                 await prisma.digestHistory.create({
                                     data: record
-                                }).catch(() => {}); // Safely ignore if it was already inserted
+                                }).catch(() => {}); 
                             }
                         }
                     }
@@ -835,7 +854,6 @@ export function initWorker() {
         Logger.log(`[BullMQ] Job ${job?.id} (${job?.data.type}) failed: ${err.message}`, "error");
     });
 
-    // 5. Cache the worker
     if (process.env.NODE_ENV !== 'production') {
         globalForMQ.omnibusWorker = worker;
     }

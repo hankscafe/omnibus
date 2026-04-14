@@ -9,7 +9,7 @@ import { detectManga } from '@/lib/manga-detector';
 import { DiscordNotifier } from '@/lib/discord'; 
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger'; 
-import { MangaDexProvider } from '@/lib/metadata/providers/mangadex';
+import { MetronProvider } from '@/lib/metadata/providers/metron';
 
 export async function POST(request: Request) {
   try {
@@ -38,9 +38,9 @@ export async function POST(request: Request) {
     let status = 'Ongoing'; 
     
     try {
-        if (targetSource === 'MANGADEX') {
-            const md = new MangaDexProvider();
-            const details = await md.getSeriesDetails(targetMetaId);
+        if (targetSource === 'METRON') {
+            const metron = new MetronProvider();
+            const details = await metron.getSeriesDetails(targetMetaId);
             if (!realPublisher) realPublisher = details.publisher;
             if (!realName) realName = details.name;
             if (!realYear) realYear = details.year;
@@ -105,7 +105,7 @@ export async function POST(request: Request) {
     });
 
     const updateData = {
-        cvId: parseInt(targetMetaId), 
+        cvId: targetSource === 'COMICVINE' ? parseInt(targetMetaId) : null, 
         metadataId: targetMetaId,
         metadataSource: targetSource,
         matchState: 'MATCHED',
@@ -120,33 +120,26 @@ export async function POST(request: Request) {
     };
 
     if (existingRecord) {
-        // A series with this CV ID already exists! Merge the unmatched folder into it.
         if (unmatchedRecord && unmatchedRecord.id !== existingRecord.id) {
-            // Reassign all issues from the unmatched series to the matched series
             await prisma.issue.updateMany({
                 where: { seriesId: unmatchedRecord.id },
                 data: { seriesId: existingRecord.id }
             });
-            // Delete the now-empty unmatched series record
             await prisma.series.delete({ where: { id: unmatchedRecord.id } }).catch(() => {});
         }
         
-        // Update the existing series with fresh data
         existingRecord = await prisma.series.update({
             where: { id: existingRecord.id },
             data: updateData
         });
     } else if (unmatchedRecord) {
-        // No existing match, so we just upgrade the unmatched record
         existingRecord = await prisma.series.update({
             where: { id: unmatchedRecord.id },
             data: updateData
         });
     } else {
-        // Nothing exists, create fresh
         existingRecord = await prisma.series.create({ data: updateData });
     }
-    // ---------------------------------------
 
     DiscordNotifier.sendAlert('metadata_match', { 
         title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 

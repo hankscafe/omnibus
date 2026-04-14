@@ -13,7 +13,8 @@ const SENSITIVE_KEYS = [
     'oidc_client_secret', 
     'discord_webhooks', 
     'omnibus_api_key',  
-    'smtp_pass'         
+    'smtp_pass',
+    'metron_pass' // <-- ADDED: Securely hide Metron Password
 ];
 
 export async function GET(request: Request) {
@@ -43,7 +44,6 @@ export async function GET(request: Request) {
       apiKey: c.apiKey ? '********' : null
   }));
 
-  // --- NEW: Fetch and obfuscate Hoster Accounts ---
   const rawHosters = await prisma.hosterAccount.findMany();
   const hosterAccounts = rawHosters.map(h => ({
       ...h,
@@ -72,7 +72,7 @@ export async function GET(request: Request) {
       settings,
       libraries,
       downloadClients: clients,
-      hosterAccounts, // <-- Injected
+      hosterAccounts, 
       discordWebhooks: webhooks,
       indexers,
       customHeaders: headers,
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
         settings,
         libraries, 
         downloadClients, 
-        hosterAccounts, // <-- Destructured
+        hosterAccounts, 
         discordWebhooks,
         indexers, 
         customHeaders, 
@@ -168,7 +168,7 @@ export async function POST(request: Request) {
 
         if (libraries) await syncTable(tx.library, libraries);
         if (downloadClients) await syncTable(tx.downloadClient, downloadClients);
-        if (hosterAccounts) await syncTable(tx.hosterAccount, hosterAccounts); // <-- Synced
+        if (hosterAccounts) await syncTable(tx.hosterAccount, hosterAccounts); 
         if (indexers) await syncTable(tx.indexer, indexers);
         if (customHeaders) await syncTable(tx.customHeader, customHeaders);
         if (searchAcronyms) await syncTable(tx.searchAcronym, searchAcronyms, 'key');

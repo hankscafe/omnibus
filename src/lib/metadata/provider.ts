@@ -1,6 +1,7 @@
+// src/lib/metadata/provider.ts
 export interface MetadataSeries {
     sourceId: string;
-    source: 'COMICVINE' | 'MANGADEX' | 'ANILIST';
+    source: 'COMICVINE' | 'METRON' | 'ANILIST';
     name: string;
     year: number;
     publisher: string;

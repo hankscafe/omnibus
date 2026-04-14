@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
+import { omnibusQueue } from '@/lib/queue'; // <-- NEW
 
 export async function PUT(request: Request) {
     const authOptions = await getAuthOptions();
@@ -27,11 +28,20 @@ export async function PUT(request: Request) {
 
         await prisma.$transaction(transactions);
 
-        // --- NEW: LOG BULK METADATA UPDATES ---
         await AuditLogger.log('UPDATE_ISSUE_BULK', {
             updatedCount: updates.length,
             updates: updates.map((u: any) => ({ id: u.id, name: u.name, number: u.number }))
         }, (session.user as any).id);
+
+        // --- NEW: Immediately trigger the XML Writer for the exact issues modified ---
+        if (updates.length > 0) {
+            await omnibusQueue.add('EMBED_METADATA', { 
+                type: 'EMBED_METADATA', 
+                issueIds: updates.map((u: any) => u.id) 
+            }, {
+                jobId: `EMBED_META_BULK_${Date.now()}`
+            }).catch(() => {});
+        }
 
         return NextResponse.json({ success: true });
     } catch (error: any) {

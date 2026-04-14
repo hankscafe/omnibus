@@ -598,7 +598,9 @@ function LibraryContent() {
           } catch(e) {
               failCount++;
           }
-          if (i < seriesList.length - 1) await new Promise(r => setTimeout(r, 2000));
+          
+          // RATE LIMIT SAFEGUARD: Increased from 2000 to 4000
+          if (i < seriesList.length - 1) await new Promise(r => setTimeout(r, 4000));
       }
       
       toastRef.current({ title: "Refresh Complete", description: `Successfully refreshed ${successCount} series. ${failCount > 0 ? `Failed: ${failCount}` : ''}` });

@@ -1,3 +1,4 @@
+// src/app/api/library/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -11,10 +12,9 @@ import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-// --- ATOMIC LOCKING HELPER ---
 async function withScanLock<T>(fn: () => Promise<T>): Promise<T | null> {
     const lockId = 'LIBRARY_SCAN_ACTIVE';
-    const timeoutLimit = new Date(Date.now() - 10 * 60 * 1000); // 10 minute expiration
+    const timeoutLimit = new Date(Date.now() - 10 * 60 * 1000); 
     
     const existingLock = await prisma.jobLock.findUnique({ where: { id: lockId } });
     if (existingLock && existingLock.lockedAt > timeoutLimit) {
@@ -111,6 +111,8 @@ export async function GET(request: Request) {
                                     publisher: embeddedMeta?.publisher || "Other",
                                     metadataId: embeddedMeta?.cvId?.toString() || `unmatched_${Math.random()}`,
                                     metadataSource: embeddedMeta?.cvId ? 'COMICVINE' : 'LOCAL',
+                                    matchState: embeddedMeta?.cvId ? 'MATCHED' : 'UNMATCHED',
+                                    cvId: embeddedMeta?.cvId || null,
                                     isManga: embeddedMeta?.isManga || libIsManga || await detectManga({ name: cleanedName }, firstArchive),
                                     libraryId: libId
                                 }
@@ -136,10 +138,8 @@ export async function GET(request: Request) {
         }
     }
 
-    // --- QUERY BUILDING ---
     let where: any = { AND: [] };
 
-    // Standard Filters
     if (!monitored && !unmatchedOnly) where.AND.push({ issues: { some: {} } });
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });
@@ -148,9 +148,7 @@ export async function GET(request: Request) {
     if (unmatchedOnly) where.AND.push({ metadataId: { startsWith: 'unmatched_' } });
     if (monitored) where.AND.push({ monitored: true });
 
-    // NEW: Era Filtering
     if (era !== 'ALL') {
-        const currentYear = new Date().getFullYear();
         if (era === '2020s') where.AND.push({ year: { gte: 2020 } });
         else if (era === '2010s') where.AND.push({ year: { gte: 2010, lt: 2020 } });
         else if (era === '2000s') where.AND.push({ year: { gte: 2000, lt: 2010 } });
@@ -159,7 +157,6 @@ export async function GET(request: Request) {
         else if (era === 'CLASSIC') where.AND.push({ year: { lt: 1980, gt: 0 } });
     }
 
-    // NEW: Read Status Filtering
     if (readStatus !== 'ALL') {
         if (readStatus === 'COMPLETED') {
             where.AND.push({ issues: { none: { readProgresses: { none: { userId, isCompleted: true } } } } });
@@ -171,7 +168,6 @@ export async function GET(request: Request) {
         }
     }
 
-    // NEW: Collection/Reading List Filter
     if (collectionId !== 'ALL') {
         where.AND.push({ collections: { some: { collectionId: collectionId } } });
     }
@@ -179,36 +175,25 @@ export async function GET(request: Request) {
     if (q) {
         where.AND.push({
             OR: [
-                { name: { contains: q } }, // REMOVED mode: 'insensitive'
-                { publisher: { contains: q } }, // REMOVED mode: 'insensitive'
-                { 
-                    issues: { 
-                        some: { 
-                            OR: [ 
-                                { writers: { contains: q } }, // REMOVED mode: 'insensitive'
-                                { artists: { contains: q } }  // REMOVED mode: 'insensitive'
-                            ] 
-                        } 
-                    } 
-                }
+                { name: { contains: q } }, 
+                { publisher: { contains: q } }, 
+                { issues: { some: { OR: [ { writers: { contains: q } }, { artists: { contains: q } } ] } } }
             ]
         });
     }
 
-    // --- SORTING LOGIC ---
     let orderBy: any = {};
     switch (sort) {
         case 'alpha_desc': orderBy = { name: 'desc' }; break;
         case 'year_desc': orderBy = { year: 'desc' }; break;
         case 'year_asc': orderBy = { year: 'asc' }; break;
         case 'count_desc': orderBy = { issues: { _count: 'desc' } }; break;
-        case 'random': orderBy = { id: 'asc' }; break; // Seeded by random skip below
+        case 'random': orderBy = { id: 'asc' }; break; 
         default: orderBy = { name: 'asc' };
     }
 
     const totalCount = await prisma.series.count({ where: (where.AND.length > 0 ? where : {}) });
 
-    // Handle "Surprise Me" (Random)
     let finalSkip = skip;
     if (sort === 'random' && totalCount > limit) {
         finalSkip = Math.floor(Math.random() * (totalCount - limit));

@@ -1,5 +1,4 @@
 // src/lib/metadata-fetcher.ts
-
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -7,7 +6,8 @@ import path from 'path';
 import { Logger } from './logger';
 import { parseComicVineCredits } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
-import { MangaDexProvider } from './metadata/providers/mangadex';
+import { MetronProvider } from './metadata/providers/metron';
+import { omnibusQueue } from './queue'; // <-- ADDED: Import the queue
 
 export async function syncSeriesMetadata(metadataId: string, folderPath: string, metadataSource: string = 'COMICVINE') {
     const series = await prisma.series.findFirst({ 
@@ -17,9 +17,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
     Logger.log(`[Metadata] Fetching data for ID: ${metadataId} via ${metadataSource}`, 'info');
 
-    if (metadataSource === 'MANGADEX') {
-        const md = new MangaDexProvider();
-        const details = await md.getSeriesDetails(metadataId);
+    if (metadataSource === 'METRON') {
+        const metron = new MetronProvider();
+        const details = await metron.getSeriesDetails(metadataId);
         
         let finalCoverUrl = details.coverUrl;
         if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
@@ -42,13 +42,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             }
         });
 
-        const issues = await md.getSeriesIssues(metadataId);
+        const issues = await metron.getSeriesIssues(metadataId);
         let syncedCount = 0;
         
         for (const issue of issues) {
             const issueNumStr = issue.issueNumber;
             const existingByMetaId = await prisma.issue.findFirst({ 
-                where: { metadataId: issue.sourceId, metadataSource: 'MANGADEX' } 
+                where: { metadataId: issue.sourceId, metadataSource: 'METRON' } 
             });
 
             const issueDataPayload = {
@@ -75,14 +75,14 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 if (existingByNum) {
                     await prisma.issue.update({
                         where: { id: existingByNum.id },
-                        data: { metadataId: issue.sourceId, metadataSource: 'MANGADEX', ...issueDataPayload }
+                        data: { metadataId: issue.sourceId, metadataSource: 'METRON', ...issueDataPayload }
                     });
                 } else {
                     await prisma.issue.create({
                         data: {
                             seriesId: series.id, 
                             metadataId: issue.sourceId, 
-                            metadataSource: 'MANGADEX', 
+                            metadataSource: 'METRON', 
                             number: issueNumStr, 
                             status: 'WANTED', 
                             ...issueDataPayload
@@ -93,7 +93,15 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             syncedCount++;
         }
 
-        Logger.log(`[Metadata] Successfully synced ${syncedCount} MangaDex issues.`, 'success');
+        // --- NEW: Trigger instant XML embedding for this series ---
+        try {
+            await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: series.id }, {
+                jobId: `EMBED_META_${series.id}_${Date.now()}`
+            });
+            Logger.log(`[Metadata] Queued XML injection for ${series.name}`, 'info');
+        } catch(e) {}
+
+        Logger.log(`[Metadata] Successfully synced ${syncedCount} Metron issues.`, 'success');
         return { success: true, count: syncedCount };
     }
 
@@ -137,7 +145,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         }
     });
 
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 3000));
 
     let offset = 0;
     let totalResults = 1;
@@ -166,7 +174,6 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 where: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE' } 
             });
 
-            // FIX: We no longer inject JSON.stringify([]) into deep fields.
             // We just update the skeleton. This ensures existing data isn't wiped out,
             // and new data remains `null` so the Lazy Heal system can catch it.
             const issueDataPayload = {
@@ -215,8 +222,18 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
         offset += 100;
         loopCount++;
-        await new Promise(r => setTimeout(r, 1500));
+        
+        // RATE LIMIT SAFEGUARD: Wait 3 seconds before fetching the next page of issues
+        await new Promise(r => setTimeout(r, 3000));
     }
+
+    // --- NEW: Trigger instant XML embedding for this series ---
+    try {
+        await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: series.id }, {
+            jobId: `EMBED_META_${series.id}_${Date.now()}`
+        });
+        Logger.log(`[Metadata] Queued XML injection for ${series.name}`, 'info');
+    } catch(e) {}
 
     Logger.log(`[Metadata] Successfully synced ${syncedCount} ComicVine issues.`, 'success');
     return { success: true, count: syncedCount };

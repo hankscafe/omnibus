@@ -17,8 +17,34 @@ import {
   Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, 
   Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, 
   ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Webhook, Copy, 
-  Plus, Smartphone, TabletSmartphone, Wifi, Flame, BookType, Sparkles, Layers
+  Plus, Smartphone, TabletSmartphone, Wifi, Flame, BookType, Sparkles, Layers,
+  ChevronDown, ChevronUp, Settings
 } from "lucide-react"
+
+// --- Helper Component: Collapsible Section ---
+function CollapsibleSection({ title, icon: Icon, children, defaultOpen = false }: { title: string, icon: any, children: React.ReactNode, defaultOpen?: boolean }) {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+    return (
+        <div className="space-y-3 pt-6">
+            <button 
+                onClick={() => setIsOpen(!isOpen)} 
+                className="flex items-center justify-between w-full p-3 bg-muted/30 border border-border rounded-xl hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+                <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-muted-foreground group-hover:text-foreground transition-colors">
+                    <Icon className="w-5 h-5 text-primary" /> {title}
+                </div>
+                <div className="bg-background rounded-full p-1 border border-border">
+                    {isOpen ? <ChevronUp className="w-4 h-4 text-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+                </div>
+            </button>
+            {isOpen && (
+                <div className="animate-in slide-in-from-top-2 fade-in duration-300">
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+}
 
 // --- Helper Component: Individual Activity Card ---
 function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (status: string) => React.ReactNode }) {
@@ -138,7 +164,7 @@ function KoreaderDevices() {
     }
 
     if (devices.length === 0) {
-        return null; // Hide the section entirely if they haven't synced an eReader yet
+        return null; 
     }
 
     return (
@@ -152,9 +178,8 @@ function KoreaderDevices() {
             </CardHeader>
             <CardContent className="grid gap-4 pt-4">
                 {devices.map((device) => {
-                    // Convert KOReader's unix timestamp to a readable date
                     const syncDate = new Date(device.lastSync * 1000);
-                    const timeAgo = Math.round((Date.now() - syncDate.getTime()) / 60000); // minutes
+                    const timeAgo = Math.round((Date.now() - syncDate.getTime()) / 60000); 
                     
                     let timeString = `${timeAgo} mins ago`;
                     if (timeAgo > 60) timeString = `${Math.round(timeAgo / 60)} hours ago`;
@@ -257,11 +282,10 @@ export default function ProfilePage() {
       const profRes = await fetch('/api/user/profile')
       if (profRes.ok) setProfile(await profRes.json())
 
-      // --- FIXED: Hit the user-facing request endpoint ---
       const reqRes = await fetch('/api/request')
       if (reqRes.ok) {
         const data = await reqRes.json()
-        setRecentReqs(data.slice(0, 5)); // Backend automatically filters this now
+        setRecentReqs(data.slice(0, 5)); 
       }
 
       const listRes = await fetch('/api/reading-lists')
@@ -546,6 +570,7 @@ export default function ProfilePage() {
     <div className="min-h-screen pb-20 transition-colors duration-300">
       <title>Omnibus - Profile</title>
       
+      {/* BANNER & AVATAR SECTION */}
       <div className="relative h-48 sm:h-64 w-full group overflow-hidden bg-slate-900">
         {profile?.user?.banner ? (
             <img src={profile.user.banner.startsWith('/') ? profile.user.banner : `/${profile.user.banner}`} alt="Banner" className="w-full h-full object-cover transition-all duration-300 group-hover:scale-105 group-hover:blur-sm opacity-90" />
@@ -576,6 +601,8 @@ export default function ProfilePage() {
       </div>
 
       <div className="container mx-auto px-6 max-w-5xl relative -mt-20 sm:-mt-24 space-y-8">
+        
+        {/* AVATAR OVERLAY */}
         <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6">
             <div className="relative group cursor-pointer" onClick={() => fileAvatarRef.current?.click()}>
                 <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-full border-4 border-background bg-muted overflow-hidden flex items-center justify-center shadow-xl relative z-10 transition-transform group-hover:scale-105">
@@ -597,309 +624,205 @@ export default function ProfilePage() {
             </div>
         </div>
 
-        {/* --- SECURITY (GRID) SECTION --- */}
-        <div className="space-y-3 pt-4">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
-                <ShieldCheck className="w-4 h-4" /> Account Security
-            </h3>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* CARD 1: 2FA */}
-                <Card className={`shadow-sm border-2 flex flex-col ${is2FAEnabled ? 'border-green-200 bg-green-50/20 dark:border-green-900/40 dark:bg-green-900/10' : ''}`}>
-                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
-                        <div className="space-y-1 flex-1">
-                            <div className="flex items-center gap-2 mb-2">
-                                <h4 className={`font-bold text-lg leading-none ${is2FAEnabled ? 'text-green-800 dark:text-green-400' : ''}`}>Two-Factor Auth</h4>
-                                {is2FAEnabled && <Badge className="bg-green-500 hover:bg-green-600 border-0 h-5 px-1.5 text-[10px]"><Check className="w-3 h-3 mr-1"/> ON</Badge>}
+        {/* --- 1. READING ACTIVITY (DEFAULT OPEN) --- */}
+        <CollapsibleSection title="Reading Activity" icon={BookOpen} defaultOpen={true}>
+            <div className="space-y-6">
+                
+                {/* Stats & Heatmap */}
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_2fr] gap-4">
+                    <Card className="shadow-sm bg-muted/50 overflow-hidden h-full">
+                        <CardContent className="p-6 flex flex-col justify-center h-full">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="space-y-1">
+                                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Completion Rate</p>
+                                    <p className="text-2xl font-black">{profile?.stats?.completionRate || 0}%</p>
+                                </div>
+                                <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 font-bold">
+                                    {profile?.stats?.historyCompleted || 0} / {profile?.stats?.historyStarted || 0} Finished
+                                </Badge>
                             </div>
-                            <p className={`text-xs ${is2FAEnabled ? 'text-green-700/80 dark:text-green-500/80' : 'text-muted-foreground'}`}>
-                                {is2FAEnabled ? "Secured with a TOTP authenticator app." : "Require a 6-digit code when logging in."}
-                            </p>
-                        </div>
-                        {is2FAEnabled ? (
-                            <Button variant="outline" className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-900/30" onClick={() => setDisable2faModalOpen(true)}>Disable 2FA</Button>
-                        ) : (
-                            <Button className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground" onClick={handleBegin2FASetup} disabled={isProcessing2fa}>
-                                {isProcessing2fa ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />} Enable 2FA
-                            </Button>
-                        )}
-                    </CardContent>
-                </Card>
+                            <div className="w-full h-3 bg-background rounded-full overflow-hidden">
+                                <div className="h-full bg-primary transition-all duration-1000 ease-out" style={{ width: `${profile?.stats?.completionRate || 0}%` }} />
+                            </div>
+                        </CardContent>
+                    </Card>
 
-                {/* CARD 2: PASSWORD RESET */}
-                <Card className="shadow-sm flex flex-col">
-                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
-                        <div className="space-y-1 flex-1">
-                            <h4 className="font-bold text-lg flex items-center gap-2 mb-2">
-                                <Key className="w-4 h-4 text-primary" /> Password
-                            </h4>
-                            <p className="text-xs text-muted-foreground">Update your local account password. SSO users must change passwords at their provider.</p>
-                        </div>
-                        <Button variant="outline" className="w-full" onClick={() => setPasswordModalOpen(true)}>
-                            Change Password
-                        </Button>
-                    </CardContent>
-                </Card>
+                    <Card className="shadow-sm bg-background border-border overflow-hidden">
+                        <CardHeader className="pb-0 pt-4 px-6 flex flex-row items-center justify-between">
+                            <CardTitle className="text-sm flex items-center gap-2">
+                                <Flame className="w-4 h-4 text-orange-500" /> Activity (Last 6 Months)
+                            </CardTitle>
+                            <Badge variant="secondary" className="font-mono text-[10px] bg-muted">
+                                {analytics?.totalPagesReadThisYear || 0} Pages Read
+                            </Badge>
+                        </CardHeader>
+                        <CardContent className="px-6 pb-4">
+                            {renderHeatmap()}
+                        </CardContent>
+                    </Card>
+                </div>
 
-                {/* CARD 3: REVOKE SESSIONS */}
-                <Card className="shadow-sm flex flex-col">
-                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
-                        <div className="space-y-1 flex-1">
-                            <h4 className="font-bold text-lg flex items-center gap-2 mb-2">
-                                <LogOut className="w-4 h-4 text-orange-500" /> Active Sessions
-                            </h4>
-                            <p className="text-xs text-muted-foreground">Logged in on a public computer? Sign out of all other devices immediately.</p>
-                        </div>
-                        <Button variant="outline" className="w-full text-orange-600 border-orange-200 hover:bg-orange-50 dark:border-orange-900/50 dark:hover:bg-orange-900/30" onClick={() => setRevokeModalOpen(true)}>
-                            Revoke Sessions
-                        </Button>
-                    </CardContent>
-                </Card>
+                {/* Wrapped Stats */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <Card className="shadow-sm border-primary/20 bg-primary/5">
+                        <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
+                            <Layers className="w-5 h-5 text-primary mb-1" />
+                            <span className="text-xl font-black text-foreground truncate w-full px-2" title={analytics?.topPublisher}>{analytics?.topPublisher || "-"}</span>
+                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Publisher</span>
+                        </CardContent>
+                    </Card>
+                    <Card className="shadow-sm bg-muted/50 border-border">
+                        <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
+                            <BookType className="w-5 h-5 text-blue-500 mb-1" />
+                            <span className="text-xl font-black text-foreground truncate w-full px-2" title={analytics?.topGenre}>{analytics?.topGenre || "-"}</span>
+                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Concept</span>
+                        </CardContent>
+                    </Card>
+                    <Card className="shadow-sm bg-muted/50 border-border">
+                        <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
+                            <Sparkles className="w-5 h-5 text-yellow-500 mb-1" />
+                            <span className="text-xl font-black text-foreground truncate w-full px-2" title={analytics?.topCharacter}>{analytics?.topCharacter || "-"}</span>
+                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Character</span>
+                        </CardContent>
+                    </Card>
+                </div>
 
-                {/* CARD 4: EXTERNAL APPS (OPDS) */}
-                <Card className="shadow-sm flex flex-col">
-                    <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
-                        <div className="space-y-1 flex-1">
-                            <h4 className="font-bold text-lg flex items-center gap-2 mb-2">
-                                <Smartphone className="w-4 h-4 text-purple-500" /> External Apps
-                            </h4>
-                            <p className="text-xs text-muted-foreground">Generate API keys to sync your library in apps like Panels, Mihon, and Paperback via OPDS.</p>
-                        </div>
-                        <Button variant="outline" className="w-full border-purple-200 text-purple-600 hover:bg-purple-50 dark:border-purple-900/50 dark:hover:bg-purple-900/30" onClick={() => setManageKeysModalOpen(true)}>
-                            Manage API Keys
-                        </Button>
-                    </CardContent>
-                </Card>
-            </div>
-        </div>
-
-        {/* CUSTOM THEME SELECTOR */}
-        <div className="space-y-3">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
-                <Palette className="w-4 h-4" /> App Appearance
-            </h3>
-            <Card className="shadow-sm bg-muted/30">
-                <CardContent className="p-4 sm:p-6">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
-                        {themes.map(t => (
-                            <button 
-                                key={t.id} 
-                                onClick={() => setColorTheme(t.id)}
-                                className={`flex flex-col items-center gap-3 p-3 rounded-xl border-2 transition-all ${colorTheme === t.id ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'}`}
-                            >
-                                <div className={`w-10 h-10 rounded-full shadow-sm flex items-center justify-center ${t.color}`}>
-                                    {colorTheme === t.id && <Check className={`w-5 h-5 ${t.id === 'symbiote' ? 'text-white dark:text-black' : 'text-white'}`} />}
+                {/* Recent History Grid */}
+                {profile?.recentHistory && profile.recentHistory.length > 0 && (
+                    <div className="space-y-3 pt-4 border-t border-border">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-bold flex items-center gap-2"><History className="w-4 h-4 text-primary" /> Continue Reading</h4>
+                            <div className="flex items-center gap-3">
+                                <Button variant="ghost" size="sm" className="h-8 text-xs font-bold text-muted-foreground hover:text-foreground hidden sm:flex" asChild>
+                                    <Link href="/library/history">View Full History <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
+                                </Button>
+                                <div className="flex items-center gap-2 bg-background p-1 rounded-md shadow-sm border border-border">
+                                    {/* @ts-ignore */}
+                                    <Button variant="ghost" size="icon-xs" className="h-6 w-6 p-0" onClick={() => setHistoryPage(p => Math.max(0, p - 1))} disabled={historyPage === 0}><ChevronLeft className="w-4 h-4" /></Button>
+                                    <span className="text-xs font-mono w-4 text-center">{historyPage + 1}</span>
+                                    {/* @ts-ignore */}
+                                    <Button variant="ghost" size="icon-xs" className="h-6 w-6 p-0" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages - 1, p + 1))} disabled={historyPage >= totalHistoryPages - 1}><ChevronRight className="w-4 h-4" /></Button>
                                 </div>
-                                <span className="text-xs font-bold text-foreground">{t.name}</span>
-                            </button>
-                        ))}
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
-
-        {/* KOREADER SYNC SECTION */}
-        <KoreaderDevices />
-
-        {/* --- CURATED READING LISTS --- */}
-        <div className="space-y-3">
-            <div className="flex items-center justify-between px-1">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
-                    <ListOrdered className="w-4 h-4" /> Curated Reading Lists
-                </h3>
-                <Button variant="ghost" size="sm" asChild className="hidden sm:flex text-xs font-bold text-muted-foreground hover:text-foreground">
-                    <Link href="/reading-lists">Manage Lists <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
-                </Button>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {readingLists.slice(0, 3).map(list => (
-                    <Link key={list.id} href={`/reading-lists?id=${list.id}`}>
-                        <Card className="shadow-sm hover:border-primary transition-all h-full bg-muted/50 hover:shadow-md">
-                            <CardContent className="p-4 flex gap-4">
-                                <div className="w-14 h-20 bg-background rounded border overflow-hidden shrink-0 flex items-center justify-center">
-                                    {list.coverUrl ? <img src={list.coverUrl} className="w-full h-full object-cover" alt="" /> : <ListOrdered className="w-6 h-6 text-muted-foreground/50" />}
-                                </div>
-                                <div className="flex flex-col justify-center">
-                                    <h4 className="font-bold text-sm line-clamp-2 leading-tight">{list.name}</h4>
-                                    <p className="text-xs font-bold text-primary mt-1">{list.items?.length || 0} Issues</p>
-                                </div>
-                            </CardContent>
-                        </Card>
-                    </Link>
-                ))}
-                {readingLists.length === 0 && (
-                    <div className="col-span-full p-8 text-center border-2 border-dashed rounded-xl border-border bg-muted/50">
-                        <ListOrdered className="w-8 h-8 mx-auto text-muted-foreground/50 mb-2" />
-                        <p className="text-sm font-bold text-foreground">No reading lists yet.</p>
-                        <p className="text-xs text-muted-foreground mt-1 mb-4">Create curated events to read your comics in the perfect order!</p>
-                        <Button variant="outline" size="sm" asChild>
-                            <Link href="/reading-lists">Create an Event</Link>
-                        </Button>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {displayedHistory.map((item: any) => (
+                                <Link key={item.id} href={`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.folderPath)}`} className="block group">
+                                    <Card className="shadow-sm bg-background border-border overflow-hidden group-hover:border-primary/50 transition-colors h-full">
+                                        <CardContent className="p-4 flex items-center gap-4">
+                                            <div className="w-14 h-20 bg-muted rounded shrink-0 border border-border flex items-center justify-center overflow-hidden relative">
+                                                {item.coverUrl ? <img src={item.coverUrl} className="w-full h-full object-cover absolute inset-0 z-10" alt="" onError={(e) => { e.currentTarget.style.opacity = '0'; }} /> : <BookOpen className="w-5 h-5 text-muted-foreground absolute z-0" />}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-bold text-sm truncate group-hover:text-primary transition-colors" title={item.seriesName}>{item.seriesName}</p>
+                                                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mt-0.5">Issue #{item.issueNumber}</p>
+                                                <div className="mt-2.5 flex items-center gap-2">
+                                                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden border border-border"><div className={`h-full ${item.isCompleted ? 'bg-green-500' : 'bg-primary'}`} style={{ width: `${item.progress}%` }} /></div>
+                                                    <span className="text-[9px] font-black text-muted-foreground w-8 text-right">{item.isCompleted ? 'DONE' : `${item.progress}%`}</span>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                </Link>
+                            ))}
+                        </div>
                     </div>
                 )}
             </div>
-            {readingLists.length > 0 && (
-                <div className="sm:hidden pt-2">
-                    <Button variant="outline" className="w-full" asChild>
-                        <Link href="/reading-lists">Manage Reading Lists</Link>
-                    </Button>
-                </div>
-            )}
-        </div>
+        </CollapsibleSection>
 
-        {/* --- RECENT READING HISTORY --- */}
-        {profile?.recentHistory && profile.recentHistory.length > 0 && (
-            <div className="space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-1 mb-2">
-                    <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
-                        <History className="w-4 h-4" /> Reading History
-                    </h3>
-                    
-                    <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
-                        <Button variant="ghost" size="sm" className="h-8 text-xs font-bold text-muted-foreground hover:text-foreground hidden sm:flex" asChild>
-                            {/* FIX: Link changed to library/history */}
-                            <Link href="/library/history">View Full History <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
-                        </Button>
-                        <div className="flex items-center gap-2 bg-background p-1 rounded-md shadow-sm border">
-                            {/* @ts-ignore */}
-                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0" onClick={() => setHistoryPage(p => Math.max(0, p - 1))} disabled={historyPage === 0}><ChevronLeft className="h-4 w-4" /></Button>
-                            <span className="text-xs font-mono w-4 text-center">{historyPage + 1}</span>
-                            {/* @ts-ignore */}
-                            <Button variant="ghost" size="icon-xs" className="h-7 w-7 p-0" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages - 1, p + 1))} disabled={historyPage >= totalHistoryPages - 1}><ChevronRight className="h-4 w-4" /></Button>
-                        </div>
-                    </div>
-                </div>
+        {/* --- 2. COLLECTIONS & REQUESTS --- */}
+        <CollapsibleSection title="Collections & Requests" icon={ListOrdered}>
+            <div className="space-y-6">
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {displayedHistory.map((item: any) => {
-                        const coverSource = item.coverUrl; // Simplifed since API does the fallback now
-                        return (
-                            <Link key={item.id} href={`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.folderPath)}`} className="block group">
-                                <Card className="shadow-sm bg-muted/50 overflow-hidden group-hover:border-primary/50 transition-colors h-full">
-                                    <CardContent className="p-4 flex items-center gap-4">
-                                        <div className="w-14 h-20 bg-background rounded shrink-0 border flex items-center justify-center overflow-hidden relative">
-                                            {coverSource ? <img src={coverSource} className="w-full h-full object-cover absolute inset-0 z-10" alt="" onError={(e) => { e.currentTarget.style.opacity = '0'; }} /> : null}
-                                            <BookOpen className="w-5 h-5 text-muted-foreground absolute z-0" />
+                {/* Reading Lists */}
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-bold flex items-center gap-2"><ListOrdered className="w-4 h-4 text-primary" /> My Reading Lists</h4>
+                        <Button variant="ghost" size="sm" asChild className="hidden sm:flex text-xs font-bold text-muted-foreground hover:text-foreground">
+                            <Link href="/reading-lists">Manage Lists <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
+                        </Button>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {readingLists.slice(0, 3).map(list => (
+                            <Link key={list.id} href={`/reading-lists?id=${list.id}`}>
+                                <Card className="shadow-sm hover:border-primary transition-all h-full bg-background hover:shadow-md border-border">
+                                    <CardContent className="p-4 flex gap-4">
+                                        <div className="w-14 h-20 bg-muted rounded border border-border overflow-hidden shrink-0 flex items-center justify-center">
+                                            {list.coverUrl ? <img src={list.coverUrl} className="w-full h-full object-cover" alt="" /> : <ListOrdered className="w-6 h-6 text-muted-foreground/50" />}
                                         </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-sm truncate group-hover:text-primary transition-colors" title={item.seriesName}>{item.seriesName}</p>
-                                            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mt-0.5">Issue #{item.issueNumber}</p>
-                                            <div className="mt-2.5 flex items-center gap-2">
-                                                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden"><div className={`h-full ${item.isCompleted ? 'bg-green-500' : 'bg-primary'}`} style={{ width: `${item.progress}%` }} /></div>
-                                                <span className="text-[9px] font-black text-muted-foreground w-8 text-right">{item.isCompleted ? 'DONE' : `${item.progress}%`}</span>
-                                            </div>
+                                        <div className="flex flex-col justify-center">
+                                            <h4 className="font-bold text-sm line-clamp-2 leading-tight">{list.name}</h4>
+                                            <p className="text-xs font-bold text-primary mt-1">{list.items?.length || 0} Issues</p>
                                         </div>
                                     </CardContent>
                                 </Card>
                             </Link>
-                        );
-                    })}
-                </div>
-            </div>
-        )}
-
-        {/* --- STATS SECTION --- */}
-        <div className="space-y-3">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
-                <BookOpen className="w-4 h-4" /> Overall Progress
-            </h3>
-            
-            <Card className="shadow-sm bg-muted/50 overflow-hidden">
-                <CardContent className="p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <div className="space-y-1">
-                            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Completion Rate</p>
-                            <p className="text-2xl font-black">{profile?.stats?.completionRate || 0}%</p>
+                        ))}
+                        {readingLists.length === 0 && (
+                            <div className="col-span-full p-8 text-center border-2 border-dashed rounded-xl border-border bg-muted/30">
+                                <ListOrdered className="w-8 h-8 mx-auto text-muted-foreground/50 mb-2" />
+                                <p className="text-sm font-bold text-foreground">No reading lists yet.</p>
+                                <Button variant="outline" size="sm" className="mt-4" asChild>
+                                    <Link href="/reading-lists">Create an Event</Link>
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                    {readingLists.length > 0 && (
+                        <div className="sm:hidden pt-2">
+                            <Button variant="outline" className="w-full border-border" asChild>
+                                <Link href="/reading-lists">Manage Reading Lists</Link>
+                            </Button>
                         </div>
-                        <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 font-bold">
-                            {profile?.stats?.historyCompleted || 0} / {profile?.stats?.historyStarted || 0} Finished
-                        </Badge>
-                    </div>
-                    <div className="w-full h-3 bg-background rounded-full overflow-hidden">
-                        <div className="h-full bg-primary transition-all duration-1000 ease-out" style={{ width: `${profile?.stats?.completionRate || 0}%` }} />
-                    </div>
-                </CardContent>
-            </Card>
+                    )}
+                </div>
 
-            <div className="grid grid-cols-2 gap-4">
-                <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><History className="w-5 h-5 text-primary mb-1" /><span className="text-2xl font-black">{profile?.stats?.historyStarted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Started</span></CardContent></Card>
-                <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Trophy className="w-5 h-5 text-emerald-500 mb-1" /><span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{profile?.stats?.historyCompleted || 0}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Finished</span></CardContent></Card>
-            </div>
-            
-            {/* NEW: PERSONAL WRAPPED ANALYTICS */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                <Card className="shadow-sm border-primary/20 bg-primary/5">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
-                        <Layers className="w-5 h-5 text-primary mb-1" />
-                        <span className="text-xl font-black text-foreground">{analytics?.topPublisher || "-"}</span>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Publisher</span>
+                {/* Request Stats */}
+                <div className="space-y-3 pt-4 border-t border-border">
+                    <h4 className="text-sm font-bold flex items-center gap-2"><Upload className="w-4 h-4 text-primary" /> Request Statistics</h4>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                        <Card className="shadow-sm bg-background border-border"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><ListOrdered className="w-5 h-5 text-muted-foreground mb-1" /><span className="text-xl sm:text-2xl font-black">{profile?.stats?.total}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total</span></CardContent></Card>
+                        <Card className="shadow-sm border-blue-200 bg-blue-50/30 dark:border-blue-900/30 dark:bg-blue-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Activity className="w-5 h-5 text-blue-500 mb-1" /><span className="text-xl sm:text-2xl font-black text-blue-600 dark:text-blue-400">{profile?.stats?.active}</span><span className="text-[10px] font-bold text-blue-800/70 dark:text-blue-400/70 uppercase tracking-wider">Active</span></CardContent></Card>
+                        <Card className="shadow-sm border-orange-200 bg-orange-50/30 dark:border-orange-900/30 dark:bg-orange-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Clock className="w-5 h-5 text-orange-500 mb-1" /><span className="text-xl sm:text-2xl font-black text-orange-600 dark:text-orange-400">{profile?.stats?.pendingApproval}</span><span className="text-[10px] font-bold text-orange-800/70 dark:text-orange-400/70 uppercase tracking-wider">Pending</span></CardContent></Card>
+                        <Card className="shadow-sm border-green-200 bg-green-50/30 dark:border-green-900/30 dark:bg-green-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><CheckCircle2 className="w-5 h-5 text-green-500 mb-1" /><span className="text-xl sm:text-2xl font-black text-green-600 dark:text-green-400">{profile?.stats?.completed}</span><span className="text-[10px] font-bold text-green-800/70 dark:text-green-400/70 uppercase tracking-wider">Ready</span></CardContent></Card>
+                        <Card className="shadow-sm border-red-200 bg-red-50/30 dark:border-red-900/30 dark:bg-red-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><XCircle className="w-5 h-5 text-red-500 mb-1" /><span className="text-xl sm:text-2xl font-black text-red-600 dark:text-red-400">{profile?.stats?.failed}</span><span className="text-[10px] font-bold text-red-800/70 dark:text-red-400/70 uppercase tracking-wider">Failed</span></CardContent></Card>
+                    </div>
+                </div>
+
+                {/* Recent Requests */}
+                <Card className="shadow-sm bg-background border-border">
+                    <div className="p-4 sm:p-6 border-b border-border flex items-center justify-between bg-muted/30">
+                        <div>
+                            <h4 className="text-lg font-bold">Recent Activity</h4>
+                            <p className="text-xs text-muted-foreground mt-1">Your latest requests and automated downloads.</p>
+                        </div>
+                        <Button variant="outline" size="sm" className="hidden sm:flex border-border" asChild>
+                            <Link href="/requests">View All <ArrowRight className="w-4 h-4 ml-2"/></Link>
+                        </Button>
+                    </div>
+                    <CardContent className="p-0">
+                        <div className="divide-y divide-border">
+                            {recentReqs.length === 0 ? (
+                                <div className="p-10 text-center text-muted-foreground italic">No requests made yet.</div>
+                            ) : (
+                                recentReqs.map((req: any) => (
+                                    <ActivityCard key={req.id} req={req} getStatusBadge={getStatusBadge} />
+                                ))
+                            )}
+                        </div>
                     </CardContent>
                 </Card>
-                <Card className="shadow-sm bg-muted/50">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
-                        <BookType className="w-5 h-5 text-blue-500 mb-1" />
-                        <span className="text-xl font-black text-foreground">{analytics?.topGenre || "-"}</span>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Genre</span>
-                    </CardContent>
-                </Card>
-                <Card className="shadow-sm bg-muted/50">
-                    <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1 h-full">
-                        <Sparkles className="w-5 h-5 text-yellow-500 mb-1" />
-                        <span className="text-xl font-black text-foreground">{analytics?.topCharacter || "-"}</span>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Top Character</span>
-                    </CardContent>
-                </Card>
             </div>
+        </CollapsibleSection>
 
-            {/* NEW: READING HEATMAP */}
-            <Card className="shadow-sm bg-background border-border mt-4 overflow-hidden">
-                <CardHeader className="pb-0 pt-6 px-6">
-                    <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <Flame className="w-5 h-5 text-orange-500" /> Reading Activity (Last 6 Months)
-                        </CardTitle>
-                        <Badge variant="secondary" className="font-mono text-[10px]">
-                            {analytics?.totalPagesReadThisYear || 0} Pages Read
-                        </Badge>
-                    </div>
-                </CardHeader>
-                <CardContent className="p-6">
-                    {renderHeatmap()}
-                    <div className="flex justify-end items-center gap-2 mt-3 text-[10px] text-muted-foreground font-bold uppercase">
-                        <span>Less</span>
-                        <div className="w-3 h-3 rounded-sm bg-muted/50 border border-border" />
-                        <div className="w-3 h-3 rounded-sm bg-primary/30 border border-primary/20" />
-                        <div className="w-3 h-3 rounded-sm bg-primary/60 border border-primary/40" />
-                        <div className="w-3 h-3 rounded-sm bg-primary border border-primary/80" />
-                        <span>More</span>
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
-
-        <div className="space-y-3">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
-                <Upload className="w-4 h-4" /> Request Statistics
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <Card className="shadow-sm bg-muted/50"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><ListOrdered className="w-5 h-5 text-muted-foreground mb-1" /><span className="text-2xl font-black">{profile?.stats?.total}</span><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total</span></CardContent></Card>
-                <Card className="shadow-sm border-blue-200 bg-blue-50/30 dark:border-blue-900/30 dark:bg-blue-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Activity className="w-5 h-5 text-blue-500 mb-1" /><span className="text-2xl font-black text-blue-600 dark:text-blue-400">{profile?.stats?.active}</span><span className="text-[10px] font-bold text-blue-800/70 dark:text-blue-400/70 uppercase tracking-wider">Active</span></CardContent></Card>
-                <Card className="shadow-sm border-orange-200 bg-orange-50/30 dark:border-orange-900/30 dark:bg-orange-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><Clock className="w-5 h-5 text-orange-500 mb-1" /><span className="text-2xl font-black text-orange-600 dark:text-orange-400">{profile?.stats?.pendingApproval}</span><span className="text-[10px] font-bold text-orange-800/70 dark:text-orange-400/70 uppercase tracking-wider">Pending</span></CardContent></Card>
-                <Card className="shadow-sm border-green-200 bg-green-50/30 dark:border-green-900/30 dark:bg-green-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><CheckCircle2 className="w-5 h-5 text-green-500 mb-1" /><span className="text-2xl font-black text-green-600 dark:text-green-400">{profile?.stats?.completed}</span><span className="text-[10px] font-bold text-green-800/70 dark:text-green-400/70 uppercase tracking-wider">Ready</span></CardContent></Card>
-                <Card className="shadow-sm border-red-200 bg-red-50/30 dark:border-red-900/30 dark:bg-red-900/10"><CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-1"><XCircle className="w-5 h-5 text-red-500 mb-1" /><span className="text-2xl font-black text-red-600 dark:text-red-400">{profile?.stats?.failed}</span><span className="text-[10px] font-bold text-red-800/70 dark:text-red-400/70 uppercase tracking-wider">Failed</span></CardContent></Card>
-            </div>
-        </div>
-
-        {/* --- TROPHIES SECTION --- */}
-        <div className="space-y-3">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2 px-1">
-                <Trophy className="w-4 h-4" /> Achievements
-            </h3>
+        {/* --- 3. ACHIEVEMENTS --- */}
+        <CollapsibleSection title="Achievements" icon={Trophy}>
             {profile?.trophies && profile.trophies.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                     {profile.trophies.map((trophy: any) => (
-                        <Card key={trophy.id} className={`shadow-sm border-2 transition-all ${trophy.earned ? 'border-yellow-400 dark:border-yellow-500/50 bg-yellow-50/10 dark:bg-yellow-900/10 scale-105 z-10' : 'border-border opacity-60 grayscale hover:grayscale-0 hover:opacity-100'}`}>
+                        <Card key={trophy.id} className={`shadow-sm border-2 transition-all ${trophy.earned ? 'border-yellow-400 dark:border-yellow-500/50 bg-yellow-50/10 dark:bg-yellow-900/10 scale-105 z-10' : 'border-border bg-background opacity-60 grayscale hover:grayscale-0 hover:opacity-100'}`}>
                             <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-2">
                                 <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-inner border ${trophy.earned ? 'bg-yellow-100 border-yellow-200 dark:bg-yellow-900/30 dark:border-yellow-700' : 'bg-muted border-border'}`}>
                                     {trophy.iconUrl ? <img src={trophy.iconUrl} alt={trophy.name} className="w-8 h-8 object-contain" /> : <Trophy className={`w-6 h-6 ${trophy.earned ? 'text-yellow-600 dark:text-yellow-500' : 'text-muted-foreground'}`} />}
@@ -918,7 +841,7 @@ export default function ProfilePage() {
                     ))}
                 </div>
             ) : (
-                <Card className="shadow-sm bg-muted/30 border-dashed">
+                <Card className="shadow-sm bg-muted/30 border-dashed border-border">
                     <CardContent className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center">
                         <Trophy className="w-8 h-8 mb-2 opacity-20" />
                         <p className="text-sm font-bold">No Trophies Available</p>
@@ -926,42 +849,119 @@ export default function ProfilePage() {
                     </CardContent>
                 </Card>
             )}
-        </div>
+        </CollapsibleSection>
 
-        <Card className="shadow-sm">
-            <div className="p-6 border-b flex items-center justify-between">
-                <div>
-                    <h3 className="text-xl font-bold">Recent Request Activity</h3>
-                    <p className="text-xs text-muted-foreground mt-1">Your latest requests and automated downloads.</p>
+        {/* --- 4. ACCOUNT & SETTINGS (DEFAULT CLOSED) --- */}
+        <CollapsibleSection title="Settings & Security" icon={Settings} defaultOpen={false}>
+            <div className="space-y-6">
+                {/* Custom Theme Selector */}
+                <div className="space-y-3">
+                    <h3 className="text-sm font-bold flex items-center gap-2"><Palette className="w-4 h-4 text-primary" /> App Appearance</h3>
+                    <Card className="shadow-sm bg-background border-border">
+                        <CardContent className="p-4 sm:p-6">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+                                {themes.map(t => (
+                                    <button 
+                                        key={t.id} 
+                                        onClick={() => setColorTheme(t.id)}
+                                        className={`flex flex-col items-center gap-3 p-3 rounded-xl border-2 transition-all bg-muted/30 ${colorTheme === t.id ? 'border-primary bg-primary/10' : 'border-transparent hover:border-border'}`}
+                                    >
+                                        <div className={`w-10 h-10 rounded-full shadow-sm flex items-center justify-center ${t.color}`}>
+                                            {colorTheme === t.id && <Check className={`w-5 h-5 ${t.id === 'symbiote' ? 'text-white dark:text-black' : 'text-white'}`} />}
+                                        </div>
+                                        <span className="text-xs font-bold text-foreground">{t.name}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </CardContent>
+                    </Card>
                 </div>
-                <Button variant="outline" size="sm" className="hidden sm:flex" asChild>
-                    <Link href="/requests">View All Requests <ArrowRight className="w-4 h-4 ml-2"/></Link>
-                </Button>
+
+                {/* Account Security Grid */}
+                <div className="space-y-3 pt-4 border-t border-border">
+                    <h3 className="text-sm font-bold flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-primary" /> Account Security</h3>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <Card className={`shadow-sm border-2 bg-background flex flex-col ${is2FAEnabled ? 'border-green-200 bg-green-50/20 dark:border-green-900/40 dark:bg-green-900/10' : 'border-border'}`}>
+                            <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                                <div className="space-y-1 flex-1">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <h4 className={`font-bold text-lg leading-none ${is2FAEnabled ? 'text-green-800 dark:text-green-400' : 'text-foreground'}`}>Two-Factor Auth</h4>
+                                        {is2FAEnabled && <Badge className="bg-green-500 hover:bg-green-600 border-0 h-5 px-1.5 text-[10px]"><Check className="w-3 h-3 mr-1"/> ON</Badge>}
+                                    </div>
+                                    <p className={`text-xs ${is2FAEnabled ? 'text-green-700/80 dark:text-green-500/80' : 'text-muted-foreground'}`}>
+                                        {is2FAEnabled ? "Secured with a TOTP authenticator app." : "Require a 6-digit code when logging in."}
+                                    </p>
+                                </div>
+                                {is2FAEnabled ? (
+                                    <Button variant="outline" className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-900/30" onClick={() => setDisable2faModalOpen(true)}>Disable 2FA</Button>
+                                ) : (
+                                    <Button className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground" onClick={handleBegin2FASetup} disabled={isProcessing2fa}>
+                                        {isProcessing2fa ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />} Enable 2FA
+                                    </Button>
+                                )}
+                            </CardContent>
+                        </Card>
+
+                        <Card className="shadow-sm bg-background border-border flex flex-col">
+                            <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                                <div className="space-y-1 flex-1">
+                                    <h4 className="font-bold text-lg flex items-center gap-2 mb-2 text-foreground">
+                                        <Key className="w-4 h-4 text-primary" /> Password
+                                    </h4>
+                                    <p className="text-xs text-muted-foreground">Update your local account password. SSO users must change passwords at their provider.</p>
+                                </div>
+                                <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground" onClick={() => setPasswordModalOpen(true)}>
+                                    Change Password
+                                </Button>
+                            </CardContent>
+                        </Card>
+
+                        <Card className="shadow-sm bg-background border-border flex flex-col">
+                            <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                                <div className="space-y-1 flex-1">
+                                    <h4 className="font-bold text-lg flex items-center gap-2 mb-2 text-foreground">
+                                        <LogOut className="w-4 h-4 text-orange-500" /> Active Sessions
+                                    </h4>
+                                    <p className="text-xs text-muted-foreground">Logged in on a public computer? Sign out of all other devices immediately.</p>
+                                </div>
+                                <Button variant="outline" className="w-full text-orange-600 border-orange-200 hover:bg-orange-50 dark:border-orange-900/50 dark:hover:bg-orange-900/30" onClick={() => setRevokeModalOpen(true)}>
+                                    Revoke Sessions
+                                </Button>
+                            </CardContent>
+                        </Card>
+
+                        <Card className="shadow-sm bg-background border-border flex flex-col">
+                            <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+                                <div className="space-y-1 flex-1">
+                                    <h4 className="font-bold text-lg flex items-center gap-2 mb-2 text-foreground">
+                                        <Smartphone className="w-4 h-4 text-purple-500" /> External Apps
+                                    </h4>
+                                    <p className="text-xs text-muted-foreground">Generate API keys to sync your library in apps like Panels, Mihon, and Paperback via OPDS.</p>
+                                </div>
+                                <Button variant="outline" className="w-full border-purple-200 text-purple-600 hover:bg-purple-50 dark:border-purple-900/50 dark:hover:bg-purple-900/30" onClick={() => setManageKeysModalOpen(true)}>
+                                    Manage API Keys
+                                </Button>
+                            </CardContent>
+                        </Card>
+                    </div>
+                </div>
+
+                <KoreaderDevices />
             </div>
-            <CardContent className="p-0">
-                <div className="divide-y">
-                    {recentReqs.length === 0 ? (
-                        <div className="p-10 text-center text-muted-foreground italic">No requests made yet.</div>
-                    ) : (
-                        recentReqs.map((req: any) => (
-                            <ActivityCard key={req.id} req={req} getStatusBadge={getStatusBadge} />
-                        ))
-                    )}
-                </div>
-            </CardContent>
-        </Card>
+        </CollapsibleSection>
       </div>
 
       {/* 2FA SETUP MODAL */}
       <Dialog open={setup2faModalOpen} onOpenChange={setSetup2faModalOpen}>
-          <DialogContent className="sm:max-w-[425px] rounded-xl">
+          <DialogContent className="sm:max-w-[425px] rounded-xl bg-background border-border">
               <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-primary" /> Setup Two-Factor Auth</DialogTitle>
+                  <DialogTitle className="flex items-center gap-2 text-foreground"><ShieldCheck className="w-5 h-5 text-primary" /> Setup Two-Factor Auth</DialogTitle>
                   <DialogDescription>Use Google Authenticator, Authy, or Bitwarden to scan the code below.</DialogDescription>
               </DialogHeader>
               <div className="py-4 flex flex-col items-center space-y-6">
                   {qrCodeDataUrl ? (
-                      <div className="bg-white p-4 rounded-xl shadow-inner border">
+                      <div className="bg-white p-4 rounded-xl shadow-inner border border-border">
                           <img src={qrCodeDataUrl} alt="QR Code" className="w-48 h-48" />
                       </div>
                   ) : (
@@ -970,7 +970,7 @@ export default function ProfilePage() {
 
                   <div className="text-center space-y-1 w-full">
                       <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">Manual Setup Key</p>
-                      <code className="bg-muted px-3 py-1.5 rounded-md font-mono text-xs block w-full text-center border select-all">
+                      <code className="bg-muted px-3 py-1.5 rounded-md font-mono text-xs block w-full text-center border border-border text-foreground select-all">
                           {totpSecret || 'Loading...'}
                       </code>
                   </div>
@@ -986,12 +986,12 @@ export default function ProfilePage() {
                           placeholder="Enter 6-digit code" 
                           value={verifyCode} 
                           onChange={(e) => setVerifyCode(e.target.value)} 
-                          className="h-12 text-center text-2xl font-mono tracking-widest bg-muted" 
+                          className="h-12 text-center text-2xl font-mono tracking-widest bg-muted border-border text-foreground" 
                       />
                   </div>
               </div>
               <DialogFooter>
-                  <Button variant="outline" onClick={() => setSetup2faModalOpen(false)} disabled={isProcessing2fa}>Cancel</Button>
+                  <Button variant="outline" className="border-border hover:bg-muted text-foreground" onClick={() => setSetup2faModalOpen(false)} disabled={isProcessing2fa}>Cancel</Button>
                   <Button onClick={handleVerifyAndEnable2FA} disabled={isProcessing2fa || verifyCode.length !== 6} className="bg-primary text-primary-foreground font-bold hover:bg-primary/90">
                       {isProcessing2fa ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Verify & Enable
                   </Button>
@@ -1001,13 +1001,13 @@ export default function ProfilePage() {
 
       {/* 2FA DISABLE MODAL */}
       <Dialog open={disable2faModalOpen} onOpenChange={setDisable2faModalOpen}>
-          <DialogContent className="sm:max-w-[425px] rounded-xl border-red-200 dark:border-red-900/50">
+          <DialogContent className="sm:max-w-[425px] rounded-xl bg-background border-red-200 dark:border-red-900/50">
               <DialogHeader>
                   <DialogTitle className="flex items-center gap-2 text-red-600"><ShieldAlert className="w-5 h-5" /> Disable Two-Factor Auth?</DialogTitle>
                   <DialogDescription>Disabling 2FA will make your account less secure. Are you sure?</DialogDescription>
               </DialogHeader>
               <DialogFooter className="mt-4">
-                  <Button variant="outline" onClick={() => setDisable2faModalOpen(false)} disabled={isProcessing2fa}>Cancel</Button>
+                  <Button variant="outline" className="border-border hover:bg-muted text-foreground" onClick={() => setDisable2faModalOpen(false)} disabled={isProcessing2fa}>Cancel</Button>
                   <Button variant="destructive" onClick={handleDisable2FA} disabled={isProcessing2fa}>
                       {isProcessing2fa ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Yes, Disable 2FA"}
                   </Button>
@@ -1017,28 +1017,28 @@ export default function ProfilePage() {
 
       {/* PASSWORD RESET MODAL */}
       <Dialog open={passwordModalOpen} onOpenChange={setPasswordModalOpen}>
-          <DialogContent className="sm:max-w-[425px] rounded-xl">
+          <DialogContent className="sm:max-w-[425px] rounded-xl bg-background border-border">
               <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2"><Key className="w-5 h-5 text-primary" /> Change Password</DialogTitle>
+                  <DialogTitle className="flex items-center gap-2 text-foreground"><Key className="w-5 h-5 text-primary" /> Change Password</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                      <Label>Current Password</Label>
-                      <Input type="password" value={passwords.current} onChange={e => setPasswords({...passwords, current: e.target.value})} className="bg-muted" />
+                      <Label className="text-foreground">Current Password</Label>
+                      <Input type="password" value={passwords.current} onChange={e => setPasswords({...passwords, current: e.target.value})} className="bg-muted border-border text-foreground" />
                   </div>
                   <div className="space-y-2">
-                      <Label>New Password</Label>
-                      <Input type="password" value={passwords.new} onChange={e => setPasswords({...passwords, new: e.target.value})} className="bg-muted" />
+                      <Label className="text-foreground">New Password</Label>
+                      <Input type="password" value={passwords.new} onChange={e => setPasswords({...passwords, new: e.target.value})} className="bg-muted border-border text-foreground" />
                       <p className="text-[10px] text-muted-foreground">Must be at least 12 characters.</p>
                   </div>
                   <div className="space-y-2">
-                      <Label>Confirm New Password</Label>
-                      <Input type="password" value={passwords.confirm} onChange={e => setPasswords({...passwords, confirm: e.target.value})} className="bg-muted" />
+                      <Label className="text-foreground">Confirm New Password</Label>
+                      <Input type="password" value={passwords.confirm} onChange={e => setPasswords({...passwords, confirm: e.target.value})} className="bg-muted border-border text-foreground" />
                   </div>
               </div>
               <DialogFooter>
-                  <Button variant="outline" onClick={() => setPasswordModalOpen(false)} disabled={isProcessingSecurity}>Cancel</Button>
-                  <Button onClick={handlePasswordChange} disabled={isProcessingSecurity || !passwords.current || !passwords.new} className="bg-primary text-primary-foreground">
+                  <Button variant="outline" className="border-border hover:bg-muted text-foreground" onClick={() => setPasswordModalOpen(false)} disabled={isProcessingSecurity}>Cancel</Button>
+                  <Button onClick={handlePasswordChange} disabled={isProcessingSecurity || !passwords.current || !passwords.new} className="bg-primary text-primary-foreground font-bold">
                       {isProcessingSecurity ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Update Password
                   </Button>
               </DialogFooter>
@@ -1047,7 +1047,7 @@ export default function ProfilePage() {
 
       {/* REVOKE SESSIONS MODAL */}
       <Dialog open={revokeModalOpen} onOpenChange={setRevokeModalOpen}>
-          <DialogContent className="sm:max-w-[425px] rounded-xl border-orange-200 dark:border-orange-900/50">
+          <DialogContent className="sm:max-w-[425px] rounded-xl bg-background border-orange-200 dark:border-orange-900/50">
               <DialogHeader>
                   <DialogTitle className="flex items-center gap-2 text-orange-600"><ShieldAlert className="w-5 h-5" /> Revoke All Sessions?</DialogTitle>
                   <DialogDescription>
@@ -1055,7 +1055,7 @@ export default function ProfilePage() {
                   </DialogDescription>
               </DialogHeader>
               <DialogFooter className="mt-4">
-                  <Button variant="outline" onClick={() => setRevokeModalOpen(false)} disabled={isProcessingSecurity}>Cancel</Button>
+                  <Button variant="outline" className="border-border hover:bg-muted text-foreground" onClick={() => setRevokeModalOpen(false)} disabled={isProcessingSecurity}>Cancel</Button>
                   <Button variant="destructive" className="bg-orange-600 hover:bg-orange-700" onClick={handleRevokeSessions} disabled={isProcessingSecurity}>
                       {isProcessingSecurity ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Yes, Sign Out Everywhere"}
                   </Button>
@@ -1068,9 +1068,9 @@ export default function ProfilePage() {
           setManageKeysModalOpen(open);
           if (!open) setGeneratedKey(null);
       }}>
-          <DialogContent className="sm:max-w-2xl w-[95%] rounded-xl overflow-hidden flex flex-col max-h-[90vh]">
+          <DialogContent className="sm:max-w-2xl w-[95%] bg-background border-border rounded-xl overflow-hidden flex flex-col max-h-[90vh]">
               <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2"><Smartphone className="w-5 h-5 text-primary" /> External App Access (OPDS)</DialogTitle>
+                  <DialogTitle className="flex items-center gap-2 text-foreground"><Smartphone className="w-5 h-5 text-primary" /> External App Access (OPDS)</DialogTitle>
                   <DialogDescription>
                       Create a personal API key to log into external reading apps. Use your Omnibus username and paste the generated API key as your password.
                   </DialogDescription>
@@ -1079,8 +1079,8 @@ export default function ProfilePage() {
               <div className="space-y-6 py-4 overflow-y-auto pr-2">
                   <div className="flex flex-col sm:flex-row sm:items-end gap-3 w-full">
                       <div className="grid gap-2 flex-1 w-full min-w-0">
-                          <Label>App Name / Device</Label>
-                          <Input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="e.g., Panels on iPad" className="bg-muted border-border w-full" />
+                          <Label className="text-foreground">App Name / Device</Label>
+                          <Input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="e.g., Panels on iPad" className="bg-muted border-border text-foreground w-full" />
                       </div>
                       <Button onClick={handleGenerateKey} disabled={!newKeyName || isGeneratingKey} className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground h-10 w-full sm:w-auto shrink-0">
                           {isGeneratingKey ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Plus className="w-4 h-4 mr-2" />} Generate Key
@@ -1110,13 +1110,13 @@ export default function ProfilePage() {
                                   <th className="px-4 py-3 text-right">Actions</th>
                               </tr>
                           </thead>
-                          <tbody className="divide-y divide-border">
+                          <tbody className="divide-y divide-border bg-background">
                               {apiKeys.length === 0 ? (
                                   <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground italic">You haven't generated any access keys.</td></tr>
                               ) : (
                                   apiKeys.map(key => (
                                       <tr key={key.id} className="hover:bg-muted/30">
-                                          <td className="px-4 py-3 font-bold truncate max-w-[200px]">{key.name}</td>
+                                          <td className="px-4 py-3 font-bold truncate max-w-[200px] text-foreground">{key.name}</td>
                                           <td className="px-4 py-3 text-muted-foreground">{new Date(key.createdAt).toLocaleDateString()}</td>
                                           <td className="px-4 py-3 text-muted-foreground">{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString() : 'Never'}</td>
                                           <td className="px-4 py-3 text-right">

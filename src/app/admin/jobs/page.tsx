@@ -1,3 +1,4 @@
+// src/app/admin/jobs/page.tsx
 "use client"
 
 import { useState, useEffect, useRef } from "react"
@@ -9,7 +10,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
     Activity, RefreshCw, FileText, ExternalLink, Download, 
-    UploadCloud, TrendingUp, FileArchive, FileJson, Mail
+    UploadCloud, TrendingUp, FileArchive, FileJson, Mail, Layers, Globe, Settings
 } from "lucide-react"
 import { getErrorMessage } from "@/lib/utils/error"
 
@@ -32,7 +33,7 @@ export default function ScheduledJobsPage() {
   const [backupSyncSchedule, setBackupSyncSchedule] = useState("168") 
   const [popularSyncSchedule, setPopularSyncSchedule] = useState("24")
   const [converterSyncSchedule, setConverterSyncSchedule] = useState("24")
-  const [weeklyDigestSchedule, setWeeklyDigestSchedule] = useState("168") // <-- Weekly Digest Schedule
+  const [weeklyDigestSchedule, setWeeklyDigestSchedule] = useState("168") 
   
   const [savingJobs, setSavingJobs] = useState(false)
   const [runningJob, setRunningJob] = useState<string | null>(null) 
@@ -61,7 +62,7 @@ export default function ScheduledJobsPage() {
         const backupItem = data.settings.find((c: any) => c.key === 'backup_sync_schedule'); 
         const popularItem = data.settings.find((c: any) => c.key === 'popular_sync_schedule'); 
         const converterItem = data.settings.find((c: any) => c.key === 'cbr_conversion_schedule');
-        const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule'); // <-- Fetch Digest config
+        const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule'); 
         
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (embedItem) setEmbedMetadataSchedule(embedItem.value);
@@ -118,7 +119,7 @@ export default function ScheduledJobsPage() {
                       backup_sync_schedule: backupSyncSchedule,
                       popular_sync_schedule: popularSyncSchedule,
                       cbr_conversion_schedule: converterSyncSchedule,
-                      weekly_digest_schedule: weeklyDigestSchedule // <-- Save Digest config
+                      weekly_digest_schedule: weeklyDigestSchedule
                   }
               }) 
           })
@@ -194,192 +195,214 @@ export default function ScheduledJobsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="space-y-10">
         
-        {/* DATABASE BACKUP */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Save className="w-5 h-5 text-primary" /> Database Backup</CardTitle>
-                <CardDescription className="text-muted-foreground">Exports or restores library and user data to a JSON file.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={backupSyncSchedule} onValueChange={setBackupSyncSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
+        {/* GROUP 1: LIBRARY & FILE MANAGEMENT */}
+        <div className="space-y-4">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-foreground border-b border-border pb-2">
+                <Layers className="w-5 h-5 text-primary" /> Library & File Management
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 
-                <div className="grid grid-cols-2 gap-2">
-                    <Button className="w-full font-bold shadow-sm text-[11px] border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('backup')} disabled={runningJob === 'backup'}>
-                        {runningJob === 'backup' ? <Loader2 className="w-3 h-3 mr-2 animate-spin"/> : <Play className="w-3 h-3 mr-2"/>} Auto-Save
-                    </Button>
-                    <Button className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm text-[11px] border-0" asChild>
-                        <a href="/api/admin/backup" download><Download className="w-3 h-3 mr-2"/> Download</a>
-                    </Button>
-                </div>
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Database className="w-5 h-5 text-primary" /> Library Auto-Scan</CardTitle>
+                        <CardDescription className="text-muted-foreground">Scans disk for newly dropped files and indexes them.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={librarySyncSchedule} onValueChange={setLibrarySyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('library')} disabled={runningJob === 'library'}>
+                            {runningJob === 'library' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
+
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><RefreshCw className="w-5 h-5 text-primary" /> Deep Metadata Sync</CardTitle>
+                        <CardDescription className="text-muted-foreground">Re-syncs series with metadata providers to update covers and info.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={metadataSyncSchedule} onValueChange={setMetadataSyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('metadata')} disabled={runningJob === 'metadata'}>
+                            {runningJob === 'metadata' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
+
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileJson className="w-5 h-5 text-primary" /> Embed XML Metadata</CardTitle>
+                        <CardDescription className="text-muted-foreground">Writes ComicInfo.xml data directly into your downloaded .cbz archives.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={embedMetadataSchedule} onValueChange={setEmbedMetadataSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('embed_metadata')} disabled={runningJob === 'embed_metadata'}>
+                            {runningJob === 'embed_metadata' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
+
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileArchive className="w-5 h-5 text-primary" /> CBR Auto-Converter</CardTitle>
+                        <CardDescription className="text-muted-foreground">Finds legacy .cbr archives in your library and converts them to .cbz for instant loading.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={converterSyncSchedule} onValueChange={setConverterSyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('converter')} disabled={runningJob === 'converter'}>
+                            {runningJob === 'converter' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
+
+            </div>
+        </div>
+
+        {/* GROUP 2: DISCOVERY & NOTIFICATIONS */}
+        <div className="space-y-4">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-foreground border-b border-border pb-2">
+                <Globe className="w-5 h-5 text-primary" /> Discovery & Engagement
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 
-                <div className="pt-2 border-t border-border">
-                    <input type="file" accept=".json" ref={fileInputRef} className="hidden" onChange={handleRestoreUpload} />
-                    <Button variant="outline" className="w-full font-bold border-primary/30 text-primary hover:bg-primary/10" disabled={isRestoring} onClick={() => fileInputRef.current?.click()}>
-                        {isRestoring ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <UploadCloud className="w-4 h-4 mr-2"/>} 
-                        {isRestoring ? "Restoring..." : "Restore from JSON"}
-                    </Button>
-                </div>
-            </CardContent>
-        </Card>
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><TrendingUp className="w-5 h-5 text-primary" /> Discover Sync</CardTitle>
+                        <CardDescription className="text-muted-foreground">Refreshes homepage new releases and popular issues cache.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={popularSyncSchedule} onValueChange={setPopularSyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('popular')} disabled={runningJob === 'popular'}>
+                            {runningJob === 'popular' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
 
-        {/* LIBRARY AUTO-SCAN */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Database className="w-5 h-5 text-primary" /> Library Auto-Scan</CardTitle>
-                <CardDescription className="text-muted-foreground">Scans disk for newly dropped files and indexes them.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={librarySyncSchedule} onValueChange={setLibrarySyncSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('library')} disabled={runningJob === 'library'}>
-                    {runningJob === 'library' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Activity className="w-5 h-5 text-primary" /> New Issue Monitor</CardTitle>
+                        <CardDescription className="text-muted-foreground">Checks monitored series for new weekly releases.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={monitorSyncSchedule} onValueChange={setMonitorSyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('monitor')} disabled={runningJob === 'monitor'}>
+                            {runningJob === 'monitor' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
 
-        {/* DEEP METADATA SYNC */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><RefreshCw className="w-5 h-5 text-primary" /> Deep Metadata Sync</CardTitle>
-                <CardDescription className="text-muted-foreground">Re-syncs series with ComicVine or Metron to update covers and info.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={metadataSyncSchedule} onValueChange={setMetadataSyncSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('metadata')} disabled={runningJob === 'metadata'}>
-                    {runningJob === 'metadata' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Mail className="w-5 h-5 text-primary" /> Weekly Email Digest</CardTitle>
+                        <CardDescription className="text-muted-foreground">Sends users an email of newly added library items (SMTP required).</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={weeklyDigestSchedule} onValueChange={setWeeklyDigestSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('weekly_digest')} disabled={runningJob === 'weekly_digest'}>
+                            {runningJob === 'weekly_digest' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
 
-        {/* EMBED XML METADATA */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileJson className="w-5 h-5 text-primary" /> Embed XML Metadata</CardTitle>
-                <CardDescription className="text-muted-foreground">Writes ComicInfo.xml data directly into your downloaded .cbz archives.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={embedMetadataSchedule} onValueChange={setEmbedMetadataSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('embed_metadata')} disabled={runningJob === 'embed_metadata'}>
-                    {runningJob === 'embed_metadata' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
+            </div>
+        </div>
 
-        {/* NEW ISSUE MONITOR */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Activity className="w-5 h-5 text-primary" /> New Issue Monitor</CardTitle>
-                <CardDescription className="text-muted-foreground">Checks monitored series for new weekly ComicVine releases.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={monitorSyncSchedule} onValueChange={setMonitorSyncSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('monitor')} disabled={runningJob === 'monitor'}>
-                    {runningJob === 'monitor' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
+        {/* GROUP 3: SYSTEM & MAINTENANCE */}
+        <div className="space-y-4">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-foreground border-b border-border pb-2">
+                <Settings className="w-5 h-5 text-primary" /> System & Maintenance
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Save className="w-5 h-5 text-primary" /> Database Backup</CardTitle>
+                        <CardDescription className="text-muted-foreground">Exports or restores library and user data to a JSON file.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={backupSyncSchedule} onValueChange={setBackupSyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                            <Button className="w-full font-bold shadow-sm text-[11px] border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('backup')} disabled={runningJob === 'backup'}>
+                                {runningJob === 'backup' ? <Loader2 className="w-3 h-3 mr-2 animate-spin"/> : <Play className="w-3 h-3 mr-2"/>} Auto-Save
+                            </Button>
+                            <Button className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm text-[11px] border-0" asChild>
+                                <a href="/api/admin/backup" download><Download className="w-3 h-3 mr-2"/> Download</a>
+                            </Button>
+                        </div>
+                        
+                        <div className="pt-2 border-t border-border">
+                            <input type="file" accept=".json" ref={fileInputRef} className="hidden" onChange={handleRestoreUpload} />
+                            <Button variant="outline" className="w-full font-bold border-primary/30 text-primary hover:bg-primary/10" disabled={isRestoring} onClick={() => fileInputRef.current?.click()}>
+                                {isRestoring ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <UploadCloud className="w-4 h-4 mr-2"/>} 
+                                {isRestoring ? "Restoring..." : "Restore from JSON"}
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
 
-        {/* CBR AUTO-CONVERTER */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileArchive className="w-5 h-5 text-primary" /> CBR Auto-Converter</CardTitle>
-                <CardDescription className="text-muted-foreground">Finds legacy .cbr archives in your library and converts them to .cbz for instant loading.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={converterSyncSchedule} onValueChange={setConverterSyncSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('converter')} disabled={runningJob === 'converter'}>
-                    {runningJob === 'converter' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><ShieldAlert className="w-5 h-5 text-primary" /> System Diagnostics</CardTitle>
+                        <CardDescription className="text-muted-foreground">Tests library integrity and checks for corrupted archives.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={diagnosticsSyncSchedule} onValueChange={setDiagnosticsSyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('diagnostics')} disabled={runningJob === 'diagnostics'}>
+                            {runningJob === 'diagnostics' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
 
-        {/* DISCOVER SYNC */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><TrendingUp className="w-5 h-5 text-primary" /> Discover Sync</CardTitle>
-                <CardDescription className="text-muted-foreground">Refreshes homepage new releases and popular issues.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={popularSyncSchedule} onValueChange={setPopularSyncSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('popular')} disabled={runningJob === 'popular'}>
-                    {runningJob === 'popular' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
+            </div>
+        </div>
 
-        {/* SYSTEM DIAGNOSTICS */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><ShieldAlert className="w-5 h-5 text-primary" /> System Diagnostics</CardTitle>
-                <CardDescription className="text-muted-foreground">Tests library integrity and checks for corrupted archives.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={diagnosticsSyncSchedule} onValueChange={setDiagnosticsSyncSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('diagnostics')} disabled={runningJob === 'diagnostics'}>
-                    {runningJob === 'diagnostics' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
-
-        {/* --- WEEKLY DIGEST EMAIL --- */}
-        <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
-            <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Mail className="w-5 h-5 text-primary" /> Weekly Email Digest</CardTitle>
-                <CardDescription className="text-muted-foreground">Sends users an email of newly added library items over the past 7 days (SMTP required).</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <Select value={weeklyDigestSchedule} onValueChange={setWeeklyDigestSchedule}>
-                    <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-popover border-border">
-                        {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                    </SelectContent>
-                </Select>
-                <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('weekly_digest')} disabled={runningJob === 'weekly_digest'}>
-                    {runningJob === 'weekly_digest' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
-                </Button>
-            </CardContent>
-        </Card>
       </div>
 
       <div className="pt-8">

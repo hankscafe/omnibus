@@ -12,7 +12,7 @@ import {
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
-  MapPin, Shield // ADDED: Imported missing icons for the new sections
+  MapPin, Shield
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -64,6 +64,8 @@ function SeriesContent() {
   });
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
+  // --- NEW: State to track if Metron is configured ---
+  const [metronConfigured, setMetronConfigured] = useState(false);
   
   const [copied, setCopied] = useState(false);
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false);
@@ -115,6 +117,22 @@ function SeriesContent() {
 
   const isAdmin = session?.user?.role === 'ADMIN';
   const canDownload = isAdmin || (session?.user as any)?.canDownload;
+
+  // --- NEW: Check if Metron is configured for the admin match modal ---
+  useEffect(() => {
+    if (isAdmin) {
+        fetch('/api/admin/config')
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (data?.settings) {
+                    const mUser = data.settings.find((s: any) => s.key === 'metron_user')?.value;
+                    const mPass = data.settings.find((s: any) => s.key === 'metron_pass')?.value;
+                    if (mUser && mPass) setMetronConfigured(true);
+                }
+            })
+            .catch(() => {});
+    }
+  }, [isAdmin]);
 
   useEffect(() => {
     document.title = "Omnibus - Series";
@@ -184,7 +202,6 @@ function SeriesContent() {
           });
   }, [seriesInfo.id, session]);
 
-  // FIX: Include the extended metadata payload from the backend route
   useEffect(() => {
     if (!activeIssue?.id) return;
     
@@ -262,7 +279,6 @@ function SeriesContent() {
   const displayDescription = activeIssue?.description || seriesInfo.description || "No synopsis available.";
   const displayCover = activeIssue?.coverUrl || seriesInfo.cover;
   
-  // Update hasCreators trigger
   const hasCreators = writers.length > 0 || artists.length > 0 || coverArtists.length > 0 || colorists.length > 0 || letterers.length > 0;
 
   const handleRefreshMetadata = async () => {
@@ -1235,16 +1251,20 @@ function SeriesContent() {
       <Dialog open={matchModalOpen} onOpenChange={setMatchModalOpen}>
           <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col bg-background border-border">
               <DialogHeader><DialogTitle>Match Series</DialogTitle></DialogHeader>
+              
+              {/* --- NEW: Hide dropdown if Metron isn't configured, but keep the search bar functioning perfectly --- */}
               <form onSubmit={(e) => performSearch(e, false)} className="flex gap-2">
-                  <Select value={searchProvider} onValueChange={setSearchProvider}>
-                      <SelectTrigger className="w-[140px] bg-background border-border shrink-0">
-                          <SelectValue placeholder="Source" />
-                      </SelectTrigger>
-                      <SelectContent>
-                          <SelectItem value="COMICVINE">ComicVine</SelectItem>
-                          <SelectItem value="MANGADEX">MangaDex</SelectItem>
-                      </SelectContent>
-                  </Select>
+                  {metronConfigured && (
+                      <Select value={searchProvider} onValueChange={setSearchProvider}>
+                          <SelectTrigger className="w-[140px] bg-background border-border shrink-0">
+                              <SelectValue placeholder="Source" />
+                          </SelectTrigger>
+                          <SelectContent>
+                              <SelectItem value="COMICVINE">ComicVine</SelectItem>
+                              <SelectItem value="METRON">Metron.Cloud</SelectItem>
+                          </SelectContent>
+                      </Select>
+                  )}
                   <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-background border-border w-full" />
                   <Button type="submit" disabled={isSearching}><Search className="w-4 h-4" /></Button>
               </form>

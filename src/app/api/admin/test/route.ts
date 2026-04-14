@@ -263,6 +263,7 @@ export async function POST(request: Request) {
       if (!user || !pass) return NextResponse.json({ success: false, message: 'Missing Username or Password' });
       
       await axios.get(`https://metron.cloud/api/series/`, {
+        headers, // <-- FIX: Injected headers (includes 'User-Agent': 'Omnibus/1.0')
         auth: { username: user, password: pass },
         timeout: 10000
       });

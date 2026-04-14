@@ -111,7 +111,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
   * Request Pipeline Badges:
     * 🟠 Requested (Orange with Clock Icon): You have requested this item. Omnibus has added it to the queue and is actively searching for a valid download source.
     * 🟡 Pending Approval (Yellow with Clock Icon): You have requested this item, but your server requires an Admin to manually approve the request before the search begins.
-* **Smart Requests & Automation:** Send requests directly to your download queue. Omnibus searches your connected indexers (Prowlarr) and gracefully falls back to direct downloads (GetComics) and 3rd-party file hosters if torrents/usenet fail.
+* **Smart Requests & Automation:** Send requests directly to your download queue. Omnibus searches GetComics first and directly downloads your request or utilizaes 3rd-party file hosters (based on your priority settings) and then falls back to your connected indexers (Prowlarr).
 * **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
 * **Unreleased Badges:** When a request is made Omnibus will check ComicVine for the issues release date and if it is not released it will tag it as UNRELEASED.  As the Monitor Series job runs it will also check items tagged as UNRELEASED and update it as available once it is availalbe, allowing future issues to be automatically downloaded.
 * **Admin Action Alerts:** Admins get a top-level heads-up display alerting them of pending user approvals, manual download interventions, and broken file reports.
@@ -138,7 +138,7 @@ A meticulously organized, highly performant view of your physical files, built t
 </p>
 
 * **Embedded Metadata (ComicInfo.xml):** Omnibus doesn't just read metadata—it writes it. Omnibus can automatically generate and embed standard `ComicInfo.xml` files directly into your `.cbz` archives, ensuring your metadata travels with your files.
-* **Dual Megadata Engines:** Omnibus reads embedded ComicInfo.xml files inside your archives and syncs with the ComicVine API to pull high-res covers, synopses, and creator credits.
+* **Dual Megadata Engines:** Omnibus reads embedded ComicInfo.xml files inside your archives and syncs with the ComicVine API or Metron.Cloud (if configured) to pull high-res covers, synopses, and creator credits.
 * **Multi-Library Routing:** Map distinct folders for standard Comics and Manga. Omnibus automatically detects Manga based on publishers, AniList cross-referencing, and tags to route them to the correct directory.
 * **Automated File Standardization:** Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
 * **Deep Filtering & Sorting:** Filter by Publisher, Genre, Format, Era (1980s, 1990s, etc.), and Read Status.

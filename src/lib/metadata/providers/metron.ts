@@ -6,6 +6,8 @@ import { Logger } from '@/lib/logger';
 
 export class MetronProvider implements IMetadataProvider {
     private readonly baseUrl = 'https://metron.cloud/api';
+    // --- FIX: Standardized custom user-agent ---
+    private readonly requestHeaders = { 'User-Agent': 'Omnibus/1.0' };
 
     private async getAuth() {
         const settings = await prisma.systemSetting.findMany({
@@ -13,7 +15,6 @@ export class MetronProvider implements IMetadataProvider {
         });
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
         
-        // Return undefined if credentials aren't set or are obfuscated by the API
         if (!config.metron_user || !config.metron_pass || config.metron_pass === '********') {
             return undefined;
         }
@@ -30,6 +31,7 @@ export class MetronProvider implements IMetadataProvider {
         
         const res = await axios.get(`${this.baseUrl}/series/`, {
             params: { name: query },
+            headers: this.requestHeaders, // <-- INJECTED
             auth,
             timeout: 10000
         });
@@ -48,7 +50,11 @@ export class MetronProvider implements IMetadataProvider {
 
     async getSeriesDetails(id: string): Promise<MetadataSeries> {
         const auth = await this.getAuth();
-        const res = await axios.get(`${this.baseUrl}/series/${id}/`, { auth, timeout: 10000 });
+        const res = await axios.get(`${this.baseUrl}/series/${id}/`, { 
+            headers: this.requestHeaders, // <-- INJECTED
+            auth, 
+            timeout: 10000 
+        });
         const series = res.data;
 
         return {
@@ -69,7 +75,11 @@ export class MetronProvider implements IMetadataProvider {
         let nextUrl = `${this.baseUrl}/issue/?series=${id}`;
 
         while (nextUrl) {
-            const res = await axios.get(nextUrl, { auth, timeout: 10000 });
+            const res = await axios.get(nextUrl, { 
+                headers: this.requestHeaders, // <-- INJECTED
+                auth, 
+                timeout: 10000 
+            });
             allIssues = allIssues.concat(res.data.results || []);
             nextUrl = res.data.next;
         }
@@ -77,7 +87,6 @@ export class MetronProvider implements IMetadataProvider {
         return allIssues.map((issue: any) => {
             const credits = issue.credits || [];
             
-            // Extract Roles from Metron's nested credit structure
             const writers = credits.filter((c: any) => c.role?.name?.toLowerCase().includes('writer')).map((c: any) => c.creator?.name);
             const artists = credits.filter((c: any) => c.role?.name?.toLowerCase().includes('artist') || c.role?.name?.toLowerCase().includes('penciller')).map((c: any) => c.creator?.name);
             const characters = (issue.characters || []).map((c: any) => c.name);

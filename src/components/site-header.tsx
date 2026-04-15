@@ -251,6 +251,9 @@ export function SiteHeader() {
                   <DropdownMenuItem asChild className="p-3 text-base font-medium cursor-pointer rounded-lg hover:bg-muted focus:bg-primary/10 focus:text-primary transition-colors">
                     <Link href="/requests">My Requests</Link>
                   </DropdownMenuItem>
+                  <DropdownMenuItem asChild className="p-3 text-base font-medium cursor-pointer rounded-lg hover:bg-muted focus:bg-primary/10 focus:text-primary transition-colors">
+                    <Link href="/calendar">Release Calendar</Link>
+                  </DropdownMenuItem>
                   {session?.user?.role === "ADMIN" && (
                     <>
                       <DropdownMenuSeparator className="bg-border my-1" />
@@ -274,6 +277,7 @@ export function SiteHeader() {
             <Link href="/library" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors">Library</Link>
             <Link href="/reading-lists" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors">Reading Lists</Link>
             <Link href="/requests" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors">My Requests</Link>
+            <Link href="/calendar" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors">Release Calendar</Link>
             
             {session?.user?.role === "ADMIN" && (
                 <Button variant="outline" size="sm" className="h-8 gap-1.5 border-primary/20 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary transition-colors" asChild>

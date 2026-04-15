@@ -33,6 +33,7 @@ export function TitleManager() {
     else if (pathname.startsWith("/library/history")) newTitle = "Omnibus - Reading History";
     else if (pathname === "/library") newTitle = "Omnibus - Library";
     else if (pathname === "/reading-lists") newTitle = "Omnibus - Reading Lists";
+    else if (pathname === "/calendar") newTitle = "Omnibus - Release Calendar";
     else if (pathname.startsWith("/requests")) newTitle = "Omnibus - My Requests";
     else if (pathname.startsWith("/reader")) newTitle = "Omnibus - Reader";
     else if (pathname.startsWith("/profile")) newTitle = "Omnibus - Profile";

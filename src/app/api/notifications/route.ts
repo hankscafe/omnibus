@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function GET() {
   try {
@@ -81,6 +82,7 @@ export async function GET() {
 
     return NextResponse.json(formatted);
   } catch (error: unknown) {
+    Logger.log(`[Notifications API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
@@ -109,6 +111,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
+    Logger.log(`[Notifications API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

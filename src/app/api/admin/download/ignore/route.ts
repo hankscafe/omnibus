@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function POST(request: Request) {
     try {
+        const authOptions = await getAuthOptions();
+        const session = await getServerSession(authOptions);
+        const userId = (session?.user as any)?.id;
+
         const { downloadId } = await request.json();
         if (!downloadId) return NextResponse.json({ error: "Missing downloadId" }, { status: 400 });
 
@@ -24,8 +32,13 @@ export async function POST(request: Request) {
             create: { key: 'ignored_downloads', value: JSON.stringify(ignored) }
         });
 
+        if (userId) {
+            await AuditLogger.log('IGNORED_DOWNLOAD', { downloadId }, userId);
+        }
+
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
+        Logger.log(`[Ignore DL] Failed: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

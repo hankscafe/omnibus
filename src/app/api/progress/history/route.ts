@@ -6,6 +6,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function GET(request: Request) {
   try {
@@ -50,6 +51,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ items });
   } catch (error: unknown) {
+    Logger.log(`[History API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

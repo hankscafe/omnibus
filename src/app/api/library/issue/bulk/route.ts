@@ -5,7 +5,9 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
-import { omnibusQueue } from '@/lib/queue'; // <-- NEW
+import { omnibusQueue } from '@/lib/queue';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function PUT(request: Request) {
     const authOptions = await getAuthOptions();
@@ -44,7 +46,8 @@ export async function PUT(request: Request) {
         }
 
         return NextResponse.json({ success: true });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Bulk Issue Edit] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

@@ -3,11 +3,17 @@ import { prisma } from '@/lib/db';
 import { Importer } from '@/lib/importer';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+
     const { requestId, torrentName, torrentId } = await request.json();
 
     if (!requestId) {
@@ -31,6 +37,9 @@ export async function POST(request: Request) {
     const success = await Importer.importRequest(requestId);
 
     if (success) {
+      if (session?.user) {
+        await AuditLogger.log('MANUAL_IMPORT_TRIGGERED', { requestId, torrentName }, (session.user as any).id);
+      }
       return NextResponse.json({ success: true, message: "Import successful" });
     } else {
       return NextResponse.json({ 

@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { prisma } from '@/lib/db';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,12 +34,16 @@ export async function GET() {
     
     return NextResponse.json(logs);
   } catch (error: unknown) {
+    Logger.log(`[Job Logs API] Fetch Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
 export async function DELETE(request: Request) {
   try {
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const userId = (session?.user as any)?.id;
     const { searchParams } = new URL(request.url);
     const days = searchParams.get('days');
 
@@ -51,14 +59,16 @@ export async function DELETE(request: Request) {
                 }
             }
         });
-        
+        if (userId) await AuditLogger.log('CLEARED_JOB_LOGS', { scope: `Older than ${days} days` }, userId);
         return NextResponse.json({ success: true, count: deleted.count });
     } else {
         // Clear ALL historical job logs
         await prisma.jobLog.deleteMany({});
+        if (userId) await AuditLogger.log('CLEARED_JOB_LOGS', { scope: 'All logs' }, userId);
         return NextResponse.json({ success: true });
     }
   } catch (error: unknown) {
+    Logger.log(`[Job Logs API] Delete Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

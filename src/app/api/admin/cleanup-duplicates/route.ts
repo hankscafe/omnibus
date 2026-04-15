@@ -3,6 +3,8 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,10 +33,16 @@ export async function GET(request: Request) {
     const idsToDelete = duplicatesToDelete.map(s => s.id);
 
     if (idsToDelete.length > 0) {
-        await prisma.series.deleteMany({
-            where: { id: { in: idsToDelete } }
-        });
-    }
+    await prisma.series.deleteMany({
+        where: { id: { in: idsToDelete } }
+    });
+    await AuditLogger.log('CLEANUP_DUPLICATE_SERIES', { 
+        deletedCount: idsToDelete.length, 
+        series: duplicatesToDelete.map(s => s.name) 
+    }, (session.user as any).id);
+    
+    Logger.log(`[Cleanup] Removed ${idsToDelete.length} duplicate local series records.`, 'success');
+}
 
     return NextResponse.json({
         success: true,
@@ -43,6 +51,7 @@ export async function GET(request: Request) {
     });
 
   } catch (error: unknown) {
+    Logger.log(`[Cleanup] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
-  }
+}
 }

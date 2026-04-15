@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,7 @@ export async function GET() {
 
         return NextResponse.json(unmatched);
     } catch (error: unknown) {
+        Logger.log(`[Unmatched API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

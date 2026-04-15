@@ -5,6 +5,8 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import fs from 'fs';
 import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +30,8 @@ export async function GET() {
 
         const fileBuffer = fs.readFileSync(logFile);
 
+        await AuditLogger.log('DOWNLOADED_SYSTEM_LOGS', "Raw system log file exported.", (session.user as any).id);
+
         return new NextResponse(fileBuffer, {
             headers: {
                 'Content-Type': 'text/plain',
@@ -35,6 +39,7 @@ export async function GET() {
             },
         });
     } catch (error: unknown) {
+        Logger.log(`[Logs Download API] Error: ${getErrorMessage(error)}`, 'error');
         return new NextResponse("Failed to download log file: " + getErrorMessage(error), { status: 500 });
     }
 }

@@ -1,6 +1,8 @@
 // src/app/api/opds/series/[id]/route.ts
 import { prisma } from '@/lib/db';
 import { validateApiKey } from '@/lib/api-auth';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,10 +17,11 @@ const escapeXml = (unsafe: string | null | undefined) => {
 };
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
-    const auth = await validateApiKey(req);
-    if (!auth.valid || !auth.user) {
-        return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="Omnibus OPDS"' } });
-    }
+    try {
+        const auth = await validateApiKey(req);
+        if (!auth.valid || !auth.user) {
+            return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="Omnibus OPDS"' } });
+        }
 
     const url = new URL(req.url);
     const baseUrl = url.origin;
@@ -87,4 +90,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 </feed>`;
 
     return new Response(xml, { headers: { 'Content-Type': 'application/atom+xml;profile=opds-catalog; charset=utf-8' } });
+    } catch (error: unknown) {
+        Logger.log(`[OPDS Series Detail API] Error: ${getErrorMessage(error)}`, 'error');
+        return new Response('Internal Server Error', { status: 500 });
+    }
 }

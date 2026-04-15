@@ -5,6 +5,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { encrypt2FA } from '@/lib/encryption';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 const otplib = require('otplib');
 const authenticator = otplib.authenticator || otplib.default?.authenticator || otplib;
@@ -78,7 +79,7 @@ export async function POST(req: Request) {
                     twoFactorSecret: encryptedSecret 
                 }
             });
-
+            await AuditLogger.log('2FA_ENABLED', "User enabled Two-Factor Authentication.", userId);
             return NextResponse.json({ success: true, message: "Two-Factor Authentication enabled!" });
         }
 
@@ -91,6 +92,7 @@ export async function POST(req: Request) {
                     twoFactorSecret: null 
                 }
             });
+            await AuditLogger.log('2FA_DISABLED', "User disabled Two-Factor Authentication.", userId);
             return NextResponse.json({ success: true, message: "Two-Factor Authentication disabled." });
         }
 

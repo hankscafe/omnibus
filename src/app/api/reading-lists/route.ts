@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -97,6 +98,7 @@ export async function GET(request: Request) {
 
         return NextResponse.json(lists);
     } catch (error: unknown) {
+        Logger.log(`[Reading Lists API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
@@ -122,6 +124,7 @@ export async function POST(request: Request) {
 
         return NextResponse.json(newList);
     } catch (error: unknown) {
+        Logger.log(`[Reading Lists API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
@@ -147,6 +150,7 @@ export async function DELETE(request: Request) {
         await prisma.readingList.delete({ where: { id } });
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
+        Logger.log(`[Reading Lists API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

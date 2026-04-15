@@ -1,8 +1,10 @@
-// src/app/api/library/repack/route.ts
 import { NextResponse } from 'next/server';
 import { omnibusQueue } from '@/lib/queue';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function POST(request: Request) {
     const authOptions = await getAuthOptions();
@@ -16,13 +18,15 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
         }
 
-        // Add to the native BullMQ queue
         await omnibusQueue.add('REPACK_ARCHIVES', { type: 'REPACK_ARCHIVES', seriesIds }, {
             jobId: `REPACK_${Date.now()}`
         });
 
+        await AuditLogger.log('REPACK_ARCHIVES_QUEUED', { seriesIds }, (session.user as any).id);
+
         return NextResponse.json({ success: true, message: "Repacking job queued." });
-    } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Repack API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

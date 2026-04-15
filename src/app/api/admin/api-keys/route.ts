@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,7 @@ export async function GET() {
         });
         return NextResponse.json(apiKeys);
     } catch (error) {
+        Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
@@ -67,8 +69,10 @@ export async function POST(request: Request) {
             }
         });
 
+        await AuditLogger.log('CREATED_ADMIN_API_KEY', { keyName: name, assignedTo: apiKey.user.username }, (session.user as any).id);
         return NextResponse.json({ success: true, rawKey, apiKey });
     } catch (error) {
+        Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
@@ -90,6 +94,7 @@ export async function DELETE(request: Request) {
 
         return NextResponse.json({ success: true });
     } catch (error) {
+        Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

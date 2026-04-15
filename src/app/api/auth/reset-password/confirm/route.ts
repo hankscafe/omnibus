@@ -4,6 +4,8 @@ import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { AuditLogger } from '@/lib/audit-logger';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +44,8 @@ export async function POST(req: Request) {
         await AuditLogger.log('PASSWORD_RESET', { message: "Password was reset via email token." }, userId);
         return NextResponse.json({ success: true, message: "Password has been successfully reset." });
 
-    } catch (error) {
+    } catch (error: unknown) {
+        Logger.log(`[Password Reset Confirm] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: "Invalid reset token." }, { status: 400 });
     }
 }

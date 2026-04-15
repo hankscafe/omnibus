@@ -2,8 +2,11 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import crypto from 'crypto';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function PUT(request: Request) {
+    try {
     // 1. Inline KOReader Auth
     const userHeader = request.headers.get('x-auth-user');
     const keyHeader = request.headers.get('x-auth-key');
@@ -63,4 +66,8 @@ export async function PUT(request: Request) {
     }
 
     return NextResponse.json({ document });
+    } catch (error: unknown) {
+        Logger.log(`[KOReader Sync API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ authorized: "KO" }, { status: 500 });
+    }
 }

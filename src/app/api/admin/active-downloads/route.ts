@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET() {
   try {
@@ -130,10 +131,7 @@ export async function GET() {
     return NextResponse.json({ success: true, activeDownloads: filteredDownloads });
 
   } catch (error: unknown) {
-    return NextResponse.json({ 
-        success: false, 
-        error: "Failed to process download clients.", 
-        activeDownloads: [] 
-    }, { status: 500 });
+    Logger.log(`[Active Downloads API] Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ success: false, error: "Failed to process download clients.", activeDownloads: [] }, { status: 500 });
   }
 }

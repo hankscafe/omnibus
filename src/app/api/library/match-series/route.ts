@@ -10,6 +10,9 @@ import { DiscordNotifier } from '@/lib/discord';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger'; 
 import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { AuditLogger } from '@/lib/audit-logger';
+import { authOptions } from '@/lib/auth';
+import { getServerSession } from 'next-auth';
 
 export async function POST(request: Request) {
   try {
@@ -239,10 +242,17 @@ export async function POST(request: Request) {
         }
     } catch (e) {}
     
+    const session = await getServerSession(authOptions);
+    const userId = (session?.user as any)?.id;
+    if (userId) {
+        await AuditLogger.log('MATCH_SERIES', { oldPath: oldFolderPath, newPath: activeFolderPath }, userId);
+    }
+    
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
     return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId });
 
   } catch (error: unknown) {
+    Logger.log(`[Match Series API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

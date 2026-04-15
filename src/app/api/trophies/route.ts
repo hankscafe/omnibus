@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from '@/lib/logger';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function GET() {
     const authOptions = await getAuthOptions();
@@ -49,11 +50,15 @@ export async function POST(req: Request) {
             const data: any = { name, description, actionType, targetValue: parseInt(targetValue) };
             if (iconUrl) data.iconUrl = iconUrl;
             const updated = await prisma.trophy.update({ where: { id }, data });
+            
+            await AuditLogger.log('UPDATE_TROPHY', { trophyId: updated.id, name }, (session.user as any).id);
             return NextResponse.json(updated);
         } else {
             const created = await prisma.trophy.create({
                 data: { name, description, actionType, targetValue: parseInt(targetValue), iconUrl }
             });
+            
+            await AuditLogger.log('CREATE_TROPHY', { trophyId: created.id, name }, (session.user as any).id);
             return NextResponse.json(created);
         }
     } catch (e: any) {
@@ -70,7 +75,11 @@ export async function DELETE(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
-        if (id) await prisma.trophy.delete({ where: { id } });
+        if (id) {
+            const trophy = await prisma.trophy.findUnique({ where: { id } });
+            await prisma.trophy.delete({ where: { id } });
+            await AuditLogger.log('DELETE_TROPHY', { trophyId: id, name: trophy?.name }, (session.user as any).id);
+        }
         return NextResponse.json({ success: true });
     } catch (e: any) {
         Logger.log(`[Trophies API] Delete Error: ${e.message}`, 'error');

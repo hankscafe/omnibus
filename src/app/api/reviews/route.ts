@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,8 +24,9 @@ export async function GET(request: Request) {
             : 0;
 
         return NextResponse.json({ reviews, avgRating: avgRating.toFixed(1), total: reviews.length });
-    } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Reviews API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
 
@@ -43,7 +46,8 @@ export async function POST(request: Request) {
             create: { userId, seriesId, rating, text }
         });
         return NextResponse.json({ success: true, review });
-    } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Reviews API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

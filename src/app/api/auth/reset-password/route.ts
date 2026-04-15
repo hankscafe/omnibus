@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Mailer } from '@/lib/mailer';
 import crypto from 'crypto';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,7 +43,8 @@ export async function POST(req: Request) {
         });
 
         return NextResponse.json({ success: true });
-    } catch (error) {
+    } catch (error: unknown) {
+        Logger.log(`[Password Reset Request] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: "Internal server error" }, { status: 500 });
     }
 }

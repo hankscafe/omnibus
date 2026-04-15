@@ -3,6 +3,8 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import crypto from 'crypto';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function POST(request: Request) {
     const authOptions = await getAuthOptions();
@@ -30,7 +32,8 @@ export async function POST(request: Request) {
         });
 
         return NextResponse.json({ success: true, shareId });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Share List API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

@@ -242,6 +242,8 @@ export async function POST(request: Request) {
                 create: { key: 'ignored_orphans', value: JSON.stringify(newIgnored) }
             });
             
+            await AuditLogger.log('IGNORE_ORPHANED_FILES', { filesIgnored: paths.length }, userId);
+            
             Logger.log(`Added ${paths.length} paths to orphan ignore list.`, "success");
             return NextResponse.json({ success: true });
         }

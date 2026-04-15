@@ -3,6 +3,8 @@ import { prisma } from '@/lib/db';
 import { validateApiKey } from '@/lib/api-auth';
 import fs from 'fs';
 import path from 'path';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,6 +57,7 @@ export async function GET(req: Request) {
         });
 
     } catch (error) {
+        Logger.log(`[OPDS Download API] Error: ${getErrorMessage(error)}`, 'error');
         return new Response("Failed to download file", { status: 500 });
     }
 }

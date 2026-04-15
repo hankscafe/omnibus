@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function GET() {
     const authOptions = await getAuthOptions();
@@ -40,6 +41,7 @@ export async function PATCH(req: Request) {
             data: { status, adminComment }
         });
 
+        await AuditLogger.log('RESOLVED_ISSUE_REPORT', { reportId: id, status, comment: adminComment }, (session.user as any).id);
         return NextResponse.json(updated);
     } catch (e: any) {
         // --- SECURITY FIX 1b: Log real error, hide from client ---

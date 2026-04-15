@@ -4,6 +4,8 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import bcrypt from 'bcryptjs';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
+import { Logger } from '@/lib/logger';
 
 export async function POST(req: Request) {
     try {
@@ -21,6 +23,8 @@ export async function POST(req: Request) {
                 where: { id: userId },
                 data: { sessionVersion: { increment: 1 } }
             });
+
+            await AuditLogger.log('REVOKED_ALL_SESSIONS', "User signed out of all other devices.", userId);
 
             return NextResponse.json({ 
                 success: true, 
@@ -51,12 +55,15 @@ export async function POST(req: Request) {
                 }
             });
 
+            await AuditLogger.log('CHANGED_PASSWORD', "User changed their password.", userId);
+
             return NextResponse.json({ success: true, message: "Password updated successfully." });
         }
 
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 
     } catch (error: unknown) {
+        Logger.log(`[User Security] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

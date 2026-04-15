@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import crypto from 'crypto';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -96,6 +97,8 @@ export async function GET() {
                 cipher.end();
             }
         });
+
+        await AuditLogger.log('DOWNLOADED_DATABASE_BACKUP', "Full database backup exported.", (session.user as any).id);
 
         return new NextResponse(stream, {
             status: 200,

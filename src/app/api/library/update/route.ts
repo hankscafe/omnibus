@@ -6,10 +6,17 @@ import path from 'path';
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { omnibusQueue } from '@/lib/queue'; // <-- NEW
+import { omnibusQueue } from '@/lib/queue';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function POST(request: Request) {
   try {
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const userId = (session?.user as any)?.id || 'System';
+
     const { currentPath, name, year, publisher, cvId, monitored, isManga } = await request.json();
 
     const parsedIsManga = isManga === true || isManga === 'true' || isManga === 'on' || isManga === 1;
@@ -128,9 +135,16 @@ export async function POST(request: Request) {
     revalidatePath('/library');
     revalidatePath('/library/series');
 
+    await AuditLogger.log('UPDATE_SERIES_METADATA', { 
+        seriesName: cleanName, 
+        oldPath: currentPath,
+        newPath: activePath
+    }, userId);
+
     return NextResponse.json({ success: true, newPath: activePath });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    Logger.log(`[Library Update API] Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

@@ -158,6 +158,11 @@ export async function POST(req: NextRequest) {
           }
       });
 
+      await AuditLogger.log('CREATE_USER', { 
+          targetUser: username, 
+          role: newUser.role 
+      }, token.id as string);
+
       const { password: _, ...safeUser } = newUser;
       return NextResponse.json(safeUser);
 

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 import { Mailer } from '@/lib/mailer';
 
 export async function POST(request: Request) {
@@ -274,7 +275,7 @@ export async function POST(request: Request) {
 
   } catch (error: unknown) {
     const msg = getErrorMessage(error) || "Connection Failed";
-    // Check for specific Metron 401 Unauthorized
+    Logger.log(`[Test API] Error: ${msg}`, 'error');
     if ((error as any)?.response?.status === 401 && type === 'metron') {
         return NextResponse.json({ success: false, message: "Invalid Metron.Cloud credentials.", code: "UNAUTHORIZED" });
     }

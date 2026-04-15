@@ -5,6 +5,8 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { cookies } from 'next/headers';
 import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
+import { Logger } from '@/lib/logger';
 
 export async function POST(request: Request) {
     try {
@@ -37,18 +39,21 @@ export async function POST(request: Request) {
                 maxAge: 60 * 60, // 1 hour
                 path: '/'
             });
+            await AuditLogger.log('IMPERSONATE_USER_START', { targetUserId: userId }, adminId);
             return NextResponse.json({ success: true, message: "Impersonation started." });
         } 
         
         if (action === 'stop') {
             const cookieStore = await cookies();
             cookieStore.delete('omnibus_impersonate');
+            await AuditLogger.log('IMPERSONATE_USER_STOP', { targetUserId: userId }, adminId);
             return NextResponse.json({ success: true, message: "Impersonation stopped." });
         }
 
         return NextResponse.json({ error: "Invalid action." }, { status: 400 });
 
     } catch (error: unknown) {
+        Logger.log(`[Impersonation API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

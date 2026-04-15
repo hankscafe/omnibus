@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -21,7 +23,8 @@ export async function GET(request: Request) {
         const year = cvRes.data.results?.cover_date ? cvRes.data.results.cover_date.split('-')[0] : null;
 
         return NextResponse.json({ volumeId: volId, year });
-    } catch (error) {
+    } catch (error: unknown) {
+        Logger.log(`[Lookup Volume API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ volumeId: 0, year: null });
     }
 }

@@ -4,6 +4,8 @@ import { validateApiKey } from '@/lib/api-auth';
 import AdmZip from 'adm-zip';
 import fs from 'fs';
 import path from 'path';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +53,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
             }
         });
     } catch (error) {
+        Logger.log(`[OPDS Page Extract] Error: ${getErrorMessage(error)}`, 'error');
         return new Response('Error extracting image', { status: 500 });
     }
 }

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import crypto from 'crypto';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function authenticateKoreader(request: Request) {
     const userHeader = request.headers.get('x-auth-user');
@@ -38,8 +40,13 @@ export async function authenticateKoreader(request: Request) {
 }
 
 export async function GET(request: Request) {
-    const user = await authenticateKoreader(request);
-    if (!user) return NextResponse.json({ authorized: "KO" }, { status: 401 });
-    
-    return NextResponse.json({ authorized: "OK" });
+    try {
+        const user = await authenticateKoreader(request);
+        if (!user) return NextResponse.json({ authorized: "KO" }, { status: 401 });
+        
+        return NextResponse.json({ authorized: "OK" });
+    } catch (error: unknown) {
+        Logger.log(`[KOReader Auth API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ authorized: "KO" }, { status: 500 });
+    }
 }

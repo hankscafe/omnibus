@@ -86,6 +86,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true });
 
     } catch (error: unknown) {
+        Logger.log(`[Database Restore] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: "Restore failed: " + getErrorMessage(error) }, { status: 500 });
     }
 }

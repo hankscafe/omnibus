@@ -78,7 +78,8 @@ export async function POST(req: NextRequest) {
         }
 
         return NextResponse.json({ success: true, jobsTriggered: jobsToRun, logsPurged: true });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        Logger.log(`[Cron API] Fatal Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

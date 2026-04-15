@@ -1038,14 +1038,16 @@ export function initWorker() {
                     const toEmails = users.map(u => u.email);
 
                     if (toEmails.length > 0) {
-                        await Mailer.sendWeeklyDigest(toEmails, finalComics, finalManga);
-                        
-                        if (recordsToSave.length > 0) {
-                            for (const record of recordsToSave) {
-                                await prisma.digestHistory.create({
-                                    data: record
-                                }).catch(() => {}); 
+                        try {
+                            await Mailer.sendWeeklyDigest(toEmails, finalComics, finalManga);
+                            if (recordsToSave.length > 0) {
+                                for (const record of recordsToSave) {
+                                    await prisma.digestHistory.create({ data: record }); 
+                                }
                             }
+                        } catch (mailErr) {
+                            Logger.log(`[Queue] Failed to send weekly digest: ${getErrorMessage(mailErr)}`, 'error');
+                            throw mailErr; // Throw to allow BullMQ to retry the job
                         }
                     }
 

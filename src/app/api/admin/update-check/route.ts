@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import packageJson from '../../../../../package.json';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,15 +86,8 @@ export async function GET() {
       releases 
     });
 
-  } catch (error) {
-    return NextResponse.json(
-      { 
-        updateAvailable: false, 
-        currentVersion: packageJson.version || "1.0.0", 
-        releases: [],
-        error: "Could not check for updates" 
-      }, 
-      { status: 200 }
-    );
+  } catch (error: unknown) {
+    Logger.log(`[Update Check API] Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ updateAvailable: false, currentVersion: packageJson.version || "1.0.0", releases: [], error: "Could not check for updates" }, { status: 200 });
   }
 }

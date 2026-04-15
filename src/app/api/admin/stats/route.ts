@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET() {
   try {
@@ -51,10 +53,15 @@ export async function GET() {
     });
 
   } catch (globalErr: any) {
+    Logger.log(`[Stats API] Server Error: ${getErrorMessage(globalErr)}`, 'error');
+    
     return NextResponse.json({ 
         success: false,
-        error: globalErr.message,
-        totalRequests: 0, completed30d: 0, failed30d: 0, totalUsers: 0,
+        error: getErrorMessage(globalErr),
+        totalRequests: 0, 
+        completed30d: 0, 
+        failed30d: 0, 
+        totalUsers: 0,
         healthStatus: "UNKNOWN"
     }, { status: 500 });
   }

@@ -11,6 +11,7 @@ import { detectManga } from '@/lib/manga-detector';
 import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 async function withScanLock<T>(fn: () => Promise<T>): Promise<T | null> {
     const lockId = 'LIBRARY_SCAN_ACTIVE';
@@ -248,4 +249,78 @@ export async function GET(request: Request) {
     Logger.log(`Library API Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: "Failed to load library." }, { status: 500 });
   }
+}
+
+export async function POST(request: Request) {
+    try {
+        const authOptions = await getAuthOptions();
+        const session = await getServerSession(authOptions);
+        const userId = (session?.user as any)?.id;
+        if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+        const body = await request.json();
+        const { seriesIds, action, status } = body;
+
+        if (!seriesIds || !Array.isArray(seriesIds) || seriesIds.length === 0) {
+            return NextResponse.json({ error: "Missing series IDs" }, { status: 400 });
+        }
+
+        // ACTION: Mark Read / Unread
+        if (action === 'bulk-progress') {
+            const isCompleted = status === 'READ';
+            const issues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } } });
+            
+            const updates = issues.map(issue => 
+                prisma.readProgress.upsert({
+                    where: { userId_issueId: { userId, issueId: issue.id } },
+                    update: { isCompleted, currentPage: isCompleted ? 100 : 0, totalPages: 100 },
+                    create: { userId, issueId: issue.id, isCompleted, currentPage: isCompleted ? 100 : 0, totalPages: 100 }
+                })
+            );
+            await prisma.$transaction(updates);
+            return NextResponse.json({ success: true });
+        }
+
+        // ACTION: Remove from Collection
+        if (action === 'bulk-remove-list') {
+            const collectionId = status;
+            await prisma.collectionItem.deleteMany({
+                where: { collectionId, seriesId: { in: seriesIds } }
+            });
+            return NextResponse.json({ success: true });
+        }
+
+        // The following actions physically alter the system and require Admin rights
+        if (session?.user?.role !== 'ADMIN') {
+            return NextResponse.json({ error: "Unauthorized. Admin required." }, { status: 403 });
+        }
+
+        // ACTION: Start / Stop Monitoring
+        if (action === 'bulk-monitor') {
+            const monitored = status === 'MONITOR';
+            await prisma.series.updateMany({
+                where: { id: { in: seriesIds } },
+                data: { monitored }
+            });
+            await AuditLogger.log('BULK_UPDATE_MONITOR', { monitored, seriesCount: seriesIds.length }, userId);
+            return NextResponse.json({ success: true });
+        }
+
+        // ACTION: Change to Manga / Comic
+        if (action === 'bulk-manga') {
+            const isManga = status === 'MANGA';
+            await prisma.series.updateMany({
+                where: { id: { in: seriesIds } },
+                data: { isManga }
+            });
+            await AuditLogger.log('BULK_UPDATE_MANGA', { isManga, seriesCount: seriesIds.length }, userId);
+            return NextResponse.json({ success: true });
+        }
+
+        return NextResponse.json({ error: "Invalid action type specified" }, { status: 400 });
+
+    } catch (error: unknown) {
+        Logger.log(`[Library API] Bulk Action Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    }
 }

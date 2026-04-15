@@ -6,6 +6,8 @@ import crypto from 'crypto';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,7 +57,8 @@ export async function POST(req: Request) {
         await AuditLogger.log('ADMIN_SENT_PASSWORD_RESET', { targetUser: user.username }, (session.user as any).id);
 
         return NextResponse.json({ success: true });
-    } catch (error) {
+    } catch (error: unknown) {
+        Logger.log(`[Admin Password Reset] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: "Internal server error" }, { status: 500 });
     }
 }

@@ -5,6 +5,8 @@ import path from 'path';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
+import { Logger } from '@/lib/logger';
 
 export async function POST(request: Request) {
   try {
@@ -118,9 +120,16 @@ export async function POST(request: Request) {
         }
     }
 
+    await AuditLogger.log('BULK_RENAME_FILES', { 
+        seriesRenamed: foldersRenamed, 
+        filesRenamed: filesRenamed,
+        pattern: pattern
+    }, (session.user as any).id);
+
     return NextResponse.json({ success: true, filesRenamed, foldersRenamed });
 
   } catch (error: unknown) {
+    Logger.log(`[Library Rename API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

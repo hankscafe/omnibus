@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export async function POST(request: Request) {
   try {
@@ -57,6 +58,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
 
   } catch (error: unknown) {
+    Logger.log(`[Collections] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
-  }
+}
 }

@@ -4,6 +4,7 @@ import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export async function POST(req: Request) {
   const token = await getToken({ req: req as any });
@@ -37,10 +38,15 @@ export async function POST(req: Request) {
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { password: hashedPassword }
+      data: { 
+          password: hashedPassword,
+          sessionVersion: { increment: 1 } // Instantly revoke all other sessions
+      }
     });
 
+    await AuditLogger.log('CHANGED_PASSWORD', "User changed their password.", user.id);
     Logger.log(`[Auth] User ${user.username} successfully changed their password.`, 'success');
+    
     return NextResponse.json({ success: true, message: 'Password updated successfully.' });
 
   } catch (error: unknown) {

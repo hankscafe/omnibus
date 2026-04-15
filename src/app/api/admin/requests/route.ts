@@ -110,6 +110,7 @@ export async function DELETE(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
+    Logger.log(`[Requests API] Delete Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: "Delete Failed" }, { status: 500 });
   }
 }

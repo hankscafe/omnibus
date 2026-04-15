@@ -5,6 +5,8 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
+import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +25,8 @@ export async function GET() {
         });
         
         return NextResponse.json(opdsKeys);
-    } catch (error) {
+    } catch (error: unknown) {
+        Logger.log(`[User API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
@@ -43,13 +46,16 @@ export async function POST(request: Request) {
         const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
         const prefix = rawKey.substring(0, 12) + '...';
 
-        // Save to the new dedicated table
         const newKey = await prisma.opdsKey.create({
             data: { name, keyHash, prefix, userId }
         });
 
+        // ADDED: Audit logging for user key generation
+        await AuditLogger.log('CREATED_OPDS_KEY', { keyName: name }, userId);
+
         return NextResponse.json({ success: true, rawKey, apiKey: newKey });
-    } catch (error) {
+    } catch (error: unknown) {
+        Logger.log(`[User API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }
@@ -72,8 +78,13 @@ export async function DELETE(request: Request) {
         }
 
         await prisma.opdsKey.delete({ where: { id } });
+        
+        // ADDED: Audit logging for user key revocation
+        await AuditLogger.log('REVOKED_OPDS_KEY', { keyId: id }, userId);
+
         return NextResponse.json({ success: true });
-    } catch (error) {
+    } catch (error: unknown) {
+        Logger.log(`[User API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

@@ -2,10 +2,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import crypto from 'crypto';
+import { getErrorMessage } from '@/lib/utils/error';
+import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request, { params }: { params: Promise<{ document: string }> }) {
+    try {
     // 1. Inline KOReader Auth to bypass Next.js route export restrictions
     const userHeader = request.headers.get('x-auth-user');
     const keyHeader = request.headers.get('x-auth-key');
@@ -34,12 +37,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ docu
 
     if (!syncData) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    return NextResponse.json({
-        document: syncData.document,
-        progress: syncData.progress,
-        percentage: syncData.percentage,
-        device: syncData.device,
-        device_id: syncData.deviceId,
-        timestamp: syncData.timestamp
-    });
+        return NextResponse.json({
+            document: syncData.document,
+            progress: syncData.progress,
+            percentage: syncData.percentage,
+            device: syncData.device,
+            device_id: syncData.deviceId,
+            timestamp: syncData.timestamp
+        });
+    } catch (error: unknown) {
+        Logger.log(`[KOReader Sync Fetch API] Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    }
 }

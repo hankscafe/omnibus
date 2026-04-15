@@ -268,6 +268,7 @@ export async function DELETE(request: Request) {
 
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
+        Logger.log(`[Library Series API] Delete Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: "Deletion failed" }, { status: 500 });
     }
 }

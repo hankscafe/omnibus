@@ -144,6 +144,7 @@ export async function GET(request: Request) {
         description: issue.description
     });
   } catch (error: unknown) {
+    Logger.log(`[Library Issue API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
@@ -174,6 +175,7 @@ export async function DELETE(request: Request) {
         
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
-        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
-    }
+    Logger.log(`[Library Issue API] Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+  }
 }

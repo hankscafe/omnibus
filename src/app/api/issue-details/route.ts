@@ -5,6 +5,8 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { parseComicVineCredits } from '@/lib/utils';
 import { sanitizeDescription } from '@/lib/utils/sanitize';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,7 +76,8 @@ export async function GET(request: Request) {
       storyArcs,
       htmlDescription: cleanHtml
     });
-  } catch (error) {
+  } catch (error: unknown) {
+    Logger.log(`[Issue Details API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: 'Failed to fetch details' }, { status: 500 });
   }
 }

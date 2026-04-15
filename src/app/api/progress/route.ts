@@ -55,6 +55,7 @@ export async function GET(request: Request) {
 
         return NextResponse.json({ currentPage: 0, isCompleted: false });
     } catch (error: unknown) {
+        Logger.log(`[Progress API] GET Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ currentPage: 0, isCompleted: false });
     }
 }
@@ -142,6 +143,7 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ success: true });
     } catch (error: any) {
+        Logger.log(`[Progress API] POST Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

@@ -12,6 +12,7 @@ import { isReleasedYet } from '@/lib/utils';
 import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
 import { getErrorMessage } from '@/lib/utils/error';
 import { syncSeriesMetadata } from '@/lib/metadata-fetcher'; 
+import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -313,6 +314,8 @@ export async function PATCH(request: NextRequest) {
       data: { status, notified: false }
     });
 
+    await AuditLogger.log('UPDATED_REQUEST_STATUS', { requestId: id, newStatus: status, title: reqRecord.activeDownloadName }, userId);
+    
     if (status === 'PENDING') {
       let year = "";
       let publisher = "";

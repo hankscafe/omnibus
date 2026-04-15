@@ -1,22 +1,22 @@
-// src/app/api/opds/route.ts
 import { validateApiKey } from '@/lib/api-auth';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-    // 1. Authenticate the request via HTTP Basic Auth
-    const auth = await validateApiKey(req);
-    if (!auth.valid) {
-        return new Response('Unauthorized', { 
-            status: 401, 
-            headers: { 'WWW-Authenticate': 'Basic realm="Omnibus OPDS"' } 
-        });
-    }
+    try {
+        const auth = await validateApiKey(req);
+        if (!auth.valid) {
+            return new Response('Unauthorized', { 
+                status: 401, 
+                headers: { 'WWW-Authenticate': 'Basic realm="Omnibus OPDS"' } 
+            });
+        }
 
-    const baseUrl = new URL(req.url).origin;
+        const baseUrl = new URL(req.url).origin;
 
-    // 2. Generate the Root OPDS XML
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>urn:omnibus:root</id>
   <title>Omnibus Catalog</title>
@@ -34,7 +34,11 @@ export async function GET(req: Request) {
   </entry>
 </feed>`;
 
-    return new Response(xml, {
-        headers: { 'Content-Type': 'application/atom+xml;profile=opds-catalog; charset=utf-8' }
-    });
+        return new Response(xml, {
+            headers: { 'Content-Type': 'application/atom+xml;profile=opds-catalog; charset=utf-8' }
+        });
+    } catch (error: unknown) {
+        Logger.log(`[OPDS Root API] Error: ${getErrorMessage(error)}`, 'error');
+        return new Response('Internal Server Error', { status: 500 });
+    }
 }

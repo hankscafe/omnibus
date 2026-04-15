@@ -25,6 +25,7 @@ interface SearchResult {
   size: number;
   indexer: string;
   guid: string;
+  downloadUrl: string;
   infoHash?: string; 
   seeders: number;
   leechers: number;
@@ -75,6 +76,7 @@ export function ProwlarrSearchModal({ requestId, seriesName, seriesYear }: Props
         body: JSON.stringify({
           requestId: requestId,
           guid: release.guid,
+          downloadUrl: release.downloadUrl,
           infoHash: release.infoHash, 
           title: release.title,
           protocol: release.protocol

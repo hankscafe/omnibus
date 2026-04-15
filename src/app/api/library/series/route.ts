@@ -223,6 +223,7 @@ export async function GET(request: Request) {
       seriesName: seriesRecord?.name?.trim() || path.basename(folderPath).replace(/\s\(\d{4}\)$/, ""),
       publisher: seriesRecord?.publisher || null, 
       year: seriesRecord?.year || null, 
+      status: seriesRecord?.status || null, // <--- FIX: Status field explicitly included!
       monitored: seriesRecord?.monitored || false,
       path: folderPath, 
       coverUrl: finalSeriesCoverUrl, 
@@ -258,7 +259,6 @@ export async function DELETE(request: Request) {
             }
         }
 
-        // --- NEW: LOG SERIES DELETIONS ---
         await AuditLogger.log('DELETE_SERIES', {
             seriesIds,
             seriesNames: seriesToDelete.map(s => s.name),

@@ -173,14 +173,55 @@ export async function GET(request: Request) {
         where.AND.push({ collections: { some: { collectionId: collectionId } } });
     }
 
+    const type = searchParams.get('type') || 'ALL';
+
     if (q) {
-        where.AND.push({
-            OR: [
-                { name: { contains: q } }, 
-                { publisher: { contains: q } }, 
-                { issues: { some: { OR: [ { writers: { contains: q } }, { artists: { contains: q } } ] } } }
-            ]
-        });
+        let parsedQuery = q.trim();
+        let targetField = type.toUpperCase();
+
+        // 1. Detect prefix-based search (e.g., "character: batman")
+        const prefixMatch = parsedQuery.match(/^(character|team|arc|location|writer|artist|genre):\s*(.+)$/i);
+        if (prefixMatch) {
+            targetField = prefixMatch[1].toUpperCase();
+            parsedQuery = prefixMatch[2].trim();
+        }
+
+        // 2. Strip optional wrapping quotes used for exact phrase matching
+        parsedQuery = parsedQuery.replace(/^["']|["']$/g, '');
+
+        // 3. Apply the targeted search
+        if (targetField === 'CHARACTER') {
+            where.AND.push({ issues: { some: { characters: { contains: parsedQuery } } } });
+        } else if (targetField === 'TEAM') {
+            where.AND.push({ issues: { some: { teams: { contains: parsedQuery } } } });
+        } else if (targetField === 'ARC') {
+            where.AND.push({ issues: { some: { storyArcs: { contains: parsedQuery } } } });
+        } else if (targetField === 'LOCATION') {
+            where.AND.push({ issues: { some: { locations: { contains: parsedQuery } } } });
+        } else if (targetField === 'WRITER') {
+            where.AND.push({ issues: { some: { writers: { contains: parsedQuery } } } });
+        } else if (targetField === 'ARTIST') {
+            where.AND.push({ issues: { some: { artists: { contains: parsedQuery } } } });
+        } else if (targetField === 'GENRE') {
+            where.AND.push({ issues: { some: { genres: { contains: parsedQuery } } } });
+        } else if (targetField === 'TITLE') {
+            where.AND.push({ OR: [{ name: { contains: parsedQuery } }, { publisher: { contains: parsedQuery } }] });
+        } else {
+            // Broad search fallback
+            where.AND.push({
+                OR: [
+                    { name: { contains: parsedQuery } }, 
+                    { publisher: { contains: parsedQuery } }, 
+                    { issues: { some: { OR: [ 
+                        { writers: { contains: parsedQuery } }, 
+                        { artists: { contains: parsedQuery } },
+                        { characters: { contains: parsedQuery } },
+                        { teams: { contains: parsedQuery } },
+                        { storyArcs: { contains: parsedQuery } }
+                    ] } } }
+                ]
+            });
+        }
     }
 
     let orderBy: any = {};

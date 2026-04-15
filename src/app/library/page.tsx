@@ -105,8 +105,8 @@ function LibraryContent() {
   const [updating, setUpdating] = useState(false)
   const [copied, setCopied] = useState(false);
   
-  const [searchQuery, setSearchQuery] = useState("")
-  const [debouncedSearch, setDebouncedSearch] = useState("") 
+  const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || "")
+  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('q') || "") 
   const [searchType, setSearchType] = useState("ALL") 
   const [publisherFilter, setPublisherFilter] = useState("ALL")
   const [uniquePublishers, setUniquePublishers] = useState<string[]>([])
@@ -164,6 +164,14 @@ function LibraryContent() {
   });
 
   useEffect(() => {
+      const qParam = searchParams.get('q');
+      if (qParam) {
+          setSearchQuery(qParam);
+          setDebouncedSearch(qParam);
+      }
+  }, [searchParams]);
+
+  useEffect(() => {
       filtersRef.current = {
           search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
           sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
@@ -176,6 +184,14 @@ function LibraryContent() {
       const timer = setTimeout(() => setDebouncedSearch(searchQuery), 500);
       return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  useEffect(() => {
+      const qParam = searchParams.get('q') || "";
+      if (qParam !== debouncedSearch) {
+          setSearchQuery(qParam);
+          setDebouncedSearch(qParam);
+      }
+  }, [searchParams]);
 
   useEffect(() => {
     fetch('/api/library/ids')
@@ -705,6 +721,10 @@ function LibraryContent() {
                           <SelectItem value="WRITER">Writer</SelectItem>
                           <SelectItem value="ARTIST">Artist</SelectItem>
                           <SelectItem value="CHARACTER">Character</SelectItem>
+                          <SelectItem value="TEAM">Team</SelectItem>
+                          <SelectItem value="ARC">Story Arc</SelectItem>
+                          <SelectItem value="LOCATION">Location</SelectItem>
+                          <SelectItem value="GENRE">Genre</SelectItem>
                       </SelectContent>
                   </Select>
                   <div className="relative flex-1 w-full">

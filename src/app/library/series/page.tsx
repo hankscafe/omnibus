@@ -847,65 +847,75 @@ function SeriesContent() {
                   </div>
 
                   <div className="flex flex-col h-full bg-background p-6 rounded-2xl border border-border shadow-sm">
-                      <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">
-                          <Users className="w-3.5 h-3.5 text-primary"/> Key Appearances
-                      </h4>
-                      <div className="flex flex-wrap gap-2">
-                          {characters.length > 0 ? (
-                              characters.slice(0,10).map((char: any, i: number) => (
-                                  <Badge key={i} variant="secondary" className="bg-muted text-foreground font-bold px-3 py-1 border border-border hover:bg-muted/80">
-                                      <Sparkles className="w-3 h-3 mr-1.5 text-primary" /> {char}
-                                  </Badge>
-                              ))
-                          ) : (
-                              <p className="text-sm italic text-muted-foreground opacity-50 py-4 text-center w-full">No character metadata found.</p>
-                          )}
-                      </div>
+    <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">
+        <Users className="w-3.5 h-3.5 text-primary"/> Key Appearances
+    </h4>
+    <div className="flex flex-wrap gap-2">
+        {characters.length > 0 ? (
+            characters.slice(0,10).map((char: any, i: number) => (
+                <Link key={i} href={`/library?q=${encodeURIComponent(`character:"${char}"`)}`}>
+                    <Badge variant="secondary" className="bg-muted text-foreground font-bold px-3 py-1 border border-border hover:bg-primary/20 hover:text-primary transition-colors cursor-pointer">
+                        <Sparkles className="w-3 h-3 mr-1.5 text-primary" /> {char}
+                    </Badge>
+                </Link>
+            ))
+        ) : (
+            <p className="text-sm italic text-muted-foreground opacity-50 py-4 text-center w-full">No character metadata found.</p>
+        )}
+    </div>
 
-                      {teams.length > 0 && (
-                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
-                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Shield className="w-4 h-4 text-primary"/> Teams</h4>
-                              <div className="flex flex-wrap gap-1.5">
-                                  {teams.map((team: string) => (
-                                      <Badge key={team} variant="secondary" className="font-medium text-[10px] bg-primary/5 text-primary border-primary/20 hover:bg-primary/10">{team}</Badge>
-                                  ))}
-                              </div>
-                          </div>
-                      )}
+    {teams.length > 0 && (
+        <div className="space-y-2 mt-4 pt-4 border-t border-border">
+            <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Shield className="w-4 h-4 text-primary"/> Teams</h4>
+            <div className="flex flex-wrap gap-1.5">
+                {teams.map((team: string) => (
+                    <Link key={team} href={`/library?q=${encodeURIComponent(`team:"${team}"`)}`}>
+                        <Badge variant="secondary" className="font-medium text-[10px] bg-primary/5 text-primary border-primary/20 hover:bg-primary/20 cursor-pointer">{team}</Badge>
+                    </Link>
+                ))}
+            </div>
+        </div>
+    )}
 
-                      {locations.length > 0 && (
-                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
-                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><MapPin className="w-4 h-4 text-primary"/> Locations</h4>
-                              <div className="flex flex-wrap gap-1.5">
-                                  {locations.map((loc: string) => (
-                                      <Badge key={loc} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border">{loc}</Badge>
-                                  ))}
-                              </div>
-                          </div>
-                      )}
+    {locations.length > 0 && (
+        <div className="space-y-2 mt-4 pt-4 border-t border-border">
+            <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><MapPin className="w-4 h-4 text-primary"/> Locations</h4>
+            <div className="flex flex-wrap gap-1.5">
+                {locations.map((loc: string) => (
+                    <Link key={loc} href={`/library?q=${encodeURIComponent(`location:"${loc}"`)}`}>
+                        <Badge variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:bg-muted hover:text-foreground cursor-pointer">{loc}</Badge>
+                    </Link>
+                ))}
+            </div>
+        </div>
+    )}
 
-                      {genres.length > 0 && (
-                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
-                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Genres & Concepts</h4>
-                              <div className="flex flex-wrap gap-1.5">
-                                  {genres.map((genre: string) => (
-                                      <Badge key={genre} variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:text-foreground">{genre}</Badge>
-                                  ))}
-                              </div>
-                          </div>
-                      )}
+    {genres.length > 0 && (
+        <div className="space-y-2 mt-4 pt-4 border-t border-border">
+            <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><Tags className="w-4 h-4 text-primary"/> Genres & Concepts</h4>
+            <div className="flex flex-wrap gap-1.5">
+                {genres.map((genre: string) => (
+                    <Link key={genre} href={`/library?q=${encodeURIComponent(`genre:"${genre}"`)}`}>
+                        <Badge variant="outline" className="font-medium text-[10px] bg-background text-muted-foreground border-border hover:bg-muted hover:text-foreground cursor-pointer">{genre}</Badge>
+                    </Link>
+                ))}
+            </div>
+        </div>
+    )}
 
-                      {storyArcs.length > 0 && (
-                          <div className="space-y-2 mt-4 pt-4 border-t border-border">
-                              <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><BookMarked className="w-4 h-4 text-primary"/> Story Arcs</h4>
-                              <div className="flex flex-wrap gap-1.5">
-                                  {storyArcs.map((arc: string) => (
-                                      <Badge key={arc} className="font-medium text-[10px] bg-primary/10 text-primary border-primary/30 hover:bg-primary/20">{arc}</Badge>
-                                  ))}
-                              </div>
-                          </div>
-                      )}
-                  </div>
+    {storyArcs.length > 0 && (
+        <div className="space-y-2 mt-4 pt-4 border-t border-border">
+            <h4 className="font-semibold flex items-center gap-2 text-sm text-foreground"><BookMarked className="w-4 h-4 text-primary"/> Story Arcs</h4>
+            <div className="flex flex-wrap gap-1.5">
+                {storyArcs.map((arc: string) => (
+                    <Link key={arc} href={`/library?q=${encodeURIComponent(`arc:"${arc}"`)}`}>
+                        <Badge className="font-medium text-[10px] bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 cursor-pointer">{arc}</Badge>
+                    </Link>
+                ))}
+            </div>
+        </div>
+    )}
+</div>
               </div>
 
               <div className="space-y-3">

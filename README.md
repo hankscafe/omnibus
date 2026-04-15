@@ -139,6 +139,7 @@ A meticulously organized, highly performant view of your physical files, built t
 
 * **Embedded Metadata (ComicInfo.xml):** Omnibus doesn't just read metadata—it writes it. Omnibus can automatically generate and embed standard `ComicInfo.xml` files directly into your `.cbz` archives, ensuring your metadata travels with your files.
 * **Dual Megadata Engines:** Omnibus reads embedded ComicInfo.xml files inside your archives and syncs with the ComicVine API or Metron.Cloud (if configured) to pull high-res covers, synopses, and creator credits.
+* **Advanced Search Syntax:** Use prefix modifiers in the search bar (e.g., `character:"Spider-Man"`, `team:"X-Men"`, `arc:"Secret Wars"`) to pinpoint exact crossovers and appearances across your entire collection.
 * **Multi-Library Routing:** Map distinct folders for standard Comics and Manga. Omnibus automatically detects Manga based on publishers, AniList cross-referencing, and tags to route them to the correct directory.
 * **Automated File Standardization:** Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
 * **Deep Filtering & Sorting:** Filter by Publisher, Genre, Format, Era (1980s, 1990s, etc.), and Read Status.
@@ -163,7 +164,7 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 </p>
 
 * **Hero Banner & Synopsis:** A premium, visually striking header displaying high-resolution cover art, publisher logos, release years, and a full story synopsis pulled directly from ComicVine.
-* **Granular Metadata:** View detailed credits including Writers, Artists, Colorists, Cover Artists, **Genres, and Story Arcs** formatted beautifully alongside character appearances.
+* **Interactive Metadata Badges:** View detailed credits including Writers, Artists, Characters, Teams, Locations, Genres, and Story Arcs. Every badge is a clickable link that instantly filters your entire library for connected issues and crossovers!
 * **ComicVine Button:** A button that will take users directly to the series page on ComicVine.
 * **"Read Next" Prompts:** A smart action button that instantly opens the web reader to your exact saved page on the next unread issue in the run.
 * **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view to easily navigate massive, 100+ issue runs.

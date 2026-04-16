@@ -379,6 +379,10 @@ services:
       - OMNIBUS_LOGS_DIR=/config/logs
       - OMNIBUS_BACKUPS_DIR=/config/backups
 
+      # DROP FOLDERS: Set these inside your single data mount for fast atomic moves!
+      - OMNIBUS_WATCHED_DIR=/data/watched
+      - OMNIBUS_AWAITING_MATCH_DIR=/data/unmatched
+
     volumes:
       # REQUIRED: Persistent storage for Database, Logs, Backups, Cache, and Uploaded Images
       - /path/to/your/nas/config:/config
@@ -396,6 +400,8 @@ services:
       # - /path/to/your/nas/comics:/comics
       # - /path/to/your/nas/manga:/manga
       # - /path/to/your/nas/downloads:/downloads
+      # - /path/to/your/nas/watched:/watched
+      # - /path/to/your/nas/unmatched:/unmatched
 
   omnibus-redis:
     image: redis:alpine

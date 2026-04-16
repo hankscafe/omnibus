@@ -31,7 +31,7 @@ services:
       - OMNIBUS_LOGS_DIR=/config/logs
       - OMNIBUS_BACKUPS_DIR=/config/backups
 
-      # Set the drop folders INSIDE the single data mount!
+      # DROP FOLDERS: Set these inside your single data mount for fast atomic moves!
       - OMNIBUS_WATCHED_DIR=/data/watched
       - OMNIBUS_AWAITING_MATCH_DIR=/data/unmatched
 
@@ -52,7 +52,6 @@ services:
       # - /path/to/your/nas/comics:/comics
       # - /path/to/your/nas/manga:/manga
       # - /path/to/your/nas/downloads:/downloads
-      # DROP FOLDERS
       # - /path/to/your/nas/watched:/watched
       # - /path/to/your/nas/unmatched:/unmatched
 

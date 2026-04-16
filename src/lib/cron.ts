@@ -224,6 +224,17 @@ export function initCronJobs() {
         } catch (error: unknown) {
             Logger.log(`[Cron] ${logName} Interval Error: ${getErrorMessage(error)}`, "error");
         }
+
+        try {
+        const mockWatchedReq = new Request('http://localhost/api/admin/jobs/trigger', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job: 'watched_sync' })
+        });
+        await executeJobRoute(mockWatchedReq);
+    } catch (err: any) {
+        Logger.log(`[Cron] Watched Folder Sync Failed: ${err.message}`, "error");
+    }
     };
 
     await checkAndTrigger('metadata', 'metadata_sync_schedule', 'last_metadata_sync', 'ComicVine Metadata Sync');

@@ -10,7 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
-  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit, Server, ArrowUp, ArrowDown
+  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit, Server, ArrowUp, ArrowDown,
+  Folder,
+  Clock
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -1136,7 +1138,7 @@ export default function SettingsPage() {
                         {/* --- DOCKER VOLUME BINDINGS UI --- */}
                         <div className="grid gap-2 pt-6 border-t border-border mt-4">
                             <Label className="text-foreground font-semibold text-lg flex items-center gap-2"><Database className="w-4 h-4 text-primary"/> Environment Paths (System Defaults)</Label>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-2">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Database className="w-3 h-3"/> Database Path</p>
                                     <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.DATABASE_URL}>{envPaths?.DATABASE_URL?.replace('file:', '') || '/config/omnibus.db'}</p>
@@ -1157,6 +1159,17 @@ export default function SettingsPage() {
                                     <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_LOGS_DIR}>{envPaths?.OMNIBUS_LOGS_DIR || '/app/config/logs'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where system activity logs are written.</p>
                                 </div>
+                                <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
+                                    <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Folder className="w-3 h-3"/> Watched Directory</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_WATCHED_DIR}>{envPaths?.OMNIBUS_WATCHED_DIR || '/watched'}</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2">Where watched media files are stored.</p>
+                                </div>
+                                <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
+                                    <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Clock className="w-3 h-3"/> Awaiting Match Directory</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_AWAITING_MATCH_DIR}>{envPaths?.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched'}</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2">Where files awaiting match are stored.</p>
+                                </div>
+
                             </div>
                             <p className="text-[11px] text-muted-foreground mt-2">
                                 These paths are configured via Environment Variables (<code className="text-foreground font-bold">DATABASE_URL</code>, <code className="text-foreground font-bold">OMNIBUS_BACKUPS_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_CACHE_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_LOGS_DIR</code>) in your Docker setup. 

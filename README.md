@@ -142,6 +142,8 @@ A meticulously organized, highly performant view of your physical files, built t
 * **Advanced Search Syntax:** Use prefix modifiers in the search bar (e.g., `character:"Spider-Man"`, `team:"X-Men"`, `arc:"Secret Wars"`) to pinpoint exact crossovers and appearances across your entire collection.
 * **Multi-Library Routing:** Map distinct folders for standard Comics and Manga. Omnibus automatically detects Manga based on publishers, AniList cross-referencing, and tags to route them to the correct directory.
 * **Automated File Standardization:** Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
+* **"Watched" Folder Auto-Ingestion:** Automate your library building by dropping loose `.cbz`, `.cbr`, `.zip`, and `.rar` files into a designated `watched` folder. Omnibus runs a scheduled background job to detect these files, read their `ComicInfo.xml` metadata, convert legacy formats, standardize the filenames, and perfectly sort them into your main library.
+* **"Awaiting Match" Drop Queue:** If dropped files lack the necessary metadata for auto-ingestion, they are safely routed to an `unmatched` directory. Admins can review these loose files in the Smart Matcher UI, apply the correct ComicVine metadata with one click, and seamlessly inject them into the main library.
 * **Deep Filtering & Sorting:** Filter by Publisher, Genre, Format, Era (1980s, 1990s, etc.), and Read Status.
   * Try the "Surprise Me" button for a randomized library shuffle when you don't know what to read!
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.

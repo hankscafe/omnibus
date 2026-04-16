@@ -13,7 +13,7 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        // FIX: Ensure records with a valid cvId are NOT considered unmatched
+        // 1. Get Unmatched DB Records
         const unmatched = await prisma.series.findMany({
             where: { 
                 AND: [
@@ -30,7 +30,29 @@ export async function GET() {
             orderBy: { name: 'asc' }
         });
 
-        return NextResponse.json(unmatched);
+        // 2. Append loose files from the unmatched drop directory
+        const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+        const rawFiles: any[] = [];
+        
+        try {
+            const fs = await import('fs-extra');
+            const path = await import('path');
+            if (fs.existsSync(unmatchedDir)) {
+                const files = await fs.promises.readdir(unmatchedDir);
+                for (const file of files) {
+                    if (file.match(/\.(cbz|cbr|zip|rar)$/i)) {
+                        rawFiles.push({
+                            id: `raw_${Buffer.from(file).toString('base64')}`, // Safe Mock ID
+                            name: file.replace(/\.[^/.]+$/, ""), // Strip extension for search guessing
+                            folderPath: path.join(unmatchedDir, file),
+                            isRawFile: true
+                        });
+                    }
+                }
+            }
+        } catch (e) {}
+
+        return NextResponse.json([...unmatched, ...rawFiles]);
     } catch (error: unknown) {
         Logger.log(`[Unmatched API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

@@ -27,12 +27,16 @@ export async function POST(request: Request) {
     }
 
     const libraries = await prisma.library.findMany();
+    // Allow access to the unmatched directory in addition to standard libraries
+    const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
+    authorizedRoots.push(path.normalize(unmatchedDir).toLowerCase());
+    
     const normalizedOld = path.normalize(oldFolderPath).toLowerCase();
     
     const isAuthorized = authorizedRoots.some(root => normalizedOld.startsWith(root));
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
-    if (!fs.existsSync(oldFolderPath)) return NextResponse.json({ error: "Folder not found." }, { status: 404 });
+    if (!fs.existsSync(oldFolderPath)) return NextResponse.json({ error: "File/Folder not found." }, { status: 404 });
 
     let realPublisher = publisher && publisher !== 'Unknown' && publisher !== 'Other' ? publisher : '';
     let realName = name && name !== 'Unknown Series' ? name : '';
@@ -148,8 +152,21 @@ export async function POST(request: Request) {
         title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 
     }).catch(() => {});
 
+    // --- NEW: RAW FILE VS FOLDER LOGIC ---
+    const oldStat = await fs.promises.stat(oldFolderPath);
+    const isFile = oldStat.isFile();
+
     let activeFolderPath = oldFolderPath;
-    if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
+    if (isFile) {
+        // It's a raw file coming from the "unmatched" drop folder
+        if (!fs.existsSync(newFolderPath)) {
+            await fs.promises.mkdir(newFolderPath, { recursive: true });
+        }
+        activeFolderPath = newFolderPath; 
+        const targetFilePath = path.join(newFolderPath, path.basename(oldFolderPath));
+        await fs.promises.rename(oldFolderPath, targetFilePath);
+    } else if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
+        // It's a directory (standard DB unmatched series)
         if (fs.existsSync(newFolderPath)) {
             const files = await fs.promises.readdir(oldFolderPath);
             for (const file of files) {
@@ -242,6 +259,19 @@ export async function POST(request: Request) {
         }
     } catch (e) {}
     
+    // --- NEW: Trigger library scan to register the new raw file ---
+    if (isFile) {
+        try {
+            const { POST: triggerJob } = await import('@/app/api/admin/jobs/trigger/route');
+            const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job: 'library' })
+            });
+            triggerJob(mockRequest).catch(() => {});
+        } catch(e) {}
+    }
+
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id;
     if (userId) {

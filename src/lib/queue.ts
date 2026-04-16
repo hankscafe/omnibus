@@ -333,6 +333,133 @@ export function initWorker() {
                     break;
                 }
 
+                case 'WATCHED_FOLDER_SYNC': {
+                    const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
+                    const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+
+                    await fs.ensureDir(watchedDir);
+                    await fs.ensureDir(unmatchedDir);
+
+                    const files = await fs.readdir(watchedDir);
+                    let successCount = 0;
+                    let unmatchedCount = 0;
+
+                    const { convertCbrToCbz } = await import('@/lib/converter');
+                    const { parseComicInfo } = await import('@/lib/metadata-extractor');
+                    const { detectManga } = await import('@/lib/manga-detector');
+
+                    const libraries = await prisma.library.findMany();
+                    if (libraries.length === 0) break;
+
+                    const settings = await prisma.systemSetting.findMany();
+                    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+                    const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
+                    const filePattern = config.file_naming_pattern || "{Series} #{Issue}";
+                    const mangaFilePattern = config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
+
+                    for (const file of files) {
+                        const ext = path.extname(file).toLowerCase();
+                        if (!['.cbz', '.cbr', '.zip', '.rar'].includes(ext)) continue;
+
+                        let filePath = path.join(watchedDir, file);
+
+                        try {
+                            if (ext === '.cbr' || ext === '.rar') {
+                                const convertedPath = await convertCbrToCbz(filePath);
+                                if (convertedPath) filePath = convertedPath;
+                                else continue;
+                            }
+
+                            const meta = await parseComicInfo(filePath);
+
+                            // We require a Series Name and ComicVine Volume ID to confidently auto-import
+                            if (meta && meta.cvId && meta.series) {
+                                const safePublisher = meta.publisher || "Other";
+                                const isManga = meta.isManga || await detectManga({ name: meta.series, publisher: { name: safePublisher }, year: meta.year || 0 }, filePath);
+
+                                let targetLib = isManga 
+                                    ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+                                    : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+                                if (!targetLib) targetLib = libraries[0];
+
+                                const sanitize = (str: string) => str.replace(/[<>:"/\\|?*]/g, '').trim();
+                                const safeSeries = sanitize(meta.series);
+                                const safeYear = meta.year ? meta.year.toString() : "";
+                                const safePub = sanitize(safePublisher);
+
+                                let relFolderPath = folderPattern
+                                    .replace(/{Publisher}/gi, safePub)
+                                    .replace(/{Series}/gi, safeSeries)
+                                    .replace(/{Year}/gi, safeYear)
+                                    .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
+
+                                const destFolder = path.join(targetLib.path, ...relFolderPath.split(/[/\\]/).map(p => p.trim()).filter(Boolean));
+                                await fs.ensureDir(destFolder);
+
+                                const extractedNum = meta.number || "1";
+                                let formattedNum = extractedNum.includes('.') || extractedNum.length > 1 ? extractedNum : `0${extractedNum}`;
+                                
+                                const filePatToUse = isManga ? mangaFilePattern : filePattern;
+                                const newFileName = filePatToUse
+                                    .replace(/{Publisher}/gi, safePub)
+                                    .replace(/{Series}/gi, safeSeries)
+                                    .replace(/{Year}/gi, safeYear)
+                                    .replace(/{Issue}/gi, formattedNum)
+                                    .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
+
+                                const finalDestPath = path.join(destFolder, `${sanitize(newFileName)}.cbz`);
+
+                                await fs.move(filePath, finalDestPath, { overwrite: true });
+
+                                const seriesRecord = await prisma.series.upsert({
+                                    where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: meta.cvId.toString() } },
+                                    update: { folderPath: destFolder },
+                                    create: {
+                                        name: safeSeries, publisher: safePub, year: meta.year || new Date().getFullYear(),
+                                        folderPath: destFolder, metadataId: meta.cvId.toString(), metadataSource: 'COMICVINE',
+                                        matchState: 'MATCHED', isManga, libraryId: targetLib.id
+                                    }
+                                });
+
+                                await prisma.issue.create({
+                                    data: {
+                                        seriesId: seriesRecord.id,
+                                        metadataId: meta.cvIssueId ? meta.cvIssueId.toString() : `unmatched_${Math.random()}`,
+                                        metadataSource: meta.cvIssueId ? 'COMICVINE' : 'LOCAL',
+                                        matchState: meta.cvIssueId ? 'MATCHED' : 'UNMATCHED',
+                                        number: extractedNum, status: 'DOWNLOADED', filePath: finalDestPath,
+                                        name: meta.title, description: meta.summary,
+                                        writers: meta.writers?.length ? JSON.stringify(meta.writers) : null,
+                                        artists: meta.artists?.length ? JSON.stringify(meta.artists) : null,
+                                        characters: meta.characters?.length ? JSON.stringify(meta.characters) : null
+                                    }
+                                });
+
+                                // Trigger a metadata refresh to pull the high-res cover art
+                                await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC' });
+                                successCount++;
+                            } else {
+                                // NO MATCH - Throw into Awaiting Match Drop Folder
+                                const finalUnmatchedPath = path.join(unmatchedDir, path.basename(filePath));
+                                await fs.move(filePath, finalUnmatchedPath, { overwrite: true });
+                                unmatchedCount++;
+                            }
+                        } catch (err) {
+                            Logger.log(`[Watched Sync] Error processing ${file}`, 'error');
+                        }
+                    }
+
+                    if (successCount > 0 || unmatchedCount > 0) {
+                        await prisma.jobLog.create({
+                            data: {
+                                jobType: 'WATCHED_FOLDER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime,
+                                message: `Processed watched folder. Imported: ${successCount}. Moved to unmatched: ${unmatchedCount}.`
+                            }
+                        });
+                    }
+                    break;
+                }
+                
                 case 'LIBRARY_SCAN': {
                     await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
                     

@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { useToast } from "@/components/ui/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -33,7 +33,6 @@ export default function SmartMatchPage() {
                 if (Array.isArray(data)) {
                     setUnmatched(data);
                 } else if (data && data.error) {
-                    // FIXED: Using data.error instead of undefined 'error' variable
                     Logger.log(`Backend returned an error: ${getErrorMessage(data.error)}`, 'error');
                 }
                 
@@ -122,7 +121,7 @@ export default function SmartMatchPage() {
                             Smart Matcher
                         </h1>
                         <p className="text-muted-foreground mt-1">
-                            You have {unmatched.length} unmatched folders. Let AI find the metadata for you.
+                            You have {unmatched.length} unmatched files/folders. Let AI find the metadata for you.
                         </p>
                     </div>
                 </div>
@@ -136,7 +135,7 @@ export default function SmartMatchPage() {
                 <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
                     <Check className="w-12 h-12 mx-auto text-green-500 mb-3" />
                     <h3 className="text-lg font-bold text-foreground">All Caught Up!</h3>
-                    <p className="text-muted-foreground mt-1">Every folder in your library has a valid ComicVine ID.</p>
+                    <p className="text-muted-foreground mt-1">Every file in your library has a valid ComicVine ID.</p>
                 </div>
             ) : (
                 <div className="flex flex-col gap-4">
@@ -147,12 +146,14 @@ export default function SmartMatchPage() {
                         return (
                             <Card key={series.id} className={`p-4 flex flex-col md:flex-row items-center gap-6 transition-all border-border bg-background ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
                                 
-                                {/* LOCAL FOLDER DATA */}
+                                {/* LOCAL FOLDER/FILE DATA */}
                                 <div className="flex-1 min-w-[200px] w-full md:w-auto">
-                                    <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Local Folder</div>
+                                    <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">
+                                        {series.isRawFile ? 'Loose File' : 'Local Folder'}
+                                    </div>
                                     <div className="flex items-start gap-3">
                                         <div className="p-3 bg-muted rounded-lg shrink-0">
-                                            <FolderSearch className="w-6 h-6 text-muted-foreground" />
+                                            {series.isRawFile ? <FileText className="w-6 h-6 text-muted-foreground" /> : <FolderSearch className="w-6 h-6 text-muted-foreground" />}
                                         </div>
                                         <div className="overflow-hidden">
                                             <h3 className="font-bold text-foreground truncate" title={series.name}>{series.name}</h3>

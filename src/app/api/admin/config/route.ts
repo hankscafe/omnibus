@@ -65,7 +65,9 @@ export async function GET(request: Request) {
       DATABASE_URL: (process.env.DATABASE_URL || 'file:./omnibus.db').replace(/:.*@/, ':****@'),
       OMNIBUS_BACKUPS_DIR: process.env.OMNIBUS_BACKUPS_DIR || '/backups',
       OMNIBUS_CACHE_DIR: process.env.OMNIBUS_CACHE_DIR || '/cache',
-      OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs'
+      OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs',
+      OMNIBUS_WATCHED_DIR: process.env.OMNIBUS_WATCHED_DIR || '/watched',
+      OMNIBUS_AWAITING_MATCH_DIR: process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched'
   };
 
   return NextResponse.json({

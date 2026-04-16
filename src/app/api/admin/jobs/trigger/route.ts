@@ -17,6 +17,7 @@ export async function POST(request: Request) {
         const { job } = await request.json();
         
         const jobMap: Record<string, string> = {
+            'watched_sync': 'WATCHED_FOLDER_SYNC',
             'backup': 'DATABASE_BACKUP',
             'converter': 'CBR_CONVERSION',
             'library': 'LIBRARY_SCAN',

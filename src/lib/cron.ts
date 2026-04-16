@@ -1,3 +1,4 @@
+// src/lib/cron.ts
 import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
@@ -124,7 +125,6 @@ export function initCronJobs() {
                           if (issueMatch) return parseFloat(issueMatch[1]);
                           const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
                           if (volMatch) return parseFloat(volMatch[1]);
-                          // FIX: Proper lookbehinds used here
                           const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
                           if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
                           return null;
@@ -226,15 +226,27 @@ export function initCronJobs() {
         }
 
         try {
-        const mockWatchedReq = new Request('http://localhost/api/admin/jobs/trigger', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ job: 'watched_sync' })
-        });
-        await executeJobRoute(mockWatchedReq);
-    } catch (err: any) {
-        Logger.log(`[Cron] Watched Folder Sync Failed: ${err.message}`, "error");
-    }
+            const mockWatchedReq = new Request('http://localhost/api/admin/jobs/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job: 'watched_sync' })
+            });
+            await executeJobRoute(mockWatchedReq);
+        } catch (err: any) {
+            Logger.log(`[Cron] Watched Folder Sync Failed: ${err.message}`, "error");
+        }
+        
+        // --- NEW: Run the System Health check automatically every 15 minutes ---
+        try {
+            const mockHealthReq = new Request('http://localhost/api/admin/jobs/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job: 'health_check' })
+            });
+            await executeJobRoute(mockHealthReq);
+        } catch (err: any) {
+            Logger.log(`[Cron] Health Check Sync Failed: ${err.message}`, "error");
+        }
     };
 
     await checkAndTrigger('metadata', 'metadata_sync_schedule', 'last_metadata_sync', 'ComicVine Metadata Sync');
@@ -244,7 +256,7 @@ export function initCronJobs() {
     await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
     await checkAndTrigger('popular', 'popular_sync_schedule', 'last_popular_sync', 'Discover Sync');
     await checkAndTrigger('backup', 'backup_sync_schedule', 'last_backup_sync', 'Database Backup');
-    await checkAndTrigger('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest', 'Weekly Digest Email'); // <-- ADDED
+    await checkAndTrigger('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest', 'Weekly Digest Email');
 
     try {
         const lastUpdateCheck = await prisma.systemSetting.findUnique({ where: { key: 'last_update_check_time' } });

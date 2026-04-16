@@ -304,6 +304,11 @@ Complete, granular control over your instance, your users, and your underlying a
   * Ghost Records: Find and purge database entries pointing to files you deleted outside of Omnibus.
   * Orphaned Files: Find comic files sitting on your hard drive that Omnibus hasn't indexed, saving you wasted disk space.
   * Archive Integrity: Scan your .cbz files to detect corrupted or incomplete zip archives.
+* **Real-Time System Health Dashboard:** A comprehensive, automated diagnostic engine that continuously monitors your server's vitals in the background. It proactively checks for:
+  * **API & Network Blocks:** Detects Cloudflare 403s (alerting you to use FlareSolverr) and monitors rate limits for ComicVine, Metron, and third-party hosters to gracefully pause and retry metadata syncing.
+  * **Storage Safety:** Calculates available drive space and actively prevents new downloads if your disk is critically full.
+  * **System Configurations:** Ensures all API keys are valid, library directories are accessible to the Docker container, and that no external client downloads are stalled due to incorrect remote-path mappings.
+  * **Maintenance Warnings:** Alerts you if database backups are out of date or if a new version of Omnibus is available on GitHub.
 * **Storage Analytics:** A beautiful visual dashboard breaking down your storage usage by publisher, tracking user engagement, and highlighting "Inactive Series" that you might want to delete to free up space.
 * **Indexer Support:** Plug in Prowlarr or Jackett to search dozens of trackers simultaneously, and use torznab IDs to prevent unwanted results.
 * **Queue & History Management:** View active, pending, paused, and completed downloads with real-time progress bars, speeds, and ETA.

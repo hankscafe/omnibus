@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
 import { prisma } from './db';
+import { markSystemFlag } from './utils/system-flags';
 
 // --- NEW: FlareSolverr 403-Bypass Helper ---
 async function fetchGetComicsHtml(url: string) {
@@ -20,19 +21,27 @@ async function fetchGetComicsHtml(url: string) {
         });
         return data;
     } catch (err: any) {
-        if (err.response?.status === 403 && flareUrl) {
-            Logger.log(`[GetComics] 403 Forbidden detected. Attempting Cloudflare bypass via FlareSolverr...`, 'warn');
-            const targetUrl = flareUrl.endsWith('/v1') ? flareUrl : `${flareUrl}/v1`;
-            
-            const flareRes = await axios.post(targetUrl, {
-                cmd: 'request.get',
-                url: url,
-                maxTimeout: 60000
-            }, { headers: { 'Content-Type': 'application/json' }, timeout: 65000 });
-            
-            if (flareRes.data?.solution?.response) {
-                Logger.log(`[GetComics] FlareSolverr bypass successful!`, 'success');
-                return flareRes.data.solution.response;
+        if (err.response?.status === 403) {
+            if (flareUrl) {
+                Logger.log(`[GetComics] 403 Forbidden detected. Attempting Cloudflare bypass via FlareSolverr...`, 'warn');
+                try {
+                    const targetUrl = flareUrl.endsWith('/v1') ? flareUrl : `${flareUrl}/v1`;
+                    const flareRes = await axios.post(targetUrl, {
+                        cmd: 'request.get',
+                        url: url,
+                        maxTimeout: 60000
+                    }, { headers: { 'Content-Type': 'application/json' }, timeout: 65000 });
+                    
+                    if (flareRes.data?.solution?.response) {
+                        Logger.log(`[GetComics] FlareSolverr bypass successful!`, 'success');
+                        return flareRes.data.solution.response;
+                    }
+                } catch (flareErr) {
+                     await markSystemFlag('cloudflare_block_time');
+                     throw flareErr;
+                }
+            } else {
+                await markSystemFlag('cloudflare_block_time');
             }
         }
         throw err;
@@ -230,7 +239,6 @@ export const GetComicsService = {
               }
           });
 
-          // --- PRIORITY SORTING & FILTERING ---
           const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
           let priorityList = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'];
           let disabledHosters: string[] = [];
@@ -249,7 +257,6 @@ export const GetComicsService = {
               } catch (e) {}
           }
 
-          // Filter out disabled hosters FIRST
           if (disabledHosters.length > 0) {
               const beforeCount = foundLinks.length;
               foundLinks = foundLinks.filter(l => !disabledHosters.includes(l.hoster));

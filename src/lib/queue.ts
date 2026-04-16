@@ -247,6 +247,12 @@ export function initWorker() {
                     break;
                 }
 
+                case 'SYSTEM_HEALTH_CHECK': {
+                    const { runSystemHealthCheck } = await import('@/lib/health-checker');
+                    await runSystemHealthCheck();
+                    break;
+                }
+
                 case 'CBR_CONVERSION': {
                     await prisma.systemSetting.upsert({ where: { key: 'last_converter_sync' }, update: { value: nowStr }, create: { key: 'last_converter_sync', value: nowStr } });
                     const { convertCbrToCbz } = await import('@/lib/converter');

@@ -7,7 +7,8 @@ import { Logger } from './logger';
 import { parseComicVineCredits } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
-import { omnibusQueue } from './queue'; // <-- ADDED: Import the queue
+import { omnibusQueue } from './queue';
+import { markSystemFlag } from './utils/system-flags';
 
 export async function syncSeriesMetadata(metadataId: string, folderPath: string, metadataSource: string = 'COMICVINE') {
     const series = await prisma.series.findFirst({ 
@@ -18,108 +19,118 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     Logger.log(`[Metadata] Fetching data for ID: ${metadataId} via ${metadataSource}`, 'info');
 
     if (metadataSource === 'METRON') {
-        const metron = new MetronProvider();
-        const details = await metron.getSeriesDetails(metadataId);
-        
-        let finalCoverUrl = details.coverUrl;
-        if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
-            try {
-                const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
-                await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-                finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, 'cover.jpg'))}`;
-            } catch (e) {}
-        }
-        
-        await prisma.series.update({
-            where: { id: series.id },
-            data: {
-                name: details.name,
-                publisher: details.publisher,
-                year: details.year || series.year,
-                description: details.description,
-                coverUrl: finalCoverUrl, 
-                status: details.status
+        try {
+            const metron = new MetronProvider();
+            const details = await metron.getSeriesDetails(metadataId);
+            
+            let finalCoverUrl = details.coverUrl;
+            if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
+                try {
+                    const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
+                    await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
+                    finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, 'cover.jpg'))}`;
+                } catch (e) {}
             }
-        });
-
-        const issues = await metron.getSeriesIssues(metadataId);
-        let syncedCount = 0;
-        
-        for (const issue of issues) {
-            const issueNumStr = issue.issueNumber;
-            const existingByMetaId = await prisma.issue.findFirst({ 
-                where: { metadataId: issue.sourceId, metadataSource: 'METRON' } 
+            
+            await prisma.series.update({
+                where: { id: series.id },
+                data: {
+                    name: details.name,
+                    publisher: details.publisher,
+                    year: details.year || series.year,
+                    description: details.description,
+                    coverUrl: finalCoverUrl, 
+                    status: details.status
+                }
             });
 
-            const issueDataPayload = {
-                name: issue.name,
-                description: issue.description,
-                releaseDate: issue.releaseDate,
-                coverUrl: issue.coverUrl,
-                writers: JSON.stringify(issue.writers),
-                artists: JSON.stringify(issue.artists),
-                characters: JSON.stringify(issue.characters),
-                matchState: 'DEEP_SYNCED' 
-            };
-
-            if (existingByMetaId) {
-                await prisma.issue.update({
-                    where: { id: existingByMetaId.id },
-                    data: { seriesId: series.id, number: issueNumStr, ...issueDataPayload }
-                });
-            } else {
-                const existingByNum = await prisma.issue.findFirst({
-                    where: { seriesId: series.id, number: issueNumStr }
+            const issues = await metron.getSeriesIssues(metadataId);
+            let syncedCount = 0;
+            
+            for (const issue of issues) {
+                const issueNumStr = issue.issueNumber;
+                const existingByMetaId = await prisma.issue.findFirst({ 
+                    where: { metadataId: issue.sourceId, metadataSource: 'METRON' } 
                 });
 
-                if (existingByNum) {
+                const issueDataPayload = {
+                    name: issue.name,
+                    description: issue.description,
+                    releaseDate: issue.releaseDate,
+                    coverUrl: issue.coverUrl,
+                    writers: JSON.stringify(issue.writers),
+                    artists: JSON.stringify(issue.artists),
+                    characters: JSON.stringify(issue.characters),
+                    matchState: 'DEEP_SYNCED' 
+                };
+
+                if (existingByMetaId) {
                     await prisma.issue.update({
-                        where: { id: existingByNum.id },
-                        data: { metadataId: issue.sourceId, metadataSource: 'METRON', ...issueDataPayload }
+                        where: { id: existingByMetaId.id },
+                        data: { seriesId: series.id, number: issueNumStr, ...issueDataPayload }
                     });
                 } else {
-                    await prisma.issue.create({
-                        data: {
-                            seriesId: series.id, 
-                            metadataId: issue.sourceId, 
-                            metadataSource: 'METRON', 
-                            number: issueNumStr, 
-                            status: 'WANTED', 
-                            ...issueDataPayload
-                        }
+                    const existingByNum = await prisma.issue.findFirst({
+                        where: { seriesId: series.id, number: issueNumStr }
                     });
+
+                    if (existingByNum) {
+                        await prisma.issue.update({
+                            where: { id: existingByNum.id },
+                            data: { metadataId: issue.sourceId, metadataSource: 'METRON', ...issueDataPayload }
+                        });
+                    } else {
+                        await prisma.issue.create({
+                            data: {
+                                seriesId: series.id, 
+                                metadataId: issue.sourceId, 
+                                metadataSource: 'METRON', 
+                                number: issueNumStr, 
+                                status: 'WANTED', 
+                                ...issueDataPayload
+                            }
+                        });
+                    }
                 }
+                syncedCount++;
             }
-            syncedCount++;
+
+            try {
+                await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: series.id }, {
+                    jobId: `EMBED_META_${series.id}_${Date.now()}`
+                });
+                Logger.log(`[Metadata] Queued XML injection for ${series.name}`, 'info');
+            } catch(e) {}
+
+            Logger.log(`[Metadata] Successfully synced ${syncedCount} Metron issues.`, 'success');
+            return { success: true, count: syncedCount };
+
+        } catch (e: any) {
+            if (e.response?.status === 429) await markSystemFlag('metron_rate_limit_time');
+            throw e;
         }
-
-        // --- NEW: Trigger instant XML embedding for this series ---
-        try {
-            await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: series.id }, {
-                jobId: `EMBED_META_${series.id}_${Date.now()}`
-            });
-            Logger.log(`[Metadata] Queued XML injection for ${series.name}`, 'info');
-        } catch(e) {}
-
-        Logger.log(`[Metadata] Successfully synced ${syncedCount} Metron issues.`, 'success');
-        return { success: true, count: syncedCount };
     }
 
     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
     if (!setting?.value) throw new Error("No ComicVine API Key configured.");
 
-    const volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
-        params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year' },
-        headers: { 'User-Agent': 'Omnibus/1.0' },
-        timeout: 15000
-    });
+    let volRes;
+    try {
+        volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
+            params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year' },
+            headers: { 'User-Agent': 'Omnibus/1.0' },
+            timeout: 15000
+        });
+    } catch (e: any) {
+        if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
+        throw e;
+    }
 
     const volData = volRes.data.results;
     if (!volData) throw new Error("Volume data not found on ComicVine.");
 
     const imageUrl = volData.image?.medium_url || volData.image?.super_url;
 
-    // Grab volume-level concepts to pass down to issues
     const { genres: volGenres } = parseComicVineCredits(undefined, undefined, volData.concepts || undefined);
 
     let finalCoverUrl = imageUrl;
@@ -153,14 +164,20 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let syncedCount = 0;
 
     while (offset < totalResults && loopCount < 20) {
-        const issueRes = await axios.get<{ number_of_total_results: number; results: any[] }>(`https://comicvine.gamespot.com/api/issues/`, {
-            params: {
-                api_key: setting.value, format: 'json', filter: `volume:${metadataId}`, sort: 'issue_number:asc', limit: 100, offset: offset,
-                field_list: 'id,name,issue_number,store_date,cover_date,image,deck,description'
-            },
-            headers: { 'User-Agent': 'Omnibus/1.0' },
-            timeout: 15000
-        });
+        let issueRes;
+        try {
+            issueRes = await axios.get<{ number_of_total_results: number; results: any[] }>(`https://comicvine.gamespot.com/api/issues/`, {
+                params: {
+                    api_key: setting.value, format: 'json', filter: `volume:${metadataId}`, sort: 'issue_number:asc', limit: 100, offset: offset,
+                    field_list: 'id,name,issue_number,store_date,cover_date,image,deck,description'
+                },
+                headers: { 'User-Agent': 'Omnibus/1.0' },
+                timeout: 15000
+            });
+        } catch (e: any) {
+            if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
+            throw e;
+        }
 
         const data = issueRes.data;
         if (offset === 0) totalResults = data.number_of_total_results || 0;
@@ -174,8 +191,6 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 where: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE' } 
             });
 
-            // We just update the skeleton. This ensures existing data isn't wiped out,
-            // and new data remains `null` so the Lazy Heal system can catch it.
             const issueDataPayload = {
                 name: cvIssue.name,
                 description: cvIssue.description || cvIssue.deck || null,
@@ -183,7 +198,6 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
             };
 
-            // Only pass down volume genres if they exist and the issue is new/missing them
             const dynamicPayload: any = { ...issueDataPayload };
             if (volGenres.length > 0 && (!existingByCvId || !(existingByCvId as any).genres)) {
                 dynamicPayload.genres = JSON.stringify(volGenres);
@@ -223,11 +237,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         offset += 100;
         loopCount++;
         
-        // RATE LIMIT SAFEGUARD: Wait 3 seconds before fetching the next page of issues
         await new Promise(r => setTimeout(r, 3000));
     }
 
-    // --- NEW: Trigger instant XML embedding for this series ---
     try {
         await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: series.id }, {
             jobId: `EMBED_META_${series.id}_${Date.now()}`

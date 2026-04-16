@@ -86,6 +86,12 @@ export const DownloadService = {
   },
 
   async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string, hoster?: string) {
+      // --- NEW DISK SPACE GUARD ---
+      const diskSetting = await prisma.systemSetting.findUnique({ where: { key: 'is_disk_full' } });
+      if (diskSetting?.value === 'true') {
+          throw new Error("Download aborted: Disk Space is Critically Full (< 2GB).");
+      }
+
       const { Importer } = await import('./importer');
       
       const extMatch = url.split(/[#?]/)[0].split('.').pop();
@@ -107,7 +113,6 @@ export const DownloadService = {
 
           let resolvedHoster: any = null;
           
-          // --- HOSTER RESOLUTION INTERCEPT ---
           if (hoster && hoster !== 'getcomics' && hoster !== 'unknown') {
               await prisma.request.update({
                   where: { id: requestId },
@@ -158,7 +163,6 @@ export const DownloadService = {
               attempt++;
               abortController = new AbortController(); 
               try {
-                  // --- NEW MEGAJS BYPASS ---
                   if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
                       megaStream = resolvedHoster.megaFileNode.download();
                       break;
@@ -169,7 +173,6 @@ export const DownloadService = {
                           'Referer': 'https://getcomics.org/' 
                       };
                       
-                      // Inject custom hoster headers (like Pixeldrain Auth)
                       if (resolvedHoster?.headers) {
                           Object.assign(requestHeaders, resolvedHoster.headers);
                       }
@@ -223,7 +226,6 @@ export const DownloadService = {
 
           resetStallTimer(); 
 
-          // Combine the two possible streams
           const dataStream = megaStream || response.data;
 
           dataStream.on('data', (chunk: Buffer) => {
@@ -240,7 +242,6 @@ export const DownloadService = {
           });
 
           try {
-              // Pipe the data into the file stream
               await pipeline(dataStream, writer);
           } finally {
               if (stallTimer) clearTimeout(stallTimer); 

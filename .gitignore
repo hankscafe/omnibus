@@ -75,3 +75,6 @@ tmp/
 
 # Ignore /config
 /config/
+
+# Ignore /backups
+/backups/

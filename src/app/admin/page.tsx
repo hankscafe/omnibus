@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge"
 import { AdminRequestManagement } from "@/components/admin-request-management"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { getErrorMessage } from "@/lib/utils/error"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 // Skeleton for individual Stat Cards
 function StatSkeleton() {
@@ -84,6 +85,10 @@ export default function AdminPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [systemHealthy, setSystemHealthy] = useState(true)
 
+  const [healthData, setHealthData] = useState<any>(null);
+  const [healthModalOpen, setHealthModalOpen] = useState(false);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [requestToDelete, setRequestToDelete] = useState<{id: string, name: string} | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -101,6 +106,13 @@ export default function AdminPage() {
     try {
       const res = await fetch('/api/admin/stats');
       const data = await res.json();
+      
+      // Fetch the detailed health data
+      const healthRes = await fetch('/api/admin/health');
+      if (healthRes.ok) {
+          setHealthData(await healthRes.json());
+      }
+
       if (res.ok && data.success) {
         setStats({ 
           totalRequests: data.totalRequests, 
@@ -498,35 +510,38 @@ const mappedRequests = requests.map(req => {
                   </Card>
                 </Link>
               ) : (
-                <Link href="/admin/updates" className="block transition-transform hover:scale-[1.02] h-full">
-                  <Card className={`shadow-sm transition-colors duration-500 h-full hover:border-primary/50 ${
-                      stats.healthStatus === "HEALTHY" && systemHealthy ? "border-green-200 bg-green-50/30 dark:border-green-900/50 dark:bg-green-900/10" : 
-                      stats.healthStatus === "WARNING" ? "border-amber-200 bg-amber-50/30 dark:border-amber-900/50 dark:bg-amber-900/10" :
+                <div className="block transition-transform hover:scale-[1.02] h-full" onClick={() => setHealthModalOpen(true)}>
+                  <Card 
+                  className={`shadow-sm transition-colors duration-500 h-full cursor-pointer hover:shadow-md ${
+                      !healthData ? "border-border bg-background" :
+                      healthData.status === "HEALTHY" ? "border-green-200 bg-green-50/30 dark:border-green-900/50 dark:bg-green-900/10" : 
+                      healthData.status === "WARNING" ? "border-amber-200 bg-amber-50/30 dark:border-amber-900/50 dark:bg-amber-900/10" :
                       "border-red-200 bg-red-50/30 dark:border-red-900/50 dark:bg-red-900/10"
-                  }`}>
-                    <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-xs sm:text-sm font-medium">System Health</CardTitle>
-                      <Activity className={`h-4 w-4 hidden sm:block ${
-                          stats.healthStatus === "HEALTHY" && systemHealthy ? "text-green-600" : 
-                          stats.healthStatus === "WARNING" ? "text-amber-600" : "text-red-600"
-                      }`} />
-                    </CardHeader>
-                    <CardContent>
-                      <div className={`text-xl sm:text-2xl font-bold ${
-                          stats.healthStatus === "HEALTHY" && systemHealthy ? "text-green-600" : 
-                          stats.healthStatus === "WARNING" ? "text-amber-600" : "text-red-600"
-                      }`}>
-                        {stats.healthStatus === "HEALTHY" && systemHealthy ? "Healthy" : 
-                         stats.healthStatus === "WARNING" ? "Warning" : "Degraded"}
-                      </div>
-                      <p className="text-[10px] sm:text-xs text-muted-foreground pt-1">
-                        v{updateData?.currentVersion || "1.0.0"} • {stats.healthStatus === "HEALTHY" && systemHealthy ? "All systems operational" : 
-                         stats.healthStatus === "WARNING" ? `${stats.failureRate}% failure rate detected` : 
-                         `Critical failure rate: ${stats.failureRate}%`}
-                      </p>
-                    </CardContent>
-                  </Card>
-                </Link>
+                  }`}
+              >
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-xs sm:text-sm font-medium">System Health</CardTitle>
+                    {healthData?.status === 'DEGRADED' ? <XCircle className="h-4 w-4 text-red-600" /> : 
+                     healthData?.status === 'WARNING' ? <AlertTriangle className="h-4 w-4 text-amber-600" /> : 
+                     <Activity className="h-4 w-4 text-green-600" />}
+                  </CardHeader>
+                  <CardContent>
+                    <div className={`text-xl sm:text-2xl font-bold ${
+                        !healthData ? "text-foreground" :
+                        healthData.status === "HEALTHY" ? "text-green-600" : 
+                        healthData.status === "WARNING" ? "text-amber-600" : "text-red-600"
+                    }`}>
+                      {healthData?.status === 'HEALTHY' ? "Healthy" : 
+                       healthData?.status === 'WARNING' ? "Warning" : 
+                       healthData?.status === 'DEGRADED' ? "Degraded" : "Loading..."}
+                    </div>
+                    <p className="text-[10px] sm:text-xs text-muted-foreground pt-1">
+                      v{updateData?.currentVersion || "1.0.0"} • {healthData?.status === 'HEALTHY' ? "All systems operational. Click for details." : 
+                       "Issues detected. Click to view diagnostics."}
+                    </p>
+                  </CardContent>
+              </Card>
+                </div>
               )}
             </>
           )}
@@ -932,6 +947,67 @@ const mappedRequests = requests.map(req => {
         description={`This will remove "${requestToDelete?.name}" from your active tracking list and stop any pending searches. The file will not be deleted if it has already finished downloading.`}
         confirmText="Remove Request"
       />
+
+      {/* SYSTEM HEALTH DIAGNOSTICS MODAL */}
+      <Dialog open={healthModalOpen} onOpenChange={setHealthModalOpen}>
+        <DialogContent className="sm:max-w-2xl bg-background border-border rounded-xl">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold flex items-center gap-2">
+              <Activity className="w-6 h-6 text-primary" /> System Diagnostics
+            </DialogTitle>
+            <DialogDescription>
+              Detailed status report of all core services and configurations. 
+              Last checked: {healthData?.lastRun ? new Date(healthData.lastRun).toLocaleTimeString() : 'Never'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-3 py-4">
+            {!healthData ? (
+                <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
+            ) : (
+                healthData.checks.map((check: any) => (
+                    <div key={check.id} className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/30">
+                        <div className="shrink-0 mt-0.5">
+                            {check.status === 'ok' ? <CheckCircle2 className="w-5 h-5 text-green-500" /> :
+                             check.status === 'warning' ? <AlertTriangle className="w-5 h-5 text-amber-500" /> :
+                             <XCircle className="w-5 h-5 text-red-500" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <h4 className="font-bold text-sm text-foreground">{check.name}</h4>
+                            <p className={`text-xs mt-0.5 ${check.status === 'error' ? 'text-red-500 font-medium' : check.status === 'warning' ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-muted-foreground'}`}>
+                                {check.message}
+                            </p>
+                        </div>
+                        {(check.actionLink || check.id === 'system_update') && (
+                            <Button variant="outline" size="sm" asChild className="shrink-0 h-8 text-[10px] uppercase font-bold tracking-wider">
+                                <Link href={check.actionLink || '/admin/updates'}>
+                                    {check.id === 'system_update' && check.status === 'ok' ? 'History' : 'Resolve'}
+                                </Link>
+                            </Button>
+                        )}
+                    </div>
+                ))
+            )}
+          </div>
+
+          <div className="flex justify-between items-center pt-4 border-t border-border mt-2">
+              <Button variant="outline" onClick={() => setHealthModalOpen(false)}>Close</Button>
+              <Button 
+                className="font-bold bg-primary text-primary-foreground hover:bg-primary/90" 
+                disabled={isCheckingHealth}
+                onClick={async () => {
+                    setIsCheckingHealth(true);
+                    const res = await fetch('/api/admin/health?force=true');
+                    if (res.ok) setHealthData(await res.json());
+                    setIsCheckingHealth(false);
+                }}
+              >
+                  {isCheckingHealth ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  Run Health Check
+              </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

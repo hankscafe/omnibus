@@ -8,7 +8,7 @@ import { parseComicVineCredits } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
-import { markSystemFlag } from './utils/system-flags';
+import { markSystemFlag, logApiUsage } from './utils/system-flags'; 
 
 export async function syncSeriesMetadata(metadataId: string, folderPath: string, metadataSource: string = 'COMICVINE') {
     const series = await prisma.series.findFirst({ 
@@ -121,6 +121,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 15000
         });
+        await logApiUsage('comicvine', '/volume');
     } catch (e: any) {
         if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
         throw e;
@@ -162,6 +163,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let totalResults = 1;
     let loopCount = 0;
     let syncedCount = 0;
+    let issuesCallsMade = 0;
 
     while (offset < totalResults && loopCount < 20) {
         let issueRes;
@@ -174,7 +176,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 headers: { 'User-Agent': 'Omnibus/1.0' },
                 timeout: 15000
             });
+            issuesCallsMade++;
         } catch (e: any) {
+            if (issuesCallsMade > 0) await logApiUsage('comicvine', '/issues', issuesCallsMade); 
             if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
             throw e;
         }
@@ -238,6 +242,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         loopCount++;
         
         await new Promise(r => setTimeout(r, 3000));
+    }
+
+    if (issuesCallsMade > 0) {
+        await logApiUsage('comicvine', '/issues', issuesCallsMade);
     }
 
     try {

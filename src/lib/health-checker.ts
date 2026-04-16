@@ -47,7 +47,6 @@ export async function runSystemHealthCheck() {
         results.push({ id: 'dl_dir', name: 'Download Directory', status: 'ok', message: 'Configured and accessible' });
         
         try {
-            // FIX: Using fs.promises.statfs to correctly await the result
             const stat = await fs.promises.statfs(config.download_path);
             const freeGB = (stat.bavail * stat.bsize) / (1024 * 1024 * 1024);
             if (freeGB < 2) {
@@ -58,12 +57,9 @@ export async function runSystemHealthCheck() {
             } else {
                 results.push({ id: 'disk_space', name: 'Drive Space', status: 'ok', message: `${freeGB.toFixed(2)}GB free` });
             }
-        } catch (e) {
-            // Safe ignore: statfs is not supported on all file systems (like some raw Docker volumes)
-        }
+        } catch (e) {}
     }
 
-    // Update database with disk full status so downloaders can check it instantly
     await prisma.systemSetting.upsert({
         where: { key: 'is_disk_full' },
         update: { value: isDiskFull ? 'true' : 'false' },
@@ -99,26 +95,64 @@ export async function runSystemHealthCheck() {
         results.push({ id: 'cf_block', name: 'CloudFlare Challenge Detected', status: 'ok', message: 'No' });
     }
 
-    // 6. API Rate Limits
+    // 6. API Rate Limits & Call Counts
     const cvLimitTime = parseInt(config.cv_rate_limit_time || '0');
+    
+    // Parse CV Rolling Usage
+    let cvCalls = 0;
+    let cvDetails = "";
+    if (config.cv_api_usage) {
+        try {
+            const usage = JSON.parse(config.cv_api_usage);
+            const now = Date.now();
+            for (const ep in usage) {
+                const validTs = usage[ep].filter((ts: number) => now - ts < 3600000); // Past hour
+                if (validTs.length > 0) {
+                    cvCalls += validTs.length;
+                    cvDetails += `${validTs.length} on '${ep}', `;
+                }
+            }
+        } catch (e) {}
+    }
+    cvDetails = cvDetails ? `(${cvDetails.slice(0, -2)})` : "(0 active calls)";
+
     if (cvLimitTime > Date.now() - (60 * 60 * 1000)) {
-        results.push({ id: 'cv_limit', name: 'ComicVine API Rate Limit', status: 'error', message: 'Reached within the last hour. Metadata syncing temporarily paused.' });
+        results.push({ id: 'cv_limit', name: 'ComicVine API', status: 'error', message: `Rate limit reached within the last hour. Syncing paused. Past hour: ${cvCalls} total calls ${cvDetails}` });
+    } else if (cvCalls > 160) {
+         results.push({ id: 'cv_limit', name: 'ComicVine API', status: 'warning', message: `Approaching rate limit (200/hr). Past hour: ${cvCalls} total calls ${cvDetails}` });
     } else {
-        results.push({ id: 'cv_limit', name: 'ComicVine API Rate Limit', status: 'ok', message: 'Normal' });
+        results.push({ id: 'cv_limit', name: 'ComicVine API', status: 'ok', message: `Status: Normal. Past hour: ${cvCalls} total calls ${cvDetails}` });
+    }
+
+    // Parse Metron Rolling Usage
+    let metronCalls = 0;
+    if (config.metron_api_usage) {
+        try {
+            const usage = JSON.parse(config.metron_api_usage);
+            const now = Date.now();
+            for (const ep in usage) {
+                const validTs = usage[ep].filter((ts: number) => now - ts < 86400000); // Past 24 hours
+                if (validTs.length > 0) {
+                    metronCalls += validTs.length;
+                }
+            }
+        } catch (e) {}
     }
 
     const metronLimitTime = parseInt(config.metron_rate_limit_time || '0');
     if (metronLimitTime > Date.now() - (60 * 60 * 1000)) {
-        results.push({ id: 'metron_limit', name: 'Metron.Cloud API Rate Limit', status: 'error', message: 'Reached within the last hour. Metadata syncing temporarily paused.' });
+        results.push({ id: 'metron_limit', name: 'Metron.Cloud API', status: 'error', message: `Rate limit reached. Syncing paused. Past 24 hours: ${metronCalls} / 5000 calls.` });
+    } else if (metronCalls > 4000) {
+        results.push({ id: 'metron_limit', name: 'Metron.Cloud API', status: 'warning', message: `Approaching daily limit. Past 24 hours: ${metronCalls} / 5000 calls.` });
     } else {
-        results.push({ id: 'metron_limit', name: 'Metron.Cloud API Rate Limit', status: 'ok', message: 'Normal' });
+        results.push({ id: 'metron_limit', name: 'Metron.Cloud API', status: 'ok', message: `Status: Normal. Past 24 hours: ${metronCalls} / 5000 calls.` });
     }
 
     const hosterLimitTime = parseInt(config.hoster_rate_limit_time || '0');
     if (hosterLimitTime > Date.now() - (24 * 60 * 60 * 1000)) {
-        results.push({ id: 'hoster_limit', name: '3rd Party Hoster Rate Limit', status: 'warning', message: 'Reached within the last 24 hours.' });
+        results.push({ id: 'hoster_limit', name: '3rd Party Hoster Limit', status: 'warning', message: 'Rate limit reached within the last 24 hours.' });
     } else {
-        results.push({ id: 'hoster_limit', name: '3rd Party Hoster Rate Limit', status: 'ok', message: 'Normal' });
+        results.push({ id: 'hoster_limit', name: '3rd Party Hoster Limit', status: 'ok', message: 'Normal' });
     }
 
     // 7. External Client Missing Files

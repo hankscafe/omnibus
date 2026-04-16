@@ -7,6 +7,7 @@ import { parseComicVineCredits } from '@/lib/utils';
 import { sanitizeDescription } from '@/lib/utils/sanitize';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { logApiUsage } from '@/lib/utils/system-flags';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,6 +41,7 @@ export async function GET(request: Request) {
         },
         headers: { 'User-Agent': 'Omnibus/1.0' }
     });
+    await logApiUsage('comicvine', `/${isIssue ? 'issue' : 'volume'}`);
     
     const issueData = res.data.results;
     if (!issueData) return NextResponse.json({ error: 'Not Found' }, { status: 404 });

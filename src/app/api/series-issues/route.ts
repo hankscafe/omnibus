@@ -7,6 +7,7 @@ import { parseComicVineCredits } from '@/lib/utils';
 import { ComicVineIssue } from '@/types'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { logApiUsage } from '@/lib/utils/system-flags';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -62,6 +63,7 @@ export async function GET(request: Request) {
         },
         headers: { 'User-Agent': 'Omnibus/1.0' }
       });
+      await logApiUsage('comicvine', '/issues');
 
       const data = response.data;
       if (offset === 0) totalResults = data.number_of_total_results || 0;

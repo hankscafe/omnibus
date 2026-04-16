@@ -3,10 +3,10 @@ import axios from 'axios';
 import { IMetadataProvider, MetadataSeries, MetadataIssue } from '../provider';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
+import { logApiUsage } from '@/lib/utils/system-flags'; 
 
 export class MetronProvider implements IMetadataProvider {
     private readonly baseUrl = 'https://metron.cloud/api';
-    // --- FIX: Standardized custom user-agent ---
     private readonly requestHeaders = { 'User-Agent': 'Omnibus/1.0' };
 
     private async getAuth() {
@@ -31,10 +31,12 @@ export class MetronProvider implements IMetadataProvider {
         
         const res = await axios.get(`${this.baseUrl}/series/`, {
             params: { name: query },
-            headers: this.requestHeaders, // <-- INJECTED
+            headers: this.requestHeaders,
             auth,
             timeout: 10000
         });
+
+        await logApiUsage('metron', '/series');
 
         return (res.data.results || []).map((series: any) => ({
             sourceId: series.id.toString(),
@@ -51,10 +53,13 @@ export class MetronProvider implements IMetadataProvider {
     async getSeriesDetails(id: string): Promise<MetadataSeries> {
         const auth = await this.getAuth();
         const res = await axios.get(`${this.baseUrl}/series/${id}/`, { 
-            headers: this.requestHeaders, // <-- INJECTED
+            headers: this.requestHeaders, 
             auth, 
             timeout: 10000 
         });
+        
+        await logApiUsage('metron', `/series/${id}`);
+        
         const series = res.data;
 
         return {
@@ -73,15 +78,21 @@ export class MetronProvider implements IMetadataProvider {
         const auth = await this.getAuth();
         let allIssues: any[] = [];
         let nextUrl = `${this.baseUrl}/issue/?series=${id}`;
+        let callsMade = 0;
 
         while (nextUrl) {
             const res = await axios.get(nextUrl, { 
-                headers: this.requestHeaders, // <-- INJECTED
+                headers: this.requestHeaders, 
                 auth, 
                 timeout: 10000 
             });
+            callsMade++;
             allIssues = allIssues.concat(res.data.results || []);
             nextUrl = res.data.next;
+        }
+
+        if (callsMade > 0) {
+            await logApiUsage('metron', '/issue', callsMade);
         }
 
         return allIssues.map((issue: any) => {

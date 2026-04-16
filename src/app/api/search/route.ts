@@ -8,6 +8,7 @@ import { ComicVineVolume, FormattedSearchResult } from '@/types';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { logApiUsage } from '@/lib/utils/system-flags';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -27,6 +28,7 @@ export async function GET(request: Request) {
     if (provider === 'METRON') {
         const metron = new MetronProvider();
         const mdResults = await metron.searchSeries(query);
+        await logApiUsage('metron', '/search')
         const results = mdResults.map((r: any) => ({
             id: r.sourceId,
             name: r.name,
@@ -52,7 +54,7 @@ export async function GET(request: Request) {
         field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description' 
       },
       headers: { 'User-Agent': 'Omnibus/1.0' }
-    });
+    });await logApiUsage('comicvine', '/search');
 
     if (!response.data || !Array.isArray(response.data.results)) {
         return NextResponse.json({ results: [], hasMore: false });

@@ -2,11 +2,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
-import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route'; 
+import { omnibusQueue } from '@/lib/queue'; 
 import { getErrorMessage } from '@/lib/utils/error';
 import { validateApiKey } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
+
+const jobMap: Record<string, string> = {
+    'watched_sync': 'WATCHED_FOLDER_SYNC',
+    'backup': 'DATABASE_BACKUP',
+    'converter': 'CBR_CONVERSION',
+    'library': 'LIBRARY_SCAN',
+    'metadata': 'METADATA_SYNC',
+    'embed_metadata': 'EMBED_METADATA',
+    'monitor': 'SERIES_MONITOR',
+    'diagnostics': 'DIAGNOSTICS',
+    'popular': 'DISCOVER_SYNC',
+    'storage_scan': 'STORAGE_SCAN',
+    'health_check': 'SYSTEM_HEALTH_CHECK',
+    'update_check': 'UPDATE_CHECK',
+    'weekly_digest': 'WEEKLY_DIGEST'
+};
 
 export async function POST(req: NextRequest) {
     const authResult = await validateApiKey(req);
@@ -62,18 +78,18 @@ export async function POST(req: NextRequest) {
         checkJob('backup', 'backup_sync_schedule', 'last_backup_sync');
         checkJob('popular', 'popular_sync_schedule', 'last_popular_sync');
         checkJob('converter', 'cbr_conversion_schedule', 'last_converter_sync');
-        checkJob('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest'); // <-- ADDED
+        checkJob('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest');
 
         for (const job of jobsToRun) {
             Logger.log(`[CRON] External heartbeat triggering job: ${job}`, 'info');
-            const reqTrigger = new Request('http://localhost/api/admin/jobs/trigger', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job })
-            });
-            await executeJobRoute(reqTrigger).catch((err) => {
+            try {
+                const jobType = jobMap[job];
+                if (jobType) {
+                    await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
+                }
+            } catch (err) {
                 Logger.log(`[CRON] Job ${job} execution failed: ${getErrorMessage(err)}`, 'error');
-            });
+            }
             await new Promise(r => setTimeout(r, 2000));
         }
 

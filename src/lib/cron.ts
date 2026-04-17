@@ -3,11 +3,27 @@ import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { Importer } from './importer';
-import { POST as executeJobRoute } from '@/app/api/admin/jobs/trigger/route';
+import { omnibusQueue } from '@/lib/queue';
 import { DiscordNotifier } from '@/lib/discord';
 import { getErrorMessage } from './utils/error';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
+
+const jobMap: Record<string, string> = {
+    'watched_sync': 'WATCHED_FOLDER_SYNC',
+    'backup': 'DATABASE_BACKUP',
+    'converter': 'CBR_CONVERSION',
+    'library': 'LIBRARY_SCAN',
+    'metadata': 'METADATA_SYNC',
+    'embed_metadata': 'EMBED_METADATA',
+    'monitor': 'SERIES_MONITOR',
+    'diagnostics': 'DIAGNOSTICS',
+    'popular': 'DISCOVER_SYNC',
+    'storage_scan': 'STORAGE_SCAN',
+    'health_check': 'SYSTEM_HEALTH_CHECK',
+    'update_check': 'UPDATE_CHECK',
+    'weekly_digest': 'WEEKLY_DIGEST'
+};
 
 async function acquireLock(lockId: string, timeoutMs: number): Promise<boolean> {
     const cutoff = new Date(Date.now() - timeoutMs);
@@ -209,13 +225,12 @@ export function initCronJobs() {
                     Logger.log(`[Cron] Starting Automated ${logName}...`, "info");
                     
                     try {
-                        const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ job: jobName })
-                        });
-                        
-                        await executeJobRoute(mockRequest);
+                        const jobType = jobMap[jobName];
+                        if (jobType) {
+                            await omnibusQueue.add(jobType, { type: jobType }, {
+                                jobId: `${jobType}_${Date.now()}`
+                            });
+                        }
                     } catch (err: any) {
                         Logger.log(`[Cron] Internal Execution Failed for ${jobName}: ${err.message}`, "error");
                     }
@@ -223,29 +238,6 @@ export function initCronJobs() {
             }
         } catch (error: unknown) {
             Logger.log(`[Cron] ${logName} Interval Error: ${getErrorMessage(error)}`, "error");
-        }
-
-        try {
-            const mockWatchedReq = new Request('http://localhost/api/admin/jobs/trigger', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job: 'watched_sync' })
-            });
-            await executeJobRoute(mockWatchedReq);
-        } catch (err: any) {
-            Logger.log(`[Cron] Watched Folder Sync Failed: ${err.message}`, "error");
-        }
-        
-        // --- NEW: Run the System Health check automatically every 15 minutes ---
-        try {
-            const mockHealthReq = new Request('http://localhost/api/admin/jobs/trigger', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job: 'health_check' })
-            });
-            await executeJobRoute(mockHealthReq);
-        } catch (err: any) {
-            Logger.log(`[Cron] Health Check Sync Failed: ${err.message}`, "error");
         }
     };
 
@@ -259,6 +251,24 @@ export function initCronJobs() {
     await checkAndTrigger('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest', 'Weekly Digest Email');
 
     try {
+        const jobType = jobMap['watched_sync'];
+        if (jobType) {
+            await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
+        }
+    } catch (err: any) {
+        Logger.log(`[Cron] Watched Folder Sync Failed: ${err.message}`, "error");
+    }
+    
+    try {
+        const jobType = jobMap['health_check'];
+        if (jobType) {
+            await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
+        }
+    } catch (err: any) {
+        Logger.log(`[Cron] Health Check Sync Failed: ${err.message}`, "error");
+    }
+
+    try {
         const lastUpdateCheck = await prisma.systemSetting.findUnique({ where: { key: 'last_update_check_time' } });
         const lastUpdateCheckTime = parseInt(lastUpdateCheck?.value || "0");
 
@@ -269,12 +279,10 @@ export function initCronJobs() {
                 create: { key: 'last_update_check_time', value: now.toString() }
             });
 
-            const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job: 'update_check' })
-            });
-            await executeJobRoute(mockRequest);
+            const jobType = jobMap['update_check'];
+            if (jobType) {
+                await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
+            }
         }
     } catch (err: any) {
         Logger.log(`[Cron] Update Check Error: ${err.message}`, "error");

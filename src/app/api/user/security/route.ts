@@ -6,14 +6,20 @@ import bcrypt from 'bcryptjs';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export async function POST(req: Request) {
+    let rateLimit: ReturnType<typeof checkRateLimit> | null = null;
+    
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         
         const userId = (session.user as any).id;
+        rateLimit = checkRateLimit(`security_${userId}`, 5, 15 * 60 * 1000);
+        if (rateLimit.isLimited) return rateLimit.response!;
+
         const body = await req.json();
         const { action } = body;
 
@@ -26,6 +32,7 @@ export async function POST(req: Request) {
 
             await AuditLogger.log('REVOKED_ALL_SESSIONS', "User signed out of all other devices.", userId);
 
+            rateLimit.trackSuccess();
             return NextResponse.json({ 
                 success: true, 
                 message: "All other devices have been signed out.",
@@ -39,11 +46,15 @@ export async function POST(req: Request) {
             
             const user = await prisma.user.findUnique({ where: { id: userId } });
             if (!user || !user.password) {
+                rateLimit.trackFailure();
                 return NextResponse.json({ error: "SSO users cannot change passwords here." }, { status: 400 });
             }
 
             const isValid = await bcrypt.compare(currentPassword, user.password);
-            if (!isValid) return NextResponse.json({ error: "Incorrect current password." }, { status: 400 });
+            if (!isValid) {
+                rateLimit.trackFailure();
+                return NextResponse.json({ error: "Incorrect current password." }, { status: 400 });
+            }
 
             const hashedPassword = await bcrypt.hash(newPassword, 10);
             
@@ -57,12 +68,15 @@ export async function POST(req: Request) {
 
             await AuditLogger.log('CHANGED_PASSWORD', "User changed their password.", userId);
 
+            rateLimit.trackSuccess();
             return NextResponse.json({ success: true, message: "Password updated successfully." });
         }
 
+        rateLimit.trackFailure();
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 
     } catch (error: unknown) {
+        if (rateLimit) rateLimit.trackFailure();
         Logger.log(`[User Security] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }

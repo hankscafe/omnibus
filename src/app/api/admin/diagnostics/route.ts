@@ -1,3 +1,4 @@
+// src/app/api/admin/diagnostics/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -5,7 +6,7 @@ import path from 'path';
 import AdmZip from 'adm-zip';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
-import { Logger } from '@/lib/logger'; // Import the logger
+import { Logger } from '@/lib/logger'; 
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 
@@ -46,8 +47,6 @@ export async function POST(request: Request) {
                 .filter(s => !s.folderPath || !fs.existsSync(s.folderPath))
                 .map(s => ({ id: s.id, type: 'SERIES', name: s.name, path: s.folderPath || 'Missing Path' }));
             
-            // FIX: Only flag issues as ghosts if they actually have a file path assigned but the file is missing from disk.
-            // This safely ignores un-downloaded metadata stubs.
             const ghostIssues = issues
                 .filter(i => i.filePath && i.filePath.trim().length > 0 && !fs.existsSync(i.filePath))
                 .map(i => ({ id: i.id, type: 'ISSUE', name: `${i.series?.name} #${i.number}`, path: i.filePath }));
@@ -183,7 +182,7 @@ export async function POST(request: Request) {
                     if (deletePhysical && issue.filePath && fs.existsSync(issue.filePath)) {
                         await fs.remove(issue.filePath);
                     }
-                    await prisma.readProgress.deleteMany({ where: { issueId: id } });
+                    // Relies on Prisma onDelete: Cascade to remove ReadProgress automatically
                     await prisma.issue.delete({ where: { id } });
                 }
             }
@@ -199,10 +198,10 @@ export async function POST(request: Request) {
         if (action === 'delete-ghosts') {
             const { ids, type } = payload; 
             if (type === 'SERIES') {
-                await prisma.issue.deleteMany({ where: { seriesId: { in: ids } } });
+                // Relies on Prisma onDelete: Cascade to remove associated Issues and ReadProgresses automatically
                 await prisma.series.deleteMany({ where: { id: { in: ids } } });
             } else {
-                await prisma.readProgress.deleteMany({ where: { issueId: { in: ids } } });
+                // Relies on Prisma onDelete: Cascade to remove associated ReadProgresses automatically
                 await prisma.issue.deleteMany({ where: { id: { in: ids } } });
             }
             

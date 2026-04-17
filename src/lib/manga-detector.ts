@@ -1,42 +1,73 @@
+// src/lib/manga-detector.ts
 import fs from 'fs-extra';
 import path from 'path';
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
+import { prisma } from './db';
 
-// STEP 1: Internal Publisher Dictionary
-const MANGA_PUBLISHERS = [
+// Default Internal Publisher Dictionary Fallbacks
+const DEFAULT_MANGA_PUBLISHERS = [
     "viz media", "kodansha", "yen press", "seven seas", "shueisha", 
     "shogakukan", "tokyopop", "dark horse manga", "vertical", 
     "ghost ship", "denpa", "fakku", "j-novel club", "sublime", 
     "kuma", "ize press", "square enix", "hakusensha", "lezhin"
 ];
 
-// STEP 1.5: Strict Western Publisher Bypass
-const WESTERN_PUBLISHERS = [
+const DEFAULT_WESTERN_PUBLISHERS = [
     "marvel", "dc comics", "image comics", "idw publishing", 
     "dynamite", "boom! studios", "valiant", "archie", 
     "oni press", "titan comics", "vault comics", "awa studios", "humanoids", "2000 ad", "zenescope"
 ];
 
-// STEP 2: ComicVine Concepts Dictionary
 const MANGA_CONCEPTS = [
     "manga", "shonen", "seinen", "shojo", "josei", 
     "manhwa", "manhua", "webtoon", "tankobon", "doujinshi"
 ];
+
+// --- NEW: In-Memory Cache to prevent N+1 DB queries during mass library scans ---
+let cachedSettings: { manga: string[], western: string[] } | null = null;
+let cacheTimestamp = 0;
+
+async function getDetectorSettings() {
+    // Return cache if it is less than 5 minutes old
+    if (cachedSettings && Date.now() - cacheTimestamp < 5 * 60 * 1000) {
+        return cachedSettings;
+    }
+
+    const settings = await prisma.systemSetting.findMany({
+        where: { key: { in: ['manga_publishers', 'western_publishers'] } }
+    });
+    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    
+    cachedSettings = {
+        manga: config.manga_publishers 
+            ? config.manga_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean)
+            : DEFAULT_MANGA_PUBLISHERS,
+        western: config.western_publishers
+            ? config.western_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean)
+            : DEFAULT_WESTERN_PUBLISHERS
+    };
+    cacheTimestamp = Date.now();
+
+    return cachedSettings;
+}
 
 export async function detectManga(
     comicVineData: any, 
     filePath: string | null = null
 ): Promise<boolean> {
     
+    // Fetch settings (will hit RAM instantly 99% of the time)
+    const { manga: mangaPublishers, western: westernPublishers } = await getDetectorSettings();
+
     // --------------------------------------------------------
     // WATERFALL STEP 1: Check Publisher
     // --------------------------------------------------------
     if (comicVineData?.publisher?.name) {
         const publisher = comicVineData.publisher.name.toLowerCase();
-        if (MANGA_PUBLISHERS.some(mp => publisher.includes(mp))) {
+        if (mangaPublishers.some((mp: string) => publisher.includes(mp))) {
             Logger.log(`[Manga Engine] Identified via Publisher: ${publisher}`, 'info');
             return true;
         }
@@ -60,7 +91,7 @@ export async function detectManga(
     // --------------------------------------------------------
     if (comicVineData?.publisher?.name) {
         const publisher = comicVineData.publisher.name.toLowerCase();
-        if (WESTERN_PUBLISHERS.some(wp => publisher.includes(wp))) {
+        if (westernPublishers.some((wp: string) => publisher.includes(wp))) {
             Logger.log(`[Manga Engine] Bypassing AniList due to Western Publisher: ${publisher}`, 'info');
             
             if (filePath && fs.existsSync(filePath)) {
@@ -87,11 +118,10 @@ export async function detectManga(
     }
 
     // --------------------------------------------------------
-    // WATERFALL STEP 3: AniList API Cross-Reference (NOW WITH YEAR)
+    // WATERFALL STEP 3: AniList API Cross-Reference
     // --------------------------------------------------------
     if (comicVineData?.name) {
         try {
-            // Extract year if provided by the caller
             const releaseYear = parseInt(comicVineData.year) || parseInt(comicVineData.start_year) || 0;
             const isAniListMatch = await checkAniList(comicVineData.name, releaseYear);
             
@@ -100,7 +130,6 @@ export async function detectManga(
                 return true;
             }
         } catch (e) {
-            // FIX: Uses the proper `e` exception object
             Logger.log(`[Manga Engine] AniList check failed: ${getErrorMessage(e)}`, 'error');
         }
     }
@@ -163,12 +192,11 @@ async function checkAniList(title: string, releaseYear: number): Promise<boolean
         const romajiTitle = media.title?.romaji?.toLowerCase().trim() || "";
 
         if (searchTitle === engTitle || searchTitle === romajiTitle) {
-            // FUZZY YEAR CHECK: If we have a year, ensure it's within 4 years of the Japanese release
             if (releaseYear > 0 && media.startDate?.year) {
                 const yearDiff = Math.abs(releaseYear - media.startDate.year);
                 if (yearDiff > 4) {
                     Logger.log(`[Manga Engine] AniList match rejected due to Year Mismatch (${releaseYear} vs JP ${media.startDate.year})`, 'info');
-                    continue; // Skip this result, year is too far off
+                    continue; 
                 }
             }
             return true;

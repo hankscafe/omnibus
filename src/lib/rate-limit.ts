@@ -11,12 +11,17 @@ export function checkRateLimit(identifier: string, limit: number = 5, windowMs: 
         return { 
             isLimited: true, 
             message: `Too many attempts. Try again in ${remaining} minutes.`,
-            response: NextResponse.json({ error: `Locked out for ${remaining}m.` }, { status: 429 })
+            response: NextResponse.json({ error: `Locked out for ${remaining}m.` }, { status: 429 }),
+            // Provide dummy functions to satisfy TypeScript's strict type checking
+            trackFailure: () => {},
+            trackSuccess: () => {}
         };
     }
 
     return {
         isLimited: false,
+        message: "",
+        response: null,
         trackFailure: () => {
             data.count += 1;
             if (data.count >= limit) {

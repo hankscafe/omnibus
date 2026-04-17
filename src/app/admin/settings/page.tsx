@@ -163,6 +163,7 @@ export default function SettingsPage() {
     metron_user: "", metron_pass: "", // Included Metron state
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
+    manga_publishers: "", western_publishers: "",
     download_retry_delay: "5",
     convert_to_webp: "false", webp_quality: "80", 
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
@@ -740,6 +741,56 @@ export default function SettingsPage() {
                         <StatusBox result={testResults.metron} />
                     </div>
 
+                    <div className="space-y-4 pt-6 border-t border-border mt-4">
+    <div>
+        <h3 className="text-lg font-bold text-foreground flex items-center gap-2 pb-2">
+            <Database className="w-5 h-5 text-primary" /> Auto-Tagging Logic
+        </h3>
+        <p className="text-[0.8rem] text-muted-foreground">Omnibus automatically detects if an imported series is Manga based on the publisher. Customize the keywords used for detection below.</p>
+    </div>
+    
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="flex flex-col gap-2 h-full">
+            <Label className="text-foreground font-semibold">Western Publishers (Comma Separated)</Label>
+            <textarea 
+                rows={4}
+                value={config.western_publishers || ""} 
+                onChange={(e) => setConfig({...config, western_publishers: e.target.value})} 
+                placeholder="marvel, dc comics, image comics, idw publishing..." 
+                className="flex-1 min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border resize-y"
+            />
+            <p className="text-[10px] text-muted-foreground">These publishers will instantly bypass the AniList API check to save time and reduce rate limits.</p>
+        </div>
+        <div className="flex flex-col gap-2 h-full">
+            <Label className="text-foreground font-semibold">Manga Publishers (Comma Separated)</Label>
+            <textarea 
+                rows={4}
+                value={config.manga_publishers || ""} 
+                onChange={(e) => setConfig({...config, manga_publishers: e.target.value})} 
+                placeholder="viz media, kodansha, yen press, seven seas, shueisha..." 
+                className="flex-1 min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border resize-y"
+            />
+            {/* Invisible spacer to maintain perfect visual alignment with the left column */}
+            <p className="text-[10px] opacity-0 pointer-events-none select-none hidden md:block">Spacer</p>
+        </div>
+    </div>
+    
+    <div className="flex justify-start mt-2">
+         <Button 
+            variant="secondary" 
+            size="sm" 
+            className="font-bold border border-border shadow-sm text-xs"
+            onClick={() => setConfig({
+                ...config, 
+                manga_publishers: "viz media, kodansha, yen press, seven seas, shueisha, shogakukan, tokyopop, dark horse manga, vertical, ghost ship, denpa, fakku, j-novel club, sublime, kuma, ize press, square enix, hakusensha, lezhin", 
+                western_publishers: "marvel, dc comics, image comics, idw publishing, dynamite, boom! studios, valiant, archie, oni press, titan comics, vault comics, awa studios, humanoids, 2000 ad, zenescope"
+            })}
+         >
+             Load Default Lists
+         </Button>
+    </div>
+</div>
+
                 </CardContent>
             </Card>
         </TabsContent>
@@ -1246,13 +1297,19 @@ export default function SettingsPage() {
                     </div>
                     <div className="border-t border-primary/20 my-2" />
                     <Button 
-                        className="w-full h-12 sm:h-10 font-bold border-primary text-primary hover:bg-primary/10 transition-colors" 
                         variant="outline" 
+                        className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" 
                         onClick={() => handleTest('mapping', { remote: config.remote_path_mapping, local: config.local_path_mapping })} 
-                        disabled={!!testing}
+                        disabled={!!testing || !config.remote_path_mapping || !config.local_path_mapping}
                     >
-                        {testing === 'mapping' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2"/> : <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2"/>} 
-                        Test Logic
+                        {testing === 'mapping' ? (
+                            <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/>
+                        ) : testResults['mapping']?.success ? (
+                            <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-green-500"/>
+                        ) : (
+                            <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>
+                        )} 
+                        {testResults['mapping']?.success ? "Logic Verified!" : "Test Logic"}
                     </Button>
                     <StatusBox result={testResults.mapping} />
                 </CardContent>
@@ -1944,11 +2001,21 @@ export default function SettingsPage() {
                         <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => updateEditingClient('apiKey', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                     )}
                     <div className="border-t border-border pt-4">
-                        <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" onClick={() => handleTest('clients', { clientType: editingClient.type, ...editingClient })} disabled={!!testing}>
-                            {testing === 'clients' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} 
-                            {testResults['clients']?.success ? "Connection Verified!" : "Test Connection"}
+                        <Button 
+                          variant="outline" 
+                          className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" 
+                          onClick={() => handleTest('clients', { clientType: editingClient.type, ...editingClient })} 
+                          disabled={!!testing || !editingClient.url}
+                        >
+                          {testing === 'clients' ? (
+                            <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/>
+                          ) : testResults['clients']?.success ? (
+                            <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-green-500"/>
+                          ) : (
+                            <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>
+                          )} 
+                          {testResults['clients']?.success ? "Connection Verified!" : "Test Connection"}
                         </Button>
-                        <StatusBox result={testResults.clients} />
                     </div>
                 </div>
             )}

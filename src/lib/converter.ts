@@ -77,12 +77,15 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
             
             if (convertToWebp && imgExt.toLowerCase() !== '.webp' && imgExt.toLowerCase() !== '.gif') {
                 try {
-                    const webpBuffer = await sharp(imgPath)
-                        .webp({ quality: webpQuality, effort: 4 })
-                        .toBuffer();
-                    
                     const newName = `page_${imageCount.toString().padStart(4, '0')}.webp`;
-                    zip.addFile(newName, webpBuffer);
+                    const tempWebpPath = path.join(tempDir, newName);
+                    
+                    // Write to physical disk instead of memory buffer to prevent OOM
+                    await sharp(imgPath)
+                        .webp({ quality: webpQuality, effort: 4 })
+                        .toFile(tempWebpPath);
+                    
+                    zip.addLocalFile(tempWebpPath, "", newName);
                 } catch (err) {
                     Logger.log(`[Converter] WEBP conversion failed for ${path.basename(imgPath)}, falling back to original.`, 'warn');
                     const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;
@@ -183,12 +186,15 @@ export async function repackArchive(filePath: string): Promise<boolean> {
             
             if (convertToWebp && imgExt.toLowerCase() !== '.webp' && imgExt.toLowerCase() !== '.gif') {
                 try {
-                    const webpBuffer = await sharp(imgPath)
-                        .webp({ quality: webpQuality, effort: 4 })
-                        .toBuffer();
-                    
                     const newName = `page_${imageCount.toString().padStart(4, '0')}.webp`;
-                    newZip.addFile(newName, webpBuffer);
+                    const tempWebpPath = path.join(tempDir, newName);
+
+                    // Write to physical disk instead of memory buffer to prevent OOM
+                    await sharp(imgPath)
+                        .webp({ quality: webpQuality, effort: 4 })
+                        .toFile(tempWebpPath);
+                    
+                    newZip.addLocalFile(tempWebpPath, "", newName);
                 } catch (err) {
                     Logger.log(`[Repacker] WEBP conversion failed for ${path.basename(imgPath)}, falling back.`, 'warn');
                     const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;

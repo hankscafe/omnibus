@@ -7,6 +7,7 @@ import { AuthProvider } from "@/components/AuthProvider";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationWrapper } from "@/components/navigation-wrapper";
 import { TitleManager } from "@/components/title-manager";
+import { Toaster } from "@/components/ui/toaster";
 
 // --- NEW IMPORTS FOR SERVER-SIDE REDIRECT ---
 import { headers } from "next/headers";
@@ -126,6 +127,8 @@ export default async function RootLayout({
               <NavigationWrapper>
                 <SiteFooter />
               </NavigationWrapper>
+
+              <Toaster />
 
             </ThemeProvider>
           </AuthProvider>

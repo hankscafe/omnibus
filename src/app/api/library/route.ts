@@ -325,6 +325,13 @@ export async function POST(request: Request) {
         // ACTION: Remove from Collection
         if (action === 'bulk-remove-list') {
             const collectionId = status;
+            const list = await prisma.readingList.findUnique({ where: { id: collectionId } });
+
+            // Ensure the user owns the list or is an admin
+            if (!list || (list.userId !== userId && session?.user?.role !== 'ADMIN')) {
+                return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+            }
+
             await prisma.collectionItem.deleteMany({
                 where: { collectionId, seriesId: { in: seriesIds } }
             });

@@ -1,28 +1,40 @@
-// src/app/api/auth/reset-password/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Mailer } from '@/lib/mailer';
 import crypto from 'crypto';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
+    const ip = req.headers.get('x-forwarded-for') || 'unknown';
+    // Stricter limit of 3 attempts to prevent spamming email inboxes
+    const rateLimit = checkRateLimit(`reset_req_${ip}`, 3, 15 * 60 * 1000);
+    if (rateLimit.isLimited) return rateLimit.response!;
+
     try {
         const { email } = await req.json();
-        if (!email) return NextResponse.json({ error: "Email is required" }, { status: 400 });
+        if (!email) {
+            rateLimit.trackFailure();
+            return NextResponse.json({ error: "Email is required" }, { status: 400 });
+        }
 
         const user = await prisma.user.findFirst({ 
             where: { email: email.toLowerCase() } 
         });
         
         // Always return success to prevent email enumeration
-        if (!user || !user.email) return NextResponse.json({ success: true });
+        if (!user || !user.email) {
+            rateLimit.trackSuccess(); // Track as success to obscure whether it worked
+            return NextResponse.json({ success: true });
+        }
 
         // SECURITY FIX: Validate secret before creating HMAC
         const secret = process.env.NEXTAUTH_SECRET;
         if (!secret || secret === 'change_this_to_a_random_secure_string_123!') {
+            rateLimit.trackFailure();
             return NextResponse.json({ error: "Internal Configuration Error" }, { status: 500 });
         }
 
@@ -42,8 +54,10 @@ export async function POST(req: Request) {
             resetLink 
         });
 
+        rateLimit.trackSuccess();
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
+        rateLimit.trackFailure();
         Logger.log(`[Password Reset Request] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: "Internal server error" }, { status: 500 });
     }

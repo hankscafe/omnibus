@@ -2,6 +2,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import AdmZip from 'adm-zip';
+import sharp from 'sharp';
 import { Logger } from '@/lib/logger';
 import { prisma } from '@/lib/db';
 import crypto from 'crypto';
@@ -21,6 +22,14 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
     try {
         await fs.ensureDir(tempDir);
         Logger.log(`[Converter] Starting conversion for: ${path.basename(cbrPath)}`, 'info');
+
+        // --- Fetch WEBP Conversion Settings ---
+        const settings = await prisma.systemSetting.findMany({
+            where: { key: { in: ['convert_to_webp', 'webp_quality'] } }
+        });
+        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+        const convertToWebp = config.convert_to_webp === 'true';
+        const webpQuality = parseInt(config.webp_quality || '80', 10);
 
         const options: any = { 
             filepath: cbrPath,
@@ -60,12 +69,29 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         allImages.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
         const zip = new AdmZip();
-        let imageCount = 1; // Start at 1 for cleaner naming
+        let imageCount = 1;
 
+        // --- NEW: WEBP Conversion Logic ---
         for (const imgPath of allImages) {
-            const ext = path.extname(imgPath);
-            const newName = `page_${imageCount.toString().padStart(4, '0')}${ext}`;
-            zip.addLocalFile(imgPath, "", newName);
+            const imgExt = path.extname(imgPath);
+            
+            if (convertToWebp && imgExt.toLowerCase() !== '.webp' && imgExt.toLowerCase() !== '.gif') {
+                try {
+                    const webpBuffer = await sharp(imgPath)
+                        .webp({ quality: webpQuality, effort: 4 })
+                        .toBuffer();
+                    
+                    const newName = `page_${imageCount.toString().padStart(4, '0')}.webp`;
+                    zip.addFile(newName, webpBuffer);
+                } catch (err) {
+                    Logger.log(`[Converter] WEBP conversion failed for ${path.basename(imgPath)}, falling back to original.`, 'warn');
+                    const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;
+                    zip.addLocalFile(imgPath, "", newName);
+                }
+            } else {
+                const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;
+                zip.addLocalFile(imgPath, "", newName);
+            }
             imageCount++;
         }
 
@@ -101,7 +127,6 @@ export async function repackArchive(filePath: string): Promise<boolean> {
 
     const ext = path.extname(filePath).toLowerCase();
 
-    // If it's a CBR, route it to the existing converter which inherently repacks and renames
     if (ext === '.cbr' || ext === '.rar') {
         const newPath = await convertCbrToCbz(filePath);
         return !!newPath;
@@ -116,12 +141,17 @@ export async function repackArchive(filePath: string): Promise<boolean> {
         await fs.ensureDir(tempDir);
         Logger.log(`[Repacker] Starting internal repack for: ${path.basename(filePath)}`, 'info');
 
-        const zip = new AdmZip(filePath);
+        // --- Fetch WEBP Conversion Settings ---
+        const settings = await prisma.systemSetting.findMany({
+            where: { key: { in: ['convert_to_webp', 'webp_quality'] } }
+        });
+        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+        const convertToWebp = config.convert_to_webp === 'true';
+        const webpQuality = parseInt(config.webp_quality || '80', 10);
 
-        // Extract all to temp dir
+        const zip = new AdmZip(filePath);
         zip.extractAllTo(tempDir, true);
 
-        // Find all images, ignoring macOS hidden files
         const allImages: string[] = [];
 
         async function findImages(currentDir: string) {
@@ -142,33 +172,45 @@ export async function repackArchive(filePath: string): Promise<boolean> {
             throw new Error("Archive contained no valid images after extraction.");
         }
 
-        // Sort naturally
         allImages.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-        // Create a brand new, flat CBZ
         const newZip = new AdmZip();
         let imageCount = 1;
 
+        // --- NEW: WEBP Conversion Logic ---
         for (const imgPath of allImages) {
             const imgExt = path.extname(imgPath);
-            // Rename files sequentially to avoid collisions from nested folders
-            const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;
-            newZip.addLocalFile(imgPath, "", newName);
+            
+            if (convertToWebp && imgExt.toLowerCase() !== '.webp' && imgExt.toLowerCase() !== '.gif') {
+                try {
+                    const webpBuffer = await sharp(imgPath)
+                        .webp({ quality: webpQuality, effort: 4 })
+                        .toBuffer();
+                    
+                    const newName = `page_${imageCount.toString().padStart(4, '0')}.webp`;
+                    newZip.addFile(newName, webpBuffer);
+                } catch (err) {
+                    Logger.log(`[Repacker] WEBP conversion failed for ${path.basename(imgPath)}, falling back.`, 'warn');
+                    const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;
+                    newZip.addLocalFile(imgPath, "", newName);
+                }
+            } else {
+                const newName = `page_${imageCount.toString().padStart(4, '0')}${imgExt}`;
+                newZip.addLocalFile(imgPath, "", newName);
+            }
             imageCount++;
         }
 
-        // Preserve ComicInfo.xml if it exists
         const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
         if (fs.existsSync(comicInfoPath)) {
             newZip.addLocalFile(comicInfoPath, "", "ComicInfo.xml");
         }
 
-        // Save the CBZ safely back to disk
         const tmpOut = `${filePath}.tmp`;
         newZip.writeZip(tmpOut);
         await fs.move(tmpOut, filePath, { overwrite: true });
 
-        Logger.log(`[Repacker] Success: Flattened and renamed ${imageCount - 1} pages in ${path.basename(filePath)}`, 'success');
+        Logger.log(`[Repacker] Success: Flattened and repacked ${imageCount - 1} pages in ${path.basename(filePath)}`, 'success');
         return true;
 
     } catch (error: unknown) {

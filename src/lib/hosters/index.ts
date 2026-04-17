@@ -7,6 +7,7 @@ import { resolveMega } from './mega';
 import { resolveRootz } from './rootz';
 import { resolveVikingfile } from './vikingfile';
 import { resolveTerabox } from './terabox';
+import { resolveAnnasArchive } from './annas-archive';
 
 export interface HosterResolveResult {
     success: boolean;
@@ -40,6 +41,8 @@ export const HosterEngine = {
                     return await resolveVikingfile(url, account);
                 case 'terabox':
                     return await resolveTerabox(url, account);
+                case 'annas_archive':
+                    return await resolveAnnasArchive(url, account);
                 default:
                     return { success: false, error: `No resolver found for hoster: ${hoster}` };
             }

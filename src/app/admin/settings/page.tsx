@@ -72,7 +72,8 @@ const hosterDisplayNames: Record<string, string> = {
     'pixeldrain': 'Pixeldrain',
     'rootz': 'Rootz',
     'vikingfile': 'VikingFile',
-    'terabox': 'Terabox'
+    'terabox': 'Terabox',
+    'annas_archive': "Anna's Archive"
 };
 
 const DISCORD_EVENTS = [
@@ -130,7 +131,8 @@ export default function SettingsPage() {
       { hoster: 'pixeldrain', enabled: true },
       { hoster: 'rootz', enabled: true },
       { hoster: 'vikingfile', enabled: true },
-      { hoster: 'terabox', enabled: true }
+      { hoster: 'terabox', enabled: true },
+      { hoster: 'annas_archive', enabled: true }
   ])
   const [hosterModalOpen, setHosterModalOpen] = useState(false)
   const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null)
@@ -272,7 +274,8 @@ export default function SettingsPage() {
                 { hoster: 'pixeldrain', enabled: true },
                 { hoster: 'rootz', enabled: true },
                 { hoster: 'vikingfile', enabled: true },
-                { hoster: 'terabox', enabled: true }
+                { hoster: 'terabox', enabled: true },
+                { hoster: 'annas_archive', enabled: true }
             ];
             
             if (hpSetting?.value) {
@@ -993,7 +996,7 @@ export default function SettingsPage() {
                         <p className="text-xs text-muted-foreground mb-4">Add your free or premium credentials to bypass bandwidth limits.</p>
                         
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-                            {['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].map(type => {
+                            {['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'].map(type => {
                                 const isAdded = configuredHosters.some(c => c.hoster === type);
                                 return (
                                     <Button key={type} variant="outline" className={`h-12 font-bold ${isAdded ? 'border-primary text-primary bg-primary/5' : ''}`} onClick={() => !isAdded && openHosterSetup(type)}>

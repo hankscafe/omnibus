@@ -249,6 +249,7 @@ export function initCronJobs() {
     await checkAndTrigger('popular', 'popular_sync_schedule', 'last_popular_sync', 'Discover Sync');
     await checkAndTrigger('backup', 'backup_sync_schedule', 'last_backup_sync', 'Database Backup');
     await checkAndTrigger('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest', 'Weekly Digest Email');
+    await checkAndTrigger('converter', 'cbr_conversion_schedule', 'last_converter_sync', 'CBR Conversion');
 
     try {
         const jobType = jobMap['watched_sync'];

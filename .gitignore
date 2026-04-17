@@ -76,5 +76,7 @@ tmp/
 # Ignore /config
 /config/
 
-# Ignore /backups
+# Ignore /backups, /watched, and /unmatched directories for local development
 /backups/
+/watched/
+/unmatched/

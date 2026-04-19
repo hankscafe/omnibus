@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
+import { syncSchedules } from '@/lib/queue';
 
 const SENSITIVE_KEYS = [
     'cv_api_key', 
@@ -189,6 +190,9 @@ export async function POST(request: Request) {
             message: "System configuration and integrations updated.",
             updatedSections: Object.keys(body).filter(k => body[k] !== undefined)
         }, userId);
+
+        // Tell BullMQ to wipe the old schedules and apply the new intervals
+        await syncSchedules().catch(e => Logger.log(`Failed to sync BullMQ schedules: ${getErrorMessage(e)}`, 'error'));
     }
 
     return NextResponse.json({ success: true });

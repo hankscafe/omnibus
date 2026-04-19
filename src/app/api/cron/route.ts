@@ -2,27 +2,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
-import { omnibusQueue } from '@/lib/queue'; 
 import { getErrorMessage } from '@/lib/utils/error';
 import { validateApiKey } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
-
-const jobMap: Record<string, string> = {
-    'watched_sync': 'WATCHED_FOLDER_SYNC',
-    'backup': 'DATABASE_BACKUP',
-    'converter': 'CBR_CONVERSION',
-    'library': 'LIBRARY_SCAN',
-    'metadata': 'METADATA_SYNC',
-    'embed_metadata': 'EMBED_METADATA',
-    'monitor': 'SERIES_MONITOR',
-    'diagnostics': 'DIAGNOSTICS',
-    'popular': 'DISCOVER_SYNC',
-    'storage_scan': 'STORAGE_SCAN',
-    'health_check': 'SYSTEM_HEALTH_CHECK',
-    'update_check': 'UPDATE_CHECK',
-    'weekly_digest': 'WEEKLY_DIGEST'
-};
 
 export async function POST(req: NextRequest) {
     const authResult = await validateApiKey(req);
@@ -36,6 +19,7 @@ export async function POST(req: NextRequest) {
         const cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() - 7);
         
+        // Retain the log cleanup feature
         await prisma.jobLog.deleteMany({
             where: {
                 createdAt: {
@@ -44,56 +28,12 @@ export async function POST(req: NextRequest) {
             }
         });
 
-        const settings = await prisma.systemSetting.findMany({
-            where: {
-                key: {
-                    in: [
-                        'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule', 'diagnostics_sync_schedule', 'backup_sync_schedule',
-                        'popular_sync_schedule', 'weekly_digest_schedule', 'cbr_conversion_schedule', 'embed_metadata_schedule',
-                        'last_library_sync', 'last_metadata_sync', 'last_monitor_sync', 'last_diagnostics_sync', 'last_backup_sync',
-                        'last_popular_sync', 'last_converter_sync', 'last_weekly_digest', 'last_embed_sync'
-                    ]
-                }
-            }
+        Logger.log(`[CRON] External heartbeat received. Logs purged.`, 'info');
+
+        return NextResponse.json({ 
+            success: true, 
+            message: "Heartbeat received. BullMQ is managing schedules natively." 
         });
-
-        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-        const now = Date.now();
-        const jobsToRun: string[] = [];
-
-        const checkJob = (jobName: string, intervalKey: string, lastSyncKey: string) => {
-            const hours = parseInt(config[intervalKey] || '0');
-            if (hours > 0) {
-                const lastRun = parseInt(config[lastSyncKey] || '0');
-                if (now - lastRun >= hours * 60 * 60 * 1000) {
-                    jobsToRun.push(jobName);
-                }
-            }
-        };
-
-        checkJob('library', 'library_sync_schedule', 'last_library_sync');
-        checkJob('metadata', 'metadata_sync_schedule', 'last_metadata_sync');
-        checkJob('monitor', 'monitor_sync_schedule', 'last_monitor_sync');
-        checkJob('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync');
-        checkJob('backup', 'backup_sync_schedule', 'last_backup_sync');
-        checkJob('popular', 'popular_sync_schedule', 'last_popular_sync');
-        checkJob('converter', 'cbr_conversion_schedule', 'last_converter_sync');
-        checkJob('embed_metadata', 'embed_metadata_schedule', 'last_embed_sync');
-           
-        for (const job of jobsToRun) {
-            Logger.log(`[CRON] External heartbeat triggering job: ${job}`, 'info');
-            try {
-                const jobType = jobMap[job];
-                if (jobType) {
-                    await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
-                }
-            } catch (err) {
-                Logger.log(`[CRON] Job ${job} execution failed: ${getErrorMessage(err)}`, 'error');
-            }
-            await new Promise(r => setTimeout(r, 2000));
-        }
-
-        return NextResponse.json({ success: true, jobsTriggered: jobsToRun, logsPurged: true });
     } catch (error: unknown) {
         Logger.log(`[Cron API] Fatal Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

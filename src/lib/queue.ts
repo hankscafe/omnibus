@@ -141,6 +141,59 @@ export const omnibusQueue = globalForMQ.omnibusQueue || new Queue('omnibus-backg
 
 if (process.env.NODE_ENV !== 'production') globalForMQ.omnibusQueue = omnibusQueue;
 
+// --- NEW: Sync Schedules Function ---
+export async function syncSchedules() {
+    const settings = await prisma.systemSetting.findMany({
+        where: {
+            key: {
+                in: [
+                    'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule',
+                    'diagnostics_sync_schedule', 'backup_sync_schedule', 'popular_sync_schedule',
+                    'weekly_digest_schedule', 'cbr_conversion_schedule', 'embed_metadata_schedule'
+                ]
+            }
+        }
+    });
+    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+
+    // 1. Clear out existing schedules to prevent duplicates
+    const repeatableJobs = await omnibusQueue.getRepeatableJobs();
+    for (const job of repeatableJobs) {
+        await omnibusQueue.removeRepeatableByKey(job.key);
+    }
+
+    // 2. Helper to add jobs if their interval is > 0
+    const addJob = async (jobType: string, hoursStr: string | undefined) => {
+        const hours = parseInt(hoursStr || '0');
+        if (hours > 0) {
+            await omnibusQueue.add(jobType, { type: jobType }, {
+                repeat: { every: hours * 60 * 60 * 1000 }, // BullMQ repeats based on milliseconds
+                jobId: `repeat_${jobType.toLowerCase()}`
+            });
+        }
+    };
+
+    // 3. Register user-configurable jobs
+    await addJob('LIBRARY_SCAN', config.library_sync_schedule);
+    await addJob('METADATA_SYNC', config.metadata_sync_schedule);
+    await addJob('SERIES_MONITOR', config.monitor_sync_schedule);
+    await addJob('DIAGNOSTICS', config.diagnostics_sync_schedule);
+    await addJob('DATABASE_BACKUP', config.backup_sync_schedule);
+    await addJob('DISCOVER_SYNC', config.popular_sync_schedule);
+    await addJob('WEEKLY_DIGEST', config.weekly_digest_schedule);
+    await addJob('CBR_CONVERSION', config.cbr_conversion_schedule);
+    await addJob('EMBED_METADATA', config.embed_metadata_schedule);
+
+    // 4. Register fixed 15-minute background jobs
+    await omnibusQueue.add('WATCHED_FOLDER_SYNC', { type: 'WATCHED_FOLDER_SYNC' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_watched_sync' });
+    await omnibusQueue.add('SYSTEM_HEALTH_CHECK', { type: 'SYSTEM_HEALTH_CHECK' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_health_check' });
+    
+    // 5. Register daily update check
+    await omnibusQueue.add('UPDATE_CHECK', { type: 'UPDATE_CHECK' }, { repeat: { every: 24 * 60 * 60 * 1000 }, jobId: 'repeat_update_check' });
+
+    Logger.log("[BullMQ] Native schedules synchronized with database settings.", "info");
+}
+
 // --- BACKGROUND WORKER PROCESSOR ---
 export function initWorker() {
     // 4. Prevent duplicate workers from spawning on Hot Reload

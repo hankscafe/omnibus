@@ -3,27 +3,11 @@ import { prisma } from './db';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { Importer } from './importer';
-import { omnibusQueue } from '@/lib/queue';
+import { omnibusQueue, syncSchedules } from '@/lib/queue';
 import { DiscordNotifier } from '@/lib/discord';
 import { getErrorMessage } from './utils/error';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
-
-const jobMap: Record<string, string> = {
-    'watched_sync': 'WATCHED_FOLDER_SYNC',
-    'backup': 'DATABASE_BACKUP',
-    'converter': 'CBR_CONVERSION',
-    'library': 'LIBRARY_SCAN',
-    'metadata': 'METADATA_SYNC',
-    'embed_metadata': 'EMBED_METADATA',
-    'monitor': 'SERIES_MONITOR',
-    'diagnostics': 'DIAGNOSTICS',
-    'popular': 'DISCOVER_SYNC',
-    'storage_scan': 'STORAGE_SCAN',
-    'health_check': 'SYSTEM_HEALTH_CHECK',
-    'update_check': 'UPDATE_CHECK',
-    'weekly_digest': 'WEEKLY_DIGEST'
-};
 
 async function acquireLock(lockId: string, timeoutMs: number): Promise<boolean> {
     const cutoff = new Date(Date.now() - timeoutMs);
@@ -54,8 +38,12 @@ export function initCronJobs() {
   if (globalForCron._cronInitialized) return;
   globalForCron._cronInitialized = true;
 
-  Logger.log("[Cron] Initializing native background automation...", "info");
+  Logger.log("[Cron] Initializing background automation...", "info");
 
+  // Sync BullMQ schedules on server boot
+  syncSchedules().catch(err => Logger.log(`[Cron] Failed to sync schedules: ${getErrorMessage(err)}`, "error"));
+
+  // Keep the 60-second Download Checker running independently
   setInterval(async () => {
     const locked = await acquireLock('CRON_DOWNLOAD_CHECKER', 55000); 
     if (!locked) return;
@@ -205,89 +193,4 @@ export function initCronJobs() {
       Logger.log(`[Cron] Download Checker Error: ${getErrorMessage(error)}`, 'error');
     }
   }, 60000); 
-
-  setInterval(async () => {
-    const locked = await acquireLock('CRON_SCHEDULER', 890000); 
-    if (!locked) return;
-
-    const now = Date.now();
-
-    const checkAndTrigger = async (jobName: string, scheduleKey: string, lastSyncKey: string, logName: string) => {
-        try {
-            const scheduleSetting = await prisma.systemSetting.findUnique({ where: { key: scheduleKey } });
-            const scheduleHours = parseInt(scheduleSetting?.value || "0");
-
-            if (scheduleHours > 0) {
-                const lastSyncSetting = await prisma.systemSetting.findUnique({ where: { key: lastSyncKey } });
-                const lastSync = parseInt(lastSyncSetting?.value || "0");
-
-                if (now - lastSync > scheduleHours * 60 * 60 * 1000) {
-                    Logger.log(`[Cron] Starting Automated ${logName}...`, "info");
-                    
-                    try {
-                        const jobType = jobMap[jobName];
-                        if (jobType) {
-                            await omnibusQueue.add(jobType, { type: jobType }, {
-                                jobId: `${jobType}_${Date.now()}`
-                            });
-                        }
-                    } catch (err: any) {
-                        Logger.log(`[Cron] Internal Execution Failed for ${jobName}: ${err.message}`, "error");
-                    }
-                }
-            }
-        } catch (error: unknown) {
-            Logger.log(`[Cron] ${logName} Interval Error: ${getErrorMessage(error)}`, "error");
-        }
-    };
-
-    await checkAndTrigger('metadata', 'metadata_sync_schedule', 'last_metadata_sync', 'ComicVine Metadata Sync');
-    await checkAndTrigger('embed_metadata', 'embed_metadata_schedule', 'last_embed_sync', 'Embed XML Metadata');
-    await checkAndTrigger('library', 'library_sync_schedule', 'last_library_sync', 'Library Scan');
-    await checkAndTrigger('monitor', 'monitor_sync_schedule', 'last_monitor_sync', 'Series Monitor Scan');
-    await checkAndTrigger('diagnostics', 'diagnostics_sync_schedule', 'last_diagnostics_sync', 'Library Diagnostics');
-    await checkAndTrigger('popular', 'popular_sync_schedule', 'last_popular_sync', 'Discover Sync');
-    await checkAndTrigger('backup', 'backup_sync_schedule', 'last_backup_sync', 'Database Backup');
-    await checkAndTrigger('weekly_digest', 'weekly_digest_schedule', 'last_weekly_digest', 'Weekly Digest Email');
-    await checkAndTrigger('converter', 'cbr_conversion_schedule', 'last_converter_sync', 'CBR Conversion');
-
-    try {
-        const jobType = jobMap['watched_sync'];
-        if (jobType) {
-            await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
-        }
-    } catch (err: any) {
-        Logger.log(`[Cron] Watched Folder Sync Failed: ${err.message}`, "error");
-    }
-    
-    try {
-        const jobType = jobMap['health_check'];
-        if (jobType) {
-            await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
-        }
-    } catch (err: any) {
-        Logger.log(`[Cron] Health Check Sync Failed: ${err.message}`, "error");
-    }
-
-    try {
-        const lastUpdateCheck = await prisma.systemSetting.findUnique({ where: { key: 'last_update_check_time' } });
-        const lastUpdateCheckTime = parseInt(lastUpdateCheck?.value || "0");
-
-        if (now - lastUpdateCheckTime > 86400000) {
-            await prisma.systemSetting.upsert({
-                where: { key: 'last_update_check_time' },
-                update: { value: now.toString() },
-                create: { key: 'last_update_check_time', value: now.toString() }
-            });
-
-            const jobType = jobMap['update_check'];
-            if (jobType) {
-                await omnibusQueue.add(jobType, { type: jobType }, { jobId: `${jobType}_${Date.now()}` });
-            }
-        }
-    } catch (err: any) {
-        Logger.log(`[Cron] Update Check Error: ${err.message}`, "error");
-    }
-
-  }, 900000); 
 }

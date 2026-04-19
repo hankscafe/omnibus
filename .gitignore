@@ -69,6 +69,7 @@ prisma/schema - BACKUP.prisma
 
 # Ignore .claude/worktree
 .claude/worktrees/
+.claude/plans/
 
 # Ignore tmp directory in dev environment
 tmp/

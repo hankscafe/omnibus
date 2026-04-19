@@ -9,7 +9,6 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import AdmZip from 'adm-zip';
 import { AuditLogger } from '@/lib/audit-logger';
 
 const safeParse = (str: string | null) => {
@@ -99,21 +98,10 @@ export async function GET(request: Request) {
         }
     }
 
-    // 5. Scan Folder for Issues and Cover
-    const files = await fs.promises.readdir(folderPath);
-    let physicalCover = null;
-    
-    const coverFile = files.find(f => 
-        ['cover.jpg', 'cover.png', 'folder.jpg', 'poster.jpg'].includes(f.toLowerCase())
-    );
-
-    if (coverFile) {
-        const fullCoverPath = path.join(folderPath, coverFile);
-        physicalCover = `/api/library/cover?path=${encodeURIComponent(fullCoverPath)}`;
-    }
-
     let downloadedIssues: any[] = [];
     let missingIssues: any[] = [];
+
+    // --- FIX: Expensive disk scanning removed. Relying entirely on DB cache. ---
 
     if (seriesRecord) {
         let existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
@@ -141,6 +129,9 @@ export async function GET(request: Request) {
         const updateOperations: any[] = [];
         const activeFilePaths = new Set();
         const creatingNums = new Set();
+
+        // We only scan the folder for issues, NOT covers.
+        const files = await fs.promises.readdir(folderPath);
 
         for (const file of files) {
             if (file.toLowerCase().match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) { 
@@ -186,7 +177,11 @@ export async function GET(request: Request) {
         for (const issue of existingIssues) {
             const fileName = issue.filePath ? path.basename(issue.filePath) : null;
             const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
-            const finalIssueCoverUrl = issue.coverUrl && issue.coverUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}` : issue.coverUrl;
+            
+            // --- FIX: Issue covers strictly route through DB proxy URL ---
+            const finalIssueCoverUrl = issue.coverUrl && (issue.coverUrl.startsWith('http') || issue.coverUrl.match(/^[a-zA-Z]:\\/))
+                ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}` 
+                : issue.coverUrl;
 
             const formatted = {
                 id: issue.id, 
@@ -211,10 +206,11 @@ export async function GET(request: Request) {
 
     downloadedIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
     missingIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
-    const finalSeriesCoverUrl = physicalCover || 
-        (seriesRecord?.coverUrl && seriesRecord.coverUrl.startsWith('http') 
-            ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 
-            : seriesRecord?.coverUrl) || null;
+    
+    // --- FIX: Series covers strictly route through DB proxy URL ---
+    const finalSeriesCoverUrl = seriesRecord?.coverUrl && (seriesRecord.coverUrl.startsWith('http') || seriesRecord.coverUrl.match(/^[a-zA-Z]:\\/))
+        ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 
+        : seriesRecord?.coverUrl || null;
 
     return NextResponse.json({ 
       id: seriesRecord?.id || null, 
@@ -223,7 +219,7 @@ export async function GET(request: Request) {
       seriesName: seriesRecord?.name?.trim() || path.basename(folderPath).replace(/\s\(\d{4}\)$/, ""),
       publisher: seriesRecord?.publisher || null, 
       year: seriesRecord?.year || null, 
-      status: seriesRecord?.status || null, // <--- FIX: Status field explicitly included!
+      status: seriesRecord?.status || null,
       monitored: seriesRecord?.monitored || false,
       path: folderPath, 
       coverUrl: finalSeriesCoverUrl, 

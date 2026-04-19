@@ -2,8 +2,8 @@ import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import bcrypt from 'bcryptjs';
-import { DiscordNotifier } from '@/lib/discord';
-import { Mailer } from '@/lib/mailer';
+// --- CHANGED: Using unified SystemNotifier ---
+import { SystemNotifier } from '@/lib/notifications';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
 
@@ -71,13 +71,10 @@ export async function PATCH(req: NextRequest) {
     }, token.id as string);
 
     if (isApproved === true && oldUser && !oldUser.isApproved) {
-        DiscordNotifier.sendAlert('account_approved', {
+        // --- CHANGED: Unified Notifier Call ---
+        SystemNotifier.sendAlert('account_approved', {
             user: updatedUser.username,
             email: updatedUser.email
-        }).catch(() => {});
-        Mailer.sendAlert('account_approved', { 
-            user: updatedUser.username, 
-            email: updatedUser.email 
         }).catch(() => {});
     }
 

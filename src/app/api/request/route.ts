@@ -4,8 +4,8 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import axios from 'axios';
-import { DiscordNotifier } from '@/lib/discord';
-import { Mailer } from '@/lib/mailer';
+// --- CHANGED: Using unified SystemNotifier instead of DiscordNotifier/Mailer ---
+import { SystemNotifier } from '@/lib/notifications';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
 import { detectManga } from '@/lib/manga-detector'; 
 import { isReleasedYet } from '@/lib/utils';
@@ -16,7 +16,21 @@ import { AuditLogger } from '@/lib/audit-logger';
 
 export const dynamic = 'force-dynamic';
 
-// --- NEW: Secure User-Facing GET Route ---
+const getMetronCover = async (seriesName: string, issueNumber: string, user?: string, pass?: string) => {
+    if (!user || !pass) return null;
+    try {
+        const res = await axios.get(`https://metron.cloud/api/issue/`, {
+            params: { series_name: seriesName, number: issueNumber },
+            auth: { username: user, password: pass },
+            headers: { 'User-Agent': 'Omnibus/1.0' },
+            timeout: 4000
+        });
+        return res.data?.results?.[0]?.image || null;
+    } catch (e) {
+        return null;
+    }
+};
+
 export async function GET(request: NextRequest) {
   const token = await getToken({ req: request });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -34,17 +48,33 @@ export async function GET(request: NextRequest) {
         where: { metadataId: { in: volumeIds }, metadataSource: 'COMICVINE' } 
     });
 
-    const formattedRequests = requests.map(req => {
+    const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
+    const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
+
+    const formattedRequests = await Promise.all(requests.map(async req => {
       const series = seriesList.find(s => s.metadataId === req.volumeId);
       let issueNumberStr = "";
-      if (req.activeDownloadName) {
-          const match = req.activeDownloadName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-          if (match) issueNumberStr = ` Issue #${match[1].padStart(3, '0')}`;
+      
+      const regexMatch = req.activeDownloadName?.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+      if (regexMatch) issueNumberStr = ` Issue #${regexMatch[1].padStart(3, '0')}`;
+
+      let finalImageUrl = req.imageUrl;
+
+      if (req.status === 'UNRELEASED' && (!finalImageUrl || finalImageUrl.includes('placeholder') || finalImageUrl.includes('default'))) {
+          const seriesNameStr = series?.name || req.activeDownloadName?.replace(/#.*/, '').trim();
+          if (regexMatch && seriesNameStr) {
+              const fallback = await getMetronCover(seriesNameStr, regexMatch[1], metronUserSetting?.value, metronPassSetting?.value);
+              if (fallback) {
+                  finalImageUrl = fallback;
+                  prisma.request.update({ where: { id: req.id }, data: { imageUrl: fallback } }).catch(()=>{});
+              }
+          }
       }
 
       return {
         id: req.id,
         userId: req.userId,
+        volumeId: req.volumeId, 
         seriesName: series ? `${series.name}${issueNumberStr} (${series.year})` : (req.activeDownloadName || `Volume ${req.volumeId}`), 
         userName: token.name || 'User',
         createdAt: req.createdAt,
@@ -52,10 +82,10 @@ export async function GET(request: NextRequest) {
         status: req.status,
         progress: req.progress, 
         downloadLink: req.downloadLink,
-        imageUrl: req.imageUrl && req.imageUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(req.imageUrl)}` : req.imageUrl,
+        imageUrl: finalImageUrl && finalImageUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(finalImageUrl)}` : finalImageUrl,
         retryCount: req.retryCount || 0 
       };
-    });
+    }));
 
     return NextResponse.json(formattedRequests);
   } catch (error: any) {
@@ -76,11 +106,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
   }
 
+  const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
+  const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
+
   try {
     const body = await request.json();
     let name = body.name || body.seriesName || body.title;
-    const { cvId, type, image, monitored, directSource } = body; 
-    let { publisher, year, description } = body;
+    const { cvId, type, monitored, directSource } = body; 
+    let { image, publisher, year, description } = body;
 
     if (!cvId) return NextResponse.json({ error: 'Missing ComicVine ID' }, { status: 400 });
 
@@ -164,20 +197,14 @@ export async function POST(request: NextRequest) {
       Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');
 
       if (initialStatus === 'PENDING_APPROVAL') {
-          DiscordNotifier.sendAlert('pending_request', {
+          // --- CHANGED: Unified Notifier Call ---
+          SystemNotifier.sendAlert('pending_request', {
               title: name,
               imageUrl: image,
               user: token.name as string,
               description: description,
               publisher: safePublisher,
-              year: year
-          }).catch(() => {});
-          
-          Mailer.sendAlert('pending_request', { 
-              user: token.name as string, 
-              title: name,
-              imageUrl: image,
-              description: description,
+              year: year,
               date: new Date().toLocaleString()
           }).catch(() => {});
       }
@@ -202,8 +229,15 @@ export async function POST(request: NextRequest) {
       for (const issue of issues) {
         const issueYear = (issue.store_date || issue.cover_date || year || "").split('-')[0];
         const searchName = `${name} #${issue.issue_number}`;
-        const issueImage = issue.image?.medium_url || issue.image?.small_url || image;
         const isReleased = isReleasedYet(issue.store_date, issue.cover_date);
+        
+        let issueImage = issue.image?.medium_url || issue.image?.small_url || image;
+        
+        if (!isReleased && (!issueImage || issueImage.includes('placeholder') || issueImage.includes('default'))) {
+            const fallback = await getMetronCover(name, issue.issue_number, metronUserSetting?.value, metronPassSetting?.value);
+            if (fallback) issueImage = fallback;
+        }
+
         let issueStatus = initialStatus;
         if (!isReleased) issueStatus = 'UNRELEASED';
 
@@ -242,6 +276,11 @@ export async function POST(request: NextRequest) {
         ? `${name} #${body.issueNumber}` 
         : name;
 
+      if (body.issueNumber && (!image || image.includes('placeholder') || image.includes('default'))) {
+         const fallback = await getMetronCover(name, body.issueNumber, metronUserSetting?.value, metronPassSetting?.value);
+         if (fallback) image = fallback;
+      }
+
       const newReq = await prisma.request.create({
         data: {
           userId: userId,
@@ -254,20 +293,14 @@ export async function POST(request: NextRequest) {
       });
 
       if (initialStatus === 'PENDING_APPROVAL') {
-          DiscordNotifier.sendAlert('pending_request', {
+          // --- CHANGED: Unified Notifier Call ---
+          SystemNotifier.sendAlert('pending_request', {
               title: searchName,
               imageUrl: image,
               user: token.name as string,
               description: description,
               publisher: safePublisher,
-              year: year
-          }).catch(() => {});
-          
-          Mailer.sendAlert('pending_request', { 
-              user: token.name as string, 
-              title: searchName,
-              imageUrl: image,
-              description: description,
+              year: year,
               date: new Date().toLocaleString()
           }).catch(() => {});
       }
@@ -371,22 +404,16 @@ export async function PATCH(request: NextRequest) {
       }
 
       if (shouldNotifyApproval) {
-          DiscordNotifier.sendAlert('request_approved', {
+          // --- CHANGED: Unified Notifier Call ---
+          SystemNotifier.sendAlert('request_approved', {
               title: approvalTitle,
               imageUrl: reqRecord.imageUrl,
               user: token.name as string,
+              requester: reqRecord.user?.username || "Unknown",
+              email: reqRecord.user?.email,
               description: approvalDesc,
               publisher: publisher,
-              year: year 
-          }).catch(() => {});
-          
-          Mailer.sendAlert('request_approved', { 
-              user: token.name as string, 
-              requester: reqRecord.user?.username || "Unknown",
-              title: approvalTitle,
-              email: reqRecord.user?.email,
-              imageUrl: reqRecord.imageUrl,
-              description: approvalDesc,
+              year: year,
               date: new Date().toLocaleString()
           }).catch(() => {});
       }

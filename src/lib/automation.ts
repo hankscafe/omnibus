@@ -7,6 +7,8 @@ import { GetComicsService } from '@/lib/getcomics';
 import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
+// --- CHANGED: Injecting the unified notifier ---
+import { SystemNotifier } from '@/lib/notifications';
 
 export async function getDownloadClient() {
   const clients = await prisma.downloadClient.findMany();
@@ -28,7 +30,6 @@ export async function searchAndDownload(requestId: string, name: string, year: s
     const best = getComicsResults[0];
     const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
     
-    // --- UPDATED HOSTER WHITELIST ---
     if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
       const settings = await prisma.systemSetting.findMany();
       const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -55,6 +56,7 @@ export async function searchAndDownload(requestId: string, name: string, year: s
         where: { id: requestId },
         data: { status: 'MANUAL_DDL', downloadLink: url }
       });
+      return; // Exit early since it's queued manually
     }
   } else {
     Logger.log(`[Automation] [GetComics] No valid matches found across all variations.`, 'info');
@@ -64,14 +66,12 @@ export async function searchAndDownload(requestId: string, name: string, year: s
   if (!skipIndexers) {
       Logger.log(`[Automation] Fallback Phase: Searching Prowlarr...`, 'info');
       let healthyResults: any[] = [];
-      let successfulQuery = "";
 
       for (const query of queries) {
           Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
           const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga);
           healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
           if (healthyResults.length > 0) {
-              successfulQuery = query;
               break; 
           }
       }
@@ -96,13 +96,30 @@ export async function searchAndDownload(requestId: string, name: string, year: s
       }
   }
 
-  const currentReq = await prisma.request.findUnique({ where: { id: requestId } });
+  // --- FAILURE PHASE ---
+  // If we reach this line, the file was not found on GetComics OR Prowlarr.
+  const currentReq = await prisma.request.findUnique({ 
+      where: { id: requestId },
+      include: { user: true }
+  });
+
   if (currentReq?.status !== 'MANUAL_DDL' && currentReq?.status !== 'DOWNLOADING') {
       Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
+      
       await prisma.request.update({
          where: { id: requestId },
          data: { status: 'STALLED' }
       });
+
+      // --- CHANGED: Send a system alert so the user knows their request failed ---
+      await SystemNotifier.sendAlert('download_failed', {
+          title: name,
+          imageUrl: currentReq?.imageUrl,
+          user: currentReq?.user?.username,
+          description: `Omnibus searched all connected indexers and direct download sites but could not find a match for **${name}**.`,
+          publisher: publisher,
+          year: year
+      }).catch(() => {});
   }
 }
 

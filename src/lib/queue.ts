@@ -3,7 +3,7 @@ import { Queue, Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { prisma } from './db';
 import { Logger } from './logger';
-import { DiscordNotifier } from './discord';
+import { SystemNotifier } from './notifications'; // <-- CHANGED
 import { Mailer } from './mailer';
 import crypto from 'crypto';
 import axios from 'axios';
@@ -114,21 +114,18 @@ async function runStorageScan() {
     return storageData.length;
 }
 
-// 1. Create a global cache object
 const globalForMQ = globalThis as unknown as { 
     omnibusQueue: Queue; 
     omnibusWorker: Worker; 
     redisConnection: IORedis;
 };
 
-// 2. Cache the Redis connection
 const connection = globalForMQ.redisConnection || new IORedis(process.env.OMNIBUS_REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null
 });
 
 if (process.env.NODE_ENV !== 'production') globalForMQ.redisConnection = connection;
 
-// 3. Cache the Queue
 export const omnibusQueue = globalForMQ.omnibusQueue || new Queue('omnibus-background-jobs', { 
     connection,
     defaultJobOptions: {
@@ -141,7 +138,6 @@ export const omnibusQueue = globalForMQ.omnibusQueue || new Queue('omnibus-backg
 
 if (process.env.NODE_ENV !== 'production') globalForMQ.omnibusQueue = omnibusQueue;
 
-// --- NEW: Sync Schedules Function ---
 export async function syncSchedules() {
     const settings = await prisma.systemSetting.findMany({
         where: {
@@ -156,24 +152,21 @@ export async function syncSchedules() {
     });
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
-    // 1. Clear out existing schedules to prevent duplicates
     const repeatableJobs = await omnibusQueue.getRepeatableJobs();
     for (const job of repeatableJobs) {
         await omnibusQueue.removeRepeatableByKey(job.key);
     }
 
-    // 2. Helper to add jobs if their interval is > 0
     const addJob = async (jobType: string, hoursStr: string | undefined) => {
         const hours = parseInt(hoursStr || '0');
         if (hours > 0) {
             await omnibusQueue.add(jobType, { type: jobType }, {
-                repeat: { every: hours * 60 * 60 * 1000 }, // BullMQ repeats based on milliseconds
+                repeat: { every: hours * 60 * 60 * 1000 }, 
                 jobId: `repeat_${jobType.toLowerCase()}`
             });
         }
     };
 
-    // 3. Register user-configurable jobs
     await addJob('LIBRARY_SCAN', config.library_sync_schedule);
     await addJob('METADATA_SYNC', config.metadata_sync_schedule);
     await addJob('SERIES_MONITOR', config.monitor_sync_schedule);
@@ -184,19 +177,14 @@ export async function syncSchedules() {
     await addJob('CBR_CONVERSION', config.cbr_conversion_schedule);
     await addJob('EMBED_METADATA', config.embed_metadata_schedule);
 
-    // 4. Register fixed 15-minute background jobs
     await omnibusQueue.add('WATCHED_FOLDER_SYNC', { type: 'WATCHED_FOLDER_SYNC' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_watched_sync' });
     await omnibusQueue.add('SYSTEM_HEALTH_CHECK', { type: 'SYSTEM_HEALTH_CHECK' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_health_check' });
-    
-    // 5. Register daily update check
     await omnibusQueue.add('UPDATE_CHECK', { type: 'UPDATE_CHECK' }, { repeat: { every: 24 * 60 * 60 * 1000 }, jobId: 'repeat_update_check' });
 
     Logger.log("[BullMQ] Native schedules synchronized with database settings.", "info");
 }
 
-// --- BACKGROUND WORKER PROCESSOR ---
 export function initWorker() {
-    // 4. Prevent duplicate workers from spawning on Hot Reload
     if (globalForMQ.omnibusWorker) {
         return;
     }
@@ -296,7 +284,7 @@ export function initWorker() {
                     }
 
                     await prisma.jobLog.create({ data: { jobType: 'DATABASE_BACKUP', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Backup saved successfully to ${filePath}. Retaining last 5 backups.` } });
-                    DiscordNotifier.sendAlert('job_db_backup', { description: `Backup saved successfully to ${fileName}.` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_db_backup', { description: `Backup saved successfully to ${fileName}.` }).catch(() => {});
                     break;
                 }
 
@@ -347,7 +335,7 @@ export function initWorker() {
                             message: details + `\nSummary: ${successCount} Converted, ${failCount} Failed.`
                         }
                     });
-                    DiscordNotifier.sendAlert('job_diagnostics', { description: `CBR Conversion Sweep Complete. Converted: ${successCount}, Failed: ${failCount}` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_diagnostics', { description: `CBR Conversion Sweep Complete. Converted: ${successCount}, Failed: ${failCount}` }).catch(() => {});
                     break;
                 }
 
@@ -540,7 +528,7 @@ export function initWorker() {
                     await prisma.jobLog.create({ 
                         data: { jobType: 'LIBRARY_SCAN', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Library scan complete. ${storageMessage}` } 
                     });
-                    DiscordNotifier.sendAlert('job_library_scan', { description: `Library scan complete. ${storageMessage}` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_library_scan', { description: `Library scan complete. ${storageMessage}` }).catch(() => {});
                     break;
                 }
 
@@ -593,7 +581,7 @@ export function initWorker() {
                             message: details + `\nFinal Summary: ${successCount} Success, ${failCount} Failed.`
                         }
                     });
-                    DiscordNotifier.sendAlert('job_metadata_sync', { description: `Metadata Sync Finished. Success: ${successCount} | Failed: ${failCount}` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_metadata_sync', { description: `Metadata Sync Finished. Success: ${successCount} | Failed: ${failCount}` }).catch(() => {});
                     break;
                 }
 
@@ -972,7 +960,7 @@ export function initWorker() {
                     await prisma.jobLog.create({ 
                         data: { jobType: 'SERIES_MONITOR', status: 'COMPLETED', durationMs: Date.now() - startTime, message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades.` } 
                     });
-                    DiscordNotifier.sendAlert('job_issue_monitor', { description: `Monitor Scan Complete. Calendar entries added: ${skeletonsCreated}. New: ${newRequestsFound}, Upgraded: ${unreleasedUpgraded}` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_issue_monitor', { description: `Monitor Scan Complete. Calendar entries added: ${skeletonsCreated}. New: ${newRequestsFound}, Upgraded: ${unreleasedUpgraded}` }).catch(() => {});
                     break;
                 }
 
@@ -992,7 +980,7 @@ export function initWorker() {
                     if (issuesFound === 0) details += "Library is in perfect health. 100% Integrity.\n";
 
                     await prisma.jobLog.create({ data: { jobType: 'DIAGNOSTICS', status: issuesFound > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', durationMs: Date.now() - startTime, message: details } });
-                    DiscordNotifier.sendAlert('job_diagnostics', { description: `Diagnostics Complete. Issues found: ${issuesFound}` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_diagnostics', { description: `Diagnostics Complete. Issues found: ${issuesFound}` }).catch(() => {});
                     break;
                 }
 
@@ -1010,7 +998,7 @@ export function initWorker() {
                         if (latestVersion !== lastNotified) {
                             const currentVersion = packageJson.version || "1.0.0";
                             if (isNewerVersion(latestVersion, currentVersion)) {
-                                await DiscordNotifier.sendAlert('update_available', { version: latestVersion });
+                                await SystemNotifier.sendAlert('update_available', { version: latestVersion });
                                 await prisma.systemSetting.upsert({
                                     where: { key: 'last_notified_version' }, update: { value: latestVersion }, create: { key: 'last_notified_version', value: latestVersion }
                                 });
@@ -1112,7 +1100,7 @@ export function initWorker() {
                     await prisma.jobLog.create({
                         data: { jobType: 'DISCOVER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}` }
                     });
-                    DiscordNotifier.sendAlert('job_discover_sync', { description: `Successfully rebuilt the Discover cache (New & Popular).` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_discover_sync', { description: `Successfully rebuilt the Discover cache (New & Popular).` }).catch(() => {});
                     break;
                 }
 
@@ -1233,7 +1221,7 @@ export function initWorker() {
                             }
                         } catch (mailErr) {
                             Logger.log(`[Queue] Failed to send weekly digest: ${getErrorMessage(mailErr)}`, 'error');
-                            throw mailErr; // Throw to allow BullMQ to retry the job
+                            throw mailErr; 
                         }
                     }
 
@@ -1268,7 +1256,6 @@ export function initWorker() {
         Logger.log(`[BullMQ] Job ${job?.id} (${job?.data.type}) failed: ${err.message}`, "error");
     });
 
-    // 5. Cache the worker
     if (process.env.NODE_ENV !== 'production') {
         globalForMQ.omnibusWorker = worker;
     }

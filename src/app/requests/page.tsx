@@ -32,7 +32,9 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
     if (!desc && req.volumeId) {
         setLoadingDesc(true);
         try {
-            const issueMatch = req.seriesName?.match(/#(\d+)/);
+            // --- FIXED: Regex expanded to handle decimal issues (e.g., #1.5) ---
+            const issueMatch = req.seriesName?.match(/#(\d+(?:\.\d+)?)/);
+            
             if (issueMatch) {
                 const targetIssueNum = parseFloat(issueMatch[1]);
                 const [volRes, issuesRes] = await Promise.all([
@@ -65,7 +67,8 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
       <CardContent className="p-4 flex flex-col sm:flex-row gap-6">
         
         <div className="w-full sm:w-32 shrink-0 sm:self-start aspect-[2/3] bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
-            {req.imageUrl ? (
+            {/* FIXED: Added .trim() check to prevent empty string broken images */}
+            {req.imageUrl && req.imageUrl.trim() !== "" ? (
                 <img src={req.imageUrl} alt={displayName} className="object-cover w-full h-full" />
             ) : (
                 <ImageIcon className="w-10 h-10 text-muted-foreground/50" />

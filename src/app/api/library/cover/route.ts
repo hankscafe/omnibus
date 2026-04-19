@@ -6,7 +6,8 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org'];
+// --- FIXED: Added metron.cloud and static.metron.cloud to the strict whitelist ---
+const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org', 'metron.cloud', 'static.metron.cloud'];
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export async function GET(request: NextRequest) {
@@ -20,7 +21,14 @@ export async function GET(request: NextRequest) {
     if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
         const url = new URL(filePath);
         
-        if (!ALLOWED_METADATA_HOSTS.includes(url.hostname)) {
+        // --- FIXED: Expanded to allow ComicVine, Gamespot, AND Metron Cloud CDNs ---
+        const isAllowedHost = ALLOWED_METADATA_HOSTS.includes(url.hostname) || 
+                              url.hostname.includes('comicvine') || 
+                              url.hostname.includes('cbsistatic.com') ||
+                              url.hostname.includes('gamespot.com') ||
+                              url.hostname.includes('metron.cloud');
+
+        if (!isAllowedHost) {
             return new Response("Forbidden: Untrusted Host", { status: 403 });
         }
 
@@ -50,7 +58,7 @@ export async function GET(request: NextRequest) {
                 }
             });
         } catch (e) {
-            // --- FIX: Return fallback image on fetch failure ---
+            // Return fallback image on fetch failure
             return NextResponse.redirect(new URL('/favicon.ico', request.url));
         }
     }
@@ -69,7 +77,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (!fs.existsSync(realTarget)) {
-        // --- FIX: Return fallback image on file missing ---
+        // Return fallback image on file missing
         return NextResponse.redirect(new URL('/favicon.ico', request.url));
     }
 

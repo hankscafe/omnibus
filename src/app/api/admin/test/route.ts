@@ -41,6 +41,46 @@ export async function POST(request: Request) {
         return providedValue;
     };
 
+    // --- PUSHOVER TEST ---
+    if (type === 'pushover') {
+        if (!config.pushover_token || !config.pushover_user) {
+            return NextResponse.json({ success: false, message: 'Missing Token or User Key.' });
+        }
+        const res = await axios.post('https://api.pushover.net/1/messages.json', {
+            token: config.pushover_token,
+            user: config.pushover_user,
+            title: "Omnibus Test",
+            message: "✅ Pushover connection successful!"
+        });
+        return NextResponse.json({ success: res.status === 200, message: "Push notification sent successfully." });
+    }
+
+    // --- TELEGRAM TEST ---
+    if (type === 'telegram') {
+        if (!config.telegram_bot_token || !config.telegram_chat_id) {
+            return NextResponse.json({ success: false, message: 'Missing Bot Token or Chat ID.' });
+        }
+        const res = await axios.post(`https://api.telegram.org/bot${config.telegram_bot_token}/sendMessage`, {
+            chat_id: config.telegram_chat_id,
+            text: "*Omnibus Test*\n✅ Telegram connection successful!",
+            parse_mode: 'Markdown'
+        });
+        return NextResponse.json({ success: res.status === 200, message: "Telegram message sent successfully." });
+    }
+
+    // --- APPRISE TEST ---
+    if (type === 'apprise') {
+        if (!config.apprise_url) {
+            return NextResponse.json({ success: false, message: 'Missing Apprise URL.' });
+        }
+        const res = await axios.post(config.apprise_url, {
+            title: "Omnibus Test",
+            body: "✅ Apprise connection successful!",
+            format: 'markdown'
+        });
+        return NextResponse.json({ success: res.status === 200, message: "Apprise notification sent successfully." });
+    }
+
     // --- SMTP TEST ---
     if (type === 'smtp' || type === 'smtp_digest') {
         const { smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, test_email } = config;
@@ -76,7 +116,6 @@ export async function POST(request: Request) {
             });
             return NextResponse.json({ success: true, message: `Test email sent to ${test_email}` });
         } else {
-            // Test Weekly Digest Format with rich dummy objects
             const dummyComics = [
                 {
                     name: "Batman",
@@ -107,7 +146,6 @@ export async function POST(request: Request) {
                 }
             ];
 
-            // Use the mailer to generate the actual template so we test exactly what users see
             const payload = await Mailer.buildWeeklyDigestPayload(dummyComics, dummyManga);
 
             await transporter.sendMail({

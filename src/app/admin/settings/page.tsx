@@ -12,7 +12,9 @@ import {
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
   XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit, Server, ArrowUp, ArrowDown,
   Folder,
-  Clock
+  Clock,
+  Smartphone,
+  Globe
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -76,7 +78,7 @@ const hosterDisplayNames: Record<string, string> = {
     'annas_archive': "Anna's Archive"
 };
 
-const DISCORD_EVENTS = [
+const SYSTEM_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
   { id: "request_approved", label: "Request Approved", desc: "Includes admin username, cover image, and synopsis." },
   { id: "comic_available", label: "Comic Available", desc: "Includes requester username, cover image, and synopsis." },
@@ -106,7 +108,8 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("metadata")
   
   const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean, text: string } | null }>({
-    comicvine: null, metron: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null, flaresolverr: null
+    comicvine: null, metron: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null, flaresolverr: null,
+    pushover: null, telegram: null, apprise: null
   })
   
   const [refreshing, setRefreshing] = useState(false)
@@ -170,7 +173,10 @@ export default function SettingsPage() {
     convert_to_webp: "false", webp_quality: "80", 
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
     folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "",
-    smtp_enabled: "false", smtp_host: "", smtp_port: "", smtp_user: "", smtp_pass: "", smtp_from: ""
+    smtp_enabled: "false", smtp_host: "", smtp_port: "", smtp_user: "", smtp_pass: "", smtp_from: "",
+    pushover_enabled: "false", pushover_token: "", pushover_user: "", pushover_events: "[]",
+    telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
+    apprise_enabled: "false", apprise_url: "", apprise_events: "[]"
   })
 
   // --- UNSAVED CHANGES STATES ---
@@ -365,6 +371,14 @@ export default function SettingsPage() {
     } finally { 
         setLoading(false) 
     }
+  }
+
+  // --- Generic Provider Event Handler ---
+  const toggleProviderEvent = (providerKey: string, eventId: string) => {
+    let current = [];
+    try { current = JSON.parse(config[`${providerKey}_events`] || "[]"); } catch(e){}
+    const updated = current.includes(eventId) ? current.filter((e: string) => e !== eventId) : [...current, eventId];
+    setConfig({...config, [`${providerKey}_events`]: JSON.stringify(updated)});
   }
 
   // --- Library Methods ---
@@ -1482,158 +1496,261 @@ export default function SettingsPage() {
             </Card>
         </TabsContent>
 
-        {/* 7. ALERTS (DISCORD WEBHOOKS & EMAIL) */}
+        {/* 7. ALERTS (NOTIFICATION PROVIDERS) */}
         <TabsContent value="alerts">
-          <Card className="shadow-sm border-border bg-background">
-            <CardHeader>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2 text-foreground">
-                    <Bell className="w-5 h-5 text-primary" /> Discord Notifications
-                  </CardTitle>
-                  <CardDescription className="text-muted-foreground">
-                    Configure automated server alerts to keep your team updated on requests and system events.
-                  </CardDescription>
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-foreground">Notification Providers</h2>
+              <p className="text-sm text-muted-foreground mt-1">Select and configure the services you want to use to receive automated system alerts.</p>
+            </div>
+
+            {/* --- 1. DISCORD --- */}
+            <Card className="shadow-sm border-border bg-background">
+              <CardHeader>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <CardTitle className="flex items-center gap-2 text-foreground">
+                      <Webhook className="w-5 h-5 text-primary" /> Discord
+                    </CardTitle>
+                    <CardDescription className="text-muted-foreground">
+                      Configure automated server alerts using Discord Webhooks.
+                    </CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => openWebhookModal()} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground transition-colors">
+                    <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Add Webhook
+                  </Button>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => openWebhookModal()} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground transition-colors">
-                  <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Add Webhook
-                </Button>
-              </div>
-            </CardHeader>
-            
-            <CardContent className="space-y-6">
-              {configuredWebhooks.length === 0 ? (
-                <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">
-                  No webhooks configured yet. Add one to start receiving Discord alerts.
-                </div>
-              ) : (
-                <div className="grid gap-4">
-                  {configuredWebhooks.map(hook => (
-                    <div key={hook.id} className="flex flex-col border border-border rounded-lg bg-muted/20 shadow-sm p-4 gap-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="flex flex-col gap-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-lg sm:text-base text-foreground">{hook.name}</span>
-                            <Badge variant={hook.isActive ? "secondary" : "outline"} className={hook.isActive ? "bg-primary/10 text-primary border-primary/20" : "text-muted-foreground border-border"}>
-                              {hook.isActive ? "Active" : "Disabled"}
-                            </Badge>
+              </CardHeader>
+              
+              <CardContent className="space-y-6">
+                {configuredWebhooks.length === 0 ? (
+                  <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">
+                    No webhooks configured yet. Add one to start receiving Discord alerts.
+                  </div>
+                ) : (
+                  <div className="grid gap-4">
+                    {configuredWebhooks.map(hook => (
+                      <div key={hook.id} className="flex flex-col border border-border rounded-lg bg-muted/20 shadow-sm p-4 gap-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex flex-col gap-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-lg sm:text-base text-foreground">{hook.name}</span>
+                              <Badge variant={hook.isActive ? "secondary" : "outline"} className={hook.isActive ? "bg-primary/10 text-primary border-primary/20" : "text-muted-foreground border-border"}>
+                                {hook.isActive ? "Active" : "Disabled"}
+                              </Badge>
+                            </div>
+                            <p className="text-xs sm:text-[11px] font-mono text-muted-foreground truncate max-w-[300px] sm:max-w-md">
+                              {hook.url.replace(/https:\/\/discord\.com\/api\/webhooks\/[^\/]+\//, "https://.../")}
+                            </p>
                           </div>
-                          <p className="text-xs sm:text-[11px] font-mono text-muted-foreground truncate max-w-[300px] sm:max-w-md">
-                            {hook.url.replace(/https:\/\/discord\.com\/api\/webhooks\/[^\/]+\//, "https://.../")}
-                          </p>
+                          
+                          <div className="flex items-center gap-2 shrink-0 border-t sm:border-0 border-border pt-3 sm:pt-0">
+                            <Button 
+                              variant="outline" 
+                              size="icon" 
+                              className="h-10 w-10 sm:h-8 sm:w-8 text-primary hover:bg-primary/10 border-primary/20 transition-colors" 
+                              disabled={testingWebhookId === hook.id}
+                              onClick={() => handleTestWebhook(hook)}
+                            >
+                              {testingWebhookId === hook.id ? <Loader2 className="h-5 w-5 sm:h-4 sm:w-4 animate-spin" /> : <Send className="h-5 w-5 sm:h-4 sm:w-4" />}
+                            </Button>
+                            <Switch checked={hook.isActive} onCheckedChange={() => toggleWebhookActive(hook.id)} className="mx-2 scale-110 sm:scale-100" />
+                            <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => openWebhookModal(hook)}>
+                              <Settings className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteWebhook(hook.id)}>
+                              <Trash2 className="h-5 w-5 sm:h-4 sm:w-4" />
+                            </Button>
+                          </div>
                         </div>
                         
-                        <div className="flex items-center gap-2 shrink-0 border-t sm:border-0 border-border pt-3 sm:pt-0">
-                          <Button 
-                            variant="outline" 
-                            size="icon" 
-                            className="h-10 w-10 sm:h-8 sm:w-8 text-primary hover:bg-primary/10 border-primary/20 transition-colors" 
-                            disabled={testingWebhookId === hook.id}
-                            onClick={() => handleTestWebhook(hook)}
-                          >
-                            {testingWebhookId === hook.id ? <Loader2 className="h-5 w-5 sm:h-4 sm:w-4 animate-spin" /> : <Send className="h-5 w-5 sm:h-4 sm:w-4" />}
-                          </Button>
-                          <Switch checked={hook.isActive} onCheckedChange={() => toggleWebhookActive(hook.id)} className="mx-2 scale-110 sm:scale-100" />
-                          <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => openWebhookModal(hook)}>
-                            <Settings className="h-5 w-5 sm:h-4 sm:w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteWebhook(hook.id)}>
-                            <Trash2 className="h-5 w-5 sm:h-4 sm:w-4" />
-                          </Button>
+                        <div className="flex flex-wrap gap-1.5 bg-background p-2 rounded-md border border-border shadow-inner">
+                          {hook.events.map(ev => (
+                            <Badge key={ev} variant="outline" className="text-[10px] uppercase tracking-tighter border-border text-muted-foreground">
+                              {ev.replace(/_/g, ' ')}
+                            </Badge>
+                          ))}
                         </div>
-                      </div>
-                      
-                      <div className="flex flex-wrap gap-1.5 bg-background p-2 rounded-md border border-border shadow-inner">
-                        {hook.events.map(ev => (
-                          <Badge key={ev} variant="outline" className="text-[10px] uppercase tracking-tighter border-border text-muted-foreground">
-                            {ev.replace(/_/g, ' ')}
-                          </Badge>
-                        ))}
-                      </div>
 
-                      {testingWebhookId === hook.id && testResults.webhooks && (
-                        <StatusBox result={testResults.webhooks} />
-                      )}
+                        {testingWebhookId === hook.id && testResults.webhooks && (
+                          <StatusBox result={testResults.webhooks} />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* --- 2. PUSHOVER --- */}
+            <Card className="shadow-sm border-border bg-background">
+                <CardHeader>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                            <CardTitle className="flex items-center gap-2 text-foreground"><Smartphone className="w-5 h-5 text-primary" /> Pushover</CardTitle>
+                            <CardDescription className="text-muted-foreground">Receive instant push notifications on your iOS or Android devices.</CardDescription>
+                        </div>
+                        <Switch checked={config.pushover_enabled === "true"} onCheckedChange={(c) => setConfig({...config, pushover_enabled: c ? "true" : "false"})} />
                     </div>
-                  ))}
+                </CardHeader>
+                {config.pushover_enabled === "true" && (
+                <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-2 border-t border-border pt-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid gap-2"><Label>Application Token</Label><Input value={config.pushover_token} onChange={e => setConfig({...config, pushover_token: e.target.value})} placeholder="API Token/Key" className="bg-muted/20 border-border" /></div>
+                        <div className="grid gap-2"><Label>User/Group Key</Label><Input value={config.pushover_user} onChange={e => setConfig({...config, pushover_user: e.target.value})} placeholder="User Key" className="bg-muted/20 border-border" /></div>
+                    </div>
+                    <div className="space-y-3 pt-2">
+                        <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
+                        <div className="grid sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto bg-muted/20 p-4 border border-border rounded-lg">
+                            {SYSTEM_EVENTS.map(event => {
+                                const isActive = (JSON.parse(config.pushover_events || "[]") as string[]).includes(event.id);
+                                return (
+                                <div key={event.id} className="flex items-start space-x-3 p-2 rounded hover:bg-background border border-transparent hover:border-border transition-colors group">
+                                    <Checkbox id={`po_${event.id}`} checked={isActive} onCheckedChange={() => toggleProviderEvent('pushover', event.id)} className="mt-1 border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary" />
+                                    <label htmlFor={`po_${event.id}`} className="text-sm font-bold leading-none cursor-pointer text-foreground group-hover:text-primary transition-colors">{event.label}</label>
+                                </div>
+                            )})}
+                        </div>
+                    </div>
+                    <Button variant="outline" className="w-full sm:w-auto mt-2 border-border font-bold hover:bg-muted" onClick={() => handleTest('pushover', config)} disabled={!!testing}>
+                        {testing === 'pushover' ? <Loader2 className="w-4 h-4 animate-spin mr-2 text-primary" /> : <Send className="w-4 h-4 mr-2 text-primary" />} Test Pushover
+                    </Button>
+                    <StatusBox result={testResults.pushover} />
+                </CardContent>
+                )}
+            </Card>
+
+            {/* --- 3. TELEGRAM --- */}
+            <Card className="shadow-sm border-border bg-background">
+                <CardHeader>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                            <CardTitle className="flex items-center gap-2 text-foreground"><Send className="w-5 h-5 text-primary" /> Telegram</CardTitle>
+                            <CardDescription className="text-muted-foreground">Send Omnibus alerts directly to a Telegram chat or channel.</CardDescription>
+                        </div>
+                        <Switch checked={config.telegram_enabled === "true"} onCheckedChange={(c) => setConfig({...config, telegram_enabled: c ? "true" : "false"})} />
+                    </div>
+                </CardHeader>
+                {config.telegram_enabled === "true" && (
+                <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-2 border-t border-border pt-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid gap-2"><Label>Bot Token</Label><Input value={config.telegram_bot_token} onChange={e => setConfig({...config, telegram_bot_token: e.target.value})} placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" className="bg-muted/20 border-border" /></div>
+                        <div className="grid gap-2"><Label>Chat ID</Label><Input value={config.telegram_chat_id} onChange={e => setConfig({...config, telegram_chat_id: e.target.value})} placeholder="-1001234567890" className="bg-muted/20 border-border" /></div>
+                    </div>
+                    <div className="space-y-3 pt-2">
+                        <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
+                        <div className="grid sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto bg-muted/20 p-4 border border-border rounded-lg">
+                            {SYSTEM_EVENTS.map(event => {
+                                const isActive = (JSON.parse(config.telegram_events || "[]") as string[]).includes(event.id);
+                                return (
+                                <div key={event.id} className="flex items-start space-x-3 p-2 rounded hover:bg-background border border-transparent hover:border-border transition-colors group">
+                                    <Checkbox id={`tg_${event.id}`} checked={isActive} onCheckedChange={() => toggleProviderEvent('telegram', event.id)} className="mt-1 border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary" />
+                                    <label htmlFor={`tg_${event.id}`} className="text-sm font-bold leading-none cursor-pointer text-foreground group-hover:text-primary transition-colors">{event.label}</label>
+                                </div>
+                            )})}
+                        </div>
+                    </div>
+                    <Button variant="outline" className="w-full sm:w-auto mt-2 border-border font-bold hover:bg-muted" onClick={() => handleTest('telegram', config)} disabled={!!testing}>
+                        {testing === 'telegram' ? <Loader2 className="w-4 h-4 animate-spin mr-2 text-primary" /> : <Send className="w-4 h-4 mr-2 text-primary" />} Test Telegram
+                    </Button>
+                    <StatusBox result={testResults.telegram} />
+                </CardContent>
+                )}
+            </Card>
+
+            {/* --- 4. APPRISE --- */}
+            <Card className="shadow-sm border-border bg-background">
+                <CardHeader>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                            <CardTitle className="flex items-center gap-2 text-foreground"><Globe className="w-5 h-5 text-primary" /> Apprise</CardTitle>
+                            <CardDescription className="text-muted-foreground">Route notifications through an Apprise instance to support 80+ other services.</CardDescription>
+                        </div>
+                        <Switch checked={config.apprise_enabled === "true"} onCheckedChange={(c) => setConfig({...config, apprise_enabled: c ? "true" : "false"})} />
+                    </div>
+                </CardHeader>
+                {config.apprise_enabled === "true" && (
+                <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-2 border-t border-border pt-6">
+                    <div className="grid gap-2"><Label>Apprise URL</Label><Input value={config.apprise_url} onChange={e => setConfig({...config, apprise_url: e.target.value})} placeholder="http://apprise:8000/notify/apprise" className="bg-muted/20 border-border" /></div>
+                    <div className="space-y-3 pt-2">
+                        <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
+                        <div className="grid sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto bg-muted/20 p-4 border border-border rounded-lg">
+                            {SYSTEM_EVENTS.map(event => {
+                                const isActive = (JSON.parse(config.apprise_events || "[]") as string[]).includes(event.id);
+                                return (
+                                <div key={event.id} className="flex items-start space-x-3 p-2 rounded hover:bg-background border border-transparent hover:border-border transition-colors group">
+                                    <Checkbox id={`ap_${event.id}`} checked={isActive} onCheckedChange={() => toggleProviderEvent('apprise', event.id)} className="mt-1 border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary" />
+                                    <label htmlFor={`ap_${event.id}`} className="text-sm font-bold leading-none cursor-pointer text-foreground group-hover:text-primary transition-colors">{event.label}</label>
+                                </div>
+                            )})}
+                        </div>
+                    </div>
+                    <Button variant="outline" className="w-full sm:w-auto mt-2 border-border font-bold hover:bg-muted" onClick={() => handleTest('apprise', config)} disabled={!!testing}>
+                        {testing === 'apprise' ? <Loader2 className="w-4 h-4 animate-spin mr-2 text-primary" /> : <Globe className="w-4 h-4 mr-2 text-primary" />} Test Apprise
+                    </Button>
+                    <StatusBox result={testResults.apprise} />
+                </CardContent>
+                )}
+            </Card>
+
+            {/* --- 5. EMAIL --- */}
+            <Card className="shadow-sm border-border bg-background mt-6">
+                <CardHeader>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                        <CardTitle className="flex items-center gap-2 text-foreground">
+                            <Mail className="w-5 h-5 text-primary" /> SMTP Email Alerts
+                        </CardTitle>
+                        <CardDescription className="text-muted-foreground mt-1">Configure an SMTP server to send email notifications for approvals and fulfilled requests.</CardDescription>
+                    </div>
+                    <Button variant="outline" size="sm" asChild className="h-12 sm:h-9 font-bold border-border hover:bg-muted text-foreground transition-colors w-full sm:w-auto">
+                        <Link href="/admin/email-templates"><FileEdit className="w-4 h-4 mr-2 text-primary" /> Customize Templates</Link>
+                    </Button>
                 </div>
-              )}
+                </CardHeader>
+                <CardContent className="space-y-6 border-t border-border pt-6">
+                <div className="flex items-center space-x-2">
+                    <Switch checked={config.smtp_enabled === "true"} onCheckedChange={(c) => setConfig({...config, smtp_enabled: c ? "true" : "false"})} />
+                    <Label className="cursor-pointer font-bold">Enable Email Notifications</Label>
+                </div>
+                {config.smtp_enabled === "true" && (
+                    <div className="grid gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid gap-2"><Label>SMTP Host</Label><Input value={config.smtp_host} onChange={e => setConfig({...config, smtp_host: e.target.value})} placeholder="smtp.gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                            <div className="grid gap-2"><Label>SMTP Port</Label><Input value={config.smtp_port} onChange={e => setConfig({...config, smtp_port: e.target.value})} placeholder="587" className="bg-muted/20 border-border text-foreground" /></div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid gap-2"><Label>SMTP Username</Label><Input value={config.smtp_user} onChange={e => setConfig({...config, smtp_user: e.target.value})} placeholder="user@gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
+                            <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={config.smtp_pass} onChange={e => setConfig({...config, smtp_pass: e.target.value})} placeholder="App Password" className="bg-muted/20 border-border text-foreground" /></div>
+                        </div>
+                        <div className="grid gap-2"><Label>From Email Address</Label><Input value={config.smtp_from} onChange={e => setConfig({...config, smtp_from: e.target.value})} placeholder="omnibus@yourdomain.com" className="bg-muted/20 border-border text-foreground" /></div>
+                        
+                        <div className="border-t border-border pt-4 flex flex-col sm:flex-row gap-2">
+                            <Input id="smtp-test-email" placeholder="Send test email to..." className="bg-muted/20 border-border max-w-xs text-foreground flex-1 sm:flex-none" />
+                            <div className="flex gap-2">
+                                <Button variant="outline" className="border-border hover:bg-muted text-foreground flex-1 sm:flex-none" onClick={() => {
+                                    const testEmail = (document.getElementById('smtp-test-email') as HTMLInputElement)?.value;
+                                    if (testEmail) handleTest('smtp', { ...config, test_email: testEmail });
+                                    else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
+                                }} disabled={!!testing}>
+                                    {testing === 'smtp' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />} Test SMTP
+                                </Button>
+                                <Button variant="outline" className="border-primary/30 text-primary bg-primary/10 hover:bg-primary/20 flex-1 sm:flex-none" onClick={() => {
+                                    const testEmail = (document.getElementById('smtp-test-email') as HTMLInputElement)?.value;
+                                    if (testEmail) handleTest('smtp_digest', { ...config, test_email: testEmail });
+                                    else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
+                                }} disabled={!!testing}>
+                                    {testing === 'smtp_digest' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileText className="w-4 h-4 mr-2" />} Test Weekly Digest
+                                </Button>
+                            </div>
+                        </div>
+                        <StatusBox result={testResults.smtp || testResults.smtp_digest} />
+                    </div>
+                )}
+                </CardContent>
+            </Card>
 
-              <div className="border-t border-border my-4" />
-              <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
-                <p className="text-xs text-foreground/80">
-                  <strong className="text-primary">Pro-Tip:</strong> Separate webhooks allow for channel-specific logging. For example, send "Download Failed" to your #dev-logs and "Comic Available" to #general.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* EMAIL SETTINGS */}
-          <Card className="shadow-sm border-border bg-background mt-6">
-            <CardHeader>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                      <CardTitle className="flex items-center gap-2 text-foreground">
-                        <Mail className="w-5 h-5 text-primary" /> SMTP Email Alerts
-                      </CardTitle>
-                      <CardDescription className="text-muted-foreground mt-1">
-                        Configure an SMTP server to send email notifications for approvals and fulfilled requests.
-                      </CardDescription>
-                  </div>
-                  <Button variant="outline" size="sm" asChild className="h-12 sm:h-9 font-bold border-border hover:bg-muted text-foreground transition-colors w-full sm:w-auto">
-                      <Link href="/admin/email-templates">
-                          <FileEdit className="w-4 h-4 mr-2 text-primary" /> Customize Templates
-                      </Link>
-                  </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
-                  <Switch 
-                      id="smtp-toggle"
-                      checked={config.smtp_enabled === "true"} 
-                      onCheckedChange={(c) => setConfig({...config, smtp_enabled: c ? "true" : "false"})} 
-                  />
-                  <Label htmlFor="smtp-toggle" className="cursor-pointer font-bold">Enable Email Notifications</Label>
-              </div>
-
-              {config.smtp_enabled === "true" && (
-                  <div className="grid gap-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="grid gap-2"><Label>SMTP Host</Label><Input value={config.smtp_host} onChange={e => setConfig({...config, smtp_host: e.target.value})} placeholder="smtp.gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
-                          <div className="grid gap-2"><Label>SMTP Port</Label><Input value={config.smtp_port} onChange={e => setConfig({...config, smtp_port: e.target.value})} placeholder="587" className="bg-muted/20 border-border text-foreground" /></div>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="grid gap-2"><Label>SMTP Username</Label><Input value={config.smtp_user} onChange={e => setConfig({...config, smtp_user: e.target.value})} placeholder="user@gmail.com" className="bg-muted/20 border-border text-foreground" /></div>
-                          <div className="grid gap-2"><Label>SMTP Password</Label><Input type="password" value={config.smtp_pass} onChange={e => setConfig({...config, smtp_pass: e.target.value})} placeholder="App Password" className="bg-muted/20 border-border text-foreground" /></div>
-                      </div>
-                      <div className="grid gap-2"><Label>From Email Address</Label><Input value={config.smtp_from} onChange={e => setConfig({...config, smtp_from: e.target.value})} placeholder="omnibus@yourdomain.com" className="bg-muted/20 border-border text-foreground" /></div>
-                      
-                      <div className="border-t border-border pt-4 flex flex-col sm:flex-row gap-2">
-                          <Input id="smtp-test-email" placeholder="Send test email to..." className="bg-muted/20 border-border max-w-xs text-foreground flex-1 sm:flex-none" />
-                          <div className="flex gap-2">
-                              <Button variant="outline" className="border-border hover:bg-muted text-foreground flex-1 sm:flex-none" onClick={() => {
-                                  const testEmail = (document.getElementById('smtp-test-email') as HTMLInputElement)?.value;
-                                  if (testEmail) handleTest('smtp', { ...config, test_email: testEmail });
-                                  else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
-                              }} disabled={!!testing}>
-                                  {testing === 'smtp' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />} Test SMTP
-                              </Button>
-                              <Button variant="outline" className="border-primary/30 text-primary bg-primary/10 hover:bg-primary/20 flex-1 sm:flex-none" onClick={() => {
-                                  const testEmail = (document.getElementById('smtp-test-email') as HTMLInputElement)?.value;
-                                  if (testEmail) handleTest('smtp_digest', { ...config, test_email: testEmail });
-                                  else toast({ title: "Validation Error", description: "Enter an email to test.", variant: "destructive" });
-                              }} disabled={!!testing}>
-                                  {testing === 'smtp_digest' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileText className="w-4 h-4 mr-2" />} Test Weekly Digest
-                              </Button>
-                          </div>
-                      </div>
-                      <StatusBox result={testResults.smtp || testResults.smtp_digest} />
-                  </div>
-              )}
-            </CardContent>
-          </Card>
+          </div>
         </TabsContent>
 
         {/* SSO / AUTH */}
@@ -1924,16 +2041,16 @@ export default function SettingsPage() {
               <div className="space-y-3 pt-4 border-t border-border">
                 <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
                 <div className="grid gap-2 max-h-[250px] overflow-y-auto pr-2">
-                  {DISCORD_EVENTS.map(event => (
+                  {SYSTEM_EVENTS.map(event => (
                     <div key={event.id} className="flex items-start space-x-3 p-2 sm:p-2 rounded hover:bg-muted/50 border border-transparent hover:border-border transition-colors group">
                       <Checkbox 
-                        id={event.id} 
+                        id={`wh_${event.id}`} 
                         checked={editingWebhook.events.includes(event.id)}
                         onCheckedChange={() => toggleWebhookEvent(event.id)}
                         className="mt-1 sm:mt-0 border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                       />
                       <div className="grid gap-1.5 leading-none">
-                        <label htmlFor={event.id} className="text-sm font-bold leading-none cursor-pointer text-foreground group-hover:text-primary transition-colors">
+                        <label htmlFor={`wh_${event.id}`} className="text-sm font-bold leading-none cursor-pointer text-foreground group-hover:text-primary transition-colors">
                           {event.label}
                         </label>
                         <p className="text-[11px] text-muted-foreground leading-snug">
@@ -1945,6 +2062,7 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              <StatusBox result={testResults.webhooks} />
             </div>
           )}
 

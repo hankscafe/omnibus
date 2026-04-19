@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
-import { parseComicVineCredits } from '@/lib/utils';
+import { parseComicVineCredits, isReleasedYet } from '@/lib/utils';
 import { ComicVineIssue } from '@/types'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
@@ -27,6 +27,22 @@ interface MappedIssueResult {
     coverArtists: string[];
 }
 
+// --- NEW: Helper to securely fetch from Metron ---
+const getMetronCover = async (seriesName: string, issueNumber: string, user?: string, pass?: string) => {
+    if (!user || !pass) return null;
+    try {
+        const res = await axios.get(`https://metron.cloud/api/issue/`, {
+            params: { series_name: seriesName, number: issueNumber },
+            auth: { username: user, password: pass },
+            headers: { 'User-Agent': 'Omnibus/1.0' },
+            timeout: 4000
+        });
+        return res.data?.results?.[0]?.image || null;
+    } catch (e) {
+        return null;
+    }
+};
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const volumeId = searchParams.get('volumeId');
@@ -43,6 +59,10 @@ export async function GET(request: Request) {
   if (!CV_API_KEY) {
     return NextResponse.json({ error: 'Missing API Key' }, { status: 500 });
   }
+
+  // Grab Metron credentials for fallback lookups
+  const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
+  const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
 
   try {
     const allResults: MappedIssueResult[] = []; 
@@ -68,7 +88,8 @@ export async function GET(request: Request) {
       const data = response.data;
       if (offset === 0) totalResults = data.number_of_total_results || 0;
 
-      const pageResults: MappedIssueResult[] = (data.results || []).map((item: ComicVineIssue) => {
+      // --- FIXED: Async mapping to allow Metron fallback ---
+      const pageResults: MappedIssueResult[] = await Promise.all((data.results || []).map(async (item: ComicVineIssue) => {
         let desc = item.deck;
         if (!desc && item.description) {
            desc = item.description.replace(/<[^>]*>?/gm, '');
@@ -79,9 +100,16 @@ export async function GET(request: Request) {
 
         const dateStr = item.store_date || item.cover_date;
         const year = dateStr ? dateStr.split('-')[0] : '????';
+        const isReleased = isReleasedYet(item.store_date, item.cover_date);
         
-        // --- FIX: Proxy external ComicVine image immediately ---
-        const rawImage = item.image?.medium_url || item.image?.small_url || item.image?.super_url || null;
+        let rawImage = item.image?.medium_url || item.image?.small_url || item.image?.super_url || null;
+
+        // --- NEW: Metron Fallback Logic ---
+        // If the issue is unreleased AND ComicVine returned a generic placeholder, check Metron
+        if (!isReleased && (!rawImage || rawImage.includes('placeholder') || rawImage.includes('default'))) {
+            const fallback = await getMetronCover(item.volume.name, item.issue_number, metronUserSetting?.value, metronPassSetting?.value);
+            if (fallback) rawImage = fallback;
+        }
 
         return {
           id: item.id,
@@ -98,7 +126,7 @@ export async function GET(request: Request) {
           artists: artists.slice(0, 3),
           coverArtists: coverArtists.slice(0, 3),
         };
-      });
+      }));
 
       allResults.push(...pageResults);
       offset += 100;

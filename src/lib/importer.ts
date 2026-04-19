@@ -6,8 +6,8 @@ import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { resolveRemotePath } from './utils/path-resolver'; 
 import axios from 'axios';
-import { DiscordNotifier } from './discord';
-import { Mailer } from './mailer';
+// --- CHANGED: Using unified SystemNotifier instead of DiscordNotifier/Mailer ---
+import { SystemNotifier } from './notifications';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
@@ -375,7 +375,6 @@ export const Importer = {
              where: { seriesId: series.id, number: issueNum }
          });
 
-         // --- CRITICAL FIX: Ensure the correct Match State and cvIssueId are injected! ---
          const targetMetaId = xmlMeta?.cvIssueId ? xmlMeta.cvIssueId.toString() : `unmatched_${Math.random()}`;
          const targetMetaSource = xmlMeta?.cvIssueId ? 'COMICVINE' : 'LOCAL';
          const matchState = xmlMeta?.cvIssueId ? 'MATCHED' : 'UNMATCHED';
@@ -495,24 +494,17 @@ export const Importer = {
       }
 
       if (shouldNotify) {
-          await DiscordNotifier.sendAlert('comic_available', {
+          // --- CHANGED: Unified Notifier Call ---
+          await SystemNotifier.sendAlert('comic_available', {
               title: notificationTitle,
               imageUrl: req.imageUrl,
               user: req.user?.username,
+              email: req.user?.email,
               description: notificationDesc,
               publisher: series?.publisher,
-              year: series?.year?.toString()
-          }).catch(() => {});
-          
-          await Mailer.sendAlert('comic_available', {
-              title: notificationTitle,
-              email: req.user?.email,
-              user: req.user?.username,
-              requester: req.user?.username,
-              imageUrl: req.imageUrl,
-              description: notificationDesc,
+              year: series?.year?.toString(),
               date: new Date().toLocaleString()
-          }).catch(() => {});
+          });
       }
 
       Logger.log(`[Importer] Successfully imported to: ${destFolder}`, "success");
@@ -521,14 +513,15 @@ export const Importer = {
     } catch (e: any) {
       Logger.log(`[Importer] Import Failed: ${e.message}`, "error");
       if (req) {
-          await DiscordNotifier.sendAlert('download_failed', {
+          // --- CHANGED: Unified Notifier Call ---
+          await SystemNotifier.sendAlert('download_failed', {
               title: req.activeDownloadName || series?.name || "Unknown Comic",
               imageUrl: req.imageUrl,
               user: req.user?.username,
               description: series?.description,
               publisher: series?.publisher,
               year: series?.year?.toString()
-          }).catch(() => {});
+          });
       }
       return false;
     }

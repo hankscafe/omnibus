@@ -174,6 +174,7 @@ export default function SettingsPage() {
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
     folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "",
     smtp_enabled: "false", smtp_host: "", smtp_port: "", smtp_user: "", smtp_pass: "", smtp_from: "",
+    discord_enabled: "true",
     pushover_enabled: "false", pushover_token: "", pushover_user: "", pushover_events: "[]",
     telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
     apprise_enabled: "false", apprise_url: "", apprise_events: "[]"
@@ -307,6 +308,7 @@ export default function SettingsPage() {
 
         if (!newConfig.download_retry_delay) newConfig.download_retry_delay = "5";
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
+        if (newConfig.discord_enabled === undefined) newConfig.discord_enabled = "true";
         
         setConfig(newConfig);
         setTimeout(() => setIsDataLoaded(true), 500);
@@ -1106,7 +1108,7 @@ export default function SettingsPage() {
 
                     <div className="border-t border-border my-4" />
                     <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('paths')} disabled={!!testing}>
-                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
+                        {testing === 'paths' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test File Permissions
                     </Button>
                     <StatusBox result={testResults.paths} />
 
@@ -1186,8 +1188,8 @@ export default function SettingsPage() {
                                     />
                                     <p className="text-[10px] text-muted-foreground">80% provides excellent visual quality while heavily reducing file size.</p>
                                 </div>
-                    )}
-                </div>
+                            )}
+                        </div>
 
                         {/* --- LIVE PREVIEW BOX --- */}
                         <div className="bg-muted/30 p-4 rounded-lg border border-border space-y-3 mt-2">
@@ -1273,7 +1275,6 @@ export default function SettingsPage() {
                                     <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_AWAITING_MATCH_DIR}>{envPaths?.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where files awaiting match are stored.</p>
                                 </div>
-
                             </div>
                             <p className="text-[11px] text-muted-foreground mt-2">
                                 These paths are configured via Environment Variables (<code className="text-foreground font-bold">DATABASE_URL</code>, <code className="text-foreground font-bold">OMNIBUS_BACKUPS_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_CACHE_DIR</code>, <code className="text-foreground font-bold">OMNIBUS_LOGS_DIR</code>) in your Docker setup. 
@@ -1516,13 +1517,22 @@ export default function SettingsPage() {
                       Configure automated server alerts using Discord Webhooks.
                     </CardDescription>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => openWebhookModal()} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground transition-colors">
-                    <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Add Webhook
-                  </Button>
+                  <div className="flex items-center gap-4">
+                    <Switch 
+                        checked={config.discord_enabled !== "false"} 
+                        onCheckedChange={(c) => setConfig({...config, discord_enabled: c ? "true" : "false"})} 
+                    />
+                    {config.discord_enabled !== "false" && (
+                        <Button variant="outline" size="sm" onClick={() => openWebhookModal()} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground transition-colors">
+                          <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary" /> Add Webhook
+                        </Button>
+                    )}
+                  </div>
                 </div>
               </CardHeader>
               
-              <CardContent className="space-y-6">
+              {config.discord_enabled !== "false" && (
+              <CardContent className="space-y-6 border-t border-border pt-6 animate-in fade-in slide-in-from-top-2">
                 {configuredWebhooks.length === 0 ? (
                   <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">
                     No webhooks configured yet. Add one to start receiving Discord alerts.
@@ -1580,6 +1590,7 @@ export default function SettingsPage() {
                   </div>
                 )}
               </CardContent>
+              )}
             </Card>
 
             {/* --- 2. PUSHOVER --- */}

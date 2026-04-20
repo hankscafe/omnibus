@@ -8,15 +8,11 @@ import { getErrorMessage } from './utils/error';
 
 export const SystemNotifier = {
     async sendAlert(event: string, payload: any) {
-        // 1. Trigger existing native Discord Webhooks & Email Mailer
-        // (These internal scripts handle their own event filtering)
-        await DiscordNotifier.sendAlert(event, payload).catch(()=>{});
-        await Mailer.sendAlert(event, payload).catch(()=>{});
-
-        // 2. Fetch generic settings for third-party push providers
+        // 1. Fetch generic settings for third-party push providers
         const settings = await prisma.systemSetting.findMany({
             where: {
                 key: { in: [
+                    'discord_enabled',
                     'pushover_enabled', 'pushover_token', 'pushover_user', 'pushover_events',
                     'telegram_enabled', 'telegram_bot_token', 'telegram_chat_id', 'telegram_events',
                     'apprise_enabled', 'apprise_url', 'apprise_events'
@@ -24,6 +20,13 @@ export const SystemNotifier = {
             }
         });
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+
+        // 2. Trigger existing native Discord Webhooks & Email Mailer
+        // (Default to true if missing for backward compatibility)
+        if (config.discord_enabled !== 'false') {
+            await DiscordNotifier.sendAlert(event, payload).catch(()=>{});
+        }
+        await Mailer.sendAlert(event, payload).catch(()=>{});
 
         const title = payload.title || 'Omnibus Alert';
         const message = payload.description || `System Event: ${event} triggered.`;

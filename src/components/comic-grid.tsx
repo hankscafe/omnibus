@@ -1,3 +1,4 @@
+// src/components/comic-grid.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -382,25 +383,16 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               {volStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
                                           </Button>
                                       ) : (
-                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
-                                              <Button 
-                                                  className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold px-1 whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
-                                                  variant="default" 
-                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined })} 
-                                                  disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
-                                              >
-                                                  {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : (
-                                                      isVolOwned ? <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
-                                                  )}
-                                              </Button>
-                                              <Button 
-                                                  className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-1 border-0 whitespace-normal" 
-                                                  onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: 'getcomics' })} 
-                                                  disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
-                                              >
-                                                  {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
-                                              </Button>
-                                          </div>
+                                          <Button 
+                                              className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
+                                              variant="default" 
+                                              onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined })} 
+                                              disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
+                                          >
+                                              {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
+                                                  isVolOwned ? <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
+                                              )}
+                                          </Button>
                                       )}
                                       
                                       {/* ISSUE BUTTONS */}
@@ -411,24 +403,14 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               {issueStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
                                           </Button>
                                       ) : (
-                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
-                                              <Button 
-                                                  className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 px-1 whitespace-normal" 
-                                                  variant="outline" 
-                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber)} 
-                                                  disabled={requestingTarget === `iss-${issueTargetName}`}
-                                              >
-                                                  {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
-                                              </Button>
-                                              <Button 
-                                                  className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 px-1 border-0 whitespace-normal" 
-                                                  variant="outline" 
-                                                  onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, 'getcomics', selectedComic.issueNumber)} 
-                                                  disabled={requestingTarget === `iss-${issueTargetName}`}
-                                              >
-                                                  {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
-                                              </Button>
-                                          </div>
+                                          <Button 
+                                              className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
+                                              variant="outline" 
+                                              onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber)} 
+                                              disabled={requestingTarget === `iss-${issueTargetName}`}
+                                          >
+                                              {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
+                                          </Button>
                                       )}
                                       
                                       <Button 
@@ -578,7 +560,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                     <div className="absolute bottom-1 left-2 z-20 text-white text-[11px] font-black truncate drop-shadow-md">#{issue.issueNumber}</div>
 
                                                     {!relIssueStatus && (
-                                                        <div className="absolute bottom-2 inset-x-2 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity flex justify-between items-center pointer-events-none">
+                                                        <div className="absolute bottom-2 inset-x-2 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity flex justify-center items-center pointer-events-none">
                                                             <Button
                                                                 size="icon"
                                                                 className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg pointer-events-auto"
@@ -588,24 +570,10 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                                     e.stopPropagation();
                                                                     handleRequest(selectedComic.volumeId, seriesBaseName, issue.image, issue.year, 'issue', selectedComic.publisher, false, undefined, issue.issueNumber);
                                                                 }}
-                                                                title="Standard Request"
+                                                                title="Request Issue"
                                                                 tabIndex={-1}
                                                             >
                                                                 {requestingTarget === `iss-${relIssueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
-                                                            </Button>
-                                                            <Button
-                                                                size="icon"
-                                                                className="h-8 w-8 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg pointer-events-auto border-0"
-                                                                disabled={requestingTarget === `iss-${relIssueTargetName}`}
-                                                                onClick={(e) => {
-                                                                    e.preventDefault();
-                                                                    e.stopPropagation();
-                                                                    handleRequest(selectedComic.volumeId, seriesBaseName, issue.image, issue.year, 'issue', selectedComic.publisher, false, 'getcomics', issue.issueNumber);
-                                                                }}
-                                                                title="Direct from GetComics"
-                                                                tabIndex={-1}
-                                                            >
-                                                                {requestingTarget === `iss-${relIssueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Globe className="w-4 h-4"/>}
                                                             </Button>
                                                         </div>
                                                     )}

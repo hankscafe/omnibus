@@ -1,8 +1,9 @@
+// src/components/request-search.tsx
 "use client"
 
 import { useState, useEffect } from "react"
 import { useSession } from "next-auth/react" 
-import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck, Tags, BookMarked, Shield, MapPin } from "lucide-react"
+import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck, Tags, BookMarked, Shield, MapPin, ExternalLink } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } from "@/components/ui/dialog"
@@ -60,10 +61,16 @@ export function RequestSearch() {
   const [homeQuery, setHomeQuery] = useState("")
   const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
   
-  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, directSource?: 'getcomics' } | null>(null);
+  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string } | null>(null);
   
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
+  
+  // Pagination State
+  const [searchPage, setSearchPage] = useState(1);
+  const [hasMoreSearch, setHasMoreSearch] = useState(false);
+  const [isSearchingMore, setIsSearchingMore] = useState(false);
+
   const [selectedItem, setSelectedItem] = useState<any>(null)
   const [volumeIssues, setVolumeIssues] = useState<Issue[]>([])
   
@@ -118,15 +125,38 @@ export function RequestSearch() {
       return null;
   }
 
-  const performSearch = async (e?: React.FormEvent) => {
+  const performSearch = async (e?: React.FormEvent, isLoadMore = false) => {
     if (e) e.preventDefault();
     if (homeQuery.trim().length < 2) return;
-    setOpen(true); setLoading(true); setSelectedItem(null);
+
+    const nextPage = isLoadMore ? searchPage + 1 : 1;
+
+    if (!isLoadMore) {
+        setOpen(true); 
+        setLoading(true); 
+        setSelectedItem(null);
+    } else {
+        setIsSearchingMore(true);
+    }
+
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(homeQuery)}&_t=${Date.now()}`)
+      const res = await fetch(`/api/search?q=${encodeURIComponent(homeQuery)}&page=${nextPage}&_t=${Date.now()}`)
       const data = await res.json()
-      if (data.results) setResults(data.results)
-    } finally { setLoading(false) }
+      
+      if (isLoadMore) {
+          setResults(prev => [...prev, ...(data.results || [])]);
+      } else {
+          setResults(data.results || []);
+      }
+      
+      setHasMoreSearch(data.hasMore || false);
+      setSearchPage(nextPage);
+    } catch (e) {
+      toast({ title: "Search failed", variant: "destructive" });
+    } finally { 
+      setLoading(false);
+      setIsSearchingMore(false);
+    }
   }
 
   const handleSelectSearchResult = async (item: SearchResult) => {
@@ -183,7 +213,7 @@ export function RequestSearch() {
       });
   }, [selectedItem?.id, selectedItem?.isVolume]);
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string, issueNumber?: string) => {
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string) => {
     if (!name || name === "Unknown" || name === "undefined") {
         toast({ title: "Request Failed", description: "Missing valid series name. Try interactive search.", variant: "destructive" });
         return;
@@ -204,8 +234,7 @@ export function RequestSearch() {
             publisher: publisher || "Unknown", 
             image, 
             type, 
-            monitored, 
-            directSource,
+            monitored,
             issueNumber: issueNumber || (type === 'issue' ? "1" : undefined)
         })
       });
@@ -288,6 +317,7 @@ export function RequestSearch() {
 
           <div className="flex-1 overflow-y-auto p-6 bg-background transition-colors duration-300">
             {!selectedItem ? (
+                <>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 pb-4 px-1">
                   {results.map((item) => {
                     const volStatus = getVolumeStatus(item.id, item.name);
@@ -318,6 +348,21 @@ export function RequestSearch() {
                     </div>
                   )})}
                 </div>
+                
+                {hasMoreSearch && (
+                    <div className="mt-8 mb-4 flex justify-center">
+                        <Button 
+                            variant="secondary" 
+                            onClick={() => performSearch(undefined, true)} 
+                            disabled={isSearchingMore}
+                            className="font-bold shadow-sm"
+                        >
+                            {isSearchingMore ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                            Load More Results
+                        </Button>
+                    </div>
+                )}
+                </>
             ) : (
               <div className="h-full flex flex-col">
                   <div className="mb-6">
@@ -354,25 +399,16 @@ export function RequestSearch() {
                                             {volStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
                                         </Button>
                                     ) : (
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
-                                            <Button 
-                                                className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold px-1 whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
-                                                variant="default" 
-                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: seriesBaseName, image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: undefined })} 
-                                                disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
-                                            >
-                                                {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : (
-                                                    isVolOwned ? <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
-                                                )}
-                                            </Button>
-                                            <Button 
-                                                className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-1 border-0 whitespace-normal" 
-                                                onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: seriesBaseName, image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', directSource: 'getcomics' })} 
-                                                disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
-                                            >
-                                                {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
-                                            </Button>
-                                        </div>
+                                        <Button 
+                                            className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
+                                            variant="default" 
+                                            onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: seriesBaseName, image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown' })} 
+                                            disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
+                                        >
+                                            {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
+                                                isVolOwned ? <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
+                                            )}
+                                        </Button>
                                     )}
                                     
                                     {/* ISSUE BUTTONS */}
@@ -383,24 +419,14 @@ export function RequestSearch() {
                                             {issueStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
                                         </Button>
                                     ) : (
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
-                                            <Button 
-                                                className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 px-1 whitespace-normal" 
-                                                variant="outline" 
-                                                onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, undefined, selectedItem.issueNumber || "1")} 
-                                                disabled={requestingTarget === `iss-${issueTargetName}`}
-                                            >
-                                                {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
-                                            </Button>
-                                            <Button 
-                                                className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-[11px] sm:text-xs font-bold bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 px-1 border-0 whitespace-normal" 
-                                                variant="outline" 
-                                                onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, 'getcomics', selectedItem.issueNumber || "1")} 
-                                                disabled={requestingTarget === `iss-${issueTargetName}`}
-                                            >
-                                                {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin shrink-0" /> : <><Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> <span className="leading-tight text-center">GetComics</span></>}
-                                            </Button>
-                                        </div>
+                                        <Button 
+                                            className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
+                                            variant="outline" 
+                                            onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, selectedItem.issueNumber || "1")} 
+                                            disabled={requestingTarget === `iss-${issueTargetName}`}
+                                        >
+                                            {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
+                                        </Button>
                                     )}
                                     
                                     <Button 
@@ -427,11 +453,11 @@ export function RequestSearch() {
                       <div className="space-y-6">
                              {hasCreators && (
                                 <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
-                                    {selectedItem.writers?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedItem.writers.join(", ")}</p></div>)}
-                                    {selectedItem.artists?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.artists.join(", ")}</p></div>)}
-                                    {selectedItem.coverArtists?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Cover Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.coverArtists.join(", ")}</p></div>)}
-                                    {selectedItem.colorists?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Colorist</p><p className="text-sm font-medium text-foreground">{selectedItem.colorists.join(", ")}</p></div>)}
-                                    {selectedItem.letterers?.length > 0 && (<div><p className="text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Letterer</p><p className="text-sm font-medium text-foreground">{selectedItem.letterers.join(", ")}</p></div>)}
+                                    {selectedItem.writers?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedItem.writers.join(", ")}</p></div>)}
+                                    {selectedItem.artists?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.artists.join(", ")}</p></div>)}
+                                    {selectedItem.coverArtists?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Cover Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.coverArtists.join(", ")}</p></div>)}
+                                    {selectedItem.colorists?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Colorist</p><p className="text-sm font-medium text-foreground">{selectedItem.colorists.join(", ")}</p></div>)}
+                                    {selectedItem.letterers?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Letterer</p><p className="text-sm font-medium text-foreground">{selectedItem.letterers.join(", ")}</p></div>)}
                                 </div>
                              )}
 
@@ -532,7 +558,7 @@ export function RequestSearch() {
                                                   <div className="absolute top-1 right-1 bg-black/80 text-white rounded-md px-1.5 py-0.5 text-[10px] font-bold z-20 shadow-sm border border-white/20">#{issue.issueNumber}</div>
 
                                                   {!relIssueStatus && (
-                                                      <div className="absolute bottom-2 inset-x-2 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity flex justify-between items-center pointer-events-none">
+                                                      <div className="absolute bottom-2 inset-x-2 z-30 opacity-100 sm:opacity-0 sm:group-hover/issue:opacity-100 transition-opacity flex justify-center items-center pointer-events-none">
                                                           <Button
                                                               size="icon"
                                                               className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg pointer-events-auto"
@@ -540,24 +566,12 @@ export function RequestSearch() {
                                                               onClick={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
-                                                                  handleRequest(selectedItem.volumeId, seriesBaseName, issue.image, issue.year, 'issue', selectedItem.publisher, false, undefined, issue.issueNumber);
+                                                                  handleRequest(selectedItem.volumeId, seriesBaseName, issue.image, issue.year, 'issue', selectedItem.publisher, false, issue.issueNumber);
                                                               }}
-                                                              title="Standard Request"
+                                                              title="Request Issue"
+                                                              tabIndex={-1}
                                                           >
                                                               {requestingTarget === `iss-${relIssueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
-                                                          </Button>
-                                                          <Button
-                                                              size="icon"
-                                                              className="h-8 w-8 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg pointer-events-auto border-0"
-                                                              disabled={requestingTarget === `iss-${relIssueTargetName}`}
-                                                              onClick={(e) => {
-                                                                  e.preventDefault();
-                                                                  e.stopPropagation();
-                                                                  handleRequest(selectedItem.volumeId, seriesBaseName, issue.image, issue.year, 'issue', selectedItem.publisher, false, 'getcomics', issue.issueNumber);
-                                                              }}
-                                                              title="Direct from GetComics"
-                                                          >
-                                                              {requestingTarget === `iss-${relIssueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin"/> : <Globe className="w-4 h-4"/>}
                                                           </Button>
                                                       </div>
                                                   )}
@@ -579,7 +593,7 @@ export function RequestSearch() {
           </div>
           {selectedItem && (
             <div className="p-4 bg-background border-t border-border flex justify-between shrink-0 z-10 transition-colors duration-300">
-                <Button variant="secondary" asChild><Link href={selectedItem.siteUrl || `https://comicvine.gamespot.com/volume/4050-${selectedItem.volumeId}/`} target="_blank" rel="noopener noreferrer">ComicVine</Link></Button>
+                <Button variant="secondary" asChild><Link href={selectedItem.siteUrl || `https://comicvine.gamespot.com/volume/4050-${selectedItem.volumeId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> View Details</Link></Button>
                 <Button variant="outline" className="text-foreground" onClick={() => setOpen(false)}>Close</Button>
             </div>
           )}
@@ -609,13 +623,13 @@ export function RequestSearch() {
           </DialogHeader>
           <div className="flex flex-col gap-3 mt-4 sm:mt-6">
             <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true, monitorPrompt.directSource);
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true);
                 setMonitorPrompt(null);
             }}>
                 Yes, Request & Monitor
             </Button>
             <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false, monitorPrompt.directSource);
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false);
                 setMonitorPrompt(null);
             }}>
                 No, Just Request Current Issues

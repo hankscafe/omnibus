@@ -3,7 +3,7 @@ import { Queue, Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { prisma } from './db';
 import { Logger } from './logger';
-import { SystemNotifier } from './notifications'; // <-- CHANGED
+import { SystemNotifier } from './notifications'; 
 import { Mailer } from './mailer';
 import crypto from 'crypto';
 import axios from 'axios';
@@ -482,8 +482,7 @@ export function initWorker() {
                                     }
                                 });
 
-                                // Trigger a metadata refresh to pull the high-res cover art
-                                await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC' });
+                                // FIX: Removed the buggy in-loop queue trigger that caused the amplification loop.
                                 successCount++;
                             } else {
                                 // NO MATCH - Throw into Awaiting Match Drop Folder
@@ -497,6 +496,13 @@ export function initWorker() {
                     }
 
                     if (successCount > 0 || unmatchedCount > 0) {
+                        // FIX: Safely trigger exactly ONE Metadata sync if new issues were successfully processed
+                        if (successCount > 0) {
+                            await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC' }, {
+                                jobId: `METADATA_SYNC_WATCHED_${Date.now()}`
+                            });
+                        }
+
                         await prisma.jobLog.create({
                             data: {
                                 jobType: 'WATCHED_FOLDER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime,

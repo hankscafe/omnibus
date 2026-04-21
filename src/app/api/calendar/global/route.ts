@@ -90,6 +90,7 @@ export async function GET(request: Request) {
             // Link a local volumeId so the Request/Subscribe buttons work properly
             const localMatch = localSeries.find(s => s.name.toLowerCase().trim() === normalizedName);
             const volumeId = localMatch ? localMatch.metadataId : (typeof issue.series === 'object' ? issue.series?.id : null);
+            const metadataSource = localMatch ? localMatch.metadataSource : 'METRON'; // <-- ADDED THIS
             
             // Fallback to local DB publisher if we have it, else Unknown
             const publisher = nameToPubMap.get(normalizedName) || localMatch?.publisher || "Unknown";
@@ -97,6 +98,7 @@ export async function GET(request: Request) {
             return {
                 id: issue.id,
                 volumeId: volumeId,
+                metadataSource: metadataSource, // <-- ADDED THIS
                 seriesName: seriesName,
                 issueNumber: issue.number || issue.issue || "1",
                 publisher: publisher,

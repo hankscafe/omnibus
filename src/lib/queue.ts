@@ -482,7 +482,6 @@ export function initWorker() {
                                     }
                                 });
 
-                                // FIX: Removed the buggy in-loop queue trigger that caused the amplification loop.
                                 successCount++;
                             } else {
                                 // NO MATCH - Throw into Awaiting Match Drop Folder
@@ -496,7 +495,6 @@ export function initWorker() {
                     }
 
                     if (successCount > 0 || unmatchedCount > 0) {
-                        // FIX: Safely trigger exactly ONE Metadata sync if new issues were successfully processed
                         if (successCount > 0) {
                             await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC' }, {
                                 jobId: `METADATA_SYNC_WATCHED_${Date.now()}`
@@ -542,10 +540,11 @@ export function initWorker() {
                     await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
                     const { syncSeriesMetadata } = await import('@/lib/metadata-fetcher');
                     
+                    // --- FIX: Reduced batch size from 50 to 15 to prevent event loop starvation and API bans ---
                     const seriesToSync = await prisma.series.findMany({ 
                         where: { metadataId: { not: null } },
                         orderBy: { updatedAt: 'asc' }, 
-                        take: 50 
+                        take: 15 
                     });
 
                     let successCount = 0;
@@ -620,7 +619,11 @@ export function initWorker() {
                         const success = await writeComicInfo(issue.id);
                         if (success) successCount++;
                         else failCount++;
-                        await new Promise(r => setTimeout(r, 100)); 
+                        
+                        // --- FIX: Increased delay from 100ms to 1000ms to yield to the event loop ---
+                        // Because AdmZip is entirely synchronous and locks the CPU, we must pause between issues 
+                        // so the web server can breathe and serve UI requests.
+                        await new Promise(r => setTimeout(r, 1000)); 
                     }
 
                     await prisma.jobLog.create({
@@ -1241,6 +1244,7 @@ export function initWorker() {
                     throw new Error(`Unknown job type: ${type}`);
             }
 
+            // --- FIX: Ensure concurrency reduction actually triggers the next queue item cleanly ---
             await job.updateProgress(100);
 
         } catch (error: any) {
@@ -1251,7 +1255,8 @@ export function initWorker() {
         }
     }, { 
         connection,
-        concurrency: 2 
+        // --- FIX: Reduced concurrency from 2 to 1 to prevent Node.js main thread starvation ---
+        concurrency: 1 
     });
 
     worker.on('completed', (job) => {

@@ -592,19 +592,19 @@ export function initWorker() {
 
                 case 'EMBED_METADATA': {
                     await prisma.systemSetting.upsert({ where: { key: 'last_embed_sync' }, update: { value: nowStr }, create: { key: 'last_embed_sync', value: nowStr } });
-                    const { writeComicInfo } = await import('@/lib/metadata-writer');
+                    
+                    // --- CHANGED: Import the new writeSeriesJson function ---
+                    const { writeComicInfo, writeSeriesJson } = await import('@/lib/metadata-writer');
                     
                     const whereClause: any = { 
                         filePath: { endsWith: '.cbz' }
                     };
                     
-                    // Allow explicit targeting (which bypasses the metadata source requirement)
                     if (job.data.seriesId) {
                         whereClause.seriesId = job.data.seriesId;
                     } else if (job.data.issueIds && Array.isArray(job.data.issueIds)) {
                         whereClause.id = { in: job.data.issueIds };
                     } else {
-                        // For general scheduled sweeps, only process matched sources
                         whereClause.series = { metadataSource: { in: ['COMICVINE', 'METRON'] } };
                     }
 
@@ -620,10 +620,15 @@ export function initWorker() {
                         if (success) successCount++;
                         else failCount++;
                         
-                        // --- FIX: Increased delay from 100ms to 1000ms to yield to the event loop ---
-                        // Because AdmZip is entirely synchronous and locks the CPU, we must pause between issues 
-                        // so the web server can breathe and serve UI requests.
                         await new Promise(r => setTimeout(r, 1000)); 
+                    }
+
+                    // --- NEW: Generate series.json for any series affected by this job ---
+                    const uniqueSeriesIds = new Set(issues.map(i => i.seriesId));
+                    let seriesJsonCount = 0;
+                    for (const sId of uniqueSeriesIds) {
+                        const wroteJson = await writeSeriesJson(sId);
+                        if (wroteJson) seriesJsonCount++;
                     }
 
                     await prisma.jobLog.create({
@@ -631,7 +636,7 @@ export function initWorker() {
                             jobType: 'EMBED_METADATA',
                             status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
                             durationMs: Date.now() - startTime,
-                            message: `Metadata embedding complete. Updated ${successCount} files. Failed: ${failCount}.`
+                            message: `Metadata embedding complete. Updated ${successCount} files. Failed: ${failCount}. Exported ${seriesJsonCount} series.json files.`
                         }
                     });
                     break;

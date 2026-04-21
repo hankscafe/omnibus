@@ -115,3 +115,59 @@ function escapeXml(unsafe: string | null) {
         }
     });
 }
+
+export async function writeSeriesJson(seriesId: string): Promise<boolean> {
+    try {
+        // 1. Check if the feature is enabled in Settings
+        const setting = await prisma.systemSetting.findUnique({ where: { key: 'export_series_json' } });
+        if (setting?.value !== 'true') return false;
+
+        const series = await prisma.series.findUnique({
+            where: { id: seriesId },
+            include: { issues: true }
+        });
+
+        if (!series || !series.folderPath || !fs.existsSync(series.folderPath)) {
+            return false;
+        }
+
+        // 2. Aggregate genres/concepts from all issues in the series
+        const allGenres = new Set<string>();
+        for (const issue of series.issues) {
+            if ((issue as any).genres) {
+                try {
+                    const parsed = JSON.parse((issue as any).genres);
+                    if (Array.isArray(parsed)) {
+                        parsed.forEach(g => { if (g !== 'NONE') allGenres.add(g); });
+                    }
+                } catch(e) {}
+            }
+        }
+
+        // 3. Build the Komga/Kavita compatible JSON structure
+        const komgaMetadata = {
+            metadata: {
+                title: series.name,
+                titleSort: series.name,
+                status: series.status === 'Ended' ? 'ENDED' : 'ONGOING',
+                summary: series.description ? series.description.replace(/(<([^>]+)>)/gi, "").trim() : "",
+                publisher: series.publisher || "",
+                readingDirection: series.isManga ? 'RIGHT_TO_LEFT' : 'LEFT_TO_RIGHT',
+                ageRating: null,
+                language: "en",
+                genres: Array.from(allGenres),
+                tags: [],
+                totalBookCount: series.issues.length
+            }
+        };
+
+        // 4. Write it to disk
+        const jsonPath = path.join(series.folderPath, 'series.json');
+        await fs.writeFile(jsonPath, JSON.stringify(komgaMetadata, null, 2), 'utf-8');
+
+        return true;
+    } catch (error) {
+        Logger.log(`[Writer] Failed to write series.json for ${seriesId}: ${getErrorMessage(error)}`, 'error');
+        return false;
+    }
+}

@@ -165,7 +165,8 @@ export default function SettingsPage() {
   
   const [config, setConfig] = useState<any>({
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", cv_api_key: "",
-    metron_user: "", metron_pass: "", // Included Metron state
+    metron_user: "", metron_pass: "",
+    export_series_json: "false", // Included Metron state
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     manga_publishers: "", western_publishers: "",
@@ -761,6 +762,26 @@ export default function SettingsPage() {
                     </div>
 
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
+
+                {/* --- NEW: SERIES.JSON EXPORT --- */}
+                    <div className="space-y-4 pt-6 border-t border-border mt-4">
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Switch 
+                                id="export-series-json"
+                                checked={config.export_series_json === "true"} 
+                                onCheckedChange={(c) => setConfig({...config, export_series_json: c ? "true" : "false"})} 
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="export-series-json" className="cursor-pointer font-bold text-base text-foreground">
+                                    Export series.json for Komga / Kavita
+                                </Label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Automatically writes a <code>series.json</code> file to the root of your series folders. This allows external reading servers to instantly recognize your metadata if you map them to the same storage drive.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
     <div>
         <h3 className="text-lg font-bold text-foreground flex items-center gap-2 pb-2">
             <Database className="w-5 h-5 text-primary" /> Auto-Tagging Logic

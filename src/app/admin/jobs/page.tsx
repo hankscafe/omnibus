@@ -3,10 +3,12 @@
 
 import { useState, useEffect, useRef } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
     Activity, RefreshCw, FileText, ExternalLink, Download, 
@@ -25,6 +27,7 @@ const INTERVALS = [
 ];
 
 export default function ScheduledJobsPage() {
+  const router = useRouter()
   const [metadataSyncSchedule, setMetadataSyncSchedule] = useState("24")
   const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0") 
   const [librarySyncSchedule, setLibrarySyncSchedule] = useState("12") 
@@ -43,6 +46,56 @@ export default function ScheduledJobsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { toast } = useToast()
+
+  const [isDataLoaded, setIsDataLoaded] = useState(false)
+  const [initialStateHash, setInitialStateHash] = useState("")
+  const [unsavedModalOpen, setUnsavedModalOpen] = useState(false)
+  const [pendingNavigation, setPendingNavigation] = useState<string | null>(null)
+
+  const currentStateString = JSON.stringify({
+      metadataSyncSchedule, embedMetadataSchedule, librarySyncSchedule,
+      monitorSyncSchedule, diagnosticsSyncSchedule, backupSyncSchedule,
+      popularSyncSchedule, converterSyncSchedule, weeklyDigestSchedule
+  });
+
+  const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
+
+  useEffect(() => {
+      if (isDataLoaded && initialStateHash === "") {
+          setInitialStateHash(currentStateString);
+      }
+  }, [isDataLoaded, currentStateString, initialStateHash]);
+
+  useEffect(() => {
+      const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+          if (hasUnsavedChanges) {
+              e.preventDefault();
+              e.returnValue = '';
+          }
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+      const handleClick = (e: MouseEvent) => {
+          if (!hasUnsavedChanges) return;
+          const target = e.target as HTMLElement;
+          const anchor = target.closest('a');
+          if (anchor && anchor.href) {
+              const url = new URL(anchor.href);
+              if (url.origin === window.location.origin && url.pathname !== window.location.pathname) {
+                  if (anchor.hasAttribute('download') || anchor.target === '_blank') return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPendingNavigation(url.pathname + url.search);
+                  setUnsavedModalOpen(true);
+              }
+          }
+      };
+      document.addEventListener('click', handleClick, { capture: true });
+      return () => document.removeEventListener('click', handleClick, { capture: true });
+  }, [hasUnsavedChanges]);
 
   useEffect(() => {
     document.title = "Omnibus - Scheduled Jobs"
@@ -78,6 +131,7 @@ export default function ScheduledJobsPage() {
       toast({ title: "Error", description: "Failed to load schedules.", variant: "destructive" });
     } finally {
       setLoading(false)
+      setTimeout(() => setIsDataLoaded(true), 500);
     }
   };
 
@@ -124,6 +178,7 @@ export default function ScheduledJobsPage() {
               }) 
           })
           if (res.ok) {
+              setInitialStateHash(currentStateString);
               toast({ title: "Jobs Updated", description: "The background schedules have been successfully saved." })
           } else {
               throw new Error("Failed to save config")
@@ -188,9 +243,13 @@ export default function ScheduledJobsPage() {
                     <FileText className="w-4 h-4" /> View Logs
                 </Link>
             </Button>
-            <Button onClick={saveScheduledJobs} disabled={savingJobs || loading} className="shadow-md bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+            <Button 
+                onClick={saveScheduledJobs} 
+                disabled={savingJobs || loading} 
+                className={`shadow-md font-bold transition-all duration-300 ${hasUnsavedChanges ? 'bg-amber-500 hover:bg-amber-600 text-white shadow-[0_0_15px_rgba(245,158,11,0.5)]' : 'bg-primary hover:bg-primary/90 text-primary-foreground'}`}
+            >
                 {savingJobs ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
-                Save Schedule
+                {hasUnsavedChanges ? "Save Unsaved Changes" : "Save Schedule"}
             </Button>
         </div>
       </div>
@@ -424,6 +483,26 @@ export default function ScheduledJobsPage() {
             </CardContent>
         </Card>
       </div>
+      {/* --- NEW UNSAVED CHANGES MODAL --- */}
+      <ConfirmationDialog 
+        isOpen={unsavedModalOpen}
+        onClose={() => {
+            setUnsavedModalOpen(false);
+            setPendingNavigation(null);
+        }}
+        onConfirm={() => {
+            setUnsavedModalOpen(false);
+            setInitialStateHash(currentStateString); // Trick the dirty state tracker
+            if (pendingNavigation) {
+                router.push(pendingNavigation);
+            }
+        }}
+        title="Unsaved Changes"
+        description="You have unsaved changes on this page. If you leave now, all your recent modifications will be lost. Are you sure you want to leave?"
+        confirmText="Discard Changes & Leave"
+        cancelText="Stay on Page"
+        variant="destructive"
+      />
     </div>
   )
 }

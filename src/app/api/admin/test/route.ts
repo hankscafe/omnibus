@@ -5,11 +5,23 @@ import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { Mailer } from '@/lib/mailer';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export async function POST(request: Request) {
   let type = 'unknown';
 
   try {
+    // --- SECURITY ENFORCEMENT ---
+    const setupStatus = await prisma.systemSetting.findUnique({ where: { key: 'setup_complete' } });
+    if (setupStatus?.value === 'true') {
+        const authOptions = await getAuthOptions();
+        const session = await getServerSession(authOptions);
+        if (session?.user?.role !== 'ADMIN') {
+            return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
+        }
+    }
+
     const body = await request.json();
     type = body.type || 'unknown';
     const { config } = body;

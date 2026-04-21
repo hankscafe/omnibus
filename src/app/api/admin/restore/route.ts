@@ -10,9 +10,19 @@ import { AuditLogger } from '@/lib/audit-logger';
 
 export async function POST(request: Request) {
     try {
+        // 1. Fetch the session unconditionally so it is available globally in this function
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+        // 2. Check if the initial setup is complete
+        const setupStatus = await prisma.systemSetting.findUnique({ where: { key: 'setup_complete' } });
+        
+        // 3. Enforce security ONLY if setup is complete
+        if (setupStatus?.value === 'true') {
+            if (session?.user?.role !== 'ADMIN') {
+                return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+            }
+        }
 
         const formData = await request.formData();
         const file = formData.get('file') as File;
@@ -82,7 +92,13 @@ export async function POST(request: Request) {
             await restoreTable(backup.data.digestHistory, tx.digestHistory);
         }, { timeout: 30000 });
 
-        await AuditLogger.log('DATABASE_RESTORE', { message: "State overwritten from backup." }, (session.user as any).id);
+        // --- UPDATED: Safely check if session exists for the audit log ---
+        await AuditLogger.log(
+            'DATABASE_RESTORE', 
+            { message: "State overwritten from backup." }, 
+            session?.user ? (session.user as any).id : 'System'
+        );
+        
         return NextResponse.json({ success: true });
 
     } catch (error: unknown) {

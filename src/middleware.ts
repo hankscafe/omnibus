@@ -18,8 +18,10 @@ export async function middleware(req: NextRequest) {
     const publicApiRoutes = [
         '/api/auth',          // NextAuth handles its own security
         '/api/setup/check',   // Used to determine if the wizard should show
-        '/api/admin/test',              // ADDED: Allow connectivity tests during setup
-        '/api/admin/prowlarr/indexers', // ADDED: Allow indexer status checks during setup
+        '/api/admin/test',              // Used during setup
+        '/api/admin/prowlarr/indexers', // Used during setup
+        '/api/admin/config',            // Used to save setup (route handles its own auth)
+        '/api/admin/restore',           // Used to restore during setup
         '/api/cron',          // Hit by external uptime monitors
         '/api/v1/stats',      // Validates its own custom x-api-key
         '/api/uploads',       // Serves public avatars and banners
@@ -34,10 +36,8 @@ export async function middleware(req: NextRequest) {
     }
 
     // --- SECURITY FIX: Global Admin API Protection ---
-    // This guarantees that no current or future /api/admin route can be accessed by a standard user,
-    // even if the individual route file forgets to verify the session role.
     const isAdminApi = pathname.startsWith('/api/admin');
-    if (isAdminApi && token?.role !== 'ADMIN') {
+    if (isAdminApi && !isPublicApi && token?.role !== 'ADMIN') {
         return NextResponse.json({ error: "Forbidden: Admin privileges required." }, { status: 403 });
     }
   }

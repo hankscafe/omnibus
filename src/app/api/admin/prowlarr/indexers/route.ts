@@ -1,10 +1,23 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
+import { prisma } from '@/lib/db';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger'; 
 import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: Request) {
   try {
+    // --- SECURITY ENFORCEMENT ---
+    const setupStatus = await prisma.systemSetting.findUnique({ where: { key: 'setup_complete' } });
+    if (setupStatus?.value === 'true') {
+        const authOptions = await getAuthOptions();
+        const session = await getServerSession(authOptions);
+        if (session?.user?.role !== 'ADMIN') {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+    }
+
     const { url, apiKey, headers } = await request.json();
     const cleanUrl = url.replace(/\/$/, '');
 

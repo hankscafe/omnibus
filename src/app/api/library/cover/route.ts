@@ -6,9 +6,34 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-// --- FIXED: Added metron.cloud and static.metron.cloud to the strict whitelist ---
 const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org', 'metron.cloud', 'static.metron.cloud'];
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// --- NEW: High-Resolution Scalable Vector Graphic (SVG) Fallback ---
+// This generates a perfectly crisp, 2:3 aspect ratio placeholder matching the Omnibus branding
+function getFallbackImage() {
+    const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600">
+        <rect width="100%" height="100%" fill="#0f172a"/>
+        <defs>
+            <mask id="slice-mask">
+                <rect x="0" y="0" width="100%" height="100%" fill="white"/>
+                <rect x="0" y="296" width="100%" height="6" fill="black"/>
+            </mask>
+        </defs>
+        <g fill="#334155">
+            <text x="200" y="320" font-family="Arial, sans-serif" font-size="60" font-weight="900" text-anchor="middle" letter-spacing="8" mask="url(#slice-mask)">OMNIBUS</text>
+            <text x="200" y="345" font-family="Arial, sans-serif" font-size="10" font-weight="bold" text-anchor="middle" letter-spacing="4">YOUR UNIVERSE. ORGANIZED.</text>
+        </g>
+    </svg>`;
+    
+    return new NextResponse(svg.trim(), {
+        headers: {
+            'Content-Type': 'image/svg+xml',
+            'Cache-Control': 'public, max-age=86400'
+        }
+    });
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -21,7 +46,6 @@ export async function GET(request: NextRequest) {
     if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
         const url = new URL(filePath);
         
-        // --- FIXED: Expanded to allow ComicVine, Gamespot, AND Metron Cloud CDNs ---
         const isAllowedHost = ALLOWED_METADATA_HOSTS.includes(url.hostname) || 
                               url.hostname.includes('comicvine') || 
                               url.hostname.includes('cbsistatic.com') ||
@@ -58,8 +82,8 @@ export async function GET(request: NextRequest) {
                 }
             });
         } catch (e) {
-            // Return fallback image on fetch failure
-            return NextResponse.redirect(new URL('/favicon.ico', request.url));
+            // --- UPDATED: Return the high-res SVG fallback ---
+            return getFallbackImage();
         }
     }
 
@@ -77,8 +101,8 @@ export async function GET(request: NextRequest) {
     }
 
     if (!fs.existsSync(realTarget)) {
-        // Return fallback image on file missing
-        return NextResponse.redirect(new URL('/favicon.ico', request.url));
+        // --- UPDATED: Return the high-res SVG fallback ---
+        return getFallbackImage();
     }
 
     const ext = path.extname(realTarget).toLowerCase();
@@ -93,6 +117,7 @@ export async function GET(request: NextRequest) {
     
   } catch (error) {
     Logger.log(`Cover Error: ${getErrorMessage(error)}`, 'error');
-    return NextResponse.redirect(new URL('/favicon.ico', request.url));
+    // --- UPDATED: Return the high-res SVG fallback ---
+    return getFallbackImage();
   }
 }

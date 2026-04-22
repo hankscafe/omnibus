@@ -18,7 +18,11 @@ import { getErrorMessage } from "@/lib/utils/error"
 
 const INTERVALS = [
     { label: "Disabled (Manual Only)", value: "0" },
+    { label: "Every 15 Minutes", value: "0.25" },
+    { label: "Every 30 Minutes", value: "0.5" },
     { label: "Every Hour", value: "1" },
+    { label: "Every 2 Hours", value: "2" },
+    { label: "Every 4 Hours", value: "4" },
     { label: "Every 6 Hours", value: "6" },
     { label: "Every 12 Hours", value: "12" },
     { label: "Every 24 Hours", value: "24" },

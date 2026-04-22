@@ -158,10 +158,12 @@ export async function syncSchedules() {
     }
 
     const addJob = async (jobType: string, hoursStr: string | undefined) => {
-        const hours = parseInt(hoursStr || '0');
+        // --- CHANGED: Use parseFloat instead of parseInt to support sub-hour intervals ---
+        const hours = parseFloat(hoursStr || '0');
         if (hours > 0) {
             await omnibusQueue.add(jobType, { type: jobType }, {
-                repeat: { every: hours * 60 * 60 * 1000 }, 
+                // Math.round ensures we don't pass weird floating-point milliseconds to BullMQ
+                repeat: { every: Math.round(hours * 60 * 60 * 1000) }, 
                 jobId: `repeat_${jobType.toLowerCase()}`
             });
         }

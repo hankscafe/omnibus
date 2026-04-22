@@ -20,7 +20,8 @@ import {
   DownloadCloud,
   UserPlus,
   Flag,
-  Rocket
+  Rocket,
+  X
 } from "lucide-react" 
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
@@ -32,12 +33,26 @@ export default function Home() {
   const [openReportsCount, setOpenReportsCount] = useState(0)
   const [manualDownloadsCount, setManualDownloadsCount] = useState(0)
   const [pendingUsersCount, setPendingUsersCount] = useState(0)
-  const [updateData, setUpdateData] = useState<{ updateAvailable: boolean, currentVersion: string, latestVersion: string } | null>(null) 
+  const [updateData, setUpdateData] = useState<{ updateAvailable: boolean, currentVersion: string, latestVersion: string } | null>(null)
+  const [showFirstSteps, setShowFirstSteps] = useState(false) 
   const isAdmin = session?.user?.role === 'ADMIN'
 
   const [refreshSignal, setRefreshSignal] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
+  const dismissFirstSteps = async () => {
+      setShowFirstSteps(false);
+      try {
+          await fetch('/api/admin/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ settings: { hide_first_steps_banner: 'true' } })
+          });
+      } catch (e) {
+          Logger.log(`Failed to dismiss banner: ${getErrorMessage(e)}`, 'error');
+      }
+  };
+  
   useEffect(() => {
     document.title = "Omnibus - Home"
   }, []);
@@ -49,6 +64,13 @@ export default function Home() {
       try {
         // --- FIX: Add cache-busting timestamps to prevent stale banners ---
         const timestamp = Date.now();
+
+        const resConfig = await fetch(`/api/admin/config?_t=${timestamp}`, { cache: 'no-store' });
+        if (resConfig.ok) {
+            const configData = await resConfig.json();
+            const isHidden = configData.settings?.find((s: any) => s.key === 'hide_first_steps_banner')?.value === 'true';
+            setShowFirstSteps(!isHidden);
+        }
 
         const resReq = await fetch(`/api/admin/requests?_t=${timestamp}`, { cache: 'no-store' })
         if (resReq.ok) {
@@ -118,6 +140,42 @@ export default function Home() {
         {/* Admin Notification Banners */}
         <div className="space-y-4">
 
+          {/* --- NEW: FIRST STEPS BANNER --- */}
+          {isAdmin && showFirstSteps && (
+            <Alert className="bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-900/50 animate-in fade-in slide-in-from-top-4 relative shadow-sm">
+              <div className="absolute top-2 right-2">
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-indigo-500 hover:bg-indigo-100 dark:hover:bg-indigo-900/50" onClick={dismissFirstSteps}>
+                      <X className="h-4 w-4" />
+                  </Button>
+              </div>
+              <Rocket className="h-5 w-5 text-indigo-600 dark:text-indigo-400 mt-0.5" />
+              <AlertTitle className="text-indigo-900 dark:text-indigo-300 font-black text-lg mb-3">
+                Welcome to Omnibus! Here are your next steps:
+              </AlertTitle>
+              <AlertDescription className="text-indigo-800 dark:text-indigo-400/90 space-y-4">
+                <p>To populate your library and get everything running smoothly, complete these tasks:</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-white/50 dark:bg-black/20 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/30">
+                        <div className="font-bold flex items-center gap-2 text-indigo-900 dark:text-indigo-300"><span className="bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px]">1</span> Library Scan</div>
+                        <p className="text-xs mt-1 leading-relaxed">Go to <strong>Admin &rarr; Scheduled Jobs</strong> and run the <em>Library Auto-Scan</em>. This finds your physical files and builds the basic folders.</p>
+                    </div>
+                    <div className="bg-white/50 dark:bg-black/20 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/30">
+                        <div className="font-bold flex items-center gap-2 text-indigo-900 dark:text-indigo-300"><span className="bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px]">2</span> Metadata Sync</div>
+                        <p className="text-xs mt-1 leading-relaxed">Run the <em>Deep Metadata Sync</em>. <strong>Note:</strong> To prevent API bans, this process is throttled and may take several hours to fully download all covers and synopses.</p>
+                    </div>
+                    <div className="bg-white/50 dark:bg-black/20 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/30">
+                        <div className="font-bold flex items-center gap-2 text-indigo-900 dark:text-indigo-300"><span className="bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px]">3</span> Smart-Match</div>
+                        <p className="text-xs mt-1 leading-relaxed">Go to <strong>Admin &rarr; Smart Matcher</strong> to automatically resolve any remaining series that didn't have a <code>ComicInfo.xml</code> file.</p>
+                    </div>
+                    <div className="bg-white/50 dark:bg-black/20 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/30">
+                        <div className="font-bold flex items-center gap-2 text-indigo-900 dark:text-indigo-300"><span className="bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px]">4</span> Discover Sync</div>
+                        <p className="text-xs mt-1 leading-relaxed">Finally, run the <em>Discover Sync</em> job to generate the "Popular" and "New Releases" grids on this dashboard!</p>
+                    </div>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+          
           {isAdmin && updateData?.updateAvailable && (
             <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/50 animate-in fade-in slide-in-from-top-4">
               <Rocket className="h-4 w-4 text-blue-600 dark:text-blue-400" />

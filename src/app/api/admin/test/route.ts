@@ -325,7 +325,9 @@ export async function POST(request: Request) {
 
   } catch (error: unknown) {
     const msg = getErrorMessage(error) || "Connection Failed";
-    Logger.log(`[Test API] Error: ${msg}`, 'error');
+    // --- UPDATED: Include the test type in the terminal output ---
+    Logger.log(`[Test API] ${type.toUpperCase()} Test Error: ${msg}`, 'error');
+    
     if ((error as any)?.response?.status === 401 && type === 'metron') {
         return NextResponse.json({ success: false, message: "Invalid Metron.Cloud credentials.", code: "UNAUTHORIZED" });
     }

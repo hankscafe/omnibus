@@ -119,6 +119,10 @@ export async function POST(request: Request) {
         email: email,
         title: username
       }).catch(() => {});
+    } else {
+      // --- NEW: Log the Admin Creation to the terminal ---
+      Logger.log(`[Setup] Master Admin account created successfully for: ${username}`, 'success');
+      // Note: We avoid AuditLogger here because the database schema might not be fully warmed up yet
     }
 
     rateLimit.trackSuccess();

@@ -16,7 +16,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { 
     UserPlus, Database, HardDrive, Download, Search, Settings2, 
     CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw,
-    Webhook, Bell, User, Zap, FolderOpen, UploadCloud, Send, AlertCircle, Mail, FileText
+    Webhook, Bell, User, Zap, FolderOpen, UploadCloud, Send, AlertCircle, Mail, FileText,
+    Server, Globe, Filter, Fingerprint
 } from "lucide-react"
 
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
@@ -41,6 +42,17 @@ const DISCORD_EVENTS = [
   { id: "job_diagnostics", label: "System Diagnostics Complete", desc: "Notifies when automated system diagnostics have been run." }
 ];
 
+const hosterDisplayNames: Record<string, string> = {
+    'mediafire': 'MediaFire',
+    'getcomics': 'GetComics (Direct)',
+    'mega': 'Mega',
+    'pixeldrain': 'Pixeldrain',
+    'rootz': 'Rootz',
+    'vikingfile': 'VikingFile',
+    'terabox': 'Terabox',
+    'annas_archive': "Anna's Archive"
+};
+
 export default function SetupWizard() {
   const router = useRouter();
   const { toast } = useToast();
@@ -55,9 +67,10 @@ export default function SetupWizard() {
 
   const [formData, setFormData] = useState({
     username: '', email: '', password: '', confirmPassword: '',
-    cv_api_key: '',
+    cv_api_key: '', metron_user: '', metron_pass: '',
     download_path: '',
     prowlarr_url: '', prowlarr_key: '', prowlarr_categories: '7030, 8030',
+    flaresolverr_url: '',
     filter_enabled: false, filter_publishers: '', filter_keywords: '',
     oidc_enabled: false, oidc_issuer: '', oidc_client_id: '', oidc_client_secret: '',
     smtp_enabled: false, smtp_host: '', smtp_port: '', smtp_user: '', smtp_pass: '', smtp_from: ''
@@ -67,6 +80,7 @@ export default function SetupWizard() {
   const [libraries, setLibraries] = useState<any[]>([{ id: 'tmp_1', name: 'Standard Comics', path: '', isManga: false, isDefault: true }]);
   const [configuredClients, setConfiguredClients] = useState<any[]>([]);
   const [configuredIndexers, setConfiguredIndexers] = useState<any[]>([]);
+  const [configuredHosters, setConfiguredHosters] = useState<any[]>([]);
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [extraUsers, setExtraUsers] = useState<any[]>([]);
 
@@ -76,6 +90,10 @@ export default function SetupWizard() {
   // Download Client Modal States
   const [clientModalOpen, setClientModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<any>(null);
+
+  // Hoster Modal States
+  const [hosterModalOpen, setHosterModalOpen] = useState(false);
+  const [editingHoster, setEditingHoster] = useState<any>(null);
 
   // Indexer Modal States
   const [indexerModalOpen, setIndexerModalOpen] = useState(false);
@@ -208,6 +226,33 @@ export default function SetupWizard() {
       setConfiguredClients(prev => prev.filter(c => c.id !== id));
       toast({ title: "Client Removed" });
   };
+
+  // --- Hoster Methods ---
+  const openHosterSetup = (hosterName: string) => {
+      setEditingHoster({
+          id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
+          name: hosterDisplayNames[hosterName] || hosterName,
+          hoster: hosterName,
+          username: "", password: "", apiKey: "",
+          isActive: true
+      });
+      setHosterModalOpen(true);
+  }
+
+  const saveHosterInState = () => {
+      if (!editingHoster) return;
+      setConfiguredHosters(prev => {
+          const filtered = prev.filter(c => c.id !== editingHoster.id);
+          return [...filtered, editingHoster];
+      });
+      setHosterModalOpen(false);
+      toast({ title: "Account Added" });
+  }
+
+  const deleteHoster = (id: string) => {
+      setConfiguredHosters(prev => prev.filter(c => c.id !== id));
+      toast({ title: "Account Removed" });
+  }
 
   const handleFetchIndexers = async () => {
       const success = await handleTestConnection('prowlarr', { prowlarr_url: formData.prowlarr_url, prowlarr_key: formData.prowlarr_key }, 'pr');
@@ -345,10 +390,13 @@ export default function SetupWizard() {
       const finalPayload = {
           settings: {
               cv_api_key: formData.cv_api_key,
+              metron_user: formData.metron_user,
+              metron_pass: formData.metron_pass,
               download_path: formData.download_path,
               prowlarr_url: formData.prowlarr_url,
               prowlarr_key: formData.prowlarr_key,
               prowlarr_categories: formData.prowlarr_categories,
+              flaresolverr_url: formData.flaresolverr_url,
               filter_enabled: formData.filter_enabled ? "true" : "false",
               filter_publishers: formData.filter_publishers,
               filter_keywords: formData.filter_keywords,
@@ -366,6 +414,7 @@ export default function SetupWizard() {
           },
           libraries,
           downloadClients: configuredClients,
+          hosterAccounts: configuredHosters,
           indexers: configuredIndexers,
           discordWebhooks: webhooks
       };
@@ -417,16 +466,19 @@ export default function SetupWizard() {
   const steps = [
       { id: 1, title: "Admin", icon: UserPlus },
       { id: 2, title: "Metadata", icon: Database },
-      { id: 3, title: "Storage", icon: HardDrive },
+      { id: 3, title: "Indexers", icon: Search },
       { id: 4, title: "Clients", icon: Download },
-      { id: 5, title: "Indexers", icon: Search },
-      { id: 6, title: "Alerts", icon: Bell },
-      { id: 7, title: "Users", icon: User },
-      { id: 8, title: "Finalize", icon: Settings2 },
+      { id: 5, title: "Hosters", icon: Server },
+      { id: 6, title: "Paths", icon: HardDrive },
+      { id: 7, title: "Network", icon: Globe },
+      { id: 8, title: "Users", icon: User },
+      { id: 9, title: "Filters", icon: Filter },
+      { id: 10, title: "Alerts", icon: Bell },
+      { id: 11, title: "SSO", icon: Fingerprint },
   ];
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-6 transition-colors duration-300">
       <title>Omnibus - Initial Setup</title>
       
       <div className="max-w-4xl w-full space-y-8">
@@ -437,18 +489,29 @@ export default function SetupWizard() {
 
         <div className="flex items-center justify-between relative px-4">
             <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1 bg-slate-200 dark:bg-slate-800 -z-10 rounded-full">
-                <div className="h-full bg-blue-500 transition-all duration-500 rounded-full" style={{ width: `${((step - 1) / 7) * 100}%` }} />
+                <div className="h-full bg-blue-500 transition-all duration-500 rounded-full" style={{ width: `${((step - 1) / (steps.length - 1)) * 100}%` }} />
             </div>
             {steps.map(s => {
                 const Icon = s.icon;
                 const isActive = step === s.id;
                 const isPast = step > s.id;
                 return (
-                    <div key={s.id} className="flex flex-col items-center gap-2 bg-slate-50 dark:bg-slate-950 px-2 hidden sm:flex">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-colors ${isActive ? 'border-blue-500 bg-blue-500 text-white shadow-lg shadow-blue-500/20' : isPast ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-500' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400'}`}>
+                    <div 
+                        key={s.id} 
+                        className="flex flex-col items-center gap-2 bg-slate-50 dark:bg-slate-950 px-2 hidden sm:flex cursor-pointer group"
+                        onClick={() => {
+                            // Prevent skipping the crucial Admin creation step
+                            if (s.id !== 1 && !adminCreated) {
+                                toast({ title: "Admin Required", description: "Please create your master account first.", variant: "destructive" });
+                                return;
+                            }
+                            setStep(s.id);
+                        }}
+                    >
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300 group-hover:scale-110 ${isActive ? 'border-blue-500 bg-blue-500 text-white shadow-lg shadow-blue-500/20' : isPast ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-500' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400 group-hover:border-blue-300 dark:group-hover:border-blue-700'}`}>
                             {isPast ? <CheckCircle2 className="w-5 h-5" /> : <Icon className="w-5 h-5" />}
                         </div>
-                        <span className={`text-[10px] font-bold ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>{s.title}</span>
+                        <span className={`text-[10px] font-bold transition-colors ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 group-hover:text-blue-400'}`}>{s.title}</span>
                     </div>
                 )
             })}
@@ -456,7 +519,7 @@ export default function SetupWizard() {
             {/* Mobile Step Indicator */}
             <div className="sm:hidden flex w-full justify-center">
                 <span className="bg-blue-500 text-white px-4 py-1 rounded-full text-xs font-bold shadow-md">
-                    Step {step} of 8
+                    Step {step} of {steps.length}
                 </span>
             </div>
         </div>
@@ -502,14 +565,16 @@ export default function SetupWizard() {
                 </div>
             )}
 
-            {/* STEP 2: COMICVINE */}
+            {/* STEP 2: METADATA SOURCE */}
             {step === 2 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Database className="w-6 h-6 text-green-500"/> Metadata Source</h2>
-                        <p className="text-muted-foreground mt-1">Omnibus uses ComicVine to automatically pull covers, synopses, and creator credits.</p>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Database className="w-6 h-6 text-green-500"/> Metadata Sources</h2>
+                        <p className="text-muted-foreground mt-1">Configure the sources used to automatically pull covers, synopses, and creator credits for your library.</p>
                     </div>
+                    
                     <div className="space-y-4 bg-slate-50 dark:bg-slate-950 p-6 rounded-xl border dark:border-slate-800">
+                        <h3 className="text-sm font-bold text-foreground flex items-center gap-2 border-b border-border pb-2 uppercase tracking-widest text-muted-foreground">ComicVine</h3>
                         <div className="grid gap-2">
                             <Label>API Key <span className="text-red-500">*</span></Label>
                             <Input value={formData.cv_api_key} onChange={e => updateForm('cv_api_key', e.target.value)} placeholder="Enter your ComicVine Key..." className="h-12 bg-white dark:bg-slate-900"/>
@@ -520,114 +585,30 @@ export default function SetupWizard() {
                             {testStates['cv'] === 'success' ? "Connection Verified!" : "Test Connection"}
                         </Button>
                     </div>
-                </div>
-            )}
 
-            {/* STEP 3: MULTI-LIBRARY STORAGE */}
-            {step === 3 && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-                    <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><HardDrive className="w-6 h-6 text-purple-500"/> Storage Mappings</h2>
-                        <p className="text-muted-foreground mt-1">Tell Omnibus where to store and organize your physical files.</p>
-                    </div>
-                    <div className="space-y-5">
-                        <div className="grid gap-2">
-                            <Label>Download Scan Root</Label>
-                            <Input value={formData.download_path} onChange={e => updateForm('download_path', e.target.value)} placeholder="e.g. /downloads" className="h-12 bg-white dark:bg-slate-950"/>
-                            <p className="text-[10px] text-muted-foreground">The folder where your download clients save completed files.</p>
-                        </div>
-
-                        <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
-                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold mb-3 block">Library Folders</Label>
-                            <div className="space-y-3">
-                                {libraries.map((lib, i) => (
-                                    <div key={lib.id} className="p-4 border rounded-lg bg-slate-50 dark:bg-slate-950/50 relative">
-                                        <div className="grid sm:grid-cols-2 gap-4">
-                                            <Input placeholder="Name (e.g. Standard Comics)" value={lib.name} onChange={e => {
-                                                const nl = [...libraries]; nl[i].name = e.target.value; setLibraries(nl);
-                                            }} className="bg-white dark:bg-slate-900" />
-                                            <Input placeholder="Path (e.g. /data/comics)" value={lib.path} onChange={e => {
-                                                const nl = [...libraries]; nl[i].path = e.target.value; setLibraries(nl);
-                                            }} className="bg-white dark:bg-slate-900 font-mono" />
-                                        </div>
-                                        <div className="flex items-center gap-6 mt-3">
-                                            <div className="flex items-center gap-2">
-                                                <Switch checked={lib.isManga} onCheckedChange={v => {
-                                                    const nl = [...libraries]; nl[i].isManga = v; setLibraries(nl);
-                                                }}/>
-                                                <Label className="text-xs">Manga Destination</Label>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <Switch checked={lib.isDefault} onCheckedChange={v => {
-                                                    const nl = libraries.map(l => {
-                                                        if (l.isManga === lib.isManga) return { ...l, isDefault: l.id === lib.id };
-                                                        return l;
-                                                    }); 
-                                                    setLibraries(nl);
-                                                }}/>
-                                                <Label className="text-xs">Default for Auto-Import</Label>
-                                            </div>
-                                        </div>
-                                        {libraries.length > 1 && (
-                                            <Button variant="ghost" size="icon" className="absolute top-2 right-2 text-red-500" onClick={() => setLibraries(libraries.filter(l => l.id !== lib.id))}>
-                                                <Trash2 className="w-4 h-4"/>
-                                            </Button>
-                                        )}
-                                    </div>
-                                ))}
-                                <Button variant="outline" className="w-full border-dashed" onClick={() => setLibraries([...libraries, { id: `tmp_${Date.now()}`, name: '', path: '', isManga: false, isDefault: false }])}>
-                                    <Plus className="w-4 h-4 mr-2"/> Add Another Library
-                                </Button>
+                    <div className="space-y-4 bg-slate-50 dark:bg-slate-950 p-6 rounded-xl border dark:border-slate-800">
+                        <h3 className="text-sm font-bold text-foreground flex items-center gap-2 border-b border-border pb-2 uppercase tracking-widest text-muted-foreground">Metron.Cloud (Optional)</h3>
+                        <p className="text-[11px] text-muted-foreground">Metron is an open-source alternative to ComicVine.</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid gap-2">
+                                <Label>Username</Label>
+                                <Input value={formData.metron_user} onChange={e => updateForm('metron_user', e.target.value)} className="h-12 bg-white dark:bg-slate-900"/>
+                            </div>
+                            <div className="grid gap-2">
+                                <Label>Password</Label>
+                                <Input type="password" value={formData.metron_pass} onChange={e => updateForm('metron_pass', e.target.value)} className="h-12 bg-white dark:bg-slate-900"/>
                             </div>
                         </div>
-
-                        <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('paths')}`} onClick={() => handleTestConnection('paths', {}, 'paths')} disabled={isTesting === 'paths'}>
-                            {isTesting === 'paths' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['paths'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
-                            {testStates['paths'] === 'success' ? "Paths Verified!" : "Test Paths"}
+                        <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('metron')}`} disabled={!formData.metron_user || !formData.metron_pass || isTesting === 'metron'} onClick={() => handleTestConnection('metron', { metron_user: formData.metron_user, metron_pass: formData.metron_pass }, 'metron')}>
+                            {isTesting === 'metron' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['metron'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
+                            {testStates['metron'] === 'success' ? "Connection Verified!" : "Test Connection"}
                         </Button>
                     </div>
                 </div>
             )}
 
-            {/* STEP 4: DOWNLOAD CLIENTS */}
-            {step === 4 && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-                    <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Download className="w-6 h-6 text-blue-500"/> Download Clients</h2>
-                        <p className="text-muted-foreground mt-1">Connect your torrent or usenet clients so Omnibus can send them downloads.</p>
-                    </div>
-
-                    {configuredClients.length > 0 && (
-                        <div className="grid gap-2 p-4 border dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-900/50">
-                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Added Clients</Label>
-                            {configuredClients.map((c, i) => (
-                                <div key={i} className="flex justify-between items-center bg-white dark:bg-slate-950 p-3 rounded-lg shadow-sm border dark:border-slate-800">
-                                    <div><p className="font-bold text-sm">{c.name}</p><p className="text-[10px] text-muted-foreground">{c.url}</p></div>
-                                    <div className="flex gap-1 shrink-0">
-                                        <Button variant="ghost" size="icon" onClick={() => { setEditingClient(c); setTestStates(prev => ({ ...prev, clients: 'idle' })); setClientModalOpen(true); }}><Settings2 className="w-4 h-4"/></Button>
-                                        <Button variant="ghost" size="icon" onClick={() => deleteClient(c.id)}><Trash2 className="w-4 h-4 text-red-500"/></Button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="space-y-4 pt-2">
-                        <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Add New Client</Label>
-                        <div className="grid grid-cols-2 gap-4 mb-4">
-                            {['qbit', 'sab', 'deluge', 'nzbget'].map(type => (
-                                <Button key={type} variant="outline" className="h-12 font-bold" onClick={() => openClientSetup(type)}>
-                                    {configuredClients.some(c => c.type === type) && <CheckCircle2 className="w-4 h-4 text-green-400 mr-2"/>}
-                                    {type.toUpperCase()}
-                                </Button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* STEP 5: INDEXERS */}
-            {step === 5 && (
+            {/* STEP 3: INDEXERS */}
+            {step === 3 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
                         <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Search className="w-6 h-6 text-orange-500"/> Connect Prowlarr</h2>
@@ -699,8 +680,257 @@ export default function SetupWizard() {
                 </div>
             )}
 
-            {/* STEP 6: ALERTS (DISCORD & SMTP) */}
+            {/* STEP 4: DOWNLOAD CLIENTS */}
+            {step === 4 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Download className="w-6 h-6 text-blue-500"/> Download Clients</h2>
+                        <p className="text-muted-foreground mt-1">Connect your torrent or usenet clients so Omnibus can send them downloads.</p>
+                    </div>
+
+                    {configuredClients.length > 0 && (
+                        <div className="grid gap-2 p-4 border dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-900/50">
+                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Added Clients</Label>
+                            {configuredClients.map((c, i) => (
+                                <div key={i} className="flex justify-between items-center bg-white dark:bg-slate-950 p-3 rounded-lg shadow-sm border dark:border-slate-800">
+                                    <div><p className="font-bold text-sm">{c.name}</p><p className="text-[10px] text-muted-foreground">{c.url}</p></div>
+                                    <div className="flex gap-1 shrink-0">
+                                        <Button variant="ghost" size="icon" onClick={() => { setEditingClient(c); setTestStates(prev => ({ ...prev, clients: 'idle' })); setClientModalOpen(true); }}><Settings2 className="w-4 h-4"/></Button>
+                                        <Button variant="ghost" size="icon" onClick={() => deleteClient(c.id)}><Trash2 className="w-4 h-4 text-red-500"/></Button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="space-y-4 pt-2">
+                        <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Add New Client</Label>
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                            {['qbit', 'sab', 'deluge', 'nzbget'].map(type => (
+                                <Button key={type} variant="outline" className="h-12 font-bold" onClick={() => openClientSetup(type)}>
+                                    {configuredClients.some(c => c.type === type) && <CheckCircle2 className="w-4 h-4 text-green-400 mr-2"/>}
+                                    {type.toUpperCase()}
+                                </Button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 5: FILE HOSTERS */}
+            {step === 5 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Server className="w-6 h-6 text-indigo-500"/> File Hosters (Optional)</h2>
+                        <p className="text-muted-foreground mt-1">Add credentials for third-party file hosters (like MediaFire or Mega) to bypass bandwidth limits on direct downloads.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                        {['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'].map(type => {
+                            const isAdded = configuredHosters.some(c => c.hoster === type);
+                            return (
+                                <Button key={type} variant="outline" className={`h-12 font-bold ${isAdded ? 'border-primary text-primary bg-primary/5' : ''}`} onClick={() => !isAdded && openHosterSetup(type)}>
+                                    {isAdded && <CheckCircle2 className="w-4 h-4 mr-2" />}
+                                    {hosterDisplayNames[type] || type}
+                                </Button>
+                            )
+                        })}
+                    </div>
+
+                    {configuredHosters.length > 0 && (
+                        <div className="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold mb-3 block">Configured Accounts</Label>
+                            <div className="grid sm:grid-cols-2 gap-4">
+                                {configuredHosters.map((hoster) => (
+                                    <div key={hoster.id} className="flex justify-between items-start bg-white dark:bg-slate-950 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800">
+                                        <div className="space-y-1 min-w-0 pr-2">
+                                            <p className="font-bold text-sm truncate text-foreground">{hoster.name}</p>
+                                            <Badge variant="secondary" className="bg-primary/10 text-primary text-[10px]">{hoster.username || "API Key Linked"}</Badge>
+                                        </div>
+                                        <div className="flex gap-1 shrink-0">
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500" onClick={() => deleteHoster(hoster.id)}><Trash2 className="h-4 w-4"/></Button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* STEP 6: PATHS / STORAGE */}
             {step === 6 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><HardDrive className="w-6 h-6 text-purple-500"/> Storage Mappings</h2>
+                        <p className="text-muted-foreground mt-1">Tell Omnibus where to store and organize your physical files.</p>
+                    </div>
+                    <div className="space-y-5">
+                        <div className="grid gap-2">
+                            <Label>Download Scan Root</Label>
+                            <Input value={formData.download_path} onChange={e => updateForm('download_path', e.target.value)} placeholder="e.g. /downloads" className="h-12 bg-white dark:bg-slate-950"/>
+                            <p className="text-[10px] text-muted-foreground">The folder where your download clients save completed files.</p>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold mb-3 block">Library Folders</Label>
+                            <div className="space-y-3">
+                                {libraries.map((lib, i) => (
+                                    <div key={lib.id} className="p-4 border rounded-lg bg-slate-50 dark:bg-slate-950/50 relative">
+                                        <div className="grid sm:grid-cols-2 gap-4">
+                                            <Input placeholder="Name (e.g. Standard Comics)" value={lib.name} onChange={e => {
+                                                const nl = [...libraries]; nl[i].name = e.target.value; setLibraries(nl);
+                                            }} className="bg-white dark:bg-slate-900" />
+                                            <Input placeholder="Path (e.g. /data/comics)" value={lib.path} onChange={e => {
+                                                const nl = [...libraries]; nl[i].path = e.target.value; setLibraries(nl);
+                                            }} className="bg-white dark:bg-slate-900 font-mono" />
+                                        </div>
+                                        <div className="flex items-center gap-6 mt-3">
+                                            <div className="flex items-center gap-2">
+                                                <Switch checked={lib.isManga} onCheckedChange={v => {
+                                                    const nl = [...libraries]; nl[i].isManga = v; setLibraries(nl);
+                                                }}/>
+                                                <Label className="text-xs">Manga Destination</Label>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <Switch checked={lib.isDefault} onCheckedChange={v => {
+                                                    const nl = libraries.map(l => {
+                                                        if (l.isManga === lib.isManga) return { ...l, isDefault: l.id === lib.id };
+                                                        return l;
+                                                    }); 
+                                                    setLibraries(nl);
+                                                }}/>
+                                                <Label className="text-xs">Default for Auto-Import</Label>
+                                            </div>
+                                        </div>
+                                        {libraries.length > 1 && (
+                                            <Button variant="ghost" size="icon" className="absolute top-2 right-2 text-red-500" onClick={() => setLibraries(libraries.filter(l => l.id !== lib.id))}>
+                                                <Trash2 className="w-4 h-4"/>
+                                            </Button>
+                                        )}
+                                    </div>
+                                ))}
+                                <Button variant="outline" className="w-full border-dashed" onClick={() => setLibraries([...libraries, { id: `tmp_${Date.now()}`, name: '', path: '', isManga: false, isDefault: false }])}>
+                                    <Plus className="w-4 h-4 mr-2"/> Add Another Library
+                                </Button>
+                            </div>
+                        </div>
+
+                        <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('paths')}`} onClick={() => handleTestConnection('paths', {}, 'paths')} disabled={isTesting === 'paths'}>
+                            {isTesting === 'paths' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['paths'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
+                            {testStates['paths'] === 'success' ? "Paths Verified!" : "Test Paths"}
+                        </Button>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 7: NETWORK */}
+            {step === 7 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Globe className="w-6 h-6 text-teal-500"/> Network Setup</h2>
+                        <p className="text-muted-foreground mt-1">Configure advanced networking options to ensure stable connectivity.</p>
+                    </div>
+                    <div className="space-y-4 pb-6">
+                        <Label className="text-base font-bold text-foreground">Cloudflare Bypass (FlareSolverr)</Label>
+                        <p className="text-[11px] text-muted-foreground mt-1">If direct download sites like GetComics block your automated searches with a 403 Forbidden error, you can route requests through a FlareSolverr container to bypass the protection.</p>
+                        <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                            <Input placeholder="http://192.168.1.100:8191" value={formData.flaresolverr_url} onChange={e => updateForm('flaresolverr_url', e.target.value)} className="h-12 bg-white dark:bg-slate-950 font-mono text-sm flex-1" />
+                            <Button className={`h-12 font-bold transition-colors w-full sm:w-auto ${getButtonClass('flare')}`} onClick={() => handleTestConnection('flaresolverr', { flaresolverr_url: formData.flaresolverr_url }, 'flare')} disabled={isTesting === 'flare' || !formData.flaresolverr_url}>
+                                {isTesting === 'flare' ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : testStates['flare'] === 'success' ? <CheckCircle2 className="w-5 h-5 mr-2" /> : <Zap className="w-5 h-5 mr-2" />} 
+                                Test FlareSolverr
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 8: EXTRA USERS */}
+            {step === 8 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><User className="w-6 h-6 text-pink-500"/> Add Users (Optional)</h2>
+                        <p className="text-muted-foreground mt-1">Create accounts for family or friends before you launch.</p>
+                    </div>
+                    
+                    {extraUsers.length > 0 && (
+                        <div className="grid gap-2 p-4 border dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-900/50">
+                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Staged Users</Label>
+                            {extraUsers.map((u, i) => (
+                                <div key={i} className="flex justify-between items-center bg-white dark:bg-slate-950 p-3 rounded-lg shadow-sm border dark:border-slate-800">
+                                    <div>
+                                        <p className="font-bold text-sm text-foreground">{u.username}</p>
+                                        <div className="flex gap-2 mt-1">
+                                            {u.canDownload && <Badge variant="outline" className="text-[9px]">Downloader</Badge>}
+                                            {u.autoApproveRequests && <Badge variant="outline" className="text-[9px]">Auto-Approve</Badge>}
+                                        </div>
+                                    </div>
+                                    <Button variant="ghost" size="icon" onClick={() => setExtraUsers(prev => prev.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-red-500"/></Button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="space-y-4 border dark:border-slate-800 p-6 rounded-xl bg-slate-50 dark:bg-slate-950">
+                        <Input placeholder="Username" id="u-name" className="h-12 bg-white dark:bg-slate-900"/>
+                        <Input placeholder="Email" id="u-email" type="email" className="h-12 bg-white dark:bg-slate-900"/>
+                        <Input placeholder="Password" id="u-pass" type="password" className="h-12 bg-white dark:bg-slate-900"/>
+                        <div className="flex gap-6 py-2">
+                            <div className="flex items-center gap-2"><Switch id="u-dl"/><Label className="text-xs cursor-pointer">Can Download</Label></div>
+                            <div className="flex items-center gap-2"><Switch id="u-auto"/><Label className="text-xs cursor-pointer">Auto-Approve</Label></div>
+                        </div>
+                        <Button className="w-full h-12 font-bold" onClick={() => {
+                            const n = (document.getElementById('u-name') as HTMLInputElement).value;
+                            const e = (document.getElementById('u-email') as HTMLInputElement).value;
+                            const p = (document.getElementById('u-pass') as HTMLInputElement).value;
+                            const d = (document.getElementById('u-dl') as HTMLButtonElement).dataset.state === 'checked';
+                            const a = (document.getElementById('u-auto') as HTMLButtonElement).dataset.state === 'checked';
+                            if (n && e && p) {
+                                setExtraUsers([...extraUsers, { username: n, email: e, password: p, canDownload: d, autoApproveRequests: a, role: 'USER', isApproved: true }]);
+                                (document.getElementById('u-name') as HTMLInputElement).value = "";
+                                (document.getElementById('u-email') as HTMLInputElement).value = "";
+                                (document.getElementById('u-pass') as HTMLInputElement).value = "";
+                                toast({ title: "User Staged" });
+                            }
+                        }}><UserPlus className="w-4 h-4 mr-2" /> Stage User</Button>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 9: FILTERS */}
+            {step === 9 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+                    <div>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Filter className="w-6 h-6 text-amber-500"/> Content Filters</h2>
+                        <p className="text-muted-foreground mt-1">Block specific keywords or publishers from appearing on the main Discovery page.</p>
+                    </div>
+                    <div className="space-y-4 p-6 bg-slate-50 dark:bg-slate-950 rounded-xl border dark:border-slate-800">
+                        <div className="flex items-center justify-between">
+                            <Label className="text-base font-bold">Enable Filtering</Label>
+                            <Switch checked={formData.filter_enabled} onCheckedChange={v => updateForm('filter_enabled', v)} />
+                        </div>
+                        {formData.filter_enabled && (
+                            <div className="pt-4 border-t dark:border-slate-800 space-y-4">
+                                <Button 
+                                    variant="secondary" 
+                                    className="w-full font-bold"
+                                    onClick={() => {
+                                        updateForm('filter_publishers', RECOMMENDED_PUBLISHERS);
+                                        updateForm('filter_keywords', RECOMMENDED_KEYWORDS);
+                                    }}
+                                >
+                                    Load NSFW Defaults
+                                </Button>
+                                <div className="grid gap-2"><Label>Blocked Publishers</Label><Input value={formData.filter_publishers} onChange={e => updateForm('filter_publishers', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
+                                <div className="grid gap-2"><Label>Blocked Keywords</Label><Input value={formData.filter_keywords} onChange={e => updateForm('filter_keywords', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 10: ALERTS */}
+            {step === 10 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
                         <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Bell className="w-6 h-6 text-indigo-500"/> Alerts & Notifications (Optional)</h2>
@@ -769,7 +999,7 @@ export default function SetupWizard() {
                         <div className="space-y-4">
                             <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border dark:border-slate-800">
                                 <div>
-                                    <Label className="text-base">Enable Email Notifications</Label>
+                                    <Label className="text-base font-bold">Enable Email Notifications</Label>
                                     <p className="text-xs text-muted-foreground mt-1">Configure an SMTP server to send email notifications.</p>
                                 </div>
                                 <Switch checked={formData.smtp_enabled} onCheckedChange={v => updateForm('smtp_enabled', v)} />
@@ -813,114 +1043,41 @@ export default function SetupWizard() {
                 </div>
             )}
 
-            {/* STEP 7: EXTRA USERS */}
-            {step === 7 && (
+            {/* STEP 11: SSO & FINALIZE */}
+            {step === 11 && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
                     <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><User className="w-6 h-6 text-pink-500"/> Add Users (Optional)</h2>
-                        <p className="text-muted-foreground mt-1">Create accounts for family or friends before you launch.</p>
-                    </div>
-                    
-                    {extraUsers.length > 0 && (
-                        <div className="grid gap-2 p-4 border dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-900/50">
-                            <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Staged Users</Label>
-                            {extraUsers.map((u, i) => (
-                                <div key={i} className="flex justify-between items-center bg-white dark:bg-slate-950 p-3 rounded-lg shadow-sm border dark:border-slate-800">
-                                    <div>
-                                        <p className="font-bold text-sm text-foreground">{u.username}</p>
-                                        <div className="flex gap-2 mt-1">
-                                            {u.canDownload && <Badge variant="outline" className="text-[9px]">Downloader</Badge>}
-                                            {u.autoApproveRequests && <Badge variant="outline" className="text-[9px]">Auto-Approve</Badge>}
-                                        </div>
-                                    </div>
-                                    <Button variant="ghost" size="icon" onClick={() => setExtraUsers(prev => prev.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-red-500"/></Button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="space-y-4 border dark:border-slate-800 p-6 rounded-xl bg-slate-50 dark:bg-slate-950">
-                        <Input placeholder="Username" id="u-name" className="h-12 bg-white dark:bg-slate-900"/>
-                        <Input placeholder="Email" id="u-email" type="email" className="h-12 bg-white dark:bg-slate-900"/>
-                        <Input placeholder="Password" id="u-pass" type="password" className="h-12 bg-white dark:bg-slate-900"/>
-                        <div className="flex gap-6 py-2">
-                            <div className="flex items-center gap-2"><Switch id="u-dl"/><Label className="text-xs cursor-pointer">Can Download</Label></div>
-                            <div className="flex items-center gap-2"><Switch id="u-auto"/><Label className="text-xs cursor-pointer">Auto-Approve</Label></div>
-                        </div>
-                        <Button className="w-full h-12 font-bold" onClick={() => {
-                            const n = (document.getElementById('u-name') as HTMLInputElement).value;
-                            const e = (document.getElementById('u-email') as HTMLInputElement).value;
-                            const p = (document.getElementById('u-pass') as HTMLInputElement).value;
-                            const d = (document.getElementById('u-dl') as HTMLButtonElement).dataset.state === 'checked';
-                            const a = (document.getElementById('u-auto') as HTMLButtonElement).dataset.state === 'checked';
-                            if (n && e && p) {
-                                setExtraUsers([...extraUsers, { username: n, email: e, password: p, canDownload: d, autoApproveRequests: a, role: 'USER', isApproved: true }]);
-                                (document.getElementById('u-name') as HTMLInputElement).value = "";
-                                (document.getElementById('u-email') as HTMLInputElement).value = "";
-                                (document.getElementById('u-pass') as HTMLInputElement).value = "";
-                                toast({ title: "User Staged" });
-                            }
-                        }}><UserPlus className="w-4 h-4 mr-2" /> Stage User</Button>
-                    </div>
-                </div>
-            )}
-
-            {/* STEP 8: FINALIZE */}
-            {step === 8 && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-                    <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Settings2 className="w-6 h-6 text-teal-500"/> Optional Extras</h2>
-                        <p className="text-muted-foreground mt-1">Fine-tune your setup. You can always change these later in Settings.</p>
+                        <h2 className="text-2xl font-bold flex items-center gap-2 text-foreground"><Fingerprint className="w-6 h-6 text-rose-500"/> Single Sign-On (SSO)</h2>
+                        <p className="text-muted-foreground mt-1">Allow users to log in using external Identity Providers like Authentik, Authelia, or Keycloak.</p>
                     </div>
                     <div className="space-y-6">
-                        <div className="space-y-4 p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border dark:border-slate-800">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <Label className="text-base">Enable Content Filter</Label>
-                                    <p className="text-xs text-muted-foreground mt-1">Block specific keywords or publishers from the Discovery page.</p>
-                                </div>
-                                <Switch checked={formData.filter_enabled} onCheckedChange={v => updateForm('filter_enabled', v)} />
-                            </div>
-                            {formData.filter_enabled && (
-                                <div className="pt-2 border-t dark:border-slate-800 space-y-4">
-                                    <Button 
-                                        variant="secondary" 
-                                        className="w-full font-bold"
-                                        onClick={() => {
-                                            updateForm('filter_publishers', RECOMMENDED_PUBLISHERS);
-                                            updateForm('filter_keywords', RECOMMENDED_KEYWORDS);
-                                        }}
-                                    >
-                                        Load NSFW Defaults
-                                    </Button>
-                                    <div className="grid gap-2"><Label>Blocked Publishers</Label><Input value={formData.filter_publishers} onChange={e => updateForm('filter_publishers', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
-                                    <div className="grid gap-2"><Label>Blocked Keywords</Label><Input value={formData.filter_keywords} onChange={e => updateForm('filter_keywords', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
-                                </div>
-                            )}
-                        </div>
-                        
                         <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border dark:border-slate-800">
                             <div>
-                                <Label className="text-base">Enable SSO (OpenID Connect)</Label>
-                                <p className="text-xs text-muted-foreground mt-1">Allow users to log in using Authentik, Authelia, or Google.</p>
+                                <Label className="text-base font-bold">Enable OIDC Authentication</Label>
                             </div>
                             <Switch checked={formData.oidc_enabled} onCheckedChange={v => updateForm('oidc_enabled', v)} />
                         </div>
 
                         {formData.oidc_enabled && (
-                            <div className="grid gap-4 p-4 border dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-950/50">
-                                <div className="grid gap-2"><Label>Issuer URL</Label><Input value={formData.oidc_issuer} onChange={e => updateForm('oidc_issuer', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
+                            <div className="grid gap-4 p-6 border dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-950/50">
+                                <div className="grid gap-2"><Label>Issuer URL</Label><Input placeholder="https://auth.yourdomain.com" value={formData.oidc_issuer} onChange={e => updateForm('oidc_issuer', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
                                 <div className="grid sm:grid-cols-2 gap-4">
                                     <div className="grid gap-2"><Label>Client ID</Label><Input value={formData.oidc_client_id} onChange={e => updateForm('oidc_client_id', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
                                     <div className="grid gap-2"><Label>Client Secret</Label><Input type="password" value={formData.oidc_client_secret} onChange={e => updateForm('oidc_client_secret', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
                                 </div>
+                                <div className="border-t border-slate-200 dark:border-slate-800 pt-4 mt-2">
+                                    <Label className="text-sm font-bold text-rose-500 mb-2 block">Redirect URI Setup</Label>
+                                    <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider's client configuration:</p>
+                                    <Input readOnly value={typeof window !== 'undefined' ? `${window.location.origin}/api/auth/callback/oidc` : ''} className="font-mono text-xs text-muted-foreground bg-slate-100 dark:bg-slate-900 border-dashed border-slate-300 dark:border-slate-700" />
+                                </div>
                             </div>
                         )}
 
-                        <div className="text-center pt-6 space-y-4">
+                        <div className="text-center pt-8 mt-8 border-t border-slate-200 dark:border-slate-800 space-y-4">
                             <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto" />
                             <h2 className="text-2xl font-bold text-foreground">Ready to Launch!</h2>
                             <p className="text-muted-foreground">We've staged your admin account, {libraries.length} libraries, and {configuredClients.length} clients.</p>
+                            <p className="text-sm font-medium">Click <strong>Finish Setup</strong> to save all configurations and start Omnibus.</p>
                         </div>
                     </div>
                 </div>
@@ -929,7 +1086,7 @@ export default function SetupWizard() {
             <div className="mt-10 pt-6 border-t dark:border-slate-800 flex justify-between">
                 <Button variant="ghost" disabled={step === 1 || isTesting === 'admin'} onClick={() => setStep(s => s - 1)}>Back</Button>
                 
-                {step < 8 ? (
+                {step < 11 ? (
                     <Button onClick={handleNext} disabled={isTesting === 'admin'} className="bg-blue-600 hover:bg-blue-700 text-white w-32 font-bold">
                         {isTesting === 'admin' ? <Loader2 className="w-5 h-5 animate-spin" /> : "Next Step"} <ArrowRight className="w-4 h-4 ml-2" />
                     </Button>
@@ -1001,6 +1158,33 @@ export default function SetupWizard() {
                   <Button className="h-12 sm:h-10 font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-md" onClick={saveClientInState}>Save Settings</Button>
               </DialogFooter>
           </DialogContent>
+      </Dialog>
+
+      {/* HOSTER MODAL */}
+      <Dialog open={hosterModalOpen} onOpenChange={setHosterModalOpen}>
+        <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl shadow-2xl transition-colors duration-300">
+            <DialogHeader><DialogTitle className="text-foreground">Configure {editingHoster?.name}</DialogTitle></DialogHeader>
+            {editingHoster && (
+                <div className="grid gap-4 py-4">
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">Account Username (Optional)</Label>
+                        <Input value={editingHoster.username || ""} onChange={e => setEditingHoster({...editingHoster, username: e.target.value})} placeholder="email@example.com" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">Account Password (Optional)</Label>
+                        <Input type="password" value={editingHoster.password || ""} onChange={e => setEditingHoster({...editingHoster, password: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="text-foreground font-semibold">API / Session Key (Optional)</Label>
+                        <Input type="password" value={editingHoster.apiKey || ""} onChange={e => setEditingHoster({...editingHoster, apiKey: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                    </div>
+                </div>
+            )}
+            <DialogFooter className="gap-2 sm:gap-0">
+                <Button variant="ghost" className="h-12 sm:h-10 hover:bg-muted text-foreground" onClick={() => setHosterModalOpen(false)}>Cancel</Button>
+                <Button className="h-12 sm:h-10 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md" onClick={saveHosterInState}>Save Account</Button>
+            </DialogFooter>
+        </DialogContent>
       </Dialog>
 
       {/* INDEXER MODAL */}
@@ -1078,7 +1262,6 @@ export default function SetupWizard() {
                 </div>
               </div>
 
-              {/* --- CUSTOM USERNAME AND AVATAR INPUTS --- */}
               <div className="grid sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label className="text-xs font-bold uppercase text-muted-foreground">Bot Username (Optional)</Label>

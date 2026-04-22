@@ -185,11 +185,17 @@ export async function POST(request: Request) {
         }
     });
 
-    if (isSetupComplete) {
+    const isFinishingSetup = !isSetupComplete && settings?.setup_complete === 'true';
+
+    if (isSetupComplete || isFinishingSetup) {
         await AuditLogger.log('UPDATE_SYSTEM_CONFIG', {
-            message: "System configuration and integrations updated.",
+            message: isFinishingSetup ? "Initial system setup completed." : "System configuration and integrations updated.",
             updatedSections: Object.keys(body).filter(k => body[k] !== undefined)
-        }, userId);
+        }, userId || 'System');
+
+        if (isFinishingSetup) {
+            Logger.log("[Setup] Initial configuration saved successfully. Welcome to Omnibus!", "success");
+        }
 
         // Tell BullMQ to wipe the old schedules and apply the new intervals
         await syncSchedules().catch(e => Logger.log(`Failed to sync BullMQ schedules: ${getErrorMessage(e)}`, 'error'));

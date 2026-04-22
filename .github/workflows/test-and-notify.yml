@@ -20,16 +20,18 @@ jobs:
           node-version: '22'
 
       - name: Install Dependencies
-        # ADDED: --legacy-peer-deps to fix the ERESOLVE nodemailer conflict
         run: npm ci --legacy-peer-deps
 
-      # --- 1. CHANGED TO BUILD INSTEAD OF TEST ---
-      # This verifies that your Next.js app compiles without errors
+      # --- ACTUALLY RUN THE NEW VITEST SUITE ---
+      - name: Run Tests
+        run: npm run test
+
+      # --- VERIFY THE APP STILL COMPILES ---
       - name: Build Application
         run: npm run build
 
       - name: Send Discord Notification
-        if: always() # CRITICAL: Ensures this runs even if the build fails
+        if: always() 
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
         run: |
@@ -37,34 +39,23 @@ jobs:
           TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
-          # --- 2. RESTORED HARDCODED METRICS ---
-          # Since you don't have automated tests yet, we will use your requested placeholder numbers
-          TEST_FILES="188 passed (188)"
-          TEST_COUNT="2099 passed (2099)"
-          DURATION="79.63s"
-          
-          # Change color and text based on GitHub's overall job status
           if [ "${{ job.status }}" = "success" ]; then
             COLOR=3066993 # Green
             TITLE="✅ Tests Passed"
-            DESC="All tests completed successfully for Omnibus"
+            DESC="Vitest security suite and Next.js build completed successfully."
+            TEST_STATUS="Passed"
           else
             COLOR=15158332 # Red
-            TITLE="❌ Build Failed"
-            DESC="The build failed for Omnibus. Please click the Workflow link to review the errors."
-            # If the build fails, we change the dummy numbers to reflect a failure
-            TEST_FILES="0 passed"
-            TEST_COUNT="0 passed"
+            TITLE="❌ Build or Tests Failed"
+            DESC="The pipeline failed for Omnibus. Please click the Workflow link to review the errors."
+            TEST_STATUS="Failed"
           fi
           
-          # --- 3. SEND THE PAYLOAD ---
           PAYLOAD=$(jq -n \
             --arg title "$TITLE" \
             --arg desc "$DESC" \
             --arg color "$COLOR" \
-            --arg files "$TEST_FILES" \
-            --arg tests "$TEST_COUNT" \
-            --arg duration "$DURATION" \
+            --arg status "$TEST_STATUS" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
             --arg workflow "[View Run]($WORKFLOW_URL)" \
@@ -76,12 +67,10 @@ jobs:
                 description: $desc,
                 color: ($color | tonumber),
                 fields: [
-                  { name: "Test Files", value: $files, inline: true },
-                  { name: "Tests", value: $tests, inline: true },
-                  { name: "Duration", value: $duration, inline: true },
+                  { name: "Status", value: $status, inline: true },
                   { name: "Branch", value: $branch, inline: true },
                   { name: "Commit", value: $commit, inline: true },
-                  { name: "Workflow", value: $workflow, inline: true }
+                  { name: "Workflow", value: $workflow, inline: false }
                 ],
                 footer: { text: $footer },
                 timestamp: $time
@@ -89,10 +78,6 @@ jobs:
             }' \
           )
           
-          # Safety check to ensure the webhook URL actually exists
-          if [ -z "$DISCORD_WEBHOOK" ]; then
-            echo "Error: DISCORD_BUILDS secret is missing or empty. Skipping notification."
-            exit 0
-          else
+          if [ -n "$DISCORD_WEBHOOK" ]; then
             curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
           fi

@@ -12,7 +12,24 @@ env:
   DOCKERHUB_REPO: omnibus 
 
 jobs:
+  # --- 1. THE GATEKEEPER: Run tests before touching Docker ---
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Dependencies
+        run: npm ci --legacy-peer-deps
+      - name: Run Tests
+        run: npm run test
+
+  # --- 2. YOUR EXISTING DOCKER JOB ---
   build-and-push-image:
+    needs: test # <-- CRITICAL: This tells Docker to wait for tests to pass!
     runs-on: ubuntu-latest
     
     permissions:

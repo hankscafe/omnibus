@@ -516,8 +516,9 @@ export function initWorker() {
                 case 'LIBRARY_SCAN': {
                     await prisma.systemSetting.upsert({ where: { key: 'last_library_sync' }, update: { value: nowStr }, create: { key: 'last_library_sync', value: nowStr } });
                     
-                    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-                    await axios.get(`${baseUrl}/api/library?refresh=true`, { timeout: 300000 }).catch(() => {});
+                    // --- NEW: Use the native scanner instead of a loopback HTTP request ---
+                    const { LibraryScanner } = await import('@/lib/library-scanner');
+                    await LibraryScanner.scan();
                     
                     const lastStorageRun = await prisma.systemSetting.findUnique({ where: { key: 'storage_deep_dive_last_run' } });
                     const lastRunTime = parseInt(lastStorageRun?.value || "0");

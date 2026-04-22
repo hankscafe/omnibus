@@ -141,7 +141,7 @@ jobs:
             --arg version "$VERSION" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
-            --arg pull "\`\`\`bash\ndocker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKERHUB_REPO }}:latest\n\`\`\`" \
+            --arg pull "\`\`\`bash\ndocker pull ghcr.io/${{ env.IMAGE_NAME }}:latest\n\`\`\`" \
             --arg footer "Omnibus $VERSION • Built with GitHub Actions" \
             --arg time "$TIMESTAMP" \
             '{

@@ -22,14 +22,19 @@ jobs:
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
 
-      # --- ACTUALLY RUN THE NEW VITEST SUITE ---
-      - name: Run Tests
-        run: npm run test
+      # --- 1. RECORD START TIME ---
+      - name: Record Start Time
+        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
 
-      # --- VERIFY THE APP STILL COMPILES ---
+      # --- 2. RUN TESTS & GENERATE JSON ---
+      # We tell Vitest to output nicely to the console (default) AND save a JSON file for Discord
+      - name: Run Tests
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json=vitest-results.json
+
       - name: Build Application
         run: npm run build
 
+      # --- 3. DYNAMIC DISCORD NOTIFICATION ---
       - name: Send Discord Notification
         if: always() 
         env:
@@ -39,23 +44,46 @@ jobs:
           TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
+          # Calculate total duration
+          END_TIME=$(date +%s)
+          DURATION="$((END_TIME - START_TIME))s"
+          
+          # Extract real metrics from the Vitest JSON report using jq
+          if [ -f vitest-results.json ]; then
+            TOTAL_SUITES=$(jq -r '.numTotalTestSuites // 0' vitest-results.json)
+            PASSED_SUITES=$(jq -r '.numPassedTestSuites // 0' vitest-results.json)
+            TOTAL_TESTS=$(jq -r '.numTotalTests // 0' vitest-results.json)
+            PASSED_TESTS=$(jq -r '.numPassedTests // 0' vitest-results.json)
+            
+            TEST_FILES="${PASSED_SUITES} passed (${TOTAL_SUITES})"
+            TEST_COUNT="${PASSED_TESTS} passed (${TOTAL_TESTS})"
+          else
+            TEST_FILES="0 passed"
+            TEST_COUNT="0 passed"
+          fi
+          
+          # Set colors and titles based on the job status
           if [ "${{ job.status }}" = "success" ]; then
             COLOR=3066993 # Green
-            TITLE="✅ Tests Passed"
+            TITLE="✅ Pipeline Succeeded"
             DESC="Vitest security suite and Next.js build completed successfully."
             TEST_STATUS="Passed"
           else
             COLOR=15158332 # Red
-            TITLE="❌ Build or Tests Failed"
+            TITLE="❌ Pipeline Failed"
             DESC="The pipeline failed for Omnibus. Please click the Workflow link to review the errors."
             TEST_STATUS="Failed"
           fi
           
+          # Build the Discord payload dynamically
           PAYLOAD=$(jq -n \
             --arg title "$TITLE" \
             --arg desc "$DESC" \
             --arg color "$COLOR" \
             --arg status "$TEST_STATUS" \
+            --arg duration "$DURATION" \
+            --arg files "$TEST_FILES" \
+            --arg tests "$TEST_COUNT" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
             --arg workflow "[View Run]($WORKFLOW_URL)" \
@@ -68,6 +96,9 @@ jobs:
                 color: ($color | tonumber),
                 fields: [
                   { name: "Status", value: $status, inline: true },
+                  { name: "Duration", value: $duration, inline: true },
+                  { name: "Test Files", value: $files, inline: true },
+                  { name: "Tests", value: $tests, inline: true },
                   { name: "Branch", value: $branch, inline: true },
                   { name: "Commit", value: $commit, inline: true },
                   { name: "Workflow", value: $workflow, inline: false }

@@ -1,17 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-// FIX: Using detectManga (or your actual function name)
 import { detectManga } from '../../src/lib/manga-detector';
 
 const fetchMock = vi.fn();
 global.fetch = fetchMock;
 
+// 1. Hoist the mock function
+const mocks = vi.hoisted(() => ({
+    findManySettings: vi.fn()
+}));
+
+// 2. Mock the Prisma database so it doesn't crash looking for a DATABASE_URL
+vi.mock('@/lib/db', () => ({
+    prisma: {
+        systemSetting: { findMany: mocks.findManySettings }
+    }
+}));
+
 describe('Logic: Manga Detector', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        // Return an empty array so the detector falls back to its default publisher lists
+        mocks.findManySettings.mockResolvedValue([]);
     });
 
     it('should return true immediately if the publisher is explicitly a Manga publisher', async () => {
-        // FIX: Match the standard ComicVine nested object shape
         const metadata = { publisher: { name: 'VIZ Media LLC' }, concepts: [] } as any;
         
         const result = await detectManga(metadata);
@@ -22,11 +34,10 @@ describe('Logic: Manga Detector', () => {
 
     it('should return true if the publisher is generic, but ComicVine tags it with a Manga concept', async () => {
         const metadata = { 
-            publisher: 'Unknown', 
+            publisher: { name: 'Unknown' }, 
             concepts: [{ name: 'Superhero' }, { name: 'Manga' }] 
-        };
+        } as any;
         
-        // FIX: Update the function call
         const result = await detectManga(metadata);
         
         expect(result).toBe(true);
@@ -35,21 +46,17 @@ describe('Logic: Manga Detector', () => {
 
     it('should fallback to AniList API and return true if AniList confirms it', async () => {
         const metadata = { 
-            name: 'Naruto', // This is what the function uses to search
-            publisher: { name: 'Unknown Print' }, 
+            name: 'Naruto', 
+            publisher: { name: '' }, 
             year: 1999
         } as any;
         
-        // We must provide the exact nested title object the GraphQL query expects
         const mockResponseData = { 
             data: { 
                 Page: { 
                     media: [
                         { 
-                            title: {
-                                english: 'Naruto',
-                                romaji: 'Naruto'
-                            },
+                            title: { english: 'Naruto', romaji: 'Naruto' },
                             startDate: { year: 1999 },
                             format: 'MANGA' 
                         }
@@ -60,7 +67,9 @@ describe('Logic: Manga Detector', () => {
 
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => mockResponseData
+            status: 200,
+            json: async () => mockResponseData,
+            text: async () => JSON.stringify(mockResponseData)
         });
 
         const result = await detectManga(metadata);
@@ -70,14 +79,19 @@ describe('Logic: Manga Detector', () => {
     });
 
     it('should return false if publisher, concepts, and AniList all fail to detect Manga', async () => {
-        const metadata = { publisher: 'DC Comics', concepts: [{ name: 'Superhero' }], title: 'Batman' };
+        const metadata = { 
+            name: 'Batman',
+            publisher: { name: 'DC Comics' }, 
+            concepts: [{ name: 'Superhero' }] 
+        } as any;
         
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ data: { Media: { format: 'COMIC' } } })
+            status: 200,
+            json: async () => ({ data: { Page: { media: [] } } }),
+            text: async () => JSON.stringify({ data: { Page: { media: [] } } })
         });
 
-        // FIX: Update the function call
         const result = await detectManga(metadata);
         
         expect(result).toBe(false);

@@ -8,7 +8,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # ADDED: Define your Docker Hub repository name here so the workflow can use it
   DOCKERHUB_REPO: omnibus 
 
 jobs:
@@ -25,9 +24,10 @@ jobs:
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
       - name: Run Tests
+        # Runs the suite silently as a pass/fail gatekeeper
         run: npm run test
 
-  # --- 2. YOUR EXISTING DOCKER JOB ---
+  # --- 2. THE PUBLISHER: Build and Push ---
   build-and-push-image:
     needs: test # <-- CRITICAL: This tells Docker to wait for tests to pass!
     runs-on: ubuntu-latest
@@ -43,7 +43,6 @@ jobs:
           fetch-depth: 0
 
       # --- AUTOMATED RELEASE STEPS ---
-      
       - name: Get version from package.json
         id: package-version
         run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
@@ -70,7 +69,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # --- DOCKER BUILD STEPS ---
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -81,7 +79,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }} 
 
-      # ADDED: You must log into Docker Hub before building/pushing!
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -92,7 +89,6 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # ADDED: Instructs the workflow to generate tags for BOTH registries
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKERHUB_REPO }}
@@ -114,7 +110,6 @@ jobs:
           build-args: |
             CACHEBUST=${{ github.run_id }}
 
-      # Automatically sync the README-docker.md to Docker Hub
       - name: Update Docker Hub Description
         if: success() 
         uses: peter-evans/dockerhub-description@v4
@@ -125,7 +120,7 @@ jobs:
           short-description: ${{ github.event.repository.description }}
           readme-filepath: ./README-docker.md
 
-      # Discord notification step
+      # --- DOCKER DISCORD NOTIFICATION ---
       - name: Send Discord Notification (Docker Published)
         if: success() 
         env:
@@ -141,7 +136,7 @@ jobs:
             --arg version "$VERSION" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
-            --arg pull "\`\`\`docker pull ghcr.io/${{ env.IMAGE_NAME }}:latest \`\`\`" \
+            --arg pull "\`\`\`bash\ndocker pull ghcr.io/${{ env.IMAGE_NAME }}:latest\n\`\`\`" \
             --arg footer "Omnibus $VERSION • Built with GitHub Actions" \
             --arg time "$TIMESTAMP" \
             '{

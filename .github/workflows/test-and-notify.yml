@@ -84,7 +84,7 @@ jobs:
             --arg duration "$DURATION" \
             --arg files "$TEST_FILES" \
             --arg tests "$TEST_COUNT" \
-            --arg branch "${{ github.ref_name }}" \
+            --arg branch "${{ github.head_ref || github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
             --arg workflow "[View Run]($WORKFLOW_URL)" \
             --arg footer "Omnibus CI/CD • Test Suite" \

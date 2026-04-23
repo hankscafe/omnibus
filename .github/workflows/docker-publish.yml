@@ -141,7 +141,7 @@ jobs:
             --arg version "$VERSION" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
-            --arg pull "\`\`\` pull ghcr.io/${{ env.IMAGE_NAME }}:latest \`\`\`" \
+            --arg pull "\`\`\`docker pull ghcr.io/${{ env.IMAGE_NAME }}:latest \`\`\`" \
             --arg footer "Omnibus $VERSION • Built with GitHub Actions" \
             --arg time "$TIMESTAMP" \
             '{
@@ -150,10 +150,10 @@ jobs:
                 description: $desc,
                 color: 3447003,
                 fields: [
-                  { name: "Version", value: $version, inline: true },
-                  { name: "Branch", value: $branch, inline: true },
-                  { name: "Commit", value: $commit, inline: true },
-                  { name: "Pull Command", value: $pull, inline: false }
+                  { name: "🏷️ Version", value: $version, inline: true },
+                  { name: "🌿 Branch", value: $branch, inline: true },
+                  { name: "🔗 Commit", value: $commit, inline: true },
+                  { name: "💻 Pull Command", value: $pull, inline: false }
                 ],
                 footer: { text: $footer },
                 timestamp: $time

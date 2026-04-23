@@ -65,12 +65,12 @@ jobs:
           # Set colors and titles based on the job status
           if [ "${{ job.status }}" = "success" ]; then
             COLOR=3066993 # Green
-            TITLE="✅ Pipeline Succeeded"
+            TITLE="✅ Tests Succeeded"
             DESC="Vitest security suite and Next.js build completed successfully."
             TEST_STATUS="Passed"
           else
             COLOR=15158332 # Red
-            TITLE="❌ Pipeline Failed"
+            TITLE="❌ Tests Failed"
             DESC="The pipeline failed for Omnibus. Please click the Workflow link to review the errors."
             TEST_STATUS="Failed"
           fi
@@ -95,13 +95,13 @@ jobs:
                 description: $desc,
                 color: ($color | tonumber),
                 fields: [
-                  { name: "Status", value: $status, inline: true },
-                  { name: "Duration", value: $duration, inline: true },
-                  { name: "Test Files", value: $files, inline: true },
-                  { name: "Tests", value: $tests, inline: true },
-                  { name: "Branch", value: $branch, inline: true },
-                  { name: "Commit", value: $commit, inline: true },
-                  { name: "Workflow", value: $workflow, inline: false }
+                  { name: "📊 Status", value: $status, inline: true },
+                  { name: "⏱️ Duration", value: $duration, inline: true },
+                  { name: "📁 Test Files", value: $files, inline: true },
+                  { name: "🧪 Tests", value: $tests, inline: true },
+                  { name: "🌿 Branch", value: $branch, inline: true },
+                  { name: "🔗 Commit", value: $commit, inline: true },
+                  { name: "⚙️ Workflow", value: $workflow, inline: false }
                 ],
                 footer: { text: $footer },
                 timestamp: $time

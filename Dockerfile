@@ -1,5 +1,5 @@
 # --- Stage 1: Build Environment ---
-FROM node:22-alpine AS builder
+FROM node:22-alpine3.20 AS builder
 
 # Safely update npm to the latest version for the BUILD stage only
 RUN corepack enable && corepack prepare npm@latest --activate
@@ -28,13 +28,16 @@ USER root
 RUN find .next/standalone/node_modules -type d -name "picomatch" -exec rm -rf {} + || true
 RUN find .next/standalone/node_modules -type d -name "brace-expansion" -exec rm -rf {} + || true
 RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {} + || true
+# ADDED: Destroy vulnerable uuid and postcss packages
+RUN find .next/standalone/node_modules -type d -name "uuid" -exec rm -rf {} + || true
+RUN find .next/standalone/node_modules -type d -name "postcss" -exec rm -rf {} + || true
 
 # Force secure versions into the standalone folder
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@latest --no-save --legacy-peer-deps
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@latest uuid@latest postcss@latest --no-save --legacy-peer-deps
 
 
 # --- Stage 2: Final Production Image ---
-FROM node:22-alpine AS runner
+FROM node:22-alpine3.20 AS runner
 WORKDIR /app
 
 # Cache-busting argument for the final stage

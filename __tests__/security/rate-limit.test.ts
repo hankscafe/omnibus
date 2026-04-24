@@ -1,52 +1,56 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { checkRateLimit } from '../../src/lib/rate-limit';
+import { describe, it, expect } from 'vitest';
+import { checkRateLimit } from '@/lib/rate-limit';
 
-describe('Security: Brute Force Rate Limiter', () => {
-    beforeEach(() => {
-        // Allows us to manipulate time in tests if needed
-        vi.useFakeTimers();
-    });
+describe('Security: Rate Limiter', () => {
 
-    afterEach(() => {
-        vi.useRealTimers();
-    });
-
-    it('should allow requests under the limit', () => {
-        // We use a unique IP for each test to prevent cross-test contamination in the memory map
-        const ip = '192.168.1.1';
-        const result = checkRateLimit(ip, 3, 60000);
+    it('should allow requests underneath the limit', () => {
+        // Use a unique ID so tests don't collide in the in-memory map
+        const ip = '192.168.1.1'; 
         
-        expect(result.isLimited).toBe(false);
-        result.trackFailure(); // Simulate 1 failed login
+        const result1 = checkRateLimit(ip, 5, 1000);
+        result1.trackFailure();
+        expect(result1.isLimited).toBe(false);
+
+        const result2 = checkRateLimit(ip, 5, 1000);
+        expect(result2.isLimited).toBe(false);
     });
 
-    it('should lock out the user after hitting the failure limit', () => {
-        const ip = '10.0.0.5';
-        
-        // Simulate 3 failures
-        for (let i = 0; i < 3; i++) {
-            checkRateLimit(ip, 3, 60000).trackFailure();
+    it('should completely block the 6th request and return a 429 response', () => {
+        const ip = '192.168.1.50';
+        const limit = 5;
+        const windowMs = 15 * 60 * 1000; // 15 minutes
+
+        // Simulate 5 rapid failures
+        for (let i = 0; i < limit; i++) {
+            const attempt = checkRateLimit(ip, limit, windowMs);
+            expect(attempt.isLimited).toBe(false);
+            attempt.trackFailure(); // Register the failed attempt
         }
 
-        // The 4th attempt should be blocked
-        const blockedResult = checkRateLimit(ip, 3, 60000);
+        // The 6th attempt should be blocked
+        const blockedAttempt = checkRateLimit(ip, limit, windowMs);
         
-        expect(blockedResult.isLimited).toBe(true);
-        expect(blockedResult.message).toContain('Too many attempts');
-        expect(blockedResult.response?.status).toBe(429); // HTTP 429 Too Many Requests
+        expect(blockedAttempt.isLimited).toBe(true);
+        expect(blockedAttempt.message).toContain('Too many attempts');
+        
+        // Assert the generated NextResponse is exactly what we expect
+        expect(blockedAttempt.response).not.toBeNull();
+        expect(blockedAttempt.response?.status).toBe(429);
     });
 
-    it('should clear the lockout immediately if trackSuccess is called', () => {
-        const ip = '172.16.0.1';
+    it('should instantly clear the tracker on a successful attempt', () => {
+        const ip = '10.0.0.5';
         
-        // Simulate a failure
-        checkRateLimit(ip, 3, 60000).trackFailure();
+        // 1 failed attempt
+        const failAttempt = checkRateLimit(ip, 5, 1000);
+        failAttempt.trackFailure();
         
-        // Simulate a successful login on the next try
-        checkRateLimit(ip, 3, 60000).trackSuccess(); 
-
-        // The tracker should be reset
-        const newAttempt = checkRateLimit(ip, 3, 60000);
-        expect(newAttempt.isLimited).toBe(false);
+        // 1 successful attempt
+        const successAttempt = checkRateLimit(ip, 5, 1000);
+        successAttempt.trackSuccess(); // This resets the counter to 0
+        
+        // The next attempt should act like a fresh start
+        const nextAttempt = checkRateLimit(ip, 5, 1000);
+        expect(nextAttempt.isLimited).toBe(false);
     });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { validateApiKey } from '../../src/lib/api-auth';
+import { validateApiKey } from '@/lib/api-auth';
 
 // 1. Tell Vitest to safely "hoist" these mock functions
 const mocks = vi.hoisted(() => ({
@@ -14,8 +14,8 @@ const mocks = vi.hoisted(() => ({
     findUniqueSystem: vi.fn().mockResolvedValue(null)
 }));
 
-// 2. Inject the hoisted mocks into the fake Prisma client
-vi.mock('../../src/lib/db', () => ({
+// 2. Mock Prisma to prevent DATABASE_URL crashes and future-proof the suite
+vi.mock('@/lib/db', () => ({
   prisma: {
     apiKey: { 
         findUnique: mocks.findUniqueApiKey, 

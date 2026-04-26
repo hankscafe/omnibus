@@ -12,7 +12,7 @@ import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
 import { getErrorMessage } from '@/lib/utils/error';
 import { syncSeriesMetadata } from '@/lib/metadata-fetcher'; 
 import { AuditLogger } from '@/lib/audit-logger';
-import { MetronProvider } from '@/lib/metadata/providers/metron'; // <-- NEW IMPORT
+import { MetronProvider } from '@/lib/metadata/providers/metron'; 
 
 export const dynamic = 'force-dynamic';
 
@@ -75,7 +75,8 @@ export async function GET(request: NextRequest) {
         id: req.id,
         userId: req.userId,
         volumeId: req.volumeId, 
-        seriesName: series ? `${series.name}${issueNumberStr} (${series.year})` : (req.activeDownloadName || `Volume ${req.volumeId}`), 
+        seriesName: req.activeDownloadName || (series ? `${series.name}${issueNumberStr} (${series.year})` : `Volume ${req.volumeId}`), 
+        activeDownloadName: req.activeDownloadName,
         userName: token.name || 'User',
         createdAt: req.createdAt,
         updatedAt: req.updatedAt,
@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
             try {
                 const metron = new MetronProvider();
                 const details = await metron.getSeriesDetails(cvId.toString());
-                name = details.name;
+                if (type === 'volume' || !name || name === "Unknown") name = details.name;
                 if (!publisher || publisher === "Unknown") publisher = details.publisher;
                 if (!year) year = details.year.toString();
                 if (!description) description = details.description;
@@ -140,7 +141,7 @@ export async function POST(request: NextRequest) {
                     });
                     const volData = cvVolRes.data?.results;
                     if (volData) {
-                        name = volData.name;
+                        if (type === 'volume' || !name || name === "Unknown") name = volData.name;
                         if (!publisher || publisher === "Unknown") publisher = volData.publisher?.name;
                         if (!year) year = volData.start_year;
                         if (!description) description = volData.description || volData.deck;
@@ -223,14 +224,18 @@ export async function POST(request: NextRequest) {
 
       const createdRequests = [];
 
-      // 1. METRON VOLUME REQUEST LOGIC
       if (metadataSource === 'METRON') {
           const metron = new MetronProvider();
           const issues = await metron.getSeriesIssues(cvId.toString());
           
           for (const issue of issues) {
               const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : year;
-              const searchName = `${name} #${issue.issueNumber}`;
+              let searchName = `${name} #${issue.issueNumber}`;
+              if (issue.name && issue.name !== name && !issue.name.includes(`#${issue.issueNumber}`)) {
+                  searchName += `: ${issue.name}`;
+              } else if (issue.name && issue.name.includes(`#${issue.issueNumber}`)) {
+                  searchName = issue.name;
+              }
               const isReleased = isReleasedYet(issue.releaseDate, issue.releaseDate);
               
               let issueImage = issue.coverUrl || image;
@@ -258,9 +263,7 @@ export async function POST(request: NextRequest) {
                   }
               }
           }
-      } 
-      // 2. COMICVINE VOLUME REQUEST LOGIC
-      else {
+      } else {
           const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
           const cvApiKey = cvKeySetting?.value;
           if (!cvApiKey) throw new Error("Missing ComicVine API Key");
@@ -279,7 +282,12 @@ export async function POST(request: NextRequest) {
 
           for (const issue of issues) {
             const issueYear = (issue.store_date || issue.cover_date || year || "").split('-')[0];
-            const searchName = `${name} #${issue.issue_number}`;
+            let searchName = `${name} #${issue.issue_number}`;
+            if (issue.name && issue.name !== name && !issue.name.includes(`#${issue.issue_number}`)) {
+                searchName += `: ${issue.name}`;
+            } else if (issue.name && issue.name.includes(`#${issue.issue_number}`)) {
+                searchName = issue.name;
+            }
             const isReleased = isReleasedYet(issue.store_date, issue.cover_date);
             
             let issueImage = issue.image?.medium_url || issue.image?.small_url || image;
@@ -325,7 +333,7 @@ export async function POST(request: NextRequest) {
 
     } else {
       // SINGLE ISSUE REQUEST LOGIC
-      const searchName = type === 'issue' && body.issueNumber 
+      const searchName = type === 'issue' && body.issueNumber && !name.includes(`#${body.issueNumber}`)
         ? `${name} #${body.issueNumber}` 
         : name;
 
@@ -378,7 +386,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  // Existing patch code remains entirely unchanged...
   const token = await getToken({ req: request });
   if (!token || token.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 

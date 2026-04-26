@@ -1,5 +1,4 @@
 // src/app/api/admin/requests/route.ts
-
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs';
@@ -43,8 +42,10 @@ export async function GET(request: Request) {
 
       return {
         id: req.id,
-        userId: req.userId, // <-- FIXED: Added missing userId back into the payload
-        seriesName: series ? `${series.name}${issueNumberStr} (${series.year})` : (req.activeDownloadName || `Volume ${req.volumeId}`), 
+        userId: req.userId,
+        // FIX: Prefer the exact stored activeDownloadName over reconstructing it
+        seriesName: req.activeDownloadName || (series ? `${series.name}${issueNumberStr} (${series.year})` : `Volume ${req.volumeId}`), 
+        activeDownloadName: req.activeDownloadName,
         userName: req.user?.username || 'System',
         createdAt: req.createdAt,
         updatedAt: req.updatedAt,

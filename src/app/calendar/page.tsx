@@ -108,7 +108,7 @@ export default function CalendarPage() {
 
     // Request & Monitor Logic
     const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, metadataSource: string = 'COMICVINE') => {
-        const exactIssueName = (type === 'issue') ? `${name} #${issueNumber || "1"}` : name;
+        const exactIssueName = name; // Passed exactly as formatted by the caller loop
         const targetKey = type === 'volume' ? `vol-${id}` : `iss-${exactIssueName}`;
         
         setRequestingTarget(targetKey);
@@ -117,7 +117,7 @@ export default function CalendarPage() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                    cvId: id, name, year, publisher: publisher || "Unknown", image, type, monitored, metadataSource,
+                    cvId: id, name: exactIssueName, year, publisher: publisher || "Unknown", image, type, monitored, metadataSource,
                     issueNumber: issueNumber || (type === 'issue' ? "1" : undefined)
                 })
             });
@@ -247,7 +247,15 @@ export default function CalendarPage() {
                                 </h2>
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                                     {monthIssues.map((issue) => {
-                                        const issueTargetName = `${issue.seriesName} #${issue.issueNumber}`;
+                                        // NEW: Construct the exact composite name of the issue seamlessly 
+                                        let compositeName = `${issue.seriesName} #${issue.issueNumber}`;
+                                        if (issue.issueName && issue.issueName !== issue.seriesName && !issue.issueName.includes(`#${issue.issueNumber}`)) {
+                                            compositeName += `: ${issue.issueName}`;
+                                        } else if (issue.issueName && issue.issueName.includes(`#${issue.issueNumber}`)) {
+                                            compositeName = issue.issueName;
+                                        }
+
+                                        const issueTargetName = compositeName;
                                         const isIssueRequested = requestedIssues.has(issueTargetName);
                                         const isVolRequested = requestedVolumes.has(issue.volumeId!);
                                         const volIdKey = issue.volumeId || 0;
@@ -290,7 +298,8 @@ export default function CalendarPage() {
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
-                                                                handleRequest(volIdKey, issue.seriesName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON')
+                                                                // Pass the composite name dynamically assembled above
+                                                                handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON')
                                                             }}
                                                         >
                                                             {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />} Request Issue

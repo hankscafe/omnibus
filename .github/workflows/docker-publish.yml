@@ -157,3 +157,24 @@ jobs:
           )
           
           curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
+
+      # --- SPECIFIC RELEASE NOTIFICATION (PLAIN TEXT FORMAT) ---
+      - name: Send Release Announcement to Discord
+        if: success() 
+        env:
+          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASES }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v${{ env.VERSION }}"
+          WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          # Fetch the release body/notes using GitHub CLI so it matches your actual release
+          RELEASE_NOTES=$(gh release view $VERSION --json body -q ".body")
+          
+          # Construct the plain text markdown payload using jq for safe multiline escaping
+          PAYLOAD=$(jq -n \
+            --arg content "🎉 **Release $VERSION**\n\n$WORKFLOW_URL\n\n$RELEASE_NOTES\n\n**Upgrade:**\n\`\`\`bash\ndocker pull ghcr.io/${{ env.IMAGE_NAME }}:latest\ndocker compose down\ndocker compose up -d\n\`\`\`" \
+            '{ content: $content }' \
+          )
+          
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_RELEASE_WEBHOOK

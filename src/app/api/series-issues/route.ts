@@ -111,10 +111,17 @@ export async function GET(request: Request) {
             if (fallback) rawImage = fallback;
         }
 
+        let issueName = `${item.volume.name} #${item.issue_number}`;
+        if (item.name && item.name !== item.volume.name && !item.name.includes(`#${item.issue_number}`)) {
+            issueName += `: ${item.name}`;
+        } else if (item.name && item.name.includes(`#${item.issue_number}`)) {
+            issueName = item.name;
+        }
+
         return {
           id: item.id,
           volumeId: item.volume.id,
-          name: `${item.volume.name} #${item.issue_number}`,
+          name: issueName,
           issueNumber: item.issue_number, 
           issue_number: item.issue_number, 
           year: year,

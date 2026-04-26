@@ -28,9 +28,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { cvId, name, year, publisher, image, type, searchResult, source, monitored } = body;
+    const { cvId, name, year, publisher, image, type, searchResult, source, monitored, requestId } = body;
 
-    if (!cvId || !name) return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
+    // Use strict check since cvId might be 0 during an interactive search override
+    if (cvId === undefined || cvId === null || !name) return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
 
     Logger.log(`[Manual Request] User ${token.name} initiated request for: ${name}`, 'info');
 
@@ -41,48 +42,74 @@ export async function POST(request: NextRequest) {
         initialStatus = 'MANUAL_DDL';
     }
 
-    if (type === 'volume' && monitored) {
-        const safePublisher = publisher || "Unknown";
-        const isManga = await detectManga({ name, publisher: { name: safePublisher }, year: parseInt(year) });
-        
-        const libraries = await prisma.library.findMany();
-        let targetLib = isManga 
-            ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
-            : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
-        if (!targetLib) targetLib = libraries[0];
+    let targetReqId = requestId;
 
-        const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-        const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
-
-        await prisma.series.upsert({
-            where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
-            update: { monitored: true, coverUrl: image },
-            create: { 
-                metadataId: cvId.toString(), 
-                metadataSource: 'COMICVINE',
-                name, 
-                year: parseInt(year) || new Date().getFullYear(), 
-                publisher: safePublisher, 
-                folderPath: targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName}` : `/Comics/${safePubFolder}/${safeFolderName}`, 
-                monitored: true,
-                isManga: isManga,
-                libraryId: targetLib?.id,
-                coverUrl: image
+    if (requestId) {
+        // --- OVERRIDE EXISTING REQUEST ---
+        await prisma.request.update({
+            where: { id: requestId },
+            data: {
+                status: initialStatus,
+                activeDownloadName: searchResult?.title || name,
+                imageUrl: image || undefined,
+                retryCount: 0 // Reset retry count for fresh search
             }
         });
+    } else {
+        // --- CREATE NEW REQUEST ---
+        if (type === 'volume' && monitored) {
+            const safePublisher = publisher || "Unknown";
+            const isManga = await detectManga({ name, publisher: { name: safePublisher }, year: parseInt(year) });
+            
+            const libraries = await prisma.library.findMany();
+            let targetLib = isManga 
+                ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+                : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+            if (!targetLib) targetLib = libraries[0];
+
+            const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+            const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
+
+            await prisma.series.upsert({
+                where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
+                update: { monitored: true, coverUrl: image },
+                create: { 
+                    metadataId: cvId.toString(), 
+                    metadataSource: 'COMICVINE',
+                    name, 
+                    year: parseInt(year) || new Date().getFullYear(), 
+                    publisher: safePublisher, 
+                    folderPath: targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName}` : `/Comics/${safePubFolder}/${safeFolderName}`, 
+                    monitored: true,
+                    isManga: isManga,
+                    libraryId: targetLib?.id,
+                    coverUrl: image
+                }
+            });
+        }
+
+        let searchName = name;
+        if (type === 'issue' && body.issueNumber && !name.includes(`#${body.issueNumber}`)) {
+            searchName = `${name} #${body.issueNumber}`;
+        }
+
+        const skipIndexers = source === 'getcomics';
+
+        const newReq = await prisma.request.create({
+          data: {
+            userId: userId,
+            volumeId: cvId.toString(),
+            status: initialStatus,
+            activeDownloadName: searchResult?.title || searchName,
+            imageUrl: image,
+            downloadLink: skipIndexers && initialStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
+          }
+        });
+        targetReqId = newReq.id;
     }
 
-    const newReq = await prisma.request.create({
-      data: {
-        userId: userId,
-        volumeId: cvId.toString(),
-        status: initialStatus,
-        activeDownloadName: searchResult?.title || name,
-        imageUrl: image
-      }
-    });
-
-    if (initialStatus === 'PENDING_APPROVAL') {
+    // --- NOTIFICATIONS ---
+    if (initialStatus === 'PENDING_APPROVAL' && !requestId) {
         DiscordNotifier.sendAlert('pending_request', {
             title: name,
             imageUrl: image,
@@ -101,6 +128,7 @@ export async function POST(request: NextRequest) {
         }).catch(() => {});
     }
 
+    // --- AUTOMATION INJECTION ---
     if (isAutoApprove && source !== 'flag_admin') {
         if (source === 'prowlarr') {
             const setting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
@@ -111,39 +139,54 @@ export async function POST(request: NextRequest) {
             if (client) {
                 await DownloadService.addDownload(client, searchResult.downloadUrl, searchResult.title, searchResult.seedTime || 0, searchResult.seedRatio || 0);
                 await prisma.request.update({
-                  where: { id: newReq.id },
+                  where: { id: targetReqId },
                   data: { downloadLink: searchResult.infoHash || searchResult.guid || null }
                 });
             }
         } 
         else if (source === 'getcomics') {
             if (searchResult && searchResult.downloadUrl) {
-                // --- HOSTER UPDATE: Pull hoster and pass it to Downloader ---
-                const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(searchResult.downloadUrl);
+                const { url, hoster } = await GetComicsService.scrapeDeepLink(searchResult.downloadUrl);
                 
-                if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
+                const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
+                let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+                if (hpSetting?.value) {
+                    try {
+                        const parsed = JSON.parse(hpSetting.value);
+                        if (parsed.length > 0) {
+                            if (typeof parsed[0] === 'string') {
+                                enabledHosters = parsed;
+                            } else if (typeof parsed[0] === 'object') {
+                                enabledHosters = parsed.filter((p: any) => p.enabled).map((p: any) => p.hoster);
+                            }
+                        } else {
+                            enabledHosters = [];
+                        }
+                    } catch(e) {}
+                }
+
+                if (enabledHosters.includes(hoster)) {
                     const safeTitle = searchResult.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
                     const settings = await prisma.systemSetting.findMany();
                     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
                     
                     await prisma.request.update({
-                      where: { id: newReq.id },
+                      where: { id: targetReqId },
                       data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
                     });
 
-                    // Passes the 'hoster' variable dynamically
-                    DownloadService.downloadDirectFile(url, safeTitle, config.download_path, newReq.id, hoster)
+                    DownloadService.downloadDirectFile(url, safeTitle, config.download_path, targetReqId, hoster)
                         .then(async (success) => {
                             if (success) {
                                 await new Promise(r => setTimeout(r, 2000));
-                                await Importer.importRequest(newReq.id);
+                                await Importer.importRequest(targetReqId);
                             }
                         })
                         .catch(e => Logger.log(getErrorMessage(e), 'error'));
                 } else {
-                    Logger.log(`[Manual Request] Best match was an unsupported hoster (${hoster}). Saved to Manual Queue.`, 'warn');
+                    Logger.log(`[Manual Request] Best match was an unsupported or disabled hoster (${hoster}). Saved to Manual Queue.`, 'warn');
                     await prisma.request.update({
-                      where: { id: newReq.id },
+                      where: { id: targetReqId },
                       data: { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: searchResult.title }
                     });
                 }

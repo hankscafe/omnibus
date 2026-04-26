@@ -10,7 +10,7 @@ import {
   AlertTriangle, Users, CheckCircle2, Activity, XCircle, 
   Settings, Trophy, Calendar, FileText, ExternalLink, Clock, Trash2,
   ThumbsUp, ThumbsDown, ImageIcon, EyeOff, Sparkles, ShieldAlert, BarChart3,
-  Check
+  Check, Search
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -19,6 +19,7 @@ import { AdminRequestManagement } from "@/components/admin-request-management"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { getErrorMessage } from "@/lib/utils/error"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InteractiveSearchModal } from "@/components/interactive-search-modal"
 
 // Skeleton for individual Stat Cards
 function StatSkeleton() {
@@ -95,6 +96,8 @@ export default function AdminPage() {
 
   const [selectedRequests, setSelectedRequests] = useState<Set<string>>(new Set())
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
+  
+  const [interactiveSearchReq, setInteractiveSearchReq] = useState<any>(null)
   
   const { toast } = useToast()
 
@@ -775,6 +778,11 @@ const mappedRequests = requests.map(req => {
                                         <Badge variant={req.status === 'MANUAL_DDL' ? 'destructive' : req.status === 'IMPORTING' ? 'secondary' : 'outline'} className={`text-[9px] uppercase font-black px-1.5 py-0 ${req.status === 'STALLED' ? 'border-orange-500 text-orange-600' : ''} ${isExhausted ? 'border-red-500 text-red-600' : ''} ${req.status === 'IMPORTING' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-300' : ''}`}>
                                             {req.status === 'MANUAL_DDL' ? 'GETCOMICS' : req.status === 'IMPORTING' ? 'IMPORTING...' : req.status}
                                         </Badge>
+                                        {req.status === 'STALLED' && (
+                                            <Badge variant="outline" className="text-[9px] uppercase font-black px-1.5 py-0 border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-900/20">
+                                                Perform Interactive Search
+                                            </Badge>
+                                        )}
                                         <span className="flex items-center gap-1 font-medium truncate"><Users className="w-3 h-3" /> {req.userName}</span>
                                         {req.status === 'DOWNLOADING' && (
                                             <span className="font-mono text-primary font-bold bg-primary/10 px-1.5 rounded">{req.progress}%</span>
@@ -795,23 +803,28 @@ const mappedRequests = requests.map(req => {
                                       </div>
                                   )}
                                   {req.status === 'MANUAL_DDL' && (
-    <div className="flex gap-1.5 w-full sm:w-auto">
-        <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground">
-            <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Link</a>
-        </Button>
-        <Button 
-            size="sm" 
-            variant="outline" 
-            className="h-10 sm:h-8 text-xs font-bold text-blue-500 border-blue-200 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800"
-            onClick={() => handleRetryRequest(req.id)}
-        >
-            <RefreshCw className="w-3 h-3 mr-1" /> Retry GetComics
-        </Button>
-    </div>
-)}
+                                      <div className="flex gap-1.5 w-full sm:w-auto">
+                                          <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground">
+                                              <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Link</a>
+                                          </Button>
+                                          <Button 
+                                              size="sm" 
+                                              variant="outline" 
+                                              className="h-10 sm:h-8 text-xs font-bold text-blue-500 border-blue-200 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800"
+                                              onClick={() => handleRetryRequest(req.id)}
+                                          >
+                                              <RefreshCw className="w-3 h-3 mr-1" /> Retry GetComics
+                                          </Button>
+                                      </div>
+                                  )}
                                   {['STALLED', 'FAILED', 'ERROR'].includes(req.status) && (
                                       <Button size="sm" variant="outline" onClick={() => handleRetryRequest(req.id)} className="h-10 sm:h-8 text-xs font-bold text-primary border-primary/30 bg-primary/10 hover:bg-primary/20 flex-1 md:flex-none">
                                           <RefreshCw className="w-3 h-3 mr-1" /> Retry
+                                      </Button>
+                                  )}
+                                  {req.status === 'STALLED' && (
+                                      <Button size="sm" variant="outline" onClick={() => setInteractiveSearchReq(req)} className="h-10 sm:h-8 text-xs font-bold text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800 flex-1 md:flex-none">
+                                          <Search className="w-3 h-3 mr-1" /> <span className="hidden sm:inline">Interactive</span> Search
                                       </Button>
                                   )}
                                   <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => initiateDeleteRequest(req.id, req.seriesName)}>
@@ -1008,6 +1021,22 @@ const mappedRequests = requests.map(req => {
           </div>
         </DialogContent>
       </Dialog>
+      
+      {interactiveSearchReq && (
+        <InteractiveSearchModal 
+          isOpen={!!interactiveSearchReq} 
+          onClose={() => { setInteractiveSearchReq(null); fetchAll(); }} 
+          initialQuery={interactiveSearchReq.exactSearchTitle || interactiveSearchReq.activeDownloadName || interactiveSearchReq.seriesName || ""}
+          comicData={{
+            cvId: parseInt(interactiveSearchReq.volumeId) || 0,
+            year: "2024",
+            publisher: "Unknown",
+            image: interactiveSearchReq.imageUrl || "",
+            type: "issue"
+          }}
+          requestId={interactiveSearchReq.id}
+        />
+      )}
     </div>
   )
 }

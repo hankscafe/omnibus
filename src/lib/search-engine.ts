@@ -40,15 +40,62 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         queries.add(dashed);
     }
 
-    // 4. RESTORED: Subtitle extraction for complex titles (e.g., "Event: Title")
-    if (name.includes(':')) {
-        const parts = name.split(':');
-        const subtitle = parts.slice(1).join(' ').replace(/[#]/g, '').trim();
+    // 4. Subtitle extraction and Main Part isolation for complex titles
+    // We strictly look for separators that appear AFTER the issue number to avoid truncating series names that naturally contain colons.
+    const issueMatch = name.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    
+    let mainPart = name;
+    let subtitle = "";
+    let hasSubtitle = false;
+
+    if (issueMatch && issueMatch.index !== undefined) {
+        const afterIssueIdx = issueMatch.index + issueMatch[0].length;
+        const remainder = name.substring(afterIssueIdx);
+        
+        // Only split if the remainder starts with a colon or spaced hyphen
+        const splitMatch = remainder.match(/^\s*(:| - )\s*(.*)$/);
+        if (splitMatch) {
+            mainPart = name.substring(0, afterIssueIdx).trim();
+            subtitle = splitMatch[2].trim();
+            hasSubtitle = true;
+        }
+    } else {
+        // For volumes/events without an issue number, we only split if there is a spaced hyphen.
+        // Splitting on colons here is too dangerous (e.g. "Avatar: The Last Airbender")
+        if (name.includes(' - ')) {
+            const parts = name.split(' - ');
+            mainPart = parts[0].trim();
+            subtitle = parts.slice(1).join(' - ').trim();
+            hasSubtitle = true;
+        }
+    }
+
+    if (hasSubtitle) {
+        // 4a. Isolate the Main Part (e.g. "Superman Unlimited 012")
+        const mainPartClean = mainPart.replace(/[#]/g, '').trim();
+        const mainNoPossessive = mainPartClean.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
+        const mainBroadClean = mainNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        if (mainBroadClean.length > 2) {
+            if (year) queries.add(`${mainBroadClean} ${year}`.trim());
+            queries.add(mainBroadClean);
+            
+            let mainExpanded = mainBroadClean;
+            for (const [ac, full] of Object.entries(acronyms)) {
+                const regex = new RegExp(`\\b${ac}\\b`, 'gi');
+                mainExpanded = mainExpanded.replace(regex, full);
+            }
+            if (mainExpanded.toLowerCase() !== mainBroadClean.toLowerCase()) {
+                if (year) queries.add(`${mainExpanded} ${year}`.trim());
+                queries.add(mainExpanded);
+            }
+        }
+
+        // 4b. Isolate the Subtitle (e.g. "Besides Myself")
         const subNoPossessive = subtitle.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
         const subBroadClean = subNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
         
         if (subBroadClean.length > 3) {
-            // ONLY add the subtitle query if we have a specific year to pair it with
             if (year) {
                 queries.add(`${subBroadClean} ${year}`.trim());
             }

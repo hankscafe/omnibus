@@ -42,14 +42,35 @@ export async function POST(request: NextRequest) {
             }
         }
 
+        // Dynamically load enabled hosters from settings
+        let hasEnabledHosters = true;
+        let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+        
+        if (config.hoster_priority) {
+            try {
+                const parsed = JSON.parse(config.hoster_priority);
+                if (parsed.length > 0) {
+                    if (typeof parsed[0] === 'string') {
+                        enabledHosters = parsed;
+                    } else if (typeof parsed[0] === 'object') {
+                        enabledHosters = parsed.filter((p: any) => p.enabled).map((p: any) => p.hoster);
+                    }
+                    hasEnabledHosters = enabledHosters.length > 0;
+                } else {
+                    enabledHosters = [];
+                    hasEnabledHosters = false;
+                }
+            } catch(e) {}
+        }
+
         // 1. GetComics Scrape Retry
         if (req.downloadLink && req.downloadLink.includes('getcomics.org') && !req.downloadLink.match(/\.(cbz|cbr|zip)$/i)) {
             Logger.log(`[Retry] Scraping fresh link for: ${req.downloadLink}`, 'info');
             
-            // --- HOSTER UPDATE: Pull hoster and pass it to Downloader ---
-            const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(req.downloadLink);
+            const { url, hoster } = await GetComicsService.scrapeDeepLink(req.downloadLink);
             
-            if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
+            // AIRTIGHT CHECK: Strictly check against enabledHosters
+            if (enabledHosters.includes(hoster)) {
                 await prisma.request.update({
                     where: { id },
                     data: { status: 'DOWNLOADING', retryCount: 0, progress: 0 }
@@ -65,11 +86,13 @@ export async function POST(request: NextRequest) {
                     .catch(() => {});
                 
                 return NextResponse.json({ success: true, message: `Fresh link found via ${hoster === 'getcomics' ? 'Direct' : hoster}, download started.` });
+            } else {
+                Logger.log(`[Retry] Scraped hoster (${hoster}) is disabled in settings. Falling back to recovery search.`, 'info');
             }
         }
 
         // 2. Standard direct link retry (for non-GetComics links)
-        if (req.downloadLink && req.downloadLink.startsWith('http')) {
+        if (req.downloadLink && req.downloadLink.startsWith('http') && !req.downloadLink.includes('getcomics.org')) {
             await prisma.request.update({
                 where: { id },
                 data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeTitle }
@@ -86,44 +109,49 @@ export async function POST(request: NextRequest) {
         } 
         
         // 3. Recovery Fuzzy Search
-        Logger.log(`[Retry] No link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
-        
-        const acronyms = await getCustomAcronyms();
-        const queries = generateSearchQueries(req.activeDownloadName || "", year, acronyms, isManga); 
-        let results: any[] = [];
-        
-        for (const q of queries) {
-            results = await GetComicsService.search(q, false, isManga); 
-            if (results.length > 0) break;
-        }
-        
-        if (results.length > 0) {
-            const best = results[0];
+        if (hasEnabledHosters) {
+            Logger.log(`[Retry] No direct link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
             
-            // --- HOSTER UPDATE: Pull hoster and pass it to Downloader ---
-            const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+            const acronyms = await getCustomAcronyms();
+            const queries = generateSearchQueries(req.activeDownloadName || "", year, acronyms, isManga); 
+            let results: any[] = [];
             
-            if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
-                const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-
-                await prisma.request.update({
-                    where: { id },
-                    data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeSearchTitle }
-                });
-
-                DownloadService.downloadDirectFile(url, safeSearchTitle, config.download_path, req.id, hoster)
-                    .then(async (success) => {
-                        if (success) {
-                            await new Promise(r => setTimeout(r, 2000));
-                            await Importer.importRequest(req.id);
-                        }
-                    })
-                    .catch(() => {});
-                return NextResponse.json({ success: true, message: `Link recovered via ${hoster === 'getcomics' ? 'Direct' : hoster} and download started.` });
+            for (const q of queries) {
+                results = await GetComicsService.search(q, false, isManga); 
+                if (results.length > 0) break;
             }
+            
+            if (results.length > 0) {
+                const best = results[0];
+                const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+                
+                // AIRTIGHT CHECK: Strictly check against enabledHosters
+                if (enabledHosters.includes(hoster)) {
+                    const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+
+                    await prisma.request.update({
+                        where: { id },
+                        data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeSearchTitle }
+                    });
+
+                    DownloadService.downloadDirectFile(url, safeSearchTitle, config.download_path, req.id, hoster)
+                        .then(async (success) => {
+                            if (success) {
+                                await new Promise(r => setTimeout(r, 2000));
+                                await Importer.importRequest(req.id);
+                            }
+                        })
+                        .catch(() => {});
+                    return NextResponse.json({ success: true, message: `Link recovered via ${hoster === 'getcomics' ? 'Direct' : hoster} and download started.` });
+                } else {
+                    Logger.log(`[Retry] Recovered hoster (${hoster}) is disabled in settings.`, 'warn');
+                }
+            }
+        } else {
+            Logger.log(`[Retry] All file hosters disabled in settings. Skipping recovery fuzzy search.`, 'info');
         }
 
-        return NextResponse.json({ error: "Direct download link lost. Please delete and re-request this comic." }, { status: 400 });
+        return NextResponse.json({ error: "Direct download link lost or hosters disabled. Please delete and re-request this comic." }, { status: 400 });
         
     } catch (e: any) {
         Logger.log(`[Retry API] Error: ${e.message}`, 'error');

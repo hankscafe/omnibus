@@ -62,7 +62,6 @@ export default function Home() {
 
     const checkAdminAlerts = async () => {
       try {
-        // --- FIX: Add cache-busting timestamps to prevent stale banners ---
         const timestamp = Date.now();
 
         const resConfig = await fetch(`/api/admin/config?_t=${timestamp}`, { cache: 'no-store' });
@@ -126,7 +125,6 @@ export default function Home() {
     }
   }
 
-  // FIX: Applying the Lookbehind Regex fix here to stop the compiler errors and ensure stability
   const extractNumSafely = (clean: string) => {
     const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
     if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
@@ -140,7 +138,6 @@ export default function Home() {
         {/* Admin Notification Banners */}
         <div className="space-y-4">
 
-          {/* --- NEW: FIRST STEPS BANNER --- */}
           {isAdmin && showFirstSteps && (
             <Alert className="bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-900/50 animate-in fade-in slide-in-from-top-4 relative shadow-sm">
               <div className="absolute top-2 right-2">

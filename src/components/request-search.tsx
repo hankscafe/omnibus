@@ -219,7 +219,7 @@ export function RequestSearch() {
         return;
     }
 
-    const exactIssueName = (type === 'issue') ? `${name} #${issueNumber || "1"}` : name;
+    const exactIssueName = (type === 'issue' && issueNumber && !name.includes(`#${issueNumber}`)) ? `${name} #${issueNumber}` : name;
     const targetKey = type === 'volume' ? `vol-${id}` : `iss-${exactIssueName}`;
     
     setRequestingTarget(targetKey);
@@ -229,7 +229,7 @@ export function RequestSearch() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             cvId: id, 
-            name, 
+            name: exactIssueName, 
             year, 
             publisher: publisher || "Unknown", 
             image, 
@@ -381,7 +381,7 @@ export function RequestSearch() {
                           </div>
                           
                           {(() => {
-                              const issueTargetName = `${seriesBaseName} #${selectedItem.issueNumber || "1"}`;
+                              const issueTargetName = selectedItem.isVolume ? `${seriesBaseName} #${selectedItem.issueNumber || "1"}` : selectedItem.name;
     
                               const volStatus = getVolumeStatus(selectedItem.volumeId, seriesBaseName);
                               const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, issueTargetName);
@@ -422,7 +422,7 @@ export function RequestSearch() {
                                         <Button 
                                             className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
                                             variant="outline" 
-                                            onClick={() => handleRequest(selectedItem.volumeId, issueTargetName, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, selectedItem.issueNumber || "1")} 
+                                            onClick={() => handleRequest(selectedItem.volumeId, selectedItem.isVolume ? seriesBaseName : selectedItem.name, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, selectedItem.issueNumber || "1")} 
                                             disabled={requestingTarget === `iss-${issueTargetName}`}
                                         >
                                             {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
@@ -531,7 +531,7 @@ export function RequestSearch() {
                               <ScrollArea className="w-full whitespace-nowrap pb-4">
                                   <div className="flex w-max gap-4 px-1">
                                       {volumeIssues.map(issue => {
-                                          const relIssueTargetName = `${seriesBaseName} #${issue.issueNumber}`;
+                                          const relIssueTargetName = issue.name;
                                           const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, relIssueTargetName);
                                           
                                           return (
@@ -564,9 +564,9 @@ export function RequestSearch() {
                                                               className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg pointer-events-auto"
                                                               disabled={requestingTarget === `iss-${relIssueTargetName}`}
                                                               onClick={(e) => {
-                                                                  e.preventDefault();
-                                                                  e.stopPropagation();
-                                                                  handleRequest(selectedItem.volumeId, seriesBaseName, issue.image, issue.year, 'issue', selectedItem.publisher, false, issue.issueNumber);
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue', selectedItem.publisher, false, issue.issueNumber);
                                                               }}
                                                               title="Request Issue"
                                                               tabIndex={-1}

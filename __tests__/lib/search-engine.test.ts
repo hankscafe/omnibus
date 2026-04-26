@@ -29,11 +29,15 @@ describe('Core Logic: Fuzzy Search Generator', () => {
         expect(queries).toContain('Batman - Robin 2011'); // dashed alternative
     });
 
-    it('should extract and search by subtitles (after the colon)', () => {
-        const queries = generateSearchQueries('Marvel Event: Secret Wars', '2015', customAcronyms);
+    it('should extract and search by subtitles (after the issue number)', () => {
+        const queries = generateSearchQueries('Superman Unlimited #12: Besides Myself', '2015', customAcronyms);
         
         // It should isolate the subtitle and append the year
-        expect(queries).toContain('Secret Wars 2015');
+        expect(queries).toContain('Besides Myself 2015');
+        
+        // It should also isolate the main part AND securely preserve the issue number for the search
+        expect(queries).toContain('Superman Unlimited 12 2015');
+        expect(queries).toContain('Superman Unlimited 12');
     });
 
     it('should expand custom acronyms', () => {

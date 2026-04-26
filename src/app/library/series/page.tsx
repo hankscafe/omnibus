@@ -64,7 +64,6 @@ function SeriesContent() {
   });
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
-  // --- NEW: State to track if Metron is configured ---
   const [metronConfigured, setMetronConfigured] = useState(false);
   
   const [copied, setCopied] = useState(false);
@@ -118,7 +117,6 @@ function SeriesContent() {
   const isAdmin = session?.user?.role === 'ADMIN';
   const canDownload = isAdmin || (session?.user as any)?.canDownload;
 
-  // --- NEW: Check if Metron is configured for the admin match modal ---
   useEffect(() => {
     if (isAdmin) {
         fetch('/api/admin/config')
@@ -309,18 +307,26 @@ function SeriesContent() {
   }
 
   const handleRequestMissing = async (issue: any) => {
-      setRequestingIds(prev => new Set(prev).add(issue.id));
-      try {
-          const res = await fetch('/api/request', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  type: 'issue',
-                  cvId: seriesInfo.cvId, 
-                  name: `${seriesInfo.name} #${issue.parsedNum}`, 
+        let compositeName = `${seriesInfo.name} #${issue.parsedNum}`;
+        if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${issue.parsedNum}`)) {
+            compositeName += `: ${issue.name}`;
+        } else if (issue.name && issue.name.includes(`#${issue.parsedNum}`)) {
+            compositeName = issue.name;
+        }
+
+        setRequestingIds(prev => new Set(prev).add(issue.id));
+        try {
+            const res = await fetch('/api/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    type: 'issue',
+                    cvId: seriesInfo.cvId, 
+                    name: compositeName, 
                   year: seriesInfo.year || new Date().getFullYear().toString(),
                   publisher: seriesInfo.publisher || "Unknown",
-                  image: issue.coverUrl || seriesInfo.cover 
+                  image: issue.coverUrl || seriesInfo.cover,
+                  issueNumber: issue.parsedNum?.toString()
               })
           });
           if (res.ok) {
@@ -802,7 +808,6 @@ function SeriesContent() {
           </div>
 
           <div className="space-y-10 min-w-0">
-              {/* FIX: Mirrored Extended UI Panels from Request Modal */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div className="flex flex-col h-full bg-background p-6 rounded-2xl border border-border shadow-sm">
                       <h4 className="font-black text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-4 flex items-center gap-2">

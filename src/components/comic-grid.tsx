@@ -196,7 +196,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
         return;
     }
 
-    const exactIssueName = (type === 'issue') ? `${name} #${issueNumber || "1"}` : name;
+    const exactIssueName = (type === 'issue' && !name.includes(`#${issueNumber || "1"}`)) ? `${name} #${issueNumber || "1"}` : name;
     const targetKey = type === 'volume' ? `vol-${id}` : `iss-${exactIssueName}`;
     
     setRequestingTarget(targetKey);
@@ -365,7 +365,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                             </div>
                             
                             {(() => {
-                                const issueTargetName = `${seriesBaseName} #${selectedComic.issueNumber || "1"}`;
+                                const issueTargetName = selectedComic.isVolume ? `${seriesBaseName} #${selectedComic.issueNumber || "1"}` : selectedComic.name;
                                 
                                 const volStatus = getVolumeStatus(selectedComic.volumeId, seriesBaseName);
                                 const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, issueTargetName);
@@ -404,10 +404,10 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                           </Button>
                                       ) : (
                                           <Button 
-                                              className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
-                                              variant="outline" 
-                                              onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber)} 
-                                              disabled={requestingTarget === `iss-${issueTargetName}`}
+                                             className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
+                                             variant="outline" 
+                                             onClick={() => handleRequest(selectedComic.volumeId, selectedComic.isVolume ? seriesBaseName : selectedComic.name, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber)} 
+                                             disabled={requestingTarget === `iss-${issueTargetName}`}
                                           >
                                               {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
                                           </Button>
@@ -515,7 +515,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                 <ScrollArea className="w-full whitespace-nowrap pb-4">
                                     <div className="flex w-max gap-4 px-1">
                                         {relatedIssues.map(issue => {
-                                            const relIssueTargetName = `${seriesBaseName} #${issue.issueNumber}`;
+                                            const relIssueTargetName = issue.name;
                                             const relIssueStatus = getIssueStatus(issue.id, selectedComic.volumeId, relIssueTargetName);
                                             
                                             return (
@@ -568,7 +568,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                                 onClick={(e) => {
                                                                     e.preventDefault();
                                                                     e.stopPropagation();
-                                                                    handleRequest(selectedComic.volumeId, seriesBaseName, issue.image, issue.year, 'issue', selectedComic.publisher, false, undefined, issue.issueNumber);
+                                                                    handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher, false, undefined, issue.issueNumber);
                                                                 }}
                                                                 title="Request Issue"
                                                                 tabIndex={-1}

@@ -13,6 +13,7 @@ import {
   ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, Users
 } from "lucide-react"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
+import { InteractiveSearchModal } from "@/components/interactive-search-modal"
 
 export function AdminRequestManagement() {
   const [requests, setRequests] = useState<any[]>([])
@@ -26,7 +27,7 @@ export function AdminRequestManagement() {
   // Sorting
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'createdAt', direction: 'desc' })
 
-  // --- FIX 5b: Standardize to 24 items per page ---
+  // Pagination
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(24)
 
@@ -40,6 +41,9 @@ export function AdminRequestManagement() {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [selectedComicDetails, setSelectedComicDetails] = useState<any>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
+
+  // Interactive Search Modal
+  const [interactiveSearchReq, setInteractiveSearchReq] = useState<any>(null)
 
   // Column Resizing State
   const [colWidths, setColWidths] = useState<Record<string, number>>({
@@ -78,7 +82,8 @@ export function AdminRequestManagement() {
 
   const filteredRequests = useMemo(() => {
     return requests.filter(req => {
-      const matchesSearch = req.seriesName?.toLowerCase().includes(searchQuery.toLowerCase()) || String(req.volumeId).includes(searchQuery);
+      const targetName = req.activeDownloadName || req.seriesName || "";
+      const matchesSearch = targetName.toLowerCase().includes(searchQuery.toLowerCase()) || String(req.volumeId).includes(searchQuery);
       const matchesStatus = statusFilter === "ALL" || req.status === statusFilter;
       const matchesUser = userFilter === "ALL" || req.userName === userFilter;
       return matchesSearch && matchesStatus && matchesUser;
@@ -148,7 +153,7 @@ export function AdminRequestManagement() {
     setDetailsOpen(true);
     setLoadingDetails(true);
     try {
-      const issueMatch = req.seriesName.match(/#(\d+)/);
+      const issueMatch = req.seriesName?.match(/#(\d+)/);
 
       if (issueMatch) {
         const targetIssueNum = parseFloat(issueMatch[1]);
@@ -161,7 +166,7 @@ export function AdminRequestManagement() {
         const specificIssue = issuesData.results?.find((i: any) => parseFloat(i.issueNumber) === targetIssueNum);
 
         setSelectedComicDetails({
-          overrideName: req.seriesName,
+          overrideName: req.activeDownloadName || req.seriesName?.replace(/Issue #0*(\d+)/i, '#$1'),
           image: req.imageUrl || specificIssue?.image || volData.image, 
           description: specificIssue?.description || volData.description,
           publisher: volData.publisher,
@@ -172,7 +177,7 @@ export function AdminRequestManagement() {
         const data = await res.json();
         setSelectedComicDetails({ 
           ...data, 
-          overrideName: req.seriesName,
+          overrideName: req.activeDownloadName || req.seriesName?.replace(/Issue #0*(\d+)/i, '#$1'),
           image: req.imageUrl || data.image 
         });
       }
@@ -346,14 +351,19 @@ export function AdminRequestManagement() {
                         setSelectedIds(newSet);
                       }} />
                     </td>
-                    <td className="px-4 py-3 font-bold text-foreground truncate" title={req.seriesName}>
-                      {req.seriesName}
+                    <td className="px-4 py-3 font-bold text-foreground truncate" title={req.activeDownloadName || req.seriesName}>
+                      {req.activeDownloadName || req.seriesName?.replace(/Issue #0*(\d+)/i, '#$1')}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground truncate">{req.userName}</td>
                     <td className="px-4 py-3">
                       <Badge className={`${getStatusColor(req.status)} text-[10px] uppercase font-bold px-2 py-0.5 truncate`}>
                         {req.status === 'PENDING_APPROVAL' ? 'Needs Approval' : req.status}
                       </Badge>
+                      {req.status === 'STALLED' && (
+                        <Badge variant="outline" className="text-[9px] uppercase font-black px-1.5 py-0 border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-900/20 ml-2">
+                            Perform Interactive Search
+                        </Badge>
+                      )}
                       {isExhausted && (
                         <div className="text-[9px] text-red-500 font-bold mt-1.5 uppercase tracking-tighter flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3" /> Admin Intervention Required
@@ -368,6 +378,11 @@ export function AdminRequestManagement() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
+                        {req.status === 'STALLED' && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-blue-100 text-blue-600" title="Interactive Search" onClick={() => setInteractiveSearchReq(req)}>
+                              <Search className="w-4 h-4" />
+                            </Button>
+                        )}
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted text-primary" onClick={() => openDetails(req)}>
                           <Info className="w-4 h-4" />
                         </Button>
@@ -413,13 +428,20 @@ export function AdminRequestManagement() {
                       />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className="font-bold text-sm sm:text-base text-foreground line-clamp-2 leading-tight mb-1">{req.seriesName}</h4>
+                      <h4 className="font-bold text-sm sm:text-base text-foreground line-clamp-2 leading-tight mb-1">{req.activeDownloadName || req.seriesName?.replace(/Issue #0*(\d+)/i, '#$1')}</h4>
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
                         <Users className="w-3.5 h-3.5" /> <span className="font-medium truncate">{req.userName}</span>
                       </div>
                       <Badge className={`${getStatusColor(req.status)} text-[10px] uppercase font-bold px-2 py-0.5`}>
                         {req.status === 'PENDING_APPROVAL' ? 'Needs Approval' : req.status}
                       </Badge>
+                      {req.status === 'STALLED' && (
+                          <div className="mt-1.5">
+                              <Badge variant="outline" className="text-[9px] uppercase font-black px-1.5 py-0 border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-900/20">
+                                  Perform Interactive Search
+                              </Badge>
+                          </div>
+                      )}
                       {isExhausted && (
                         <div className="text-[10px] text-red-500 font-bold mt-1.5 uppercase tracking-tighter flex items-center gap-1">
                           <AlertTriangle className="w-3.5 h-3.5" /> Admin Intervention Required
@@ -442,6 +464,11 @@ export function AdminRequestManagement() {
                   </div>
 
                   <div className="flex justify-end gap-2 pt-1 border-t border-border">
+                    {req.status === 'STALLED' && (
+                        <Button variant="outline" size="sm" className="h-10 sm:h-9 text-xs font-bold text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800 mr-auto px-2" onClick={() => setInteractiveSearchReq(req)}>
+                            <Search className="w-4 h-4 sm:w-3 sm:h-3 mr-1" /> Search
+                        </Button>
+                    )}
                     <Button variant="outline" size="sm" className="h-10 w-10 sm:h-9 sm:w-9 text-primary border-border hover:bg-muted" onClick={() => openDetails(req)}>
                       <Info className="w-5 h-5 sm:w-4 sm:h-4" />
                     </Button>
@@ -465,7 +492,6 @@ export function AdminRequestManagement() {
             <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(Number(v)); setCurrentPage(1); }}>
               <SelectTrigger className="h-10 sm:h-8 w-[80px] sm:w-[70px] bg-background border-border font-medium"><SelectValue placeholder={pageSize} /></SelectTrigger>
               <SelectContent className="bg-popover border-border">
-                {/* FIX 5b: Standardize Page Size Options */}
                 <SelectItem value="12" className="cursor-pointer focus:bg-primary/10 focus:text-primary">12</SelectItem>
                 <SelectItem value="24" className="cursor-pointer focus:bg-primary/10 focus:text-primary">24</SelectItem>
                 <SelectItem value="48" className="cursor-pointer focus:bg-primary/10 focus:text-primary">48</SelectItem>
@@ -524,6 +550,22 @@ export function AdminRequestManagement() {
         }
         confirmText={idsToDelete.length > 1 ? "Permanently Delete" : "Delete Request"}
       />
+
+      {interactiveSearchReq && (
+        <InteractiveSearchModal 
+          isOpen={!!interactiveSearchReq} 
+          onClose={() => { setInteractiveSearchReq(null); fetchRequests(); }} 
+          initialQuery={interactiveSearchReq.activeDownloadName || interactiveSearchReq.seriesName?.replace(/Issue #0*(\d+)/i, '#$1').replace(/\(\d{4}\)/, '').trim() || ""}
+          comicData={{
+            cvId: parseInt(interactiveSearchReq.volumeId) || 0,
+            year: "2024", // Ignored on manual overrides since series already exists
+            publisher: "Unknown", 
+            image: interactiveSearchReq.imageUrl || "",
+            type: "issue"
+          }}
+          requestId={interactiveSearchReq.id}
+        />
+      )}
     </div>
   )
 }

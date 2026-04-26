@@ -7,7 +7,6 @@ import { GetComicsService } from '@/lib/getcomics';
 import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
-// --- CHANGED: Injecting the unified notifier ---
 import { SystemNotifier } from '@/lib/notifications';
 
 export async function getDownloadClient() {
@@ -18,48 +17,78 @@ export async function getDownloadClient() {
 export async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
   const acronyms = await getCustomAcronyms();
   const queries = generateSearchQueries(name, year, acronyms, isManga);
+
+  // 1. Parse Hoster Settings
+  const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
+  let hasEnabledHosters = true;
+  let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
   
-  Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
-  let getComicsResults: any[] = [];
-  for (const query of queries) {
-      getComicsResults = await GetComicsService.search(query, false, isManga);
-      if (getComicsResults.length > 0) break;
+  if (hpSetting?.value) {
+      try {
+          const parsed = JSON.parse(hpSetting.value);
+          if (parsed.length > 0) {
+              if (typeof parsed[0] === 'string') {
+                  enabledHosters = parsed;
+              } else if (typeof parsed[0] === 'object') {
+                  enabledHosters = parsed.filter((p: any) => p.enabled).map((p: any) => p.hoster);
+              }
+              hasEnabledHosters = enabledHosters.length > 0;
+          } else {
+              enabledHosters = [];
+              hasEnabledHosters = false;
+          }
+      } catch(e) {}
   }
   
-  if (getComicsResults.length > 0) {
-    const best = getComicsResults[0];
-    const { url, isDirect, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
-    
-    if (isDirect || ['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].includes(hoster)) {
-      const settings = await prisma.systemSetting.findMany();
-      const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-      const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+  let getComicsResults: any[] = [];
+  
+  // Variables to hold a manual link in memory if we need to fall back to Prowlarr
+  let fallbackManualUrl: string | null = null;
+  let fallbackManualName: string | null = null;
 
-      await prisma.request.update({
-        where: { id: requestId },
-        data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
-      });
-
-      DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
-        .then(async (success) => {
-            if (success) {
-                await new Promise(r => setTimeout(r, 2000));
-                await Importer.importRequest(requestId);
-            }
-        })
-        .catch(e => Logger.log(getErrorMessage(e), 'error'));
+  if (hasEnabledHosters) {
+      Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
+      for (const query of queries) {
+          getComicsResults = await GetComicsService.search(query, false, isManga);
+          if (getComicsResults.length > 0) break;
+      }
       
-      return; 
-    } else {
-      Logger.log(`[Automation] [GetComics] Best match was an unsupported hoster (${hoster}). Saved to Manual Queue.`, 'warn');
-      await prisma.request.update({
-        where: { id: requestId },
-        data: { status: 'MANUAL_DDL', downloadLink: url }
-      });
-      return; // Exit early since it's queued manually
-    }
+      if (getComicsResults.length > 0) {
+        const best = getComicsResults[0];
+        const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+        const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+        
+        // AIRTIGHT CHECK: Ensure the scraped hoster is actually enabled in the admin settings
+        if (enabledHosters.includes(hoster)) {
+          const settings = await prisma.systemSetting.findMany();
+          const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+
+          await prisma.request.update({
+            where: { id: requestId },
+            data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
+          });
+
+          DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
+            .then(async (success) => {
+                if (success) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    await Importer.importRequest(requestId);
+                }
+            })
+            .catch(e => Logger.log(getErrorMessage(e), 'error'));
+          
+          return; 
+        } else {
+          Logger.log(`[Automation] [GetComics] Best match was an unsupported/disabled hoster (${hoster}). Holding manual link and falling back to Prowlarr...`, 'warn');
+          // Hold the URL in memory to save as MANUAL_DDL only if Phase 2 fails
+          fallbackManualUrl = url;
+          fallbackManualName = safeTitle;
+        }
+      } else {
+        Logger.log(`[Automation] [GetComics] No valid matches found across all variations.`, 'info');
+      }
   } else {
-    Logger.log(`[Automation] [GetComics] No valid matches found across all variations.`, 'info');
+      Logger.log(`[Automation] Priority Phase Skipped: All file hosters are disabled in settings.`, 'info');
   }
 
   // --- PHASE 2: INDEXER FALLBACK ---
@@ -97,7 +126,17 @@ export async function searchAndDownload(requestId: string, name: string, year: s
   }
 
   // --- FAILURE PHASE ---
-  // If we reach this line, the file was not found on GetComics OR Prowlarr.
+  // If Prowlarr failed, but GetComics found a disabled hoster link, save it to the manual queue now (only if getcomics is allowed!)
+  if (fallbackManualUrl && enabledHosters.includes('getcomics')) {
+      Logger.log(`[Automation] Prowlarr failed. Reverting to GetComics Manual DDL fallback.`, 'warn');
+      await prisma.request.update({
+         where: { id: requestId },
+         data: { status: 'MANUAL_DDL', downloadLink: fallbackManualUrl, activeDownloadName: fallbackManualName }
+      });
+      return;
+  }
+
+  // If we reach this line, the file was not found ANYWHERE.
   const currentReq = await prisma.request.findUnique({ 
       where: { id: requestId },
       include: { user: true }
@@ -111,7 +150,6 @@ export async function searchAndDownload(requestId: string, name: string, year: s
          data: { status: 'STALLED' }
       });
 
-      // --- CHANGED: Send a system alert so the user knows their request failed ---
       await SystemNotifier.sendAlert('download_failed', {
           title: name,
           imageUrl: currentReq?.imageUrl,

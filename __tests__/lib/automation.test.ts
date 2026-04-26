@@ -9,6 +9,7 @@ import { SystemNotifier } from '@/lib/notifications';
 const mocks = vi.hoisted(() => ({
     findManyClients: vi.fn(),
     findManySettings: vi.fn(),
+    findUniqueSetting: vi.fn(), // <-- ADDED: Needed for the new hoster check
     updateRequest: vi.fn(),
     findUniqueRequest: vi.fn(),
     log: vi.fn()
@@ -18,7 +19,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         downloadClient: { findMany: mocks.findManyClients },
-        systemSetting: { findMany: mocks.findManySettings },
+        systemSetting: { 
+            findMany: mocks.findManySettings,
+            findUnique: mocks.findUniqueSetting // <-- ADDED
+        },
         request: { update: mocks.updateRequest, findUnique: mocks.findUniqueRequest }
     }
 }));
@@ -40,6 +44,10 @@ describe('Core Logic: Automation Engine', () => {
         // Default DB mocks
         mocks.findManyClients.mockResolvedValue([{ id: 'client_1', type: 'qbit' }]);
         mocks.findManySettings.mockResolvedValue([{ key: 'download_path', value: '/downloads' }]);
+        
+        // Default to returning null so it assumes default hosters are enabled
+        mocks.findUniqueSetting.mockResolvedValue(null); 
+        
         mocks.findUniqueRequest.mockResolvedValue({ id: 'req_1', activeDownloadName: 'Batman 2024', user: { username: 'Bruce' } });
     });
 
@@ -65,6 +73,21 @@ describe('Core Logic: Automation Engine', () => {
             where: { id: 'req_1' },
             data: expect.objectContaining({ status: 'DOWNLOADING' })
         }));
+    });
+
+    it('should completely skip GetComics and go straight to Prowlarr if all file hosters are disabled', async () => {
+        // Simulate an admin disabling all file hosters by returning an empty array
+        mocks.findUniqueSetting.mockResolvedValueOnce({ value: JSON.stringify([]) });
+        
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValueOnce([
+            { title: 'Batman #01 (2024)', downloadUrl: 'magnet:?xt=123', seeders: 50, protocol: 'torrent', score: 100 } as any
+        ]);
+
+        await searchAndDownload('req_1', 'Batman', '2024', 'DC');
+
+        // Assert GetComics was completely bypassed
+        expect(GetComicsService.search).not.toHaveBeenCalled();
+        expect(DownloadService.addDownload).toHaveBeenCalled();
     });
 
     it('should fallback to Prowlarr if GetComics has no results', async () => {

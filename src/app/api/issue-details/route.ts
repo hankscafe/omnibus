@@ -57,10 +57,24 @@ export async function GET(request: Request) {
         issueData.location_credits
     );
 
+    const issueTitle = issueData.name;
+    const volName = isIssue ? issueData.volume?.name : issueData.name;
+    const issueNum = issueData.issue_number;
+    
+    let finalName = volName;
+    if (isIssue) {
+        finalName = `${volName} #${issueNum}`;
+        if (issueTitle && issueTitle !== volName && !issueTitle.includes(`#${issueNum}`)) {
+            finalName += `: ${issueTitle}`;
+        } else if (issueTitle && issueTitle.includes(`#${issueNum}`)) {
+            finalName = issueTitle;
+        }
+    }
+
     return NextResponse.json({
       id: issueData.id,
-      name: issueData.name || null, 
-      volumeName: isIssue ? issueData.volume?.name : issueData.name, 
+      name: finalName || null, 
+      volumeName: volName || 'Unknown',
       volumeId: isIssue ? issueData.volume?.id : issueData.id,
       publisher: issueData.publisher?.name || issueData.volume?.publisher?.name || 'Unknown', 
       image: issueData.image?.medium_url,

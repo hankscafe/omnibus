@@ -18,10 +18,11 @@ interface Props {
     publisher: string;
     image: string;
     type: 'volume' | 'issue';
-  }
+  };
+  requestId?: string;
 }
 
-export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicData }: Props) {
+export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicData, requestId }: Props) {
   const [query, setQuery] = useState(initialQuery)
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<any[]>([])
@@ -81,13 +82,13 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
           name: query, 
           searchResult,
           source,
-          monitored
+          monitored,
+          requestId
         })
       });
 
       if (res.ok) {
         const data = await res.json();
-        // --- FIX: Use descriptive message from API ---
         toast({ title: "Success", description: data.message || (source === 'flag_admin' ? "Flagged for manual admin import." : "Download requested.") });
         onClose();
       } else {
@@ -118,7 +119,6 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   return (
     <>
     <Dialog open={isOpen} onOpenChange={onClose}>
-      {/* --- FIX 5a: Standard Dialog Size --- */}
       <DialogContent className="sm:max-w-4xl max-h-[85vh] w-[95%] rounded-xl flex flex-col p-0 bg-background border-border overflow-hidden transition-colors duration-300">
         <DialogTitle className="sr-only">Interactive Search</DialogTitle>
         <DialogDescription className="sr-only">Manually select a release from Indexers or GetComics.</DialogDescription>
@@ -252,7 +252,6 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
       </DialogContent>
     </Dialog>
 
-    {/* MONITOR PROMPT DIALOG */}
     <Dialog open={!!monitorPrompt} onOpenChange={(open) => !open && setMonitorPrompt(null)}>
         <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
           <DialogHeader>

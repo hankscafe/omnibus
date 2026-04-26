@@ -251,7 +251,6 @@ function ReadingListsContent() {
       }
   }
 
-  // --- NEW: SHARE LIST HANDLER ---
   const handleShareList = async (listId: string) => {
     try {
         const res = await fetch('/api/reading-lists/share', {
@@ -322,16 +321,24 @@ function ReadingListsContent() {
               }
           } catch (e) { Logger.log(`Lookup failed: ${getErrorMessage(e)}`, 'error'); }
 
+          // NEW: Safely extract the exact issue number from the auto-generated title
+          let extractedIssueNumber = "1";
+          const match = item.title.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+          if (match) {
+              extractedIssueNumber = match[1];
+          }
+
           const standardRes = await fetch('/api/request', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                   type: 'issue',
                   cvId: volumeId,
-                  name: item.title, 
+                  name: item.title, // Keep the full title (with subtitle) 
                   year: year,
                   publisher: "Unknown",
-                  image: coverUrl
+                  image: coverUrl,
+                  issueNumber: extractedIssueNumber // Pass explicit number back to fix mapping!
               })
           });
 
@@ -513,7 +520,6 @@ function ReadingListsContent() {
                               {activeList.description && <CardDescription className="mt-2 text-primary/80 max-w-2xl">{activeList.description}</CardDescription>}
                           </div>
                           <div className="flex gap-2 shrink-0">
-                              {/* --- NEW SHARE BUTTON --- */}
                               <Button 
                                   size="sm" 
                                   variant="outline" 

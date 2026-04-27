@@ -105,6 +105,19 @@ export async function GET(request: NextRequest) {
         return getFallbackImage();
     }
 
+    // --- FIX: Prevent EISDIR crashes by checking if the target is a directory ---
+    const stat = fs.statSync(realTarget);
+    if (stat.isDirectory()) {
+        const possibleCover = path.join(realTarget, 'cover.jpg');
+        if (fs.existsSync(possibleCover)) {
+            const buffer = fs.readFileSync(possibleCover);
+            return new NextResponse(buffer, { 
+                headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' } 
+            });
+        }
+        return getFallbackImage();
+    }
+
     const ext = path.extname(realTarget).toLowerCase();
     const buffer = fs.readFileSync(realTarget);
     

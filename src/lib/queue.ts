@@ -389,9 +389,27 @@ export function initWorker() {
                     await fs.ensureDir(watchedDir);
                     await fs.ensureDir(unmatchedDir);
 
-                    const files = await fs.readdir(watchedDir);
+                    // --- NEW: RECURSIVE FILE SCANNER ---
+                    const filesToProcess: string[] = [];
+                    async function scanWatchedDir(currentPath: string) {
+                        const items = await fs.readdir(currentPath, { withFileTypes: true });
+                        for (const item of items) {
+                            const fullPath = path.join(currentPath, item.name);
+                            if (item.isDirectory()) {
+                                await scanWatchedDir(fullPath);
+                            } else {
+                                const ext = path.extname(item.name).toLowerCase();
+                                if (['.cbz', '.cbr', '.zip', '.rar'].includes(ext)) {
+                                    filesToProcess.push(fullPath);
+                                }
+                            }
+                        }
+                    }
+                    await scanWatchedDir(watchedDir);
+
                     let successCount = 0;
                     let unmatchedCount = 0;
+                    const syncedSeriesIds = new Set<string>();
 
                     const { convertCbrToCbz } = await import('@/lib/converter');
                     const { parseComicInfo } = await import('@/lib/metadata-extractor');
@@ -406,11 +424,10 @@ export function initWorker() {
                     const filePattern = config.file_naming_pattern || "{Series} #{Issue}";
                     const mangaFilePattern = config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
 
-                    for (const file of files) {
-                        const ext = path.extname(file).toLowerCase();
+                    for (let filePath of filesToProcess) {
+                        const file = path.basename(filePath); // Keep the file name handy for logs and unmatched moves
+                        const ext = path.extname(filePath).toLowerCase();
                         if (!['.cbz', '.cbr', '.zip', '.rar'].includes(ext)) continue;
-
-                        let filePath = path.join(watchedDir, file);
 
                         try {
                             if (ext === '.cbr' || ext === '.rar') {
@@ -424,11 +441,30 @@ export function initWorker() {
                             // We require a Series Name and ComicVine Volume ID to confidently auto-import
                             if (meta && meta.cvId && meta.series) {
                                 const safePublisher = meta.publisher || "Other";
-                                const isManga = meta.isManga || await detectManga({ name: meta.series, publisher: { name: safePublisher }, year: meta.year || 0 }, filePath);
+                                
+                                // --- FIX 1: Check existing series to preserve isManga & libraryId ---
+                                const existingSeries = await prisma.series.findUnique({
+                                    where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: meta.cvId.toString() } }
+                                });
 
-                                let targetLib = isManga 
-                                    ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
-                                    : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+                                let isManga = false;
+                                if (existingSeries) {
+                                    isManga = existingSeries.isManga;
+                                } else if (meta.mangaTag === 'No') {
+                                    isManga = false;
+                                } else {
+                                    isManga = meta.isManga || await detectManga({ name: meta.series, publisher: { name: safePublisher }, year: meta.year || 0 }, filePath);
+                                }
+
+                                let targetLib = null;
+                                if (existingSeries && existingSeries.libraryId) {
+                                    targetLib = libraries.find(l => l.id === existingSeries.libraryId);
+                                }
+                                if (!targetLib) {
+                                    targetLib = isManga 
+                                        ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+                                        : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
+                                }
                                 if (!targetLib) targetLib = libraries[0];
 
                                 const sanitize = (str: string) => str.replace(/[<>:"/\\|?*]/g, '').trim();
@@ -457,8 +493,59 @@ export function initWorker() {
                                     .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
 
                                 const finalDestPath = path.join(destFolder, `${sanitize(newFileName)}.cbz`);
+                                const sourceDir = path.dirname(filePath);
 
                                 await fs.move(filePath, finalDestPath, { overwrite: true });
+
+                                // --- FIX 2: Move left-behind cover art (Upgraded with X-Ray Logs) ---
+                                try {
+                                    const dirsToCheck = [sourceDir];
+                                    const parentDir = path.dirname(sourceDir);
+                                    
+                                    if (parentDir.toLowerCase() !== watchedDir.toLowerCase() && parentDir.toLowerCase().startsWith(watchedDir.toLowerCase())) {
+                                        dirsToCheck.push(parentDir);
+                                    }
+
+                                    Logger.log(`[Art Sweep] Scanning directories for leftover art: ${dirsToCheck.join(', ')}`, 'info');
+
+                                    for (const dir of dirsToCheck) {
+                                        if (!fs.existsSync(dir)) {
+                                            Logger.log(`[Art Sweep] Directory missing, skipping: ${dir}`, 'warn');
+                                            continue;
+                                        }
+                                        
+                                        const siblingFiles = await fs.readdir(dir);
+                                        for (const sib of siblingFiles) {
+                                            if (sib.match(/\.(jpg|jpeg|png|webp)$/i)) {
+                                                const sibSrc = path.join(dir, sib);
+                                                const sibDest = path.join(destFolder, sib);
+                                                
+                                                Logger.log(`[Art Sweep] Found image: ${sibSrc}`, 'info');
+                                                
+                                                try {
+                                                    if (sibSrc.toLowerCase() === sibDest.toLowerCase()) {
+                                                        Logger.log(`[Art Sweep] Source and Dest are exactly the same, skipping: ${sibSrc}`, 'warn');
+                                                        continue;
+                                                    }
+
+                                                    if (!fs.existsSync(sibDest)) {
+                                                        Logger.log(`[Art Sweep] Copying to library: ${sibDest}`, 'info');
+                                                        await fs.copy(sibSrc, sibDest);
+                                                    } else {
+                                                        Logger.log(`[Art Sweep] Image already exists in library, skipping copy.`, 'info');
+                                                    }
+                                                    
+                                                    Logger.log(`[Art Sweep] Deleting original from watched folder: ${sibSrc}`, 'info');
+                                                    await fs.remove(sibSrc);
+                                                } catch (imgErr: any) {
+                                                    Logger.log(`[Art Sweep] ERROR handling image ${sib}: ${imgErr.message}`, 'error');
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch(e: any) {
+                                    Logger.log(`[Art Sweep] FATAL ERROR during sweep: ${e.message}`, 'error');
+                                }
 
                                 const seriesRecord = await prisma.series.upsert({
                                     where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: meta.cvId.toString() } },
@@ -469,6 +556,8 @@ export function initWorker() {
                                         matchState: 'MATCHED', isManga, libraryId: targetLib.id
                                     }
                                 });
+
+                                syncedSeriesIds.add(seriesRecord.id);
 
                                 await prisma.issue.create({
                                     data: {
@@ -492,13 +581,36 @@ export function initWorker() {
                                 unmatchedCount++;
                             }
                         } catch (err) {
-                            Logger.log(`[Watched Sync] Error processing ${file}`, 'error');
+                            Logger.log(`[Watched Sync] Error processing ${path.basename(filePath)}`, 'error');
                         }
                     }
 
+                    // --- NEW: CLEAN UP EMPTY FOLDERS LEFT BEHIND ---
+                    async function cleanEmptyFolders(folder: string) {
+                        const items = await fs.readdir(folder, { withFileTypes: true });
+                        let isEmpty = true;
+                        for (const item of items) {
+                            const fullPath = path.join(folder, item.name);
+                            if (item.isDirectory()) {
+                                const isSubEmpty = await cleanEmptyFolders(fullPath);
+                                if (!isSubEmpty) isEmpty = false;
+                            } else {
+                                isEmpty = false;
+                            }
+                        }
+                        if (isEmpty && folder !== watchedDir) {
+                            await fs.rmdir(folder).catch(() => {});
+                        }
+                        return isEmpty;
+                    }
+                    await cleanEmptyFolders(watchedDir);
+
                     if (successCount > 0 || unmatchedCount > 0) {
-                        if (successCount > 0) {
-                            await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC' }, {
+                        if (syncedSeriesIds.size > 0) {
+                            await omnibusQueue.add('METADATA_SYNC', { 
+                                type: 'METADATA_SYNC', 
+                                seriesIds: Array.from(syncedSeriesIds) // <-- Pass the exact IDs
+                            }, {
                                 jobId: `METADATA_SYNC_WATCHED_${Date.now()}`
                             });
                         }
@@ -540,19 +652,36 @@ export function initWorker() {
                 }
 
                 case 'METADATA_SYNC': {
-                    await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
+                    const isTargeted = job.data.seriesIds && Array.isArray(job.data.seriesIds) && job.data.seriesIds.length > 0;
+                    
+                    // Only update the global "last run" heartbeat timestamp if this is a standard background sweep
+                    if (!isTargeted) {
+                        await prisma.systemSetting.upsert({ where: { key: 'last_metadata_sync' }, update: { value: nowStr }, create: { key: 'last_metadata_sync', value: nowStr } });
+                    }
+                    
                     const { syncSeriesMetadata } = await import('@/lib/metadata-fetcher');
                     
-                    // --- FIX: Reduced batch size from 50 to 15 to prevent event loop starvation and API bans ---
-                    const seriesToSync = await prisma.series.findMany({ 
-                        where: { metadataId: { not: null } },
-                        orderBy: { updatedAt: 'asc' }, 
-                        take: 15 
-                    });
+                    let seriesToSync: any[] = [];
+                    
+                    if (isTargeted) {
+                        // Grab EXACTLY the series that were just imported
+                        seriesToSync = await prisma.series.findMany({ 
+                            where: { id: { in: job.data.seriesIds }, metadataId: { not: null } }
+                        });
+                    } else {
+                        // --- FIX: Reduced batch size from 50 to 15 to prevent event loop starvation and API bans ---
+                        seriesToSync = await prisma.series.findMany({ 
+                            where: { metadataId: { not: null } },
+                            orderBy: { updatedAt: 'asc' }, 
+                            take: 15 
+                        });
+                    }
 
                     let successCount = 0;
                     let failCount = 0;
-                    let details = `Started Background Metadata Sync for ${seriesToSync.length} series (Chunked to prevent API bans).\n\n`;
+                    let details = isTargeted
+                        ? `Started Targeted Metadata Sync for ${seriesToSync.length} newly imported series.\n\n`
+                        : `Started Background Metadata Sync for ${seriesToSync.length} series (Chunked to prevent API bans).\n\n`;
 
                     for (const series of seriesToSync) {
                         try {

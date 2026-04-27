@@ -49,6 +49,7 @@ export async function parseComicInfo(filePath: string) {
             artists: splitList(info.Penciller),
             characters: splitList(info.Characters),
             isManga: (info.Manga === 'Yes' || info.Manga === 'YesAndRightToLeft'),
+            mangaTag: info.Manga ? String(info.Manga).trim() : null, // <-- ADDED
             cvId: cvId,
             cvIssueId: cvIssueId
         };

@@ -167,14 +167,21 @@ jobs:
         run: |
           VERSION="v${{ env.VERSION }}"
           WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
           
-          # Fetch the release body/notes using GitHub CLI so it matches your actual release
+          # Fetch the release body/notes using GitHub CLI
           RELEASE_NOTES=$(gh release view $VERSION --json body -q ".body")
           
-          # Construct the plain text markdown payload using jq for safe multiline escaping
+          # Check length and truncate if it exceeds 1500 characters
+          if [ ${#RELEASE_NOTES} -gt 1500 ]; then
+            RELEASE_NOTES="${RELEASE_NOTES:0:1500}...\n\n*(Notes truncated due to Discord limits. [Click here to view full release notes]($RELEASE_URL))*"
+          fi
+          
+          # Construct the plain text markdown payload
           PAYLOAD=$(jq -n \
             --arg content "🎉 **Release $VERSION**\n\n$WORKFLOW_URL\n\n$RELEASE_NOTES\n\n**Upgrade:**\n\`\`\`bash\ndocker pull ghcr.io/${{ env.IMAGE_NAME }}:latest\ndocker compose down\ndocker compose up -d\n\`\`\`" \
             '{ content: $content }' \
           )
           
-          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_RELEASE_WEBHOOK
+          # Send to Discord and fail with body if rejected
+          curl --fail-with-body -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_RELEASE_WEBHOOK

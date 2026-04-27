@@ -12,9 +12,11 @@ services:
     environment:
       - TZ=America/New_York
       
-      # REQUIRED: Set to your Cloudflare Tunnel domain (e.g., https://omnibus.mydomain.com)
-      # or your NAS IP (e.g., http://192.168.1.100:3000)
-      - NEXTAUTH_URL=http://192.168.1.100:3000
+      # REQUIRED: The canonical URL of your Omnibus instance. NextAuth requires this to match exactly.
+      # Local access only: Set to your NAS IP and port (e.g., http://192.168.1.50:3000)
+      # External access: Set to your public domain (e.g., https://omnibus.yourdomain.com)
+      # NOTE: Do NOT include a trailing slash!
+      - NEXTAUTH_URL=http://<your-ip:port>
       
       # REQUIRED: Generate a random string for security
       # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key. !!DO NOT LOSE THIS!!

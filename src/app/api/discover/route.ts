@@ -1,3 +1,4 @@
+// src/app/api/discover/route.ts
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db'; 
@@ -8,6 +9,19 @@ export async function GET(request: Request) {
   try {
       const { searchParams } = new URL(request.url);
       const type = searchParams.get('type') || 'popular'; 
+      
+      // --- NEW: Handle Settings Fetch ---
+      if (type === 'settings') {
+          const settings = await prisma.systemSetting.findMany({
+              where: { key: { in: ['show_popular_issues', 'show_new_releases'] } }
+          });
+          const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+          return NextResponse.json({
+              showPopular: config.show_popular_issues !== 'false',
+              showNew: config.show_new_releases !== 'false'
+          });
+      }
+      
       const offset = parseInt(searchParams.get('offset') || '0', 10);
       const limit = parseInt(searchParams.get('limit') || '14', 10);
       

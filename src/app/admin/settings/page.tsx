@@ -166,9 +166,10 @@ export default function SettingsPage() {
   const [config, setConfig] = useState<any>({
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", cv_api_key: "",
     metron_user: "", metron_pass: "",
-    export_series_json: "false", // Included Metron state
+    export_series_json: "false", 
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
+    show_popular_issues: "true", show_new_releases: "true", // <--- ADDED TOGGLES
     manga_publishers: "", western_publishers: "",
     download_retry_delay: "5",
     convert_to_webp: "false", webp_quality: "80", 
@@ -761,9 +762,7 @@ export default function SettingsPage() {
                         <StatusBox result={testResults.metron} />
                     </div>
 
-                    <div className="space-y-4 pt-6 border-t border-border mt-4">
-
-                {/* --- NEW: SERIES.JSON EXPORT --- */}
+                    {/* --- SERIES.JSON EXPORT --- */}
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
                         <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
                             <Switch 
@@ -782,55 +781,56 @@ export default function SettingsPage() {
                             </div>
                         </div>
                     </div>
-    <div>
-        <h3 className="text-lg font-bold text-foreground flex items-center gap-2 pb-2">
-            <Database className="w-5 h-5 text-primary" /> Auto-Tagging Logic
-        </h3>
-        <p className="text-[0.8rem] text-muted-foreground">Omnibus automatically detects if an imported series is Manga based on the publisher. Customize the keywords used for detection below.</p>
-    </div>
-    
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="flex flex-col gap-2 h-full">
-            <Label className="text-foreground font-semibold">Western Publishers (Comma Separated)</Label>
-            <textarea 
-                rows={4}
-                value={config.western_publishers || ""} 
-                onChange={(e) => setConfig({...config, western_publishers: e.target.value})} 
-                placeholder="marvel, dc comics, image comics, idw publishing..." 
-                className="flex-1 min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border resize-y"
-            />
-            <p className="text-[10px] text-muted-foreground">These publishers will instantly bypass the AniList API check to save time and reduce rate limits.</p>
-        </div>
-        <div className="flex flex-col gap-2 h-full">
-            <Label className="text-foreground font-semibold">Manga Publishers (Comma Separated)</Label>
-            <textarea 
-                rows={4}
-                value={config.manga_publishers || ""} 
-                onChange={(e) => setConfig({...config, manga_publishers: e.target.value})} 
-                placeholder="viz media, kodansha, yen press, seven seas, shueisha..." 
-                className="flex-1 min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border resize-y"
-            />
-            {/* Invisible spacer to maintain perfect visual alignment with the left column */}
-            <p className="text-[10px] opacity-0 pointer-events-none select-none hidden md:block">Spacer</p>
-        </div>
-    </div>
-    
-    <div className="flex justify-start mt-2">
-         <Button 
-            variant="secondary" 
-            size="sm" 
-            className="font-bold border border-border shadow-sm text-xs"
-            onClick={() => setConfig({
-                ...config, 
-                manga_publishers: "viz media, kodansha, yen press, seven seas, shueisha, shogakukan, tokyopop, dark horse manga, vertical, ghost ship, denpa, fakku, j-novel club, sublime, kuma, ize press, square enix, hakusensha, lezhin", 
-                western_publishers: "marvel, dc comics, image comics, idw publishing, dynamite, boom! studios, valiant, archie, oni press, titan comics, vault comics, awa studios, humanoids, 2000 ad, zenescope"
-            })}
-         >
-             Load Default Lists
-         </Button>
-    </div>
-</div>
 
+                    <div className="space-y-4 pt-6 border-t border-border mt-4">
+                        <div>
+                            <h3 className="text-lg font-bold text-foreground flex items-center gap-2 pb-2">
+                                <Database className="w-5 h-5 text-primary" /> Auto-Tagging Logic
+                            </h3>
+                            <p className="text-[0.8rem] text-muted-foreground">Omnibus automatically detects if an imported series is Manga based on the publisher. Customize the keywords used for detection below.</p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="flex flex-col gap-2 h-full">
+                                <Label className="text-foreground font-semibold">Western Publishers (Comma Separated)</Label>
+                                <textarea 
+                                    rows={4}
+                                    value={config.western_publishers || ""} 
+                                    onChange={(e) => setConfig({...config, western_publishers: e.target.value})} 
+                                    placeholder="marvel, dc comics, image comics, idw publishing..." 
+                                    className="flex-1 min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border resize-y"
+                                />
+                                <p className="text-[10px] text-muted-foreground">These publishers will instantly bypass the AniList API check to save time and reduce rate limits.</p>
+                            </div>
+                            <div className="flex flex-col gap-2 h-full">
+                                <Label className="text-foreground font-semibold">Manga Publishers (Comma Separated)</Label>
+                                <textarea 
+                                    rows={4}
+                                    value={config.manga_publishers || ""} 
+                                    onChange={(e) => setConfig({...config, manga_publishers: e.target.value})} 
+                                    placeholder="viz media, kodansha, yen press, seven seas, shueisha..." 
+                                    className="flex-1 min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border resize-y"
+                                />
+                                {/* Invisible spacer to maintain perfect visual alignment with the left column */}
+                                <p className="text-[10px] opacity-0 pointer-events-none select-none hidden md:block">Spacer</p>
+                            </div>
+                        </div>
+                        
+                        <div className="flex justify-start mt-2">
+                            <Button 
+                                variant="secondary" 
+                                size="sm" 
+                                className="font-bold border border-border shadow-sm text-xs"
+                                onClick={() => setConfig({
+                                    ...config, 
+                                    manga_publishers: "viz media, kodansha, yen press, seven seas, shueisha, shogakukan, tokyopop, dark horse manga, vertical, ghost ship, denpa, fakku, j-novel club, sublime, kuma, ize press, square enix, hakusensha, lezhin", 
+                                    western_publishers: "marvel, dc comics, image comics, idw publishing, dynamite, boom! studios, valiant, archie, oni press, titan comics, vault comics, awa studios, humanoids, 2000 ad, zenescope"
+                                })}
+                            >
+                                Load Default Lists
+                            </Button>
+                        </div>
+                    </div>
                 </CardContent>
             </Card>
         </TabsContent>
@@ -1436,6 +1436,29 @@ export default function SettingsPage() {
                     <CardDescription className="text-muted-foreground">Filter out unwanted series or publishers from the Discover grids (New Releases, Popular).</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
+                    
+                    <div className="flex flex-col space-y-4 bg-muted/30 p-4 rounded-lg border border-border">
+                        <Label className="text-base font-bold text-foreground">Discover Page Sections</Label>
+                        <div className="flex flex-col gap-3">
+                            <div className="flex items-center space-x-2">
+                                <Switch 
+                                    id="popular-toggle"
+                                    checked={config.show_popular_issues !== "false"} 
+                                    onCheckedChange={(c) => setConfig({...config, show_popular_issues: c ? "true" : "false"})} 
+                                />
+                                <Label htmlFor="popular-toggle" className="cursor-pointer font-bold text-sm text-foreground">Show Popular Issues</Label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <Switch 
+                                    id="new-toggle"
+                                    checked={config.show_new_releases !== "false"} 
+                                    onCheckedChange={(c) => setConfig({...config, show_new_releases: c ? "true" : "false"})} 
+                                />
+                                <Label htmlFor="new-toggle" className="cursor-pointer font-bold text-sm text-foreground">Show New Releases</Label>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
                         <Switch 
                             id="filter-toggle"

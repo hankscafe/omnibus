@@ -1,10 +1,14 @@
+// src/app/admin/smart-match/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
 import { useToast } from "@/components/ui/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -15,6 +19,12 @@ export default function SmartMatchPage() {
     const [isScanning, setIsScanning] = useState(false);
     const [processingId, setProcessingId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+
+    const [manualMatchOpen, setManualMatchOpen] = useState(false);
+    const [manualMatchId, setManualMatchId] = useState("");
+    const [manualMatchTarget, setManualMatchTarget] = useState<any>(null);
+    const [isManualMatching, setIsManualMatching] = useState(false);
+
     const { toast } = useToast();
 
     useEffect(() => {
@@ -42,7 +52,7 @@ export default function SmartMatchPage() {
                 Logger.log(`Fetch failed entirely: ${getErrorMessage(err)}`, 'error');
                 setLoading(false);
             });
-    }, []);
+    }, [toast]);
 
     const startSmartScan = async () => {
         setIsScanning(true);
@@ -99,6 +109,40 @@ export default function SmartMatchPage() {
             toast({ title: "Error", variant: "destructive" });
         } finally {
             setProcessingId(null);
+        }
+    };
+
+    const handleManualLookup = async () => {
+        setIsManualMatching(true);
+        try {
+            // Strip out the "4050-" prefix if they pasted the whole URL/ID format
+            const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9]/g, '');
+            if (!cleanId) throw new Error("Invalid ID format");
+
+            const res = await fetch(`/api/issue-details?id=${cleanId}&type=volume`);
+            const data = await res.json();
+
+            if (res.ok && data && !data.error) {
+                setSuggestions(prev => ({
+                    ...prev,
+                    [manualMatchTarget.id]: {
+                        id: data.id || data.volumeId,
+                        name: data.name,
+                        year: data.year,
+                        publisher: data.publisher,
+                        image: data.image,
+                        count: "?", 
+                    }
+                }));
+                setManualMatchOpen(false);
+                toast({ title: "Match Found", description: "You can now accept the manual match." });
+            } else {
+                throw new Error(data.error || "Volume not found");
+            }
+        } catch (e: any) {
+            toast({ title: "Lookup Failed", description: e.message, variant: "destructive" });
+        } finally {
+            setIsManualMatching(false);
         }
     };
 
@@ -199,15 +243,27 @@ export default function SmartMatchPage() {
                                 {/* ACTIONS */}
                                 <div className="flex md:flex-col gap-2 shrink-0 w-full md:w-auto justify-end">
                                     <Button 
-                                        size="lg" 
+                                        size="sm" 
                                         className="flex-1 md:flex-none bg-green-600 hover:bg-green-700 text-white font-bold disabled:opacity-50 border-0"
                                         disabled={!suggestion || suggestion === 'NOT_FOUND' || suggestion === 'ERROR'}
                                         onClick={() => handleAcceptMatch(series, suggestion)}
                                     >
                                         <Check className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Accept</span>
                                     </Button>
-                                    <Button size="icon" variant="outline" className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={() => handleDismiss(series.id)} title="Hide from Matcher">
-                                        <X className="w-5 h-5" />
+                                    <Button 
+                                        size="sm" 
+                                        variant="outline" 
+                                        className="flex-1 md:flex-none font-bold border-primary/30 text-primary hover:bg-primary/10"
+                                        onClick={() => {
+                                            setManualMatchTarget(series);
+                                            setManualMatchOpen(true);
+                                            setManualMatchId("");
+                                        }}
+                                    >
+                                        <Search className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Custom ID</span>
+                                    </Button>
+                                    <Button size="sm" variant="outline" className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={() => handleDismiss(series.id)} title="Hide from Matcher">
+                                        <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Dismiss</span>
                                     </Button>
                                 </div>
 
@@ -216,6 +272,36 @@ export default function SmartMatchPage() {
                     })}
                 </div>
             )}
+
+            {/* MANUAL MATCH DIALOG */}
+            <Dialog open={manualMatchOpen} onOpenChange={setManualMatchOpen}>
+                <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
+                    <DialogHeader>
+                        <DialogTitle>Manual Match</DialogTitle>
+                        <DialogDescription>
+                            Enter the exact ComicVine Volume ID for <strong>{manualMatchTarget?.name}</strong>.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="py-4 space-y-4">
+                        <div className="space-y-2">
+                            <Label>ComicVine Volume ID</Label>
+                            <Input 
+                                value={manualMatchId} 
+                                onChange={(e) => setManualMatchId(e.target.value)} 
+                                placeholder="e.g. 4050-12345"
+                                className="bg-background border-border"
+                            />
+                        </div>
+                    </div>
+                    <DialogFooter className="gap-2 sm:gap-0">
+                        <Button variant="outline" onClick={() => setManualMatchOpen(false)} disabled={isManualMatching} className="border-border hover:bg-muted text-foreground">Cancel</Button>
+                        <Button onClick={handleManualLookup} disabled={isManualMatching || !manualMatchId} className="bg-primary text-primary-foreground hover:bg-primary/90 font-bold">
+                            {isManualMatching ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Search className="w-4 h-4 mr-2" />} Look Up ID
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
         </div>
     )
 }

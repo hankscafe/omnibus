@@ -13,6 +13,7 @@ import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { AuditLogger } from '@/lib/audit-logger';
 import { authOptions } from '@/lib/auth';
 import { getServerSession } from 'next-auth';
+import { omnibusQueue } from '@/lib/queue';
 
 export async function POST(request: Request) {
   try {
@@ -259,17 +260,17 @@ export async function POST(request: Request) {
         }
     } catch (e) {}
     
-    // --- NEW: Trigger library scan to register the new raw file ---
-    if (isFile) {
-        try {
-            const { POST: triggerJob } = await import('@/app/api/admin/jobs/trigger/route');
-            const mockRequest = new Request('http://localhost/api/admin/jobs/trigger', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job: 'library' })
-            });
-            triggerJob(mockRequest).catch(() => {});
-        } catch(e) {}
+    // --- Trigger Library Scan and Metadata Sync via BullMQ ---
+    try {
+        if (isFile) {
+            await omnibusQueue.add('LIBRARY_SCAN', { type: 'LIBRARY_SCAN' }, { jobId: `LIBRARY_SCAN_${Date.now()}` });
+        }
+        
+        if (existingRecord?.id) {
+            await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC', seriesIds: [existingRecord.id] }, { jobId: `METADATA_SYNC_MATCH_${existingRecord.id}_${Date.now()}` });
+        }
+    } catch (e: any) {
+        Logger.log(`[Match Series] Failed to queue jobs: ${e.message}`, 'warn');
     }
 
     const session = await getServerSession(authOptions);

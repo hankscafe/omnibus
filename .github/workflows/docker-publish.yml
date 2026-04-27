@@ -174,13 +174,20 @@ jobs:
           
           # Check length and truncate if it exceeds 1500 characters
           if [ ${#RELEASE_NOTES} -gt 1500 ]; then
-            RELEASE_NOTES="${RELEASE_NOTES:0:1500}...\n\n*(Notes truncated due to Discord limits. [Click here to view full release notes]($RELEASE_URL))*"
+            # Using $'\n' to ensure Bash passes actual newlines into the variable
+            RELEASE_NOTES="${RELEASE_NOTES:0:1500}..."$'\n\n'"*(Notes truncated due to Discord limits. [Click here to view full release notes]($RELEASE_URL))*"
           fi
           
-          # Construct the plain text markdown payload
+          # Construct the payload using jq's native string interpolation \(var)
+          # This guarantees that newlines inside the jq string are properly formatted for JSON
           PAYLOAD=$(jq -n \
-            --arg content "🎉 **Release $VERSION**\n\n$WORKFLOW_URL\n\n$RELEASE_NOTES\n\n**Upgrade:**\n\`\`\`bash\ndocker pull ghcr.io/${{ env.IMAGE_NAME }}:latest\ndocker compose down\ndocker compose up -d\n\`\`\`" \
-            '{ content: $content }' \
+            --arg version "$VERSION" \
+            --arg url "$WORKFLOW_URL" \
+            --arg notes "$RELEASE_NOTES" \
+            --arg image "ghcr.io/${{ env.IMAGE_NAME }}:latest" \
+            '{ 
+              content: "🎉 **Release \($version)**\n\n\($url)\n\n\($notes)\n\n**Upgrade:**\n```bash\ndocker pull \($image)\ndocker compose down\ndocker compose up -d\n```" 
+            }' \
           )
           
           # Send to Discord and fail with body if rejected

@@ -40,6 +40,10 @@ export default function Home() {
   const [refreshSignal, setRefreshSignal] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
+  // --- NEW: Discover Grid Visibility States ---
+  const [showPopular, setShowPopular] = useState(true)
+  const [showNew, setShowNew] = useState(true)
+
   const dismissFirstSteps = async () => {
       setShowFirstSteps(false);
       try {
@@ -55,6 +59,15 @@ export default function Home() {
   
   useEffect(() => {
     document.title = "Omnibus - Home"
+    
+    // --- NEW: Fetch grid visibility settings ---
+    fetch('/api/discover?type=settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.showPopular !== undefined) setShowPopular(data.showPopular)
+        if (data.showNew !== undefined) setShowNew(data.showNew)
+      })
+      .catch(err => Logger.log(`Failed to fetch discover settings: ${getErrorMessage(err)}`, 'error'))
   }, []);
 
   useEffect(() => {
@@ -123,12 +136,6 @@ export default function Home() {
     } finally {
         setTimeout(() => setIsRefreshing(false), 2000); 
     }
-  }
-
-  const extractNumSafely = (clean: string) => {
-    const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
-    return null;
   }
 
   return (
@@ -319,10 +326,10 @@ export default function Home() {
         </div>
 
         {/* Popular Issues Grid */}
-        <ComicGrid title="Popular Issues" type="popular" refreshSignal={refreshSignal} />
+        {showPopular && <ComicGrid title="Popular Issues" type="popular" refreshSignal={refreshSignal} />}
 
         {/* New Releases Grid */}
-        <ComicGrid title="New Releases" type="new" refreshSignal={refreshSignal} />
+        {showNew && <ComicGrid title="New Releases" type="new" refreshSignal={refreshSignal} />}
         
       </div>
     </div>

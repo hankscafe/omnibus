@@ -45,6 +45,7 @@ While I know AI-assisted ("vibe-coded") projects can sometimes be met with skept
   - [External Readers & OPDS Support](#external-readers--opds-support)
   - [Native e-Ink Sync (KOReader)](#native-e-ink-sync-koreader)
   - [Reading Lists](#reading-lists)
+  - [Release Calendar](#release-calendar)
   - [User Profile & Preferences](#user-profile--preferences)
   - [Settings & Administration](#settings--administration)
   - [Additional Screenshots](#additional-screenshots)
@@ -75,9 +76,9 @@ The secure gateway to your personal comic universe. Omnibus ensures your collect
 The Dashboard is the personalized nerve center of your collection. It dynamically updates based on the logged-in user to provide a tailored snapshot of their reading journey.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/home_page.png?raw=true" width="500" alt="Homepage with Jump Back In section" />
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/discover_no_popular-new.png?raw=true" width="500" alt="Homepage with Jump Back In section" />
   <br>
-  <strong>Jump Back In section.</strong>
+  <strong>Discover page with the 'Popular Series' and 'New Releases' sections disabled, also shows 'Jump Back In', 'Because you read...', and 'Recently Added' sectoins</strong>
 </p>
 
 <p align="center">
@@ -87,7 +88,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/request_1.png?raw=true" width="500" alt="Series request from home page" />
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/one_click_request.png?raw=true" width="500" alt="Series request from home page" />
   <br>
   <strong>Series window when clicking issue/series from the discover sections.</strong>
 </p>
@@ -176,6 +177,8 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 * **Missing Issue Detection:** Visually highlights gaps in your collection (e.g., if you have issues #1 and #3, it flags #2 as missing). Click "Request Missing" to queue them all up at once.
 * **Sorting Options:** Sort issues sequentially (Issue # 1 to # 100) or reverse chronological (newest releases first) for ongoing weekly pulls.
 * **Offline Downloading:** Admins can grant users permission to download raw .cbz files directly from the browser for offline reading in third-party apps.
+* **Community Reviews & Ratings:** Users can leave a 1-5 star rating and written review for any series. The series page aggregates these into a total community score, allowing users to share their thoughts and recommendations with others on the server.
+* **Issue Reporting System:** Users can report broken files, incorrect metadata, or bad archives directly from the series page. Admins receive an alert and can resolve the issue, sending a direct inbox message back to the user upon completion.
 
 ### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.
@@ -187,7 +190,7 @@ A completely custom, zero-friction reading experience built natively into the br
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/reader_page_2.png?raw=true" width="500" alt="Reader page settings" />
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/reader_settings.png?raw=true" width="500" alt="Reader page settings" />
   <br>
   <strong>Reader page settings.</strong>
 </p>
@@ -200,6 +203,7 @@ A completely custom, zero-friction reading experience built natively into the br
 * **Smart Preloading:** Silently caches the next several pages in the background so you never experience loading spinners while reading.
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
 * **Live Image Adjustments:** Adjust brightness and contrast overlays independently of your device settings for late-night reading sessions.
+* **Progressive Web App (PWA) & Offline Reading:** Install Omnibus to your home screen as a PWA. Users can click the "Offline" button in the Web Reader to silently cache an entire issue to their device's local storage, allowing them to read flawlessly without an active internet connection.
 
 ### External Readers & OPDS Support
 Omnibus features a native OPDS 1.2 server with the **Page Streaming Extension (PSE)**, allowing you to read your server's library directly in your favorite mobile and tablet apps without downloading the entire file first.
@@ -246,25 +250,35 @@ Perfect for navigating the complex web of massive comic book crossover events or
 * **CSV Imports (LOCG / Goodreads):** Export your pull list or collection from League of Comic Geeks (LOCG) or Goodreads as a `.csv` file. Omnibus will parse the rows, fuzzy-match the series names and issue numbers to your local files, and generate a customized reading order.
 * **Auto-Request Missing:** During any import, you can toggle Omnibus to automatically push missing issues or volumes directly to your download queue!
 
+### Release Calendar
+A centralized hub to track upcoming comic and manga releases so you never miss an issue. The calendar is split into two powerful views to help you manage your existing collection and discover new ongoing runs.
+
+* **Omnibus Tracked Series:** A personalized calendar displaying upcoming releases specifically for the series you already own and monitor.
+  * **Tracked Series:** Automatically scans your monitored library items and groups upcoming issues by month and exact release day.
+  * **Navigation:** Features quick-action buttons to jump directly to the series page or read the most recent issues leading up to the new release.
+* **Global Pull List:** Powered by the Metron.Cloud integration, this tab lets you browse a worldwide catalog of upcoming comic releases week by week.
+  * **Navigatoin:** Easily page forward and backward through upcoming weeks to see what publishers are dropping soon.
+  * **One-Click Requests & Subscriptions:** See a new series that looks interesting? You can click "Request Issue" to grab just that single book, or click "Request Series" to subscribe to it. Subscribing automatically tells Omnibus to monitor the series and download all future issues as they release.
+
+<p align="center">
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/release_calendar-tracked_series.png?raw=true" width="500" alt="User profile page" />
+  <br>
+  <strong>Omnibus Tracked Series section of the Release Calendar page.</strong>
+</p>
+
+<p align="center">
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/release_calendar-global.png?raw=true" width="500" alt="User profile page" />
+  <br>
+  <strong>Global Pull List section of the Release Calendar page.</strong>
+</p>
+
 ### User Profile & Preferences
 A personalized space for each user on your server to manage their identity, track their unique reading habits, and customize their Omnibus experience to fit their workflow.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/profile_1.png?raw=true" width="500" alt="User profile page" />
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/user_profile.png?raw=true" width="500" alt="User profile page" />
   <br>
-  <strong>Users profile page showing customizable header and avatar.</strong>
-</p>
-
-<p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/profile_2.png?raw=true" width="500" alt="User profile page" />
-  <br>
-  <strong>Users profile page reading progress cards.</strong>
-</p>
-
-<p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/profile_3.png?raw=true" width="500" alt="User profile page" />
-  <br>
-  <strong>Users profile page showing recent request history.</strong>
+  <strong>Users profile page showing customizable header and avatar as well as collapsable information sections.</strong>
 </p>
 
 <p align="center">
@@ -280,6 +294,7 @@ A personalized space for each user on your server to manage their identity, trac
 * **Account Security:** Safely update your password and view or revoke active login sessions across your different devices.
 * **Personal API Keys:** Generate secure, user-specific API tokens to integrate your Omnibus reading progress with third-party trackers (like MyAnimeList, AniList, or custom scripts) without giving out Admin access.
 * **Theme Customization:** Toggle Dark/Light modes, adjust UI accent colors, and tailor the app to your visual preferences.
+* **Trophies & Achievements:** Unlock custom trophies and milestones based on your reading habits! Earn achievements for reading a certain number of comics, making requests, or exploring different publishers. Trophies are proudly displayed on your profile.
 
 ### Settings & Administration
 Complete, granular control over your instance, your users, and your underlying automation.
@@ -291,6 +306,12 @@ Complete, granular control over your instance, your users, and your underlying a
 </p>
 
 <p align="center">
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/system_diagnostics.png?raw=true" width="500" alt="Admin page" />
+  <br>
+  <strong>System Diagnostics modal</strong>
+</p>
+
+<p align="center">
   <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_2.png?raw=true" width="500" alt="Admin page" />
   <br>
   <strong>Admin page showing active downloads and request management sections.</strong>
@@ -298,7 +319,7 @@ Complete, granular control over your instance, your users, and your underlying a
 
 * **High-Performance Architecture:** Built to handle massive terabyte-scale libraries. Features an optimized OPDS feed, asynchronous streaming cipher engines for backups, and B-Tree indexed database lookups.
 * **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
-* **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, and Terabox. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
+* **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, Terabox, and Anna's Archive. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
 * **FlareSolverr Integration:** Route requests through a FlareSolverr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics.
 * **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries ComicVine, and suggests the correct metadata linkage so you can clean up messy archives in seconds.
 * **Deep Diagnostics Engine:**
@@ -321,10 +342,14 @@ Complete, granular control over your instance, your users, and your underlying a
 * **User & Role Management:** Create independent accounts for friends and family so everyone has their own reading progress.
   * Admin or User roles
   * Users can be assigned auto-approval permission and download permission
+* **Custom Trophy Engine:** Admins can create custom milestones and achievements (e.g., "Read 50 Comics", "Explore 5 Publishers") with uploadable icons. Omnibus automatically evaluates and awards these trophies to users as they interact with the library.
 * **Library Path Mapping:** Omnibus supports multiple libraries to easily map multiple root directories from your NAS (e.g., separate folders for `/comics`, `/manga`, and `/magazines`).
+* **WEBP Image Compression:** Save massive amounts of disk space and radically improve Web Reader performance by enabling automatic WEBP compression. Omnibus can convert heavy JPEGs and PNGs to highly optimized WEBP files during CBR-to-CBZ conversions or bulk repacks.
+* **Internal Page Repacking:** A powerful admin tool to standardize the insides of your comic archives. Omnibus can extract an entire series, rename the internal image files sequentially (e.g., page_0001.jpg), compress them, and repack them into clean, standardized .cbz files.
 * **Alerts & Notifications:**
-  * **Discord Webhooks:** Configure webhooks to send server alerts to your Discord channels when comics are requested, approved, or finish downloading.
-  * **SMTP Email Notifications:** Configure an SMTP server to send beautiful, customizable HTML emails for account approvals, password resets, request completions, and a Weekly Digest of newly added comics.
+  * **Push Notifications:** Native support for Discord Webhooks, Telegram Bots, Pushover, and Apprise (supporting 80+ external services).
+  * **SMTP Email Notifications:** Send beautiful HTML emails for approvals, completed requests, and Weekly Digests.
+  * **Custom Email Templates:** A built-in code editor allows admins to customize the exact text and HTML layout of all outgoing automated emails using dynamic variables.
 * **API & Service Configuration:** Securely plug in your ComicVine API keys, Indexer credentials, and Download Client details.
 * [**External API Integrations:**](https://github.com/hankscafe/omnibus/blob/main/docs/API.md) Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.
 * **Safe Configuration:** Dual-guard unsaved changes protection to ensure admins never accidentally lose their configuration progress.

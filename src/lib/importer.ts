@@ -6,7 +6,6 @@ import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { resolveRemotePath } from './utils/path-resolver'; 
 import axios from 'axios';
-// --- CHANGED: Using unified SystemNotifier instead of DiscordNotifier/Mailer ---
 import { SystemNotifier } from './notifications';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
@@ -130,28 +129,154 @@ export const Importer = {
         });
     }
 
+    // --- BATCH DOWNLOAD DETECTION ---
     let actualSourceFile = sourcePath;
+    let isBatchFolder = false;
+    let isBatchArchive = false;
+    let batchFiles: string[] = [];
+
     if (fs.statSync(sourcePath).isDirectory()) {
-        const files = await fs.promises.readdir(sourcePath);
-        let largestFile = "";
-        let largestSize = 0;
-        for (const f of files) {
-            if (f.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
-                const stat = fs.statSync(path.join(sourcePath, f));
-                if (stat.size > largestSize) {
-                    largestSize = stat.size;
-                    largestFile = path.join(sourcePath, f);
+        async function getComicFilesInDir(dir: string) {
+            let results: string[] = [];
+            const items = await fs.promises.readdir(dir, { withFileTypes: true });
+            for (const item of items) {
+                const fullPath = path.join(dir, item.name);
+                if (item.isDirectory()) {
+                    results = results.concat(await getComicFilesInDir(fullPath));
+                } else if (item.name.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
+                    results.push(fullPath);
                 }
             }
+            return results;
         }
-        if (largestFile) {
-            actualSourceFile = largestFile;
-            Logger.log(`[Importer] Extracted archive from folder: ${path.basename(actualSourceFile)}`, "info");
+        
+        batchFiles = await getComicFilesInDir(sourcePath);
+
+        if (batchFiles.length > 1) {
+            isBatchFolder = true;
+        } else if (batchFiles.length === 1) {
+            actualSourceFile = batchFiles[0];
+            Logger.log(`[Importer] Extracted single archive from folder: ${path.basename(actualSourceFile)}`, "info");
         } else {
             Logger.log(`[Importer] No valid comic archive found inside folder: ${sourcePath}`, "error");
             return false;
         }
+    } else {
+        const ext = path.extname(sourcePath).toLowerCase();
+        if (ext === '.zip' || ext === '.cbz') {
+            try {
+                const zip = new AdmZip(sourcePath);
+                const entries = zip.getEntries();
+                // If the zip contains other comic archives (not just jpg/png pages)
+                const comicFiles = entries.filter((e: any) => !e.isDirectory && e.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i));
+                
+                if (comicFiles.length > 0) {
+                    isBatchArchive = true;
+                }
+            } catch(e) {}
+        }
     }
+
+    // --- BATCH ROUTING EXECUTION ---
+    if (isBatchFolder || isBatchArchive) {
+        Logger.log(`[Importer] Batch download detected. Routing to WATCHED folder...`, 'info');
+        const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
+        await fs.ensureDir(watchedDir);
+        let moveSuccessCount = 0;
+
+        if (isBatchFolder) {
+            for (const file of batchFiles) {
+                let finalDest = path.join(watchedDir, path.basename(file));
+                if (fs.existsSync(finalDest)) {
+                    finalDest = path.join(watchedDir, `${Date.now()}_${path.basename(file)}`);
+                }
+                try {
+                    if (isFromClient || trackingHash) {
+                        await fs.copy(file, finalDest, { overwrite: true });
+                    } else {
+                        await fs.move(file, finalDest, { overwrite: true });
+                    }
+                    moveSuccessCount++;
+                } catch(err) {
+                    Logger.log(`[Importer] Failed to route ${path.basename(file)} to Watched folder.`, 'warn');
+                }
+            }
+            // Cleanup empty DDL folders (Keep client torrent data intact for seeding)
+            if (!isFromClient && !trackingHash) {
+                try { await fs.remove(sourcePath); } catch(e) {}
+            }
+        } else if (isBatchArchive) {
+            try {
+                const zip = new AdmZip(sourcePath);
+                const entries = zip.getEntries();
+                for (const entry of entries) {
+                    if (!entry.isDirectory && entry.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
+                        const fileName = path.basename(entry.entryName);
+                        let finalDest = path.join(watchedDir, fileName);
+                        if (fs.existsSync(finalDest)) {
+                            finalDest = path.join(watchedDir, `${Date.now()}_${fileName}`);
+                        }
+                        fs.writeFileSync(finalDest, entry.getData());
+                        moveSuccessCount++;
+                    }
+                }
+                if (!isFromClient && !trackingHash) {
+                    await fs.remove(sourcePath);
+                }
+            } catch (err: any) {
+                Logger.log(`[Importer] Failed to extract batch archive: ${err.message}`, 'error');
+                return false;
+            }
+        }
+
+        // Mark request as completed
+        await prisma.request.update({
+            where: { id: requestId },
+            data: { status: 'COMPLETED', progress: 100, notified: false }
+        });
+
+        // Trigger WATCHED_FOLDER_SYNC
+        try {
+            const { omnibusQueue } = await import('./queue');
+            await omnibusQueue.add('WATCHED_FOLDER_SYNC', { type: 'WATCHED_FOLDER_SYNC' }, {
+                jobId: `WATCHED_SYNC_BATCH_${Date.now()}`
+            });
+        } catch(e) {}
+
+        Logger.log(`[Importer] Successfully routed ${moveSuccessCount} files to Watched folder. Batch import complete.`, 'success');
+        
+        // Notify user
+        await SystemNotifier.sendAlert('comic_available', {
+            title: `${req.activeDownloadName || "Batch Download"} - ${moveSuccessCount} Files`,
+            imageUrl: req.imageUrl,
+            user: req.user?.username,
+            email: req.user?.email,
+            description: `Your batch download has finished! The files have been sent to the Watched Folder for auto-tagging and organization.`,
+            date: new Date().toLocaleString()
+        });
+
+        // Handle ignored_downloads cleanup so the queue is purged
+        if (trackingHash) {
+            try {
+                const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });
+                let ignored: string[] = [];
+                if (ignoredSetting?.value) {
+                    try { ignored = JSON.parse(ignoredSetting.value); } catch(e) {}
+                }
+                if (!ignored.includes(trackingHash)) {
+                    ignored.push(trackingHash);
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'ignored_downloads' },
+                        update: { value: JSON.stringify(ignored) },
+                        create: { key: 'ignored_downloads', value: JSON.stringify(ignored) }
+                    });
+                }
+            } catch (ignoreErr) { }
+        }
+
+        return true;
+    }
+
 
     let series = await prisma.series.findFirst({ 
         where: { metadataId: req.volumeId, metadataSource: 'COMICVINE' } 
@@ -356,7 +481,7 @@ export const Importer = {
       if (finalPath.toLowerCase().match(/\.(cbz|zip|epub)$/i)) {
           try {
               const zip = new AdmZip(finalPath);
-              pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i)).length;
+              pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp|gif)$/i)).length;
               
               const { parseComicInfo } = await import('./metadata-extractor');
               xmlMeta = await parseComicInfo(finalPath);
@@ -494,7 +619,6 @@ export const Importer = {
       }
 
       if (shouldNotify) {
-          // --- CHANGED: Unified Notifier Call ---
           await SystemNotifier.sendAlert('comic_available', {
               title: notificationTitle,
               imageUrl: req.imageUrl,
@@ -513,7 +637,6 @@ export const Importer = {
     } catch (e: any) {
       Logger.log(`[Importer] Import Failed: ${e.message}`, "error");
       if (req) {
-          // --- CHANGED: Unified Notifier Call ---
           await SystemNotifier.sendAlert('download_failed', {
               title: req.activeDownloadName || series?.name || "Unknown Comic",
               imageUrl: req.imageUrl,

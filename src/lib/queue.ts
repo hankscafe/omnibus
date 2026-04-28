@@ -399,7 +399,8 @@ export function initWorker() {
                                 await scanWatchedDir(fullPath);
                             } else {
                                 const ext = path.extname(item.name).toLowerCase();
-                                if (['.cbz', '.cbr', '.zip', '.rar'].includes(ext)) {
+                                // --- FIX: Added .epub to ensure parity with importer.ts ---
+                                if (['.cbz', '.cbr', '.zip', '.rar', '.epub'].includes(ext)) {
                                     filesToProcess.push(fullPath);
                                 }
                             }
@@ -427,7 +428,8 @@ export function initWorker() {
                     for (let filePath of filesToProcess) {
                         const file = path.basename(filePath); // Keep the file name handy for logs and unmatched moves
                         const ext = path.extname(filePath).toLowerCase();
-                        if (!['.cbz', '.cbr', '.zip', '.rar'].includes(ext)) continue;
+                        // --- FIX: Added .epub check here as well ---
+                        if (!['.cbz', '.cbr', '.zip', '.rar', '.epub'].includes(ext)) continue;
 
                         try {
                             if (ext === '.cbr' || ext === '.rar') {

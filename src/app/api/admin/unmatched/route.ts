@@ -1,3 +1,4 @@
+// src/app/api/admin/unmatched/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -40,7 +41,7 @@ export async function GET() {
             if (fs.existsSync(unmatchedDir)) {
                 const files = await fs.promises.readdir(unmatchedDir);
                 for (const file of files) {
-                    if (file.match(/\.(cbz|cbr|zip|rar)$/i)) {
+                    if (file.match(/\.(cbz|cbr|zip|rar|epub)$/i)) {
                         rawFiles.push({
                             id: `raw_${Buffer.from(file).toString('base64')}`, // Safe Mock ID
                             name: file.replace(/\.[^/.]+$/, ""), // Strip extension for search guessing

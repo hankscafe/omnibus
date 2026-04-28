@@ -4,7 +4,8 @@ import { XMLParser } from 'fast-xml-parser';
 import { Logger } from './logger';
 
 export async function parseComicInfo(filePath: string) {
-    if (!filePath.toLowerCase().match(/\.(cbz|zip)$/)) return null;
+    // FIX: Added epub to the allowed ZIP-based extensions
+    if (!filePath.toLowerCase().match(/\.(cbz|zip|epub)$/)) return null;
 
     try {
         const zip = new AdmZip(filePath);
@@ -49,7 +50,7 @@ export async function parseComicInfo(filePath: string) {
             artists: splitList(info.Penciller),
             characters: splitList(info.Characters),
             isManga: (info.Manga === 'Yes' || info.Manga === 'YesAndRightToLeft'),
-            mangaTag: info.Manga ? String(info.Manga).trim() : null, // <-- ADDED
+            mangaTag: info.Manga ? String(info.Manga).trim() : null,
             cvId: cvId,
             cvIssueId: cvIssueId
         };

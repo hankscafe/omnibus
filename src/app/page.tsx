@@ -21,7 +21,8 @@ import {
   UserPlus,
   Flag,
   Rocket,
-  X
+  X,
+  FolderSearch
 } from "lucide-react" 
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
@@ -33,6 +34,7 @@ export default function Home() {
   const [openReportsCount, setOpenReportsCount] = useState(0)
   const [manualDownloadsCount, setManualDownloadsCount] = useState(0)
   const [pendingUsersCount, setPendingUsersCount] = useState(0)
+  const [unmatchedCount, setUnmatchedCount] = useState(0)
   const [updateData, setUpdateData] = useState<{ updateAvailable: boolean, currentVersion: string, latestVersion: string } | null>(null)
   const [showFirstSteps, setShowFirstSteps] = useState(false) 
   const isAdmin = session?.user?.role === 'ADMIN'
@@ -105,6 +107,12 @@ export default function Home() {
           const data = await resUsers.json()
           const pendingUsers = data.filter((u: any) => !u.isApproved)
           setPendingUsersCount(pendingUsers.length)
+        }
+
+        const resUnmatched = await fetch(`/api/admin/unmatched?_t=${timestamp}`, { cache: 'no-store' })
+        if (resUnmatched.ok) {
+          const data = await resUnmatched.json()
+          setUnmatchedCount(data.length || 0)
         }
 
         const resUpdate = await fetch(`/api/admin/update-check?_t=${timestamp}`, { cache: 'no-store' })
@@ -254,6 +262,26 @@ export default function Home() {
                 <Button asChild variant="outline" size="sm" className="border-primary/30 text-primary hover:bg-primary/10 h-8 font-bold">
                   <Link href="/admin">
                     Open Queue <ArrowRight className="ml-2 h-3 w-3" />
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {isAdmin && unmatchedCount > 0 && (
+            <Alert className="bg-purple-50 border-purple-200 dark:bg-purple-950/20 dark:border-purple-900/50 animate-in fade-in slide-in-from-top-4">
+              <FolderSearch className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+              <AlertTitle className="text-purple-800 dark:text-purple-300 font-bold flex items-center gap-2">
+                Unmatched Files Detected
+                <Badge className="bg-purple-500 hover:bg-purple-600 text-white border-none text-[10px] h-5">
+                  {unmatchedCount}
+                </Badge>
+              </AlertTitle>
+              <AlertDescription className="text-purple-700/80 dark:text-purple-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                There are loose files or folders waiting to be matched to ComicVine.
+                <Button asChild variant="outline" size="sm" className="border-purple-300 text-purple-700 hover:bg-purple-100 dark:border-purple-800 dark:text-purple-400 dark:hover:bg-purple-900/40 h-8 font-bold">
+                  <Link href="/admin/smart-match">
+                    Open Smart Matcher <ArrowRight className="ml-2 h-3 w-3" />
                   </Link>
                 </Button>
               </AlertDescription>

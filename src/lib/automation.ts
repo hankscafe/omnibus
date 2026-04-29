@@ -54,6 +54,45 @@ export async function searchAndDownload(requestId: string, name: string, year: s
       }
       
       if (getComicsResults.length > 0) {
+        // --- NEW: Variant / Special Edition Safety Net ---
+            // Strip out parentheses, brackets, and symbols to see if the core titles are actually different
+            const normalizeTitle = (t: string) => {
+                let clean = t.toLowerCase()
+                    .replace(/\(.*?\)/g, '') // Remove (2024)
+                    .replace(/\[.*?\]/g, '') // Remove [Webrip]
+                    .replace(/[^a-z0-9\s]/g, ' ') // Remove punctuation
+                    .replace(/\b(issue|vol|volume|book|ch|chapter|part)\b/g, '') // Remove filler words
+                    .replace(/\s+/g, '') // Remove all spaces
+                    .trim();
+                return clean;
+            };
+            
+            const uniqueTitles = new Set(getComicsResults.map(r => normalizeTitle(r.title)));
+            
+            if (uniqueTitles.size > 1) {
+                Logger.log(`[Automation] Multiple distinct editions found on GetComics for ${name}. Stalling for Admin review.`, 'warn');
+                
+                const currentReq = await prisma.request.findUnique({ 
+                    where: { id: requestId },
+                    include: { user: true }
+                });
+
+                await prisma.request.update({
+                    where: { id: requestId },
+                    data: { status: 'STALLED' }
+                });
+
+                await SystemNotifier.sendAlert('download_failed', {
+                    title: name,
+                    imageUrl: currentReq?.imageUrl,
+                    user: currentReq?.user?.username,
+                    description: `Multiple distinct versions (variants/special editions) were found on GetComics for **${name}**. Please use Interactive Search in the Active Downloads queue to select the correct edition.`,
+                    publisher: publisher,
+                    year: year
+                }).catch(() => {});
+                
+                return;
+            }
         const best = getComicsResults[0];
         const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
         const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();

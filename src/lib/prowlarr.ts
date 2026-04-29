@@ -16,6 +16,10 @@ export const ProwlarrService = {
     const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
     const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => w.length > 0);
 
+    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut'];
+    const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
+    const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanQuery.toLowerCase().includes(k));
+
     let configuredIndexers: { id: number | string }[] = [];
     try {
         configuredIndexers = await prisma.indexer.findMany();
@@ -82,6 +86,15 @@ export const ProwlarrService = {
             const isLookingForOmnibus = significantQueryWords.some(w => tpbTerms.includes(w));
             if (reqNum !== null && !isLookingForOmnibus && tpbTerms.some(term => titleLower.includes(term))) {
                 return false;
+            }
+
+            // --- NEW: Apply Variant Filter ---
+            if (!userWantsVariant) {
+                if (openVariantKeywords.some(k => titleLower.includes(k))) return false;
+                for (const bk of boundedVariantKeywords) {
+                    const regex = new RegExp(`\\b${bk}\\b`, 'i');
+                    if (regex.test(titleLower)) return false;
+                }
             }
 
             // 5. Issue Number Check

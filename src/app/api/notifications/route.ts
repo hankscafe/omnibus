@@ -60,6 +60,28 @@ export async function GET() {
             orderBy: { createdAt: 'desc' }
         });
 
+        const stalledReqs = await prisma.request.findMany({
+            where: { status: 'STALLED' },
+            include: { user: { select: { username: true } } },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const unmatchedSeriesCount = await prisma.series.count({
+            where: { matchState: 'UNMATCHED' }
+        });
+
+        let looseFilesCount = 0;
+        try {
+            const fs = await import('fs');
+            const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+            if (fs.existsSync(unmatchedDir)) {
+                const files = await fs.promises.readdir(unmatchedDir);
+                looseFilesCount = files.filter(f => f.match(/\.(cbz|cbr|zip|rar|epub)$/i)).length;
+            }
+        } catch (e) {}
+
+        const totalUnmatched = unmatchedSeriesCount + looseFilesCount;
+
         formatted = [
             ...formatted,
             ...pendingReqs.map(r => ({
@@ -73,8 +95,28 @@ export async function GET() {
             ...openReports.map(r => ({
                 id: `rep_${r.id}`, type: 'admin_report', title: `Issue Reported: ${r.series?.name}`,
                 description: `Reported by ${r.user?.username}`, imageUrl: null, date: r.createdAt
-            }))
+            })),
+            ...stalledReqs.map(r => ({
+                id: `stalled_${r.id}`, 
+                type: 'admin_stalled', 
+                title: 'Action Required: Variant / Stalled',
+                description: `${r.activeDownloadName || 'A request'} requires manual selection via Interactive Search.`, 
+                imageUrl: r.imageUrl, 
+                date: r.updatedAt
+            })),
         ];
+
+        // Push the unmatched alert if any exist
+        if (totalUnmatched > 0) {
+            formatted.push({
+                id: 'admin_unmatched_alert',
+                type: 'admin_unmatched',
+                title: 'Unmatched Files Detected',
+                description: `There are ${totalUnmatched} loose files/folders waiting in the Smart Matcher.`,
+                imageUrl: null,
+                date: new Date()
+            });
+        }
     }
 
     // Sort all notifications by date descending

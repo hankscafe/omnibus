@@ -95,6 +95,10 @@ export const GetComicsService = {
     const cleanOriginal = originalQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
     const queryWords = cleanOriginal.toLowerCase().split(' ').filter(w => w.trim().length > 0);
 
+    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut'];
+    const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
+    const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanOriginal.toLowerCase().includes(k));
+
     let reqNumMatch = cleanOriginal.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
     if (reqNum === null) {
@@ -124,6 +128,21 @@ export const GetComicsService = {
           if (reqNum !== null && !isLookingForOmnibus) {
               if (tpbTerms.some(term => titleLower.includes(term))) {
                   isRelevant = false;
+              }
+          }
+
+          // --- NEW: Apply Variant Filter ---
+          if (isRelevant && !userWantsVariant) {
+              if (openVariantKeywords.some(k => titleLower.includes(k))) {
+                  isRelevant = false;
+              } else {
+                  for (const bk of boundedVariantKeywords) {
+                      const regex = new RegExp(`\\b${bk}\\b`, 'i');
+                      if (regex.test(titleLower)) {
+                          isRelevant = false;
+                          break;
+                      }
+                  }
               }
           }
 

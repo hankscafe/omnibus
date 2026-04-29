@@ -8,7 +8,8 @@ import { useTheme } from "next-themes"
 import { Button } from "@/components/ui/button"
 import { 
   ShieldAlert, LogOut, User as UserIcon, Sun, Moon, Key, Loader2, 
-  Bell, Image as ImageIcon, Trophy, Wrench, Menu, UserPlus, AlertTriangle
+  Bell, Image as ImageIcon, Trophy, Wrench, Menu, UserPlus, AlertTriangle,
+  FolderSearch, Search
 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -104,6 +105,8 @@ function NotificationBell() {
               else if (n.type === 'admin_req') targetLink = "/admin";
               else if (n.type === 'admin_user') targetLink = "/admin/users";
               else if (n.type === 'admin_report') targetLink = "/admin/reports";
+              else if (n.type === 'admin_unmatched') targetLink = "/admin/smart-match";
+              else if (n.type === 'admin_stalled') targetLink = "/admin";
 
               return (
               <DropdownMenuItem key={`${n.type}-${n.id}`} className="p-0 focus:bg-transparent">
@@ -120,6 +123,14 @@ function NotificationBell() {
                   ) : n.type === 'admin_user' ? (
                       <div className="h-12 w-12 shrink-0 bg-teal-100 dark:bg-teal-900/30 rounded-full shadow-inner overflow-hidden border border-teal-400 dark:border-teal-500/50 flex items-center justify-center">
                         <UserPlus className="h-6 w-6 text-teal-600 dark:text-teal-500" />
+                      </div>
+                  ) : n.type === 'admin_unmatched' ? (
+                      <div className="h-12 w-12 shrink-0 bg-purple-100 dark:bg-purple-900/30 rounded-full shadow-inner overflow-hidden border border-purple-400 dark:border-purple-500/50 flex items-center justify-center">
+                        <FolderSearch className="h-6 w-6 text-purple-600 dark:text-purple-500" />
+                      </div>
+                  ) : n.type === 'admin_stalled' ? (
+                      <div className="h-12 w-12 shrink-0 bg-orange-100 dark:bg-orange-900/30 rounded-full shadow-inner overflow-hidden border border-orange-400 dark:border-orange-500/50 flex items-center justify-center">
+                        <Search className="h-6 w-6 text-orange-600 dark:text-orange-500" />
                       </div>
                   ) : (
                       // Report UI
@@ -149,6 +160,10 @@ function NotificationBell() {
                         <div className="flex items-center gap-1.5"><UserPlus className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-teal-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-teal-600 tracking-widest">Action Required</span></div>
                     ) : n.type === 'admin_req' ? (
                         <div className="flex items-center gap-1.5"><Bell className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-orange-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-orange-600 tracking-widest">Needs Approval</span></div>
+                    ) : n.type === 'admin_unmatched' ? (
+                        <div className="flex items-center gap-1.5"><FolderSearch className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-purple-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-purple-600 tracking-widest">Needs Matching</span></div>
+                    ) : n.type === 'admin_stalled' ? (
+                        <div className="flex items-center gap-1.5"><Search className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-orange-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-orange-600 tracking-widest">Interactive Search</span></div>
                     ) : (
                         <div className="flex items-center gap-1.5"><Wrench className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-red-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-red-600 tracking-widest">{n.type === 'admin_report' ? 'Action Required' : 'Admin Reply'}</span></div>
                     )}

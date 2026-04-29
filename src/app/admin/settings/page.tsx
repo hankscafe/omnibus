@@ -171,6 +171,7 @@ export default function SettingsPage() {
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     show_popular_issues: "true", show_new_releases: "true", // <--- ADDED TOGGLES
     manga_publishers: "", western_publishers: "",
+    discover_manga_filter_mode: "SHOW_ALL", discover_manga_allowed_publishers: "",
     download_retry_delay: "5",
     convert_to_webp: "false", webp_quality: "80", 
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
@@ -1437,6 +1438,7 @@ export default function SettingsPage() {
                 </CardHeader>
                 <CardContent className="space-y-6">
                     
+                    {/* Discover Page Sections */}
                     <div className="flex flex-col space-y-4 bg-muted/30 p-4 rounded-lg border border-border">
                         <Label className="text-base font-bold text-foreground">Discover Page Sections</Label>
                         <div className="flex flex-col gap-3">
@@ -1459,36 +1461,78 @@ export default function SettingsPage() {
                         </div>
                     </div>
 
-                    <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
-                        <Switch 
-                            id="filter-toggle"
-                            checked={config.filter_enabled === "true"} 
-                            onCheckedChange={(c) => setConfig({...config, filter_enabled: c ? "true" : "false"})} 
-                            className="scale-110 sm:scale-100"
-                        />
-                        <Label htmlFor="filter-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable Content Filtering</Label>
-                    </div>
-                    
-                    <div className="space-y-4">
-                        <div className="grid gap-2">
-                            <Label className="text-foreground font-semibold">Blocked Publishers (Comma Separated)</Label>
-                            <textarea 
-                                rows={3}
-                                value={config.filter_publishers || ""} 
-                                onChange={e => setConfig({...config, filter_publishers: e.target.value})} 
-                                placeholder="e.g. fakku, yen press, kodansha" 
-                                className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
-                            />
+                    {/* MANGA DISCOVERY FILTERS */}
+                    <div className="space-y-4 pt-6 border-t border-border mt-6">
+                        <Label className="text-base font-bold text-foreground">Manga Discovery Filters</Label>
+                        <div className="grid gap-4 bg-muted/30 p-4 rounded-lg border border-border">
+                            <div className="space-y-2">
+                                <Label className="text-foreground font-semibold">Manga Visibility</Label>
+                                <Select 
+                                    value={config.discover_manga_filter_mode || "SHOW_ALL"} 
+                                    onValueChange={v => setConfig({...config, discover_manga_filter_mode: v})}
+                                >
+                                    <SelectTrigger className="bg-background border-border h-12 sm:h-10 text-foreground">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                        <SelectContent className="bg-popover border-border">
+                                        <SelectItem value="SHOW_ALL">Show All Manga (Default)</SelectItem>
+                                        <SelectItem value="ALLOWED_ONLY">Only Show Specific Manga Publishers</SelectItem>
+                                        <SelectItem value="HIDE_ALL">Hide All Manga</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+        
+                            {config.discover_manga_filter_mode === "ALLOWED_ONLY" && (
+                                <div className="space-y-2 animate-in fade-in zoom-in-95 mt-2">
+                                    <Label className="text-foreground font-semibold">Allowed Manga Publishers (Comma Separated)</Label>
+                                    <textarea 
+                                        rows={2}
+                                        value={config.discover_manga_allowed_publishers || ""} 
+                                        onChange={e => setConfig({...config, discover_manga_allowed_publishers: e.target.value})} 
+                                        placeholder="e.g. viz media, shueisha, kodansha" 
+                                        className="flex min-h-[60px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm text-foreground border-border"
+                                    />
+                                    <p className="text-[10px] text-muted-foreground">Only manga from these publishers will be allowed on the Discover page. All other manga will be hidden.</p>
+                                </div>
+                            )}
                         </div>
-                        <div className="grid gap-2">
-                            <Label className="text-foreground font-semibold">Blocked Keywords in Titles (Comma Separated)</Label>
-                            <textarea 
-                                rows={3}
-                                value={config.filter_keywords || ""} 
-                                onChange={e => setConfig({...config, filter_keywords: e.target.value})} 
-                                placeholder="e.g. manga, hentai, weekly shonen" 
-                                className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
+                    </div>
+
+                    {/* CONTENT FILTERING */}
+                    <div className="space-y-4 pt-6 border-t border-border mt-6">
+                        <Label className="text-base font-bold text-foreground">Content Filtering</Label>
+                        
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-4">
+                            <Switch 
+                                id="filter-toggle"
+                                checked={config.filter_enabled === "true"} 
+                                onCheckedChange={(c) => setConfig({...config, filter_enabled: c ? "true" : "false"})} 
+                                className="scale-110 sm:scale-100"
                             />
+                            <Label htmlFor="filter-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable Content Filtering</Label>
+                        </div>
+                        
+                        <div className="space-y-4 mt-4">
+                            <div className="grid gap-2">
+                                <Label className="text-foreground font-semibold">Blocked Publishers (Comma Separated)</Label>
+                                <textarea 
+                                    rows={3}
+                                    value={config.filter_publishers || ""} 
+                                    onChange={e => setConfig({...config, filter_publishers: e.target.value})} 
+                                    placeholder="e.g. fakku, yen press, kodansha" 
+                                    className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
+                                />
+                            </div>
+                            <div className="grid gap-2">
+                                <Label className="text-foreground font-semibold">Blocked Keywords in Titles (Comma Separated)</Label>
+                                <textarea 
+                                    rows={3}
+                                    value={config.filter_keywords || ""} 
+                                    onChange={e => setConfig({...config, filter_keywords: e.target.value})} 
+                                    placeholder="e.g. manga, hentai, weekly shonen" 
+                                    className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
+                                />
+                            </div>
                         </div>
                     </div>
 

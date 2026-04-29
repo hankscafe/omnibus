@@ -1163,6 +1163,7 @@ export function initWorker() {
                 }
 
                 case 'DISCOVER_SYNC': {
+                    const startTime = Date.now();
                     await prisma.systemSetting.upsert({ where: { key: 'last_popular_sync' }, update: { value: nowStr }, create: { key: 'last_popular_sync', value: nowStr } });
                     
                     const allSettings = await prisma.systemSetting.findMany();
@@ -1175,12 +1176,51 @@ export function initWorker() {
                     const blockedPublishers = config.filter_publishers ? config.filter_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
                     const blockedKeywords = config.filter_keywords ? config.filter_keywords.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
 
+                    // Manga Filters
+                    const mangaFilterMode = config.discover_manga_filter_mode || "SHOW_ALL";
+                    const allowedMangaPubs = config.discover_manga_allowed_publishers ? config.discover_manga_allowed_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
+                    
+                    // Expanded dictionary of Japanese publishers
+                    const DEFAULT_MANGA_PUBLISHERS = [
+                        "viz media", "kodansha", "yen press", "seven seas", "shueisha", 
+                        "shogakukan", "tokyopop", "dark horse manga", "vertical", 
+                        "ghost ship", "denpa", "fakku", "j-novel club", "sublime", 
+                        "kuma", "ize press", "square enix", "hakusensha", "lezhin",
+                        "suiseisha", "nihon bungeisha", "takeshobo", "futabasha", "kadokawa", "akita shoten"
+                    ];
+                    const mangaPublishersList = config.manga_publishers ? config.manga_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : DEFAULT_MANGA_PUBLISHERS;
+
                     const isValid = (item: any) => {
-                        if (!filterEnabled) return true;
-                        const pubName = (item.volume?.publisher?.name || '').toLowerCase();
-                        const volName = (item.volume?.name || '').toLowerCase();
-                        if (blockedPublishers.some((bp: string) => pubName.includes(bp))) return false;
-                        if (blockedKeywords.some((bk: string) => volName.includes(bk))) return false;
+                        const pubName = (item.volume?.publisher?.name || '').toLowerCase().trim();
+                        const volName = (item.volume?.name || '').toLowerCase().trim();
+                        const concepts = item.volume?.concepts || [];
+
+                        // 1. NSFW / Standard Filtering
+                        if (filterEnabled) {
+                            if (blockedPublishers.length > 0 && blockedPublishers.some((bp: string) => pubName.includes(bp))) return false;
+                            if (blockedKeywords.length > 0 && blockedKeywords.some((bk: string) => volName.includes(bk))) return false;
+                        }
+
+                        // 2. Manga Detection
+                        const isMangaPublisher = mangaPublishersList.some((mp: string) => pubName.includes(mp));
+                        const hasMangaConcept = concepts.some((c: any) => ['manga', 'shonen', 'seinen', 'shojo', 'josei', 'manhwa', 'manhua', 'webtoon'].includes((c.name || '').toLowerCase()));
+                        
+                        const isManga = isMangaPublisher || hasMangaConcept;
+                        
+                        if (isManga) {
+                            if (mangaFilterMode === "HIDE_ALL") {
+                                Logger.log(`[Discover Sync] Filtered out Manga: ${volName}`, 'info');
+                                return false;
+                            }
+                            if (mangaFilterMode === "ALLOWED_ONLY") {
+                                const isAllowed = allowedMangaPubs.length > 0 && allowedMangaPubs.some((amp: string) => pubName.includes(amp) || volName.includes(amp));
+                                if (!isAllowed) {
+                                    Logger.log(`[Discover Sync] Filtered out unallowed Manga: ${volName}`, 'info');
+                                    return false;
+                                }
+                            }
+                        }
+
                         return true;
                     };
 
@@ -1215,7 +1255,9 @@ export function initWorker() {
                     const fetchCategory = async (sort: string) => {
                         let validItems: any[] = [];
                         let offset = 0;
-                        while (validItems.length < 112) { 
+                        let apiCallsMade = 0;
+
+                        while (validItems.length < 112 && apiCallsMade < 15) { 
                             const response = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
                                 params: {
                                     api_key: CV_API_KEY, format: 'json', limit: 100, offset: offset, sort: sort,
@@ -1223,10 +1265,53 @@ export function initWorker() {
                                 },
                                 headers: { 'User-Agent': 'Omnibus/1.0' }
                             });
+                            apiCallsMade++;
+
                             const items = response.data.results || [];
                             if (items.length === 0) break;
+                            offset += 100;
+
+                            // Bulk Fetch Publishers & Concepts
+                            const volIds = [...new Set(items.map((i: any) => i.volume?.id).filter(Boolean))];
+                            let volumesMap: Record<number, any> = {};
+
+                            if (volIds.length > 0) {
+                                try {
+                                    const chunkedIds = [];
+                                    for (let i = 0; i < volIds.length; i += 50) {
+                                        chunkedIds.push(volIds.slice(i, i + 50));
+                                    }
+
+                                    for (const chunk of chunkedIds) {
+                                        const volIdString = chunk.join('|');
+                                        const volResponse = await axios.get(`https://comicvine.gamespot.com/api/volumes/`, {
+                                            params: {
+                                                api_key: CV_API_KEY, format: 'json', filter: `id:${volIdString}`,
+                                                field_list: 'id,publisher,concepts'
+                                            },
+                                            headers: { 'User-Agent': 'Omnibus/1.0' }
+                                        });
+                                        apiCallsMade++;
+                                        
+                                        if (volResponse.data?.results) {
+                                            const resultsArray = Array.isArray(volResponse.data.results) ? volResponse.data.results : [volResponse.data.results];
+                                            resultsArray.forEach((v: any) => {
+                                                volumesMap[v.id] = v;
+                                            });
+                                        }
+                                        await new Promise(r => setTimeout(r, 500)); 
+                                    }
+                                } catch (err) {
+                                    Logger.log(`[Discover Sync] Failed to fetch volume data chunk. Rate limit possible.`, 'warn');
+                                }
+                            }
+
                             for (const item of items) {
-                                offset++; 
+                                if (item.volume && volumesMap[item.volume.id]) {
+                                    item.volume.publisher = volumesMap[item.volume.id].publisher;
+                                    item.volume.concepts = volumesMap[item.volume.id].concepts;
+                                }
+
                                 if (isValid(item)) validItems.push(formatItem(item));
                                 if (validItems.length === 112) break;
                             }
@@ -1246,7 +1331,7 @@ export function initWorker() {
                     ]);
 
                     await prisma.jobLog.create({
-                        data: { jobType: 'DISCOVER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}` }
+                        data: { jobType: 'DISCOVER_SYNC', status: 'COMPLETED', durationMs: Date.now() - startTime, message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}. Manga Mode: ${mangaFilterMode}` }
                     });
                     SystemNotifier.sendAlert('job_discover_sync', { description: `Successfully rebuilt the Discover cache (New & Popular).` }).catch(() => {});
                     break;

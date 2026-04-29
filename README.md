@@ -128,7 +128,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 A meticulously organized, highly performant view of your physical files, built to handle massive, multi-terabyte collections smoothly.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/library.png?raw=true" width="500" alt="Library page" />
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/library_page.png?raw=true" width="500" alt="Library page" />
   <br>
   <strong>The library page which features infinite scrolling.</strong>
 </p>

@@ -16,12 +16,14 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
     BookOpen, Trash2, Plus, GripVertical, Loader2, Image as ImageIcon, 
     ArrowLeft, ListOrdered, Calendar, Minus, FolderOpen, CloudDownload,
-    Check, DownloadCloud, Sparkles, Globe, ExternalLink, Share2
+    Check, DownloadCloud, Sparkles, Globe, ExternalLink, Share2, Info
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 function ReadingListsContent() {
   const { data: session } = useSession()
@@ -43,7 +45,8 @@ function ReadingListsContent() {
 
   // Auto-Build Modal
   const [autoBuildModalOpen, setAutoBuildModalOpen] = useState(false)
-  const [cvEventId, setCvEventId] = useState("")
+  const [eventId, setEventId] = useState("")
+  const [eventSource, setEventSource] = useState("COMICVINE")
   const [autoBuildGlobal, setAutoBuildGlobal] = useState(false) 
   const [isAutoBuilding, setIsAutoBuilding] = useState(false)
 
@@ -68,6 +71,55 @@ function ReadingListsContent() {
   const [malRequestMissing, setMalRequestMissing] = useState(false);
   const [isImportingMal, setIsImportingMal] = useState(false);
 
+  // CBL Import Modal
+  const [cblModalOpen, setCblModalOpen] = useState(false)
+  const [cblFile, setCblFile] = useState<File | null>(null)
+  const [cblUrl, setCblUrl] = useState("")
+  const [cblListName, setCblListName] = useState("")
+  const [cblIsGlobal, setCblIsGlobal] = useState(false)
+  const [isImportingCbl, setIsImportingCbl] = useState(false)
+
+  // Auto-Extract Name from CBL URL
+  useEffect(() => {
+      if (!cblUrl || !cblUrl.startsWith('http')) return;
+      const fetchCblName = async () => {
+          try {
+              const res = await fetch(cblUrl);
+              if (res.ok) {
+                  const text = await res.text();
+                  const parser = new DOMParser();
+                  const xmlDoc = parser.parseFromString(text, "text/xml");
+                  const nameNode = xmlDoc.getElementsByTagName("Name")[0];
+                  if (nameNode && nameNode.textContent) {
+                      setCblListName(nameNode.textContent.trim());
+                  }
+              }
+          } catch (e) {} 
+      };
+      const timer = setTimeout(fetchCblName, 600); 
+      return () => clearTimeout(timer);
+  }, [cblUrl]);
+
+  // Auto-Extract Name from Local CBL File
+  useEffect(() => {
+      if (!cblFile) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+          try {
+              const text = e.target?.result as string;
+              if (text) {
+                  const parser = new DOMParser();
+                  const xmlDoc = parser.parseFromString(text, "text/xml");
+                  const nameNode = xmlDoc.getElementsByTagName("Name")[0];
+                  if (nameNode && nameNode.textContent) {
+                      setCblListName(nameNode.textContent.trim());
+                  }
+              }
+          } catch (err) {}
+      };
+      reader.readAsText(cblFile);
+  }, [cblFile]);
+
   // Deletion Modal
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -77,14 +129,12 @@ function ReadingListsContent() {
   const [requestedIds, setRequestedIds] = useState<Set<string>>(new Set())
   const [isBulkDownloading, setIsBulkDownloading] = useState(false)
 
-  // Fix for Next.js hydration mismatch
   const [isMounted, setIsMounted] = useState(false)
 
   useEffect(() => {
     setIsMounted(true)
     fetchLists(paramId)
 
-    // Restore requested state from storage
     const savedRequests = localStorage.getItem('omnibus_requested_issues');
     if (savedRequests) {
         try { setRequestedIds(new Set(JSON.parse(savedRequests))); } catch (e) {}
@@ -137,19 +187,19 @@ function ReadingListsContent() {
   }
 
   const handleAutoBuild = async () => {
-      if (!cvEventId.trim()) return;
+      if (!eventId.trim()) return;
       setIsAutoBuilding(true);
       try {
           const res = await fetch('/api/reading-lists/auto-build', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ cvEventId: parseInt(cvEventId), isGlobal: autoBuildGlobal })
+              body: JSON.stringify({ eventId: parseInt(eventId), eventSource, isGlobal: autoBuildGlobal })
           });
           const data = await res.json();
           if (res.ok) {
               toast({ title: "Event Auto-Built!", description: data.message });
               setAutoBuildModalOpen(false);
-              setCvEventId("");
+              setEventId("");
               setAutoBuildGlobal(false);
               fetchLists(data.listId);
           } else {
@@ -160,6 +210,11 @@ function ReadingListsContent() {
       } finally {
           setIsAutoBuilding(false);
       }
+  }
+
+  const handleQuickLoad = (id: string, source: string) => {
+      setEventSource(source);
+      setEventId(id);
   }
 
   const handleCsvImport = async () => {
@@ -192,6 +247,41 @@ function ReadingListsContent() {
           toast({ title: "Import Failed", description: e.message, variant: "destructive" });
       } finally {
           setIsImportingCsv(false);
+      }
+  }
+
+  const handleCblImport = async () => {
+      if ((!cblFile && !cblUrl.trim()) || !cblListName.trim()) return;
+      setIsImportingCbl(true);
+      
+      const formData = new FormData();
+      if (cblFile) formData.append('file', cblFile);
+      if (cblUrl.trim()) formData.append('url', cblUrl.trim());
+      formData.append('name', cblListName);
+      formData.append('isGlobal', cblIsGlobal.toString());
+
+      try {
+          const res = await fetch('/api/reading-lists/import-cbl', {
+              method: 'POST',
+              body: formData
+          });
+          const data = await res.json();
+          
+          if (res.ok) {
+              toast({ title: "CBL Import Complete!", description: data.message });
+              setCblModalOpen(false);
+              setCblFile(null);
+              setCblUrl("");
+              setCblListName("");
+              setCblIsGlobal(false);
+              fetchLists(data.listId);
+          } else {
+              throw new Error(data.error);
+          }
+      } catch (e: any) {
+          toast({ title: "Import Failed", description: e.message, variant: "destructive" });
+      } finally {
+          setIsImportingCbl(false);
       }
   }
 
@@ -263,7 +353,7 @@ function ReadingListsContent() {
             const url = `${window.location.origin}/reading-lists/shared/${data.shareId}`;
             navigator.clipboard.writeText(url);
             toast({ title: "Link Copied!", description: "Share link copied to clipboard." });
-            fetchLists(listId); // Refresh to get the new shareId
+            fetchLists(listId); 
         } else {
             throw new Error(data.error);
         }
@@ -305,23 +395,23 @@ function ReadingListsContent() {
   }
 
   const handleRequestMissing = async (item: any, coverUrl: string | null = null) => {
-      if (!item.cvIssueId) return false;
       setRequestingIds(prev => new Set(prev).add(item.id));
       
       try {
           let volumeId = 0;
           let year = new Date().getFullYear().toString();
           
-          try {
-              const lookupRes = await fetch(`/api/reading-lists/lookup-volume?issueId=${item.cvIssueId}`);
-              if (lookupRes.ok) {
-                  const data = await lookupRes.json();
-                  if (data.volumeId) volumeId = data.volumeId;
-                  if (data.year) year = data.year;
-              }
-          } catch (e) { Logger.log(`Lookup failed: ${getErrorMessage(e)}`, 'error'); }
+          if (item.cvIssueId) {
+              try {
+                  const lookupRes = await fetch(`/api/reading-lists/lookup-volume?issueId=${item.cvIssueId}`);
+                  if (lookupRes.ok) {
+                      const data = await lookupRes.json();
+                      if (data.volumeId) volumeId = data.volumeId;
+                      if (data.year) year = data.year;
+                  }
+              } catch (e) { Logger.log(`Lookup failed: ${getErrorMessage(e)}`, 'error'); }
+          }
 
-          // NEW: Safely extract the exact issue number from the auto-generated title
           let extractedIssueNumber = "1";
           const match = item.title.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
           if (match) {
@@ -334,11 +424,11 @@ function ReadingListsContent() {
               body: JSON.stringify({
                   type: 'issue',
                   cvId: volumeId,
-                  name: item.title, // Keep the full title (with subtitle) 
+                  name: item.title, 
                   year: year,
                   publisher: "Unknown",
                   image: coverUrl,
-                  issueNumber: extractedIssueNumber // Pass explicit number back to fix mapping!
+                  issueNumber: extractedIssueNumber 
               })
           });
 
@@ -458,6 +548,9 @@ function ReadingListsContent() {
                   <Button className="w-full font-bold shadow-md bg-primary hover:bg-primary/90 text-primary-foreground border-0" onClick={() => setAutoBuildModalOpen(true)}>
                       <Sparkles className="w-4 h-4 mr-2" /> Auto-Build Story Arc
                   </Button>
+                  <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => setCblModalOpen(true)}>
+                      <DownloadCloud className="w-4 h-4 mr-2" /> Import from .CBL
+                  </Button>
                   <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => setCsvModalOpen(true)}>
                       <DownloadCloud className="w-4 h-4 mr-2" /> Import from CSV
                   </Button>
@@ -472,11 +565,22 @@ function ReadingListsContent() {
                   <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => setCreateModalOpen(true)}>
                       <Plus className="w-4 h-4 mr-2" /> Create Empty List
                   </Button>
-                  <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" asChild>
-                      <a href="https://comicvine.gamespot.com/story-arcs/" target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="w-4 h-4 mr-2" /> Lookup Arc IDs
-                      </a>
-                  </Button>
+                  
+                  <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                          <Button variant="outline" className="w-full font-bold shadow-sm border-primary/30 text-primary bg-primary/5 hover:bg-primary/10">
+                              <ExternalLink className="w-4 h-4 mr-2" /> Lookup Arc IDs
+                          </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-full sm:w-[260px] bg-popover border-border z-[100]">
+                          <DropdownMenuItem asChild className="cursor-pointer hover:bg-muted">
+                              <a href="https://comicvine.gamespot.com/story-arcs/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">ComicVine Story Arcs</a>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem asChild className="cursor-pointer hover:bg-muted">
+                              <a href="https://metron.cloud/arc/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">Metron.Cloud Story Arcs</a>
+                          </DropdownMenuItem>
+                      </DropdownMenuContent>
+                  </DropdownMenu>
               </div>
 
               <Card className="shadow-sm border-border bg-background">
@@ -572,7 +676,7 @@ function ReadingListsContent() {
                                       {activeList.items.map((item: any, index: number) => {
                                           const issue = item.issue;
                                           const series = issue?.series;
-                                          const coverUrl = activeList.coverUrl || issue?.coverUrl || (series?.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : null);
+                                          const coverUrl = activeList.coverUrl || issue?.coverUrl || (series?.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '/api/library/cover?path=missing');
 
                                           if (!issue) {
                                               const isRequesting = requestingIds.has(item.id);
@@ -591,7 +695,7 @@ function ReadingListsContent() {
                                                               </div>
                                                               
                                                               <div className="w-12 h-16 shrink-0 rounded overflow-hidden bg-muted border border-border flex items-center justify-center grayscale">
-                                                                  {coverUrl ? <img src={coverUrl} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-5 h-5 text-muted-foreground/50" />}
+                                                                  <img src={coverUrl} className="w-full h-full object-cover" alt="" />
                                                               </div>
 
                                                               <div className="flex-1 min-w-0">
@@ -608,7 +712,7 @@ function ReadingListsContent() {
                                                                           <Check className="w-3.5 h-3.5 mr-1"/> Requested
                                                                       </Button>
                                                                   ) : (
-                                                                      <Button size="sm" variant="outline" className="h-8 font-bold text-[10px] uppercase tracking-wider border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => handleRequestMissing(item, coverUrl)} disabled={isRequesting}>
+                                                                      <Button size="sm" variant="outline" className="h-8 font-bold text-[10px] uppercase tracking-wider border-primary/30 text-primary bg-primary/5 hover:bg-primary/10" onClick={() => handleRequestMissing(item)} disabled={isRequesting}>
                                                                           {isRequesting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1"/> : <CloudDownload className="w-3.5 h-3.5 mr-1"/>} Request
                                                                       </Button>
                                                                   )}
@@ -632,7 +736,7 @@ function ReadingListsContent() {
                                                           </div>
                                                           
                                                           <div className="w-12 h-16 shrink-0 rounded overflow-hidden bg-muted border border-border flex items-center justify-center">
-                                                              {coverUrl ? <img src={coverUrl} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-5 h-5 text-muted-foreground/50" />}
+                                                              <img src={coverUrl} className="w-full h-full object-cover" alt="" />
                                                           </div>
 
                                                           <div className="flex-1 min-w-0">
@@ -716,20 +820,38 @@ function ReadingListsContent() {
                     <Sparkles className="w-5 h-5" /> Auto-Build Story Arc
                 </DialogTitle>
                 <DialogDescription>
-                    Omnibus will scrape ComicVine, build the entire official reading order, and map your downloaded files directly into the list!
+                    Omnibus will scrape ComicVine or Metron, build the entire official reading order, and map your downloaded files directly into the list!
                 </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                    <Label className="font-bold">ComicVine Story Arc ID</Label>
-                    <Input 
-                        placeholder="e.g. 40615" 
-                        value={cvEventId} 
-                        onChange={e => setCvEventId(e.target.value)} 
-                        className="bg-background border-border font-mono text-lg" 
-                    />
-                    <p className="text-[11px] text-muted-foreground">Find the ID in the URL of the event on ComicVine (e.g. /marvel-civil-war/4045-<b>40615</b>/)</p>
+                <div className="flex gap-4">
+                    <div className="space-y-2 flex-1">
+                        <Label className="font-bold">Source</Label>
+                        <Select value={eventSource} onValueChange={setEventSource}>
+                            <SelectTrigger className="bg-background border-border text-lg h-12">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                <SelectItem value="COMICVINE">ComicVine</SelectItem>
+                                <SelectItem value="METRON">Metron.Cloud</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="space-y-2 flex-1">
+                        <Label className="font-bold">Story Arc ID</Label>
+                        <Input 
+                            placeholder={eventSource === 'COMICVINE' ? "e.g. 40615" : "e.g. 52"} 
+                            value={eventId} 
+                            onChange={e => setEventId(e.target.value)} 
+                            className="bg-background border-border font-mono text-lg h-12" 
+                        />
+                    </div>
                 </div>
+                <p className="text-[11px] text-muted-foreground mt-[-4px]">
+                    {eventSource === 'COMICVINE' 
+                        ? "Find the ID in the URL of the event on ComicVine (e.g. /marvel-civil-war/4045-40615/)"
+                        : "Find the ID in the URL of the event on Metron.Cloud (e.g. /arc/52/)"}
+                </p>
 
                 {isAdmin && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
@@ -744,18 +866,19 @@ function ReadingListsContent() {
                 <div className="space-y-2 mt-4 pt-4 border-t border-border">
                     <Label className="text-xs uppercase tracking-widest text-muted-foreground font-black">Quick Load Popular Story Arcs</Label>
                     <div className="flex flex-wrap gap-2">
-                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => setCvEventId("40615")}>Marvel Civil War</Badge>
-                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => setCvEventId("40978")}>Secret Wars (1984)</Badge>
-                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => setCvEventId("42711")}>Infinity Gauntlet</Badge>
-                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => setCvEventId("56053")}>Flashpoint</Badge>
-                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => setCvEventId("56681")}>Avengers vs X-Men</Badge>
-                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => setCvEventId("40411")}>Crisis on Infinite Earths</Badge>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => handleQuickLoad("40615", "COMICVINE")}>Civil War [CV]</Badge>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => handleQuickLoad("56681", "COMICVINE")}>Avengers vs X-Men [CV]</Badge>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => handleQuickLoad("40978", "COMICVINE")}>Secret Wars [CV]</Badge>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => handleQuickLoad("56053", "COMICVINE")}>Flashpoint [CV]</Badge>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => handleQuickLoad("42711", "COMICVINE")}>Infinity Gauntlet [CV]</Badge>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => handleQuickLoad("52", "METRON")}>Death of the Family [Metron]</Badge>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-muted border-border text-foreground" onClick={() => handleQuickLoad("31", "METRON")}>Absolute Carnage [Metron]</Badge>
                     </div>
                 </div>
             </div>
             <DialogFooter>
                 <Button variant="outline" onClick={() => setAutoBuildModalOpen(false)} className="border-border hover:bg-muted">Cancel</Button>
-                <Button onClick={handleAutoBuild} disabled={isAutoBuilding || !cvEventId.trim()} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                <Button onClick={handleAutoBuild} disabled={isAutoBuilding || !eventId.trim()} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
                     {isAutoBuilding ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Build List"}
                 </Button>
             </DialogFooter>
@@ -790,7 +913,7 @@ function ReadingListsContent() {
                         type="file" 
                         accept=".csv" 
                         onChange={e => setCsvFile(e.target.files?.[0] || null)} 
-                        className="bg-muted/50 border-border cursor-pointer file:text-foreground file:font-bold file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-primary/10 file:text-primary hover:file:bg-primary/20" 
+                        className="h-12 sm:h-10 pt-[9px] sm:pt-[5px] text-muted-foreground bg-muted/50 border-border cursor-pointer file:text-foreground file:font-bold file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-primary/10 file:text-primary hover:file:bg-primary/20" 
                     />
                 </div>
 
@@ -808,6 +931,97 @@ function ReadingListsContent() {
                 <Button variant="outline" onClick={() => setCsvModalOpen(false)} disabled={isImportingCsv} className="border-border hover:bg-muted">Cancel</Button>
                 <Button onClick={handleCsvImport} disabled={isImportingCsv || !csvFile || !csvListName.trim()} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
                     {isImportingCsv ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Import CSV"}
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* CBL IMPORT MODAL */}
+      <Dialog open={cblModalOpen} onOpenChange={setCblModalOpen}>
+        <DialogContent className="sm:max-w-[450px] bg-background border-border rounded-xl">
+            <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-primary">
+                    <DownloadCloud className="w-5 h-5" /> Import .CBL File
+                </DialogTitle>
+                <DialogDescription>
+                    Import a ComicRack (.cbl) file. You can upload a file directly or paste a raw GitHub URL.
+                </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+                
+                {/* --- Community Repo Link --- */}
+                <div className="bg-muted/30 border border-border p-3 rounded-lg flex flex-col gap-2">
+                    <div className="flex items-start gap-2">
+                        <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                        <div className="flex flex-col">
+                            <span className="text-xs font-bold text-foreground">Need help finding lists?</span>
+                            <span className="text-[11px] text-muted-foreground mt-0.5 leading-snug">Browse the community-maintained repository for hundreds of curated reading orders.</span>
+                        </div>
+                    </div>
+                    <Button variant="outline" size="sm" asChild className="h-8 w-full border-border bg-background hover:bg-muted text-foreground text-xs font-bold shadow-sm mt-1">
+                        <a href="https://github.com/DieselTech/CBL-ReadingLists" target="_blank" rel="noopener noreferrer">
+                            Browse Community Repository <ExternalLink className="w-3 h-3 ml-1.5" />
+                        </a>
+                    </Button>
+                </div>
+
+                <div className="grid gap-2">
+                    <Label className="font-bold">Reading List Name</Label>
+                    <Input 
+                        placeholder="e.g. Dawn of X Reading Order" 
+                        value={cblListName} 
+                        onChange={e => setCblListName(e.target.value)} 
+                        className="bg-background border-border" 
+                    />
+                </div>
+
+                <div className="relative my-2">
+                    <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
+                    <div className="relative flex justify-center text-xs uppercase"><span className="bg-background px-2 text-muted-foreground">Select Source</span></div>
+                </div>
+                
+                <div className="grid gap-2">
+                    <Label className="font-bold">Raw GitHub URL</Label>
+                    <Input 
+                        placeholder="https://raw.githubusercontent.com/..." 
+                        value={cblUrl} 
+                        onChange={e => {
+                            setCblUrl(e.target.value);
+                            setCblFile(null); 
+                        }} 
+                        className="bg-background border-border" 
+                    />
+                </div>
+
+                <div className="text-center text-xs font-bold text-muted-foreground uppercase">- OR -</div>
+
+                <div className="grid gap-2">
+                    <Label className="font-bold">Upload Local .CBL File</Label>
+                    <Input 
+                        type="file" 
+                        accept=".cbl,.xml" 
+                        onChange={e => {
+                            setCblFile(e.target.files?.[0] || null);
+                            setCblUrl(""); 
+                        }} 
+                        className="h-12 sm:h-10 pt-[9px] sm:pt-[5px] text-muted-foreground bg-muted/50 border-border cursor-pointer file:text-foreground file:font-bold file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-primary/10 file:text-primary hover:file:bg-primary/20" 
+                    />
+                </div>
+
+                {isAdmin && (
+                    <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                        <Switch id="cbl-global-toggle" checked={cblIsGlobal} onCheckedChange={setCblIsGlobal} />
+                        <div className="grid gap-0.5">
+                            <Label htmlFor="cbl-global-toggle" className="font-bold cursor-pointer">Make list public</Label>
+                            <p className="text-[10px] text-muted-foreground">This reading order will be available to all users.</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+            <DialogFooter>
+                <Button variant="outline" onClick={() => setCblModalOpen(false)} disabled={isImportingCbl} className="border-border hover:bg-muted">Cancel</Button>
+                <Button onClick={handleCblImport} disabled={isImportingCbl || (!cblFile && !cblUrl.trim()) || !cblListName.trim()} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                    {isImportingCbl ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : "Import CBL"}
                 </Button>
             </DialogFooter>
         </DialogContent>
@@ -910,7 +1124,6 @@ function ReadingListsContent() {
   )
 }
 
-// Add this at the absolute bottom
 export default function ReadingListsPage() {
   return (
     <Suspense fallback={<div className="p-10 text-center text-muted-foreground">Loading...</div>}>

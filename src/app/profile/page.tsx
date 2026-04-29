@@ -93,7 +93,7 @@ function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (stat
 
   return (
     <div className="p-4 flex flex-col sm:flex-row gap-4 hover:bg-muted/50 transition-colors">
-        <div className="w-24 h-36 sm:w-28 sm:h-40 bg-muted rounded shadow-sm border overflow-hidden shrink-0">
+        <div className="w-24 h-36 sm:w-28 sm:h-40 bg-muted rounded shadow-sm border border-border overflow-hidden shrink-0">
             {req.imageUrl ? <img src={req.imageUrl} className="w-full h-full object-cover" alt="" /> : null}
         </div>
         <div className="min-w-0 flex-1 flex flex-col justify-between">
@@ -106,7 +106,7 @@ function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (stat
                     <Info className="w-3 h-3 mr-1" /> {showDesc ? "Hide Synopsis" : "Read Synopsis"}
                 </Button>
                 {showDesc && (
-                    <div className="text-xs text-muted-foreground leading-relaxed bg-muted/80 p-3 rounded border mt-1 animate-in fade-in slide-in-from-top-1">
+                    <div className="text-xs text-muted-foreground leading-relaxed bg-muted/80 p-3 rounded border border-border mt-1 animate-in fade-in slide-in-from-top-1">
                         {loadingDesc ? <Loader2 className="w-3 h-3 animate-spin" /> : desc}
                     </div>
                 )}
@@ -319,12 +319,21 @@ export default function ProfilePage() {
       if (!analytics?.heatmap) return null;
       
       const today = new Date();
+      // Force time to noon local time to avoid any Daylight Saving Time midnight skips!
+      today.setHours(12, 0, 0, 0);
+      
       const days = [];
       // Generate the last 180 days
       for (let i = 180; i >= 0; i--) {
           const d = new Date(today);
           d.setDate(d.getDate() - i);
-          const dateStr = d.toISOString().split('T')[0];
+          
+          // Format to YYYY-MM-DD strictly using local time
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          const dateStr = `${year}-${month}-${day}`;
+          
           const pagesRead = analytics.heatmap[dateStr] || 0;
           
           let colorClass = "bg-muted/50 border-border"; 

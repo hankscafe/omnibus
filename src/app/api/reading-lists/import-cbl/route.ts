@@ -1,10 +1,11 @@
-// src/app/api/reading-lists/import-csv/route.ts
+// src/app/api/reading-lists/import-cbl/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { XMLParser } from 'fast-xml-parser';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,47 +19,58 @@ export async function POST(request: Request) {
     try {
         const formData = await request.formData();
         const file = formData.get('file') as File;
+        const url = formData.get('url') as string;
         const listName = formData.get('name') as string;
         const isGlobal = formData.get('isGlobal') === 'true';
 
-        if (!file || !listName) {
-            return NextResponse.json({ error: "File and List Name are required." }, { status: 400 });
+        if (!listName || (!file && !url)) {
+            return NextResponse.json({ error: "List Name and either a File or URL are required." }, { status: 400 });
         }
 
-        const fileContent = await file.text();
-        const rows = fileContent.split(/\r?\n/);
-        if (rows.length < 2) return NextResponse.json({ error: "CSV file appears to be empty." }, { status: 400 });
+        let xmlContent = "";
 
-        const parseRow = (row: string) => {
-            const matches = row.match(/(\\.|[^",]+|"(?:\\.|[^"])*")/g) || [];
-            return matches.map(m => m.replace(/^"|"$/g, '').trim());
-        };
-
-        const headers = parseRow(rows[0]).map(h => h.toLowerCase());
-        
-        const seriesIdx = headers.findIndex(h => h === 'series' || h === 'title');
-        const issueIdx = headers.findIndex(h => h === 'issue' || h === 'number' || h === 'issue number');
-        
-        if (seriesIdx === -1) {
-            return NextResponse.json({ error: "Could not find a 'Series' or 'Title' column in the CSV." }, { status: 400 });
+        if (file) {
+            xmlContent = await file.text();
+        } else if (url) {
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                xmlContent = await res.text();
+            } catch (e) {
+                return NextResponse.json({ error: "Failed to download CBL from the provided URL." }, { status: 400 });
+            }
         }
+
+        if (!xmlContent) return NextResponse.json({ error: "CBL file is empty or unreadable." }, { status: 400 });
+
+        const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
+        let parsed: any;
+        try {
+            parsed = parser.parse(xmlContent);
+        } catch (e) {
+            return NextResponse.json({ error: "Invalid XML format." }, { status: 400 });
+        }
+
+        if (!parsed?.ReadingList?.Books?.Book) {
+            return NextResponse.json({ error: "Could not find any books in this CBL file." }, { status: 400 });
+        }
+
+        let rawBooks = parsed.ReadingList.Books.Book;
+        if (!Array.isArray(rawBooks)) rawBooks = [rawBooks];
 
         // --- ADDED: Fetch coverUrl and folderPath ---
         const allSeries = await prisma.series.findMany({ select: { id: true, name: true, coverUrl: true, folderPath: true } });
         const allIssues = await prisma.issue.findMany({ select: { id: true, seriesId: true, number: true } });
 
-        const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normalize = (str: string) => str ? str.toLowerCase().replace(/[^a-z0-9]/g, '') : "";
 
         const itemsToLink: { issueId: string | null, title: string }[] = [];
         let missingCount = 0;
         let listCoverUrl: string | null = null; // <-- NEW: Hold the list cover
 
-        for (let i = 1; i < rows.length; i++) {
-            if (!rows[i].trim()) continue;
-            
-            const cols = parseRow(rows[i]);
-            const seriesName = cols[seriesIdx];
-            const issueNum = issueIdx !== -1 ? cols[issueIdx] : "1";
+        for (const book of rawBooks) {
+            const seriesName = book.Series || book.series;
+            const issueNum = book.Number || book.number || "1";
 
             if (!seriesName) continue;
 
@@ -93,7 +105,6 @@ export async function POST(request: Request) {
                 missingCount++;
             }
 
-            // ADD TO LIST EVEN IF MISSING LOCALLY
             itemsToLink.push({
                 issueId: matchedIssueId,
                 title: `${seriesName} #${issueNum}`
@@ -101,13 +112,13 @@ export async function POST(request: Request) {
         }
 
         if (itemsToLink.length === 0) {
-            return NextResponse.json({ error: "Could not extract any valid comics from the CSV." }, { status: 400 });
+            return NextResponse.json({ error: "Could not extract any valid comics from this CBL file." }, { status: 400 });
         }
 
         const newList = await prisma.readingList.create({
             data: {
                 name: listName,
-                description: `Imported from CSV. Items not currently in your library: ${missingCount}`,
+                description: `Imported from CBL. Items not currently in your library: ${missingCount}`,
                 coverUrl: listCoverUrl, // <--- Add the coverUrl here!
                 userId: isGlobal && (session?.user as any)?.role === 'ADMIN' ? null : userId
             }
@@ -116,7 +127,7 @@ export async function POST(request: Request) {
         let orderCount = 0;
         const itemsData = itemsToLink.map(item => ({
             listId: newList.id,
-            issueId: item.issueId, // This will be null for missing items!
+            issueId: item.issueId, 
             title: item.title,
             order: orderCount++
         }));
@@ -130,7 +141,7 @@ export async function POST(request: Request) {
         });
 
     } catch (error: unknown) {
-        Logger.log(`CSV Import Error: ${getErrorMessage(error)}`, 'error');
+        Logger.log(`CBL Import Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

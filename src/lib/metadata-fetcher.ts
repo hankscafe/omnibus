@@ -1,5 +1,6 @@
 // src/lib/metadata-fetcher.ts
-import axios from 'axios';
+// import axios from 'axios';
+import { apiClient as axios } from '@/lib/api-client';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';

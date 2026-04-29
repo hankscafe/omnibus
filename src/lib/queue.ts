@@ -6,7 +6,8 @@ import { Logger } from './logger';
 import { SystemNotifier } from './notifications'; 
 import { Mailer } from './mailer';
 import crypto from 'crypto';
-import axios from 'axios';
+// import axios from 'axios';
+import { apiClient as axios } from '@/lib/api-client';
 import fs from 'fs-extra';
 import path from 'path';
 import { execFile } from 'child_process';
@@ -145,7 +146,8 @@ export async function syncSchedules() {
                 in: [
                     'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule',
                     'diagnostics_sync_schedule', 'backup_sync_schedule', 'popular_sync_schedule',
-                    'weekly_digest_schedule', 'cbr_conversion_schedule', 'embed_metadata_schedule'
+                    'weekly_digest_schedule', 'cbr_conversion_schedule', 'embed_metadata_schedule',
+                    'cache_cleanup_schedule'
                 ]
             }
         }
@@ -178,6 +180,7 @@ export async function syncSchedules() {
     await addJob('WEEKLY_DIGEST', config.weekly_digest_schedule);
     await addJob('CBR_CONVERSION', config.cbr_conversion_schedule);
     await addJob('EMBED_METADATA', config.embed_metadata_schedule);
+    await addJob('CACHE_CLEANUP', config.cache_cleanup_schedule);
 
     await omnibusQueue.add('WATCHED_FOLDER_SYNC', { type: 'WATCHED_FOLDER_SYNC' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_watched_sync' });
     await omnibusQueue.add('SYSTEM_HEALTH_CHECK', { type: 'SYSTEM_HEALTH_CHECK' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_health_check' });
@@ -201,6 +204,49 @@ export function initWorker() {
 
         try {
             switch (type) {
+                case 'CACHE_CLEANUP': {
+                    const startTime = Date.now();
+                    await prisma.systemSetting.upsert({ where: { key: 'last_cache_cleanup' }, update: { value: nowStr }, create: { key: 'last_cache_cleanup', value: nowStr } });
+                    
+                    let deletedCount = 0;
+                    try {
+                        const oldCacheSettings = await prisma.systemSetting.findMany({
+                            where: { key: { startsWith: 'cv_details_cache_' } }
+                        });
+                        
+                        for (const cache of oldCacheSettings) {
+                            try {
+                                const parsed = JSON.parse(cache.value);
+                                // If cache is older than 24 hours
+                                if (Date.now() - parsed.timestamp > 24 * 60 * 60 * 1000) {
+                                    await prisma.systemSetting.delete({ where: { key: cache.key } });
+                                    deletedCount++;
+                                }
+                            } catch(e) {}
+                        }
+                    } catch (e) {}
+
+                    // --- MAKE SURE THIS ELSE BLOCK IS PRESENT ---
+                    if (deletedCount > 0) {
+                        Logger.log(`[Cache Cleanup] Purged ${deletedCount} expired metadata entries.`, 'success');
+                    } else {
+                        Logger.log(`[Cache Cleanup] No expired metadata entries found to purge.`, 'info');
+                    }
+
+                    await prisma.jobLog.create({
+                        data: {
+                            jobType: 'CACHE_CLEANUP',
+                            status: 'COMPLETED',
+                            durationMs: Date.now() - startTime,
+                            message: `Cache cleanup finished. Purged ${deletedCount} expired cache entries.`
+                        }
+                    });
+
+                    SystemNotifier.sendAlert('job_cache_cleanup', { description: `Cache cleanup finished. Purged ${deletedCount} expired cache entries.` }).catch(() => {});
+                    
+                    break;
+                }
+                
                 case 'DATABASE_BACKUP': {
                     await prisma.systemSetting.upsert({ where: { key: 'last_backup_sync' }, update: { value: nowStr }, create: { key: 'last_backup_sync', value: nowStr } });
                     

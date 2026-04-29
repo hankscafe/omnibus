@@ -183,6 +183,12 @@ export const DiscordNotifier = {
           embed.description = payload.description || "Automated system diagnostics have been run.";
           embed.color = 15844367; // Yellow
           break;
+
+        case 'job_cache_cleanup':
+          embed.title = "🗑️ Cache Cleanup Complete";
+          embed.description = payload.description || "The automated cache cleanup has finished running.";
+          embed.color = 9807270; // Gray
+          break;
       }
 
       for (const hook of activeWebhooks) {

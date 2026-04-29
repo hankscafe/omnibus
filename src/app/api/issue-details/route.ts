@@ -1,6 +1,6 @@
 // src/app/api/issue-details/route.ts
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import { apiClient as axios } from '@/lib/api-client';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { parseComicVineCredits } from '@/lib/utils';
@@ -22,25 +22,37 @@ export async function GET(request: Request) {
 
   if (!id) return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
 
-  const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
-  let cvKey = setting?.value;
-  if (!cvKey || cvKey === '********') {
-      const realKey = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
-      cvKey = realKey?.value;
+  // --- NEW: CACHE CHECK ---
+  const cacheKey = `cv_details_cache_${type}_${id}`;
+  const cachedData = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
+  
+  if (cachedData?.value) {
+      try {
+          const parsedCache = JSON.parse(cachedData.value);
+          // Only use cache if it's less than 24 hours old
+          if (Date.now() - parsedCache.timestamp < 24 * 60 * 60 * 1000) {
+              return NextResponse.json(parsedCache.data);
+          }
+      } catch(e) {}
   }
 
-  if (!cvKey) return NextResponse.json({ error: 'Missing API Key' }, { status: 500 });
+  const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
+  const cvKey = setting?.value;
+
+  if (!cvKey || cvKey === '********') return NextResponse.json({ error: 'Missing API Key' }, { status: 500 });
 
   try {
     const endpoint = isIssue ? `issue/4000-${id}` : `volume/4050-${id}`;
+    
+    // Using the new fast apiClient, we don't need to specify User-Agent anymore
     const res = await axios.get(`https://comicvine.gamespot.com/api/${endpoint}/`, {
         params: { 
             api_key: cvKey, 
             format: 'json', 
             field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,site_detail_url' 
-        },
-        headers: { 'User-Agent': 'Omnibus/1.0' }
+        }
     });
+    
     await logApiUsage('comicvine', `/${isIssue ? 'issue' : 'volume'}`);
     
     const issueData = res.data.results;
@@ -71,7 +83,7 @@ export async function GET(request: Request) {
         }
     }
 
-    return NextResponse.json({
+    const finalPayload = {
       id: issueData.id,
       name: finalName || null, 
       volumeName: volName || 'Unknown',
@@ -91,7 +103,16 @@ export async function GET(request: Request) {
       genres,
       storyArcs,
       htmlDescription: cleanHtml
+    };
+
+    // --- NEW: SAVE TO CACHE ---
+    await prisma.systemSetting.upsert({
+        where: { key: cacheKey },
+        update: { value: JSON.stringify({ timestamp: Date.now(), data: finalPayload }) },
+        create: { key: cacheKey, value: JSON.stringify({ timestamp: Date.now(), data: finalPayload }) }
     });
+
+    return NextResponse.json(finalPayload);
   } catch (error: unknown) {
     Logger.log(`[Issue Details API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: 'Failed to fetch details' }, { status: 500 });

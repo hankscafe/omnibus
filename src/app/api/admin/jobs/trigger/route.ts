@@ -29,7 +29,8 @@ export async function POST(request: Request) {
             'storage_scan': 'STORAGE_SCAN',
             'health_check': 'SYSTEM_HEALTH_CHECK',
             'update_check': 'UPDATE_CHECK',
-            'weekly_digest': 'WEEKLY_DIGEST'
+            'weekly_digest': 'WEEKLY_DIGEST',
+            'cache_cleanup': 'CACHE_CLEANUP'
         };
 
         const jobType = jobMap[job];

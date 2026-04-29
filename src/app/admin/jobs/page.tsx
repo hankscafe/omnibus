@@ -12,7 +12,7 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
     Activity, RefreshCw, FileText, ExternalLink, Download, 
-    UploadCloud, TrendingUp, FileArchive, FileJson, Mail, Layers, Globe, Settings
+    UploadCloud, TrendingUp, FileArchive, FileJson, Mail, Layers, Globe, Settings, Trash2
 } from "lucide-react"
 import { getErrorMessage } from "@/lib/utils/error"
 
@@ -37,7 +37,8 @@ export default function ScheduledJobsPage() {
   const [librarySyncSchedule, setLibrarySyncSchedule] = useState("12") 
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
-  const [backupSyncSchedule, setBackupSyncSchedule] = useState("168") 
+  const [backupSyncSchedule, setBackupSyncSchedule] = useState("168")
+  const [cacheCleanupSchedule, setCacheCleanupSchedule] = useState("24") 
   const [popularSyncSchedule, setPopularSyncSchedule] = useState("24")
   const [converterSyncSchedule, setConverterSyncSchedule] = useState("24")
   const [weeklyDigestSchedule, setWeeklyDigestSchedule] = useState("168") 
@@ -59,6 +60,7 @@ export default function ScheduledJobsPage() {
   const currentStateString = JSON.stringify({
       metadataSyncSchedule, embedMetadataSchedule, librarySyncSchedule,
       monitorSyncSchedule, diagnosticsSyncSchedule, backupSyncSchedule,
+      cacheCleanupSchedule,
       popularSyncSchedule, converterSyncSchedule, weeklyDigestSchedule
   });
 
@@ -116,7 +118,8 @@ export default function ScheduledJobsPage() {
         const libItem = data.settings.find((c: any) => c.key === 'library_sync_schedule');
         const monitorItem = data.settings.find((c: any) => c.key === 'monitor_sync_schedule'); 
         const diagItem = data.settings.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
-        const backupItem = data.settings.find((c: any) => c.key === 'backup_sync_schedule'); 
+        const backupItem = data.settings.find((c: any) => c.key === 'backup_sync_schedule');
+        const cacheItem = data.settings.find((c: any) => c.key === 'cache_cleanup_schedule'); 
         const popularItem = data.settings.find((c: any) => c.key === 'popular_sync_schedule'); 
         const converterItem = data.settings.find((c: any) => c.key === 'cbr_conversion_schedule');
         const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule'); 
@@ -127,6 +130,7 @@ export default function ScheduledJobsPage() {
         if (monitorItem) setMonitorSyncSchedule(monitorItem.value);
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
         if (backupItem) setBackupSyncSchedule(backupItem.value);
+        if (cacheItem) setCacheCleanupSchedule(cacheItem.value);
         if (popularItem) setPopularSyncSchedule(popularItem.value); 
         if (converterItem) setConverterSyncSchedule(converterItem.value);
         if (digestItem) setWeeklyDigestSchedule(digestItem.value);
@@ -175,6 +179,7 @@ export default function ScheduledJobsPage() {
                       monitor_sync_schedule: monitorSyncSchedule,
                       diagnostics_sync_schedule: diagnosticsSyncSchedule,
                       backup_sync_schedule: backupSyncSchedule,
+                      cache_cleanup_schedule: cacheCleanupSchedule,
                       popular_sync_schedule: popularSyncSchedule,
                       cbr_conversion_schedule: converterSyncSchedule,
                       weekly_digest_schedule: weeklyDigestSchedule
@@ -442,6 +447,24 @@ export default function ScheduledJobsPage() {
                                 {isRestoring ? "Restoring..." : "Restore from JSON"}
                             </Button>
                         </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Trash2 className="w-5 h-5 text-primary" /> Cache Cleanup</CardTitle>
+                        <CardDescription className="text-muted-foreground">Purges expired temporary metadata caches from the database to save space.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={cacheCleanupSchedule} onValueChange={setCacheCleanupSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('cache_cleanup' as any)} disabled={runningJob === 'cache_cleanup'}>
+                            {runningJob === 'cache_cleanup' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
                     </CardContent>
                 </Card>
 

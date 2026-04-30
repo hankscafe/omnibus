@@ -94,17 +94,43 @@ describe('Data Processing: CSV Reading List Importer', () => {
         }));
     });
 
-    it('should return a 404 if the CSV parses successfully but nothing matches the local database', async () => {
-        const validCsv = `Series,Issue\nUnknown Comic,1`;
-        const req = createFormReq(validCsv, 'Empty List');
+    it('should successfully create a list of missing items if nothing matches the local database', async () => {
+        // 1. Setup the mock FormData with a fake CSV
+        const formData = new FormData();
+        const mockFile = new Blob(['Series,Issue\nSome Unknown Comic,1'], { type: 'text/csv' });
+        formData.append('file', mockFile as File);
+        formData.append('name', 'My Missing List');
+        formData.append('isGlobal', 'false');
 
-        mocks.findManySeries.mockResolvedValueOnce([{ id: 'series_batman', name: 'Batman' }]);
-        mocks.findManyIssues.mockResolvedValueOnce([]);
+        // 2. Create the Request object
+        const req = new Request('http://localhost/api/reading-lists/import-csv', {
+            method: 'POST',
+            body: formData,
+        });
 
-        const res = await POST(req);
+        // 3. Mock the database calls using your existing 'mocks' object
+        // We ensure series/issues find nothing
+        mocks.findManySeries.mockResolvedValue([]);
+        mocks.findManyIssues.mockResolvedValue([]);
         
-        // Fails with a 404 because none of the items in the CSV exist on your hard drive
-        expect(res.status).toBe(404);
-        expect(mocks.createList).not.toHaveBeenCalled();
+        // We mock the creation of the list and the items
+        mocks.createList.mockResolvedValue({ id: "mock-list-id" });
+        mocks.createListItems.mockResolvedValue({ count: 1 });
+
+        // 4. Execute the POST function
+        const res = await POST(req); 
+        
+        // 5. Assertions
+        expect(res.status).toBe(200);
+        
+        // Verify that createList was called (the core change in logic)
+        expect(mocks.createList).toHaveBeenCalled();
+        
+        // Verify that items were created with null issueIds (since nothing matched)
+        expect(mocks.createListItems).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.arrayContaining([
+                expect.objectContaining({ issueId: null, title: 'Some Unknown Comic #1' })
+            ])
+        }));
     });
 });

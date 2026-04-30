@@ -32,7 +32,6 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
     if (!desc && req.volumeId) {
         setLoadingDesc(true);
         try {
-            // --- FIXED: Regex expanded to handle decimal issues (e.g., #1.5) ---
             const issueMatch = req.seriesName?.match(/#(\d+(?:\.\d+)?)/);
             
             if (issueMatch) {
@@ -63,11 +62,11 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
   const isCompleted = ['IMPORTED', 'COMPLETED'].includes(req.status);
 
   return (
-    <Card className="shadow-sm hover:border-primary/50 transition-colors overflow-hidden border-border bg-background">
-      <CardContent className="p-4 flex flex-col sm:flex-row gap-6">
+    <Card className="shadow-sm hover:border-primary/50 transition-colors overflow-hidden border-border bg-background max-w-4xl mx-auto w-full">
+      <CardContent className="p-4 flex flex-col sm:flex-row gap-6 items-start">
         
-        <div className="w-full sm:w-32 shrink-0 sm:self-start aspect-[2/3] bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
-            {/* FIXED: Added .trim() check to prevent empty string broken images */}
+        {/* Fixed image dimensions to prevent "giant" cards on mobile/desktop */}
+        <div className="w-28 h-40 sm:w-32 sm:h-48 shrink-0 bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
             {req.imageUrl && req.imageUrl.trim() !== "" ? (
                 <img src={req.imageUrl} alt={displayName} className="object-cover w-full h-full" />
             ) : (
@@ -75,10 +74,10 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
             )}
         </div>
 
-        <div className="flex-1 flex flex-col min-w-0">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-4">
+        <div className="flex-1 flex flex-col min-w-0 pt-1">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-3">
                 <div className="space-y-1">
-                    <h3 className="font-bold text-lg sm:text-xl leading-tight line-clamp-2 text-foreground" title={displayName}>{displayName}</h3>
+                    <h3 className="font-bold text-lg sm:text-xl leading-tight line-clamp-1 text-foreground" title={displayName}>{displayName}</h3>
                     <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline" className={`${getStatusColor(req.status)} text-[10px] font-bold uppercase tracking-wider`}>
                             {req.status === 'PENDING_APPROVAL' ? 'Needs Approval' : req.status === 'MANUAL_DDL' ? 'GETCOMICS' : req.status}
@@ -141,11 +140,10 @@ export default function RequestsPage() {
   const fetchRequests = async () => {
     if (!session?.user?.id) return;
     try {
-      // --- FIXED: Hit the user-facing request endpoint ---
       const res = await fetch('/api/request')
       if (res.ok) {
         const data = await res.json()
-        setRequests(data) // Backend automatically filters this now
+        setRequests(data)
       }
     } catch (e) {
       toast({ title: "Error", description: "Could not load requests.", variant: "destructive" })

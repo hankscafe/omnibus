@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, Image as ImageIcon } from "lucide-react"; 
+import { Sparkles, Image as ImageIcon, Library } from "lucide-react"; 
+import { Button } from "@/components/ui/button";
 
 export function RecommendationsShelf() {
   const [items, setItems] = useState<any[]>([]);
@@ -27,7 +28,6 @@ export function RecommendationsShelf() {
     <div className="space-y-4 pt-4">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            
             Because you read <span className="text-primary truncate max-w-[200px] sm:max-w-md">{basedOn}</span>
         </h2>
       </div>
@@ -46,8 +46,34 @@ export function RecommendationsShelf() {
                       <ImageIcon className="w-8 h-8 text-muted-foreground/50" />
                   </div>
               )}
-              <div className="absolute bottom-0 left-0 w-full p-3 bg-gradient-to-t from-black/90 via-black/60 to-transparent z-10">
-                  <p className="text-white font-bold text-xs truncate drop-shadow-md">{item.name}</p>
+
+              {/* Default Bottom Gradient (Fades out on hover) */}
+              <div className="absolute bottom-0 left-0 w-full p-3 bg-gradient-to-t from-black/90 via-black/60 to-transparent z-10 group-hover:opacity-0 transition-opacity duration-300 pointer-events-none">
+                  <div className="flex flex-col mb-1.5">
+                      <p className="text-white font-bold text-xs truncate drop-shadow-md">{item.name}</p>
+                      {item.issueCount !== undefined && (
+                          <p className="text-white/80 text-[10px] font-medium drop-shadow-md mt-0.5">
+                              {item.issueCount} {item.issueCount === 1 ? 'Issue' : 'Issues'}
+                          </p>
+                      )}
+                  </div>
+              </div>
+
+              {/* Hover Overlay matching Recently Added */}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 hidden sm:flex flex-col justify-end p-4 text-center gap-2 z-20">
+                  <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md">{item.name}</h3>
+                  <p className="text-white/80 text-xs mb-2 drop-shadow-md">{item.year || '????'}</p>
+                  
+                  <Button 
+                      size="sm" 
+                      className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
+                      onClick={(e) => {
+                          e.stopPropagation();
+                          router.push(`/library/series?path=${encodeURIComponent(item.path)}`);
+                      }}
+                  >
+                      <Library className="w-3 h-3 mr-2" /> View Series
+                  </Button>
               </div>
             </div>
         ))}

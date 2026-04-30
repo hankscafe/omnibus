@@ -14,7 +14,8 @@ import {
   Folder,
   Clock,
   Smartphone,
-  Globe
+  Globe,
+  AlertTriangle
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -25,6 +26,7 @@ import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 // --- Types ---
 interface LibraryConfig { id: string; name: string; path: string; isManga: boolean; isDefault: boolean; }
@@ -170,12 +172,13 @@ export default function SettingsPage() {
     export_series_json: "false", 
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
-    show_popular_issues: "true", show_new_releases: "true", // <--- ADDED TOGGLES
+    show_popular_issues: "true", show_new_releases: "true", 
     manga_publishers: "", western_publishers: "",
     discover_manga_filter_mode: "SHOW_ALL", discover_manga_allowed_publishers: "",
     download_retry_delay: "5",
     convert_to_webp: "false", webp_quality: "80", 
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
+    oidc_force_sso: "false", oidc_auto_approve: "false", oidc_admin_group: "", oidc_user_group: "",
     folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "",
     smtp_enabled: "false", smtp_host: "", smtp_port: "", smtp_user: "", smtp_pass: "", smtp_from: "",
     discord_enabled: "true",
@@ -313,6 +316,8 @@ export default function SettingsPage() {
         if (!newConfig.download_retry_delay) newConfig.download_retry_delay = "5";
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
         if (newConfig.discord_enabled === undefined) newConfig.discord_enabled = "true";
+        if (newConfig.oidc_force_sso === undefined) newConfig.oidc_force_sso = "false";
+        if (newConfig.oidc_auto_approve === undefined) newConfig.oidc_auto_approve = "false";
         
         setConfig(newConfig);
         setTimeout(() => setIsDataLoaded(true), 500);
@@ -1055,12 +1060,11 @@ export default function SettingsPage() {
                                         <CardContent className="p-4 space-y-3">
                                             <div className="flex justify-between items-start">
                                                 <div className="space-y-1 min-w-0 pr-2">
-                                                    <p className="font-bold text-lg sm:text-base truncate text-foreground">{hoster.name}</p>
-                                                    <Badge variant="secondary" className="bg-primary/10 text-primary">{hoster.username || "API Key Linked"}</Badge>
+                                                    <p className="font-bold text-sm truncate text-foreground">{hoster.name}</p>
+                                                    <Badge variant="secondary" className="bg-primary/10 text-primary text-[10px]">{hoster.username || "API Key Linked"}</Badge>
                                                 </div>
                                                 <div className="flex gap-1 shrink-0">
-                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => {setEditingHoster(hoster); setHosterModalOpen(true)}}><Settings className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
-                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteHoster(hoster.id)}><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500" onClick={() => deleteHoster(hoster.id)}><Trash2 className="h-4 w-4"/></Button>
                                                 </div>
                                             </div>
                                         </CardContent>
@@ -1871,50 +1875,91 @@ export default function SettingsPage() {
                         <Label htmlFor="oidc-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable OIDC Authentication</Label>
                     </div>
 
-                    <div className="grid gap-4">
-                        <div className="grid gap-2">
-                            <Label className="text-foreground font-semibold">Issuer URL</Label>
-                            <Input 
-                                placeholder="https://auth.yourdomain.com" 
-                                value={config.oidc_issuer || ""} 
-                                onChange={e => setConfig({...config, oidc_issuer: e.target.value})} 
-                                className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
-                            />
-                            <p className="text-[11px] text-muted-foreground">The base URL of your identity provider.</p>
-                        </div>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="grid gap-2">
-                                <Label className="text-foreground font-semibold">Client ID</Label>
-                                <Input 
-                                    value={config.oidc_client_id || ""} 
-                                    onChange={e => setConfig({...config, oidc_client_id: e.target.value})} 
-                                    className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
-                                />
+                    {config.oidc_enabled === "true" && (
+                        <div className="grid gap-4 p-6 border dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-950/50 animate-in fade-in zoom-in-95">
+                            <div className="grid gap-2"><Label>Issuer URL</Label><Input placeholder="https://auth.yourdomain.com" value={config.oidc_issuer || ""} onChange={e => setConfig({...config, oidc_issuer: e.target.value})} className="bg-white dark:bg-slate-900" /></div>
+                            <div className="grid sm:grid-cols-2 gap-4">
+                                <div className="grid gap-2"><Label>Client ID</Label><Input value={config.oidc_client_id || ""} onChange={e => setConfig({...config, oidc_client_id: e.target.value})} className="bg-white dark:bg-slate-900" /></div>
+                                <div className="grid gap-2"><Label>Client Secret</Label><Input type="password" value={config.oidc_client_secret || ""} onChange={e => setConfig({...config, oidc_client_secret: e.target.value})} className="bg-white dark:bg-slate-900" /></div>
                             </div>
-                            <div className="grid gap-2">
-                                <Label className="text-foreground font-semibold">Client Secret</Label>
-                                <Input 
-                                    type="password"
-                                    value={config.oidc_client_secret || ""} 
-                                    onChange={e => setConfig({...config, oidc_client_secret: e.target.value})} 
-                                    className="h-12 sm:h-10 bg-muted/20 border-border text-foreground"
-                                />
+                            
+                            <div className="border-t border-slate-200 dark:border-slate-800 pt-6 mt-4">
+                                <h3 className="text-base font-bold text-foreground mb-4">SSO Behavior Options</h3>
+                                <div className="grid gap-6">
+                                    <div className="flex items-center space-x-2">
+                                        <Switch 
+                                            id="oidc-force-sso"
+                                            checked={config.oidc_force_sso === "true"} 
+                                            onCheckedChange={(c) => setConfig({...config, oidc_force_sso: c ? "true" : "false"})} 
+                                        />
+                                        <div className="grid gap-1">
+                                            <Label htmlFor="oidc-force-sso" className="cursor-pointer font-bold">Disable Native Login (Force SSO)</Label>
+                                            <p className="text-xs text-muted-foreground">Completely removes the local username/password form and auto-redirects users to your Identity Provider. Admins can bypass this by appending <code className="font-bold">?local=true</code> to the login URL.</p>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-2">
+                                        <Switch 
+                                            id="oidc-auto-approve"
+                                            checked={config.oidc_auto_approve === "true"} 
+                                            onCheckedChange={(c) => setConfig({...config, oidc_auto_approve: c ? "true" : "false"})} 
+                                        />
+                                        <div className="grid gap-1">
+                                            <Label htmlFor="oidc-auto-approve" className="cursor-pointer font-bold">Auto-Approve New Logins</Label>
+                                            <p className="text-xs text-muted-foreground">Allows users to bypass the manual admin approval stage if they successfully log in via SSO.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* --- NEW: BLANKET AUTO-APPROVE WARNING --- */}
+                                {config.oidc_auto_approve === 'true' && !config.oidc_admin_group && !config.oidc_user_group && (
+                                    <Alert className="bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50 mt-6">
+                                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                                        <AlertTitle className="text-amber-800 dark:text-amber-300 font-bold">Security Warning: Blanket Approvals</AlertTitle>
+                                        <AlertDescription className="text-amber-700/90 dark:text-amber-400/90">
+                                            You have enabled Auto-Approve without specifying any Group Mappings. 
+                                            <strong> This means ANYONE with an account on your Identity Provider can log in to Omnibus.</strong> 
+                                            Only use this if your IdP strictly restricts access to the Omnibus application.
+                                        </AlertDescription>
+                                    </Alert>
+                                )}
                             </div>
-                        </div>
-                    </div>
 
-                    <div className="border-t border-border pt-4">
-                        <Label className="text-sm font-bold text-primary mb-2 block">Redirect URI Setup</Label>
-                        <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider's client configuration:</p>
-                        <div className="flex items-center gap-2">
-                            <Input 
-                                readOnly
-                                value={typeof window !== 'undefined' ? `${window.location.origin}/api/auth/callback/oidc` : ''} 
-                                className="h-12 sm:h-10 font-mono text-xs text-muted-foreground bg-muted/30 border-dashed border-border"
-                            />
+                            <div className="border-t border-slate-200 dark:border-slate-800 pt-6 mt-4">
+                                <h3 className="text-base font-bold text-foreground mb-4">Group Mapping (Optional)</h3>
+                                <p className="text-xs text-muted-foreground mb-4">
+                                    If your Identity Provider sends a <code>groups</code> or <code>roles</code> claim, Omnibus can automatically assign user privileges.
+                                    If you configure groups here, <strong>only users in these groups will be allowed to log in.</strong>
+                                </p>
+                                <div className="grid sm:grid-cols-2 gap-4">
+                                    <div className="grid gap-2">
+                                        <Label>Admin Group Name</Label>
+                                        <Input 
+                                            placeholder="e.g. OmnibusAdmins" 
+                                            value={config.oidc_admin_group || ""} 
+                                            onChange={e => setConfig({...config, oidc_admin_group: e.target.value})} 
+                                            className="bg-white dark:bg-slate-900" 
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label>Standard User Group Name</Label>
+                                        <Input 
+                                            placeholder="e.g. OmnibusUsers" 
+                                            value={config.oidc_user_group || ""} 
+                                            onChange={e => setConfig({...config, oidc_user_group: e.target.value})} 
+                                            className="bg-white dark:bg-slate-900" 
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="border-t border-slate-200 dark:border-slate-800 pt-6 mt-4">
+                                <Label className="text-sm font-bold text-rose-500 mb-2 block">Redirect URI Setup</Label>
+                                <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider's client configuration:</p>
+                                <Input readOnly value={typeof window !== 'undefined' ? `${window.location.origin}/api/auth/callback/oidc` : ''} className="font-mono text-xs text-muted-foreground bg-slate-100 dark:bg-slate-900 border-dashed border-slate-300 dark:border-slate-700" />
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </CardContent>
             </Card>
         </TabsContent>

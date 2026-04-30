@@ -26,6 +26,11 @@ export async function POST(req: Request) {
         if (!user) {
             return NextResponse.json({ error: "User not found" }, { status: 400 });
         }
+        
+        // --- NEW: Check if this is an SSO User ---
+        if (!user.password || user.password === '') {
+            return NextResponse.json({ error: "This user is managed via Single Sign-On (SSO). Passwords must be reset at the Identity Provider." }, { status: 400 });
+        }
         if (!user.email) {
             return NextResponse.json({ error: "This user does not have an email address configured." }, { status: 400 });
         }

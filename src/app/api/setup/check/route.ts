@@ -1,3 +1,4 @@
+// src/app/api/setup/check/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
@@ -13,8 +14,7 @@ export async function GET() {
             where: { key: 'setup_complete' } 
         });
 
-        // Backward Compatibility Auto-Heal:
-        // If users exist but the setup flag is missing/false, force it to true.
+        // Backward Compatibility Auto-Heal
         if (userCount > 0 && setupSetting?.value !== 'true') {
             setupSetting = await prisma.systemSetting.upsert({
                 where: { key: 'setup_complete' },
@@ -25,10 +25,15 @@ export async function GET() {
         
         const isComplete = setupSetting?.value === 'true' && userCount > 0;
         
-        return NextResponse.json({ requiresSetup: !isComplete });
+        // --- NEW: Expose Force SSO state for the login page ---
+        const forceSsoSetting = await prisma.systemSetting.findUnique({
+            where: { key: 'oidc_force_sso' }
+        });
+        const forceSso = forceSsoSetting?.value === 'true';
+        
+        return NextResponse.json({ requiresSetup: !isComplete, forceSso });
     } catch (error) {
         Logger.log(`Setup Check Error: ${getErrorMessage(error)}`, 'error');
-
-        return NextResponse.json({ requiresSetup: true });
+        return NextResponse.json({ requiresSetup: true, forceSso: false });
     }
 }

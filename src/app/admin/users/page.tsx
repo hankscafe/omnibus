@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getErrorMessage } from "@/lib/utils/error"
 
 export default function AdminUsersPage() {
@@ -27,6 +28,9 @@ export default function AdminUsersPage() {
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState<string | null>(null)
+
+  // OIDC Config State
+  const [oidcConfig, setOidcConfig] = useState({ enabled: false, groupsMapped: false })
   
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [userToDelete, setUserToDelete] = useState<{ id: string, username: string } | null>(null)
@@ -55,8 +59,6 @@ export default function AdminUsersPage() {
       navigator.clipboard.writeText(text);
       setCopied(true);
       toast({ title: "Copied!", description: "API Key copied to clipboard." });
-      
-      // --- FIX: Reset state after 2 seconds ---
       setTimeout(() => setCopied(false), 2000);
   }
 
@@ -64,6 +66,17 @@ export default function AdminUsersPage() {
     try {
       const res = await fetch('/api/admin/users')
       if (res.ok) setUsers(await res.json())
+      
+      // --- NEW: Fetch OIDC Settings to determine if we show the warning banner ---
+      const configRes = await fetch('/api/admin/config')
+      if (configRes.ok) {
+          const configData = await configRes.json()
+          const settings = configData.settings || []
+          const isEnabled = settings.find((s: any) => s.key === 'oidc_enabled')?.value === 'true'
+          const hasGroups = !!settings.find((s: any) => s.key === 'oidc_admin_group')?.value || 
+                            !!settings.find((s: any) => s.key === 'oidc_user_group')?.value
+          setOidcConfig({ enabled: isEnabled, groupsMapped: hasGroups })
+      }
     } catch (e) {
       toast({ title: "Error", description: "Failed to load users.", variant: "destructive" })
     } finally {
@@ -227,6 +240,18 @@ export default function AdminUsersPage() {
           <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2" /> Create User
         </Button>
       </div>
+
+      {/* --- NEW: OIDC GROUP MAP WARNING BANNER --- */}
+      {oidcConfig.enabled && oidcConfig.groupsMapped && (
+          <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/50 shadow-sm">
+              <Shield className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              <AlertTitle className="text-blue-800 dark:text-blue-300 font-bold">OIDC Group Sync Active</AlertTitle>
+              <AlertDescription className="text-blue-700/90 dark:text-blue-400/90 mt-1 leading-relaxed">
+                  User roles and permissions are currently being managed by your Identity Provider via Group Mappings. 
+                  Any manual changes made here to an SSO user's Role or Approval status will be overwritten the next time they log in. Local non-SSO users can still be managed normally.
+              </AlertDescription>
+          </Alert>
+      )}
 
       {/* --- DESKTOP VIEW --- */}
       <div className="hidden md:block bg-background border border-border rounded-xl shadow-sm overflow-hidden transition-colors duration-300">

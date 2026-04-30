@@ -15,6 +15,14 @@ export async function POST(req: Request) {
     if (rateLimit.isLimited) return rateLimit.response!;
 
     try {
+
+        // --- NEW: Block resets if Force SSO is enabled ---
+        const forceSsoSetting = await prisma.systemSetting.findUnique({ where: { key: 'oidc_force_sso' } });
+        if (forceSsoSetting?.value === 'true') {
+            rateLimit.trackFailure();
+            return NextResponse.json({ error: "Native authentication is disabled. Please reset your password at your Identity Provider." }, { status: 403 });
+        }
+
         const { email } = await req.json();
         if (!email) {
             rateLimit.trackFailure();

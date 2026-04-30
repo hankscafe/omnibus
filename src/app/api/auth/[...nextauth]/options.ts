@@ -1,3 +1,4 @@
+// src/app/api/auth/[...nextauth]/options.ts
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/db";
@@ -11,9 +12,7 @@ import { Logger } from "@/lib/logger";
 const defaultSecret = 'change_this_to_a_random_secure_string_123!';
 
 if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === defaultSecret) {
-    // REDACTED verbose banner to prevent info leaks in logs
     Logger.log("CRITICAL SECURITY ERROR: NEXTAUTH_SECRET is insecure or missing. Omnibus is shutting down.", 'error');
-    
     const isBuildPhase = process.env.npm_lifecycle_event === 'build' || process.env.CI === 'true';
     if (!isBuildPhase) {
         process.exit(1); 
@@ -37,10 +36,16 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
   let oidcIssuer = "";
   let oidcClientId = "";
   let oidcClientSecret = "";
+  
+  // --- NEW SSO SETTINGS ---
+  let oidcForceSso = false;
+  let oidcAutoApprove = false;
+  let oidcAdminGroup = "";
+  let oidcUserGroup = "";
 
   try {
     const configs = await prisma.systemSetting.findMany({
-      where: { key: { in: ['oidc_enabled', 'oidc_issuer', 'oidc_client_id', 'oidc_client_secret'] } }
+      where: { key: { in: ['oidc_enabled', 'oidc_issuer', 'oidc_client_id', 'oidc_client_secret', 'oidc_force_sso', 'oidc_auto_approve', 'oidc_admin_group', 'oidc_user_group'] } }
     });
     const configMap = Object.fromEntries(configs.map(c => [c.key, c.value]));
     
@@ -48,9 +53,14 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
     oidcIssuer = configMap.oidc_issuer || "";
     oidcClientId = configMap.oidc_client_id || "";
     oidcClientSecret = configMap.oidc_client_secret || "";
+    oidcForceSso = configMap.oidc_force_sso === 'true';
+    oidcAutoApprove = configMap.oidc_auto_approve === 'true';
+    oidcAdminGroup = configMap.oidc_admin_group || "";
+    oidcUserGroup = configMap.oidc_user_group || "";
   } catch (e) {}
 
   const providers: any[] = [
+    // ALWAYS register the CredentialsProvider so the backend can handle ?local=true bypasses
     CredentialsProvider({
       name: "Credentials",
       credentials: {
@@ -59,35 +69,35 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         totpCode: { label: "2FA Code", type: "text" }
       },
       async authorize(credentials) {
-        if (!credentials?.username || !credentials?.password) return null;
-        const input = credentials.username.toLowerCase();
-        const attemptData = loginAttempts.get(input) || { count: 0, lockoutUntil: 0 };
-        if (Date.now() < attemptData.lockoutUntil) {
-            const remainingMinutes = Math.ceil((attemptData.lockoutUntil - Date.now()) / 60000);
-            throw new Error(`Account locked due to too many failed attempts. Try again in ${remainingMinutes} minutes.`);
-        }
-        const users: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(username) = ${input} OR LOWER(email) = ${input} LIMIT 1`;
-        const user = users[0];
-        const handleFailedAttempt = () => {
-            attemptData.count += 1;
-            if (attemptData.count >= 5) attemptData.lockoutUntil = Date.now() + 15 * 60 * 1000;
-            loginAttempts.set(input, attemptData);
-            throw new Error("Invalid username or password");
-        };
-        if (!user) handleFailedAttempt();
-        if (!user.password) throw new Error("Please log in using SSO.");
-        const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
-        if (!isPasswordValid) handleFailedAttempt();
-        if (!user.isApproved) throw new Error("Account pending admin approval.");
-        if (user.twoFactorEnabled && user.twoFactorSecret) {
-            if (!credentials.totpCode || credentials.totpCode === "undefined" || credentials.totpCode.trim() === "") throw new Error("2FA_REQUIRED"); 
-            const decryptedSecret = await decrypt2FA(user.twoFactorSecret);
-            const isValid = typeof authenticator.verify === 'function' ? authenticator.verify({ token: credentials.totpCode, secret: decryptedSecret }) : authenticator.check(credentials.totpCode, decryptedSecret);
-            if (!isValid) handleFailedAttempt();
-        }
-        loginAttempts.delete(input);
-        return { id: user.id, name: user.username, email: user.email, role: user.role, autoApproveRequests: user.autoApproveRequests, canDownload: user.canDownload, image: user.avatar, sessionVersion: user.sessionVersion };
-      }
+          if (!credentials?.username || !credentials?.password) return null;
+          const input = credentials.username.toLowerCase();
+          const attemptData = loginAttempts.get(input) || { count: 0, lockoutUntil: 0 };
+          if (Date.now() < attemptData.lockoutUntil) {
+              const remainingMinutes = Math.ceil((attemptData.lockoutUntil - Date.now()) / 60000);
+              throw new Error(`Account locked due to too many failed attempts. Try again in ${remainingMinutes} minutes.`);
+          }
+          const users: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(username) = ${input} OR LOWER(email) = ${input} LIMIT 1`;
+          const user = users[0];
+          const handleFailedAttempt = () => {
+              attemptData.count += 1;
+              if (attemptData.count >= 5) attemptData.lockoutUntil = Date.now() + 15 * 60 * 1000;
+              loginAttempts.set(input, attemptData);
+              throw new Error("Invalid username or password");
+          };
+          if (!user) handleFailedAttempt();
+          if (!user.password) throw new Error("Please log in using SSO.");
+          const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
+          if (!isPasswordValid) handleFailedAttempt();
+          if (!user.isApproved) throw new Error("Account pending admin approval.");
+          if (user.twoFactorEnabled && user.twoFactorSecret) {
+              if (!credentials.totpCode || credentials.totpCode === "undefined" || credentials.totpCode.trim() === "") throw new Error("2FA_REQUIRED"); 
+              const decryptedSecret = await decrypt2FA(user.twoFactorSecret);
+              const isValid = typeof authenticator.verify === 'function' ? authenticator.verify({ token: credentials.totpCode, secret: decryptedSecret }) : authenticator.check(credentials.totpCode, decryptedSecret);
+              if (!isValid) handleFailedAttempt();
+          }
+          loginAttempts.delete(input);
+          return { id: user.id, name: user.username, email: user.email, role: user.role, autoApproveRequests: user.autoApproveRequests, canDownload: user.canDownload, image: user.avatar, sessionVersion: user.sessionVersion };
+    }
     })
   ];
 
@@ -98,13 +108,18 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       type: "oauth",
       version: "2.0",
       wellKnown: `${oidcIssuer.replace(/\/$/, '')}/.well-known/openid-configuration`,
-      authorization: { params: { scope: "openid email profile" } },
+      authorization: { params: { scope: "openid email profile groups roles" } },
       idToken: true,
       checks: ["pkce", "state"],
       clientId: oidcClientId,
       clientSecret: oidcClientSecret,
       profile(profile: any) {
-        return { id: profile.sub, name: profile.name || profile.preferred_username || profile.nickname || profile.email?.split('@')[0] || "SSO User", email: profile.email };
+        return { 
+          id: profile.sub, 
+          name: profile.name || profile.preferred_username || profile.nickname || profile.email?.split('@')[0] || "SSO User", 
+          email: profile.email,
+          groups: profile.groups || profile.roles || [] 
+        };
       },
     });
   }
@@ -120,13 +135,59 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           const inputEmail = user.email.toLowerCase();
           const dbUsers: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(email) = ${inputEmail} LIMIT 1`;
           let dbUser = dbUsers[0];
+
+          // Determine target role & approval based on configuration
+          let targetRole = "USER";
+          let isApproved = oidcAutoApprove;
+
+          const userGroups = Array.isArray((user as any).groups) ? (user as any).groups : [];
+          const hasAdminGroup = oidcAdminGroup && userGroups.includes(oidcAdminGroup);
+          const hasUserGroup = oidcUserGroup && userGroups.includes(oidcUserGroup);
+
+          // Group enforcement if configured
+          if (oidcAdminGroup || oidcUserGroup) {
+              if (hasAdminGroup) {
+                  targetRole = "ADMIN";
+                  isApproved = true; // Admins map implicitly handles approval
+              } else if (hasUserGroup) {
+                  targetRole = "USER";
+              } else {
+                  Logger.log(`[SSO] Login rejected for ${user.email}: User does not belong to the required OIDC groups.`, 'warn');
+                  return false;
+              }
+          }
+
           if (!dbUser) {
-            dbUser = await prisma.user.create({ data: { username: user.name || user.email.split('@')[0], email: user.email, password: '', role: "USER", isApproved: false, autoApproveRequests: false, canDownload: false } });
+            dbUser = await prisma.user.create({ 
+              data: { 
+                username: user.name || user.email.split('@')[0], 
+                email: user.email, 
+                password: '', 
+                role: targetRole, 
+                isApproved: isApproved, 
+                autoApproveRequests: targetRole === "ADMIN", 
+                canDownload: targetRole === "ADMIN" 
+              } 
+            });
             const firstUserInDb = await prisma.user.findFirst({ orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true } });
-            if (firstUserInDb?.id === dbUser.id) {
+            if (firstUserInDb?.id === dbUser.id && targetRole !== "ADMIN") {
                 dbUser = await prisma.user.update({ where: { id: dbUser.id }, data: { role: "ADMIN", isApproved: true, autoApproveRequests: true, canDownload: true } });
             }
+          } else {
+              // Update role if groups shifted
+              if ((oidcAdminGroup || oidcUserGroup) && dbUser.role !== targetRole) {
+                  dbUser = await prisma.user.update({
+                      where: { id: dbUser.id },
+                      data: { 
+                          role: targetRole,
+                          isApproved: isApproved,
+                          autoApproveRequests: targetRole === "ADMIN" ? true : dbUser.autoApproveRequests,
+                          canDownload: targetRole === "ADMIN" ? true : dbUser.canDownload,
+                      }
+                  });
+              }
           }
+
           if (!dbUser.isApproved) return false;
           user.id = dbUser.id;
           (user as any).role = dbUser.role;
@@ -185,7 +246,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                 const secret = process.env.NEXTAUTH_SECRET!;
                 const expectedSignature = crypto.createHmac('sha256', secret).update(`${targetId}|${cookieAdminId}`).digest('hex');
                 
-                // HIGH FIX: Constant-time HMAC comparison
                 const signatureBuffer = Buffer.from(signature);
                 const expectedBuffer = Buffer.from(expectedSignature);
                 if (signatureBuffer.length === expectedBuffer.length && 

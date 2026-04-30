@@ -29,6 +29,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Username, email, and password are required" }, { status: 400 });
     }
 
+    // --- NEW: Block registration if Force SSO is enabled ---
+    const forceSsoSetting = await prisma.systemSetting.findUnique({ where: { key: 'oidc_force_sso' } });
+    if (forceSsoSetting?.value === 'true') {
+        rateLimit.trackFailure();
+        return NextResponse.json({ error: "Native registration is disabled. Please log in via your Identity Provider." }, { status: 403 });
+    }
+
     // FIX: Prevent ridiculous username lengths
     if (username.length > 50) {
         rateLimit.trackFailure();

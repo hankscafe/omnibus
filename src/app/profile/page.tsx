@@ -892,39 +892,47 @@ export default function ProfilePage() {
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <Card className={`shadow-sm border-2 bg-background flex flex-col ${is2FAEnabled ? 'border-green-200 bg-green-50/20 dark:border-green-900/40 dark:bg-green-900/10' : 'border-border'}`}>
-                            <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
-                                <div className="space-y-1 flex-1">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <h4 className={`font-bold text-lg leading-none ${is2FAEnabled ? 'text-green-800 dark:text-green-400' : 'text-foreground'}`}>Two-Factor Auth</h4>
-                                        {is2FAEnabled && <Badge className="bg-green-500 hover:bg-green-600 border-0 h-5 px-1.5 text-[10px]"><Check className="w-3 h-3 mr-1"/> ON</Badge>}
-                                    </div>
-                                    <p className={`text-xs ${is2FAEnabled ? 'text-green-700/80 dark:text-green-500/80' : 'text-muted-foreground'}`}>
-                                        {is2FAEnabled ? "Secured with a TOTP authenticator app." : "Require a 6-digit code when logging in."}
-                                    </p>
-                                </div>
-                                {is2FAEnabled ? (
-                                    <Button variant="outline" className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-900/30" onClick={() => setDisable2faModalOpen(true)}>Disable 2FA</Button>
-                                ) : (
-                                    <Button className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground" onClick={handleBegin2FASetup} disabled={isProcessing2fa}>
-                                        {isProcessing2fa ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />} Enable 2FA
-                                    </Button>
-                                )}
-                            </CardContent>
-                        </Card>
+        <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+            <div className="space-y-1 flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                    <h4 className={`font-bold text-lg leading-none ${is2FAEnabled ? 'text-green-800 dark:text-green-400' : 'text-foreground'}`}>Two-Factor Auth</h4>
+                </div>
+                <p className={`text-xs ${is2FAEnabled ? 'text-green-700/80 dark:text-green-500/80' : 'text-muted-foreground'}`}>
+                    {profile?.user?.isSsoUser ? "Managed by your Identity Provider." : (is2FAEnabled ? "Secured with a TOTP authenticator app." : "Require a 6-digit code when logging in.")}
+                </p>
+            </div>
+            <Button 
+                variant={is2FAEnabled ? "outline" : "default"} 
+                className="w-full font-bold" 
+                onClick={is2FAEnabled ? () => setDisable2faModalOpen(true) : handleBegin2FASetup} 
+                disabled={isProcessing2fa || profile?.user?.isSsoUser} // <--- Disable for SSO
+            >
+                {is2FAEnabled ? "Disable 2FA" : "Enable 2FA"}
+            </Button>
+        </CardContent>
+    </Card>
 
-                        <Card className="shadow-sm bg-background border-border flex flex-col">
-                            <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
-                                <div className="space-y-1 flex-1">
-                                    <h4 className="font-bold text-lg flex items-center gap-2 mb-2 text-foreground">
-                                        <Key className="w-4 h-4 text-primary" /> Password
-                                    </h4>
-                                    <p className="text-xs text-muted-foreground">Update your local account password. SSO users must change passwords at their provider.</p>
-                                </div>
-                                <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground" onClick={() => setPasswordModalOpen(true)}>
-                                    Change Password
-                                </Button>
-                            </CardContent>
-                        </Card>
+    {/* PASSWORD CARD */}
+    <Card className="shadow-sm bg-background border-border flex flex-col">
+        <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">
+            <div className="space-y-1 flex-1">
+                <h4 className="font-bold text-lg flex items-center gap-2 mb-2 text-foreground">
+                    <Key className="w-4 h-4 text-primary" /> Password
+                </h4>
+                <p className="text-xs text-muted-foreground">
+                    {profile?.user?.isSsoUser ? "Managed by your Identity Provider." : "Update your local account password."}
+                </p>
+            </div>
+            <Button 
+                variant="outline" 
+                className="w-full border-border hover:bg-muted text-foreground" 
+                onClick={() => setPasswordModalOpen(true)}
+                disabled={profile?.user?.isSsoUser} // <--- Disable for SSO
+            >
+                Change Password
+            </Button>
+        </CardContent>
+    </Card>
 
                         <Card className="shadow-sm bg-background border-border flex flex-col">
                             <CardContent className="p-4 sm:p-6 flex flex-col h-full gap-4">

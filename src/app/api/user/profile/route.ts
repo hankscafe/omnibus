@@ -14,9 +14,18 @@ export async function GET(req: Request) {
   try {
     const user = await prisma.user.findUnique({
         where: { id: token.id as string },
-        select: { username: true, role: true, avatar: true, banner: true, createdAt: true } 
+        select: { username: true, role: true, avatar: true, banner: true, createdAt: true, password: true } 
     });
 
+    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
+
+    // Identify if the user is managed via SSO
+    const isSsoUser = !user.password || user.password === '';
+    
+    // Strip the password before sending the payload to the frontend
+    const { password, ...safeUser } = user;
+    (safeUser as any).isSsoUser = isSsoUser;
+    
     const requests = await prisma.request.findMany({
         where: { userId: token.id as string },
         orderBy: { createdAt: 'desc' }

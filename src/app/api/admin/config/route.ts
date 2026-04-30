@@ -118,6 +118,22 @@ export async function POST(request: Request) {
         searchAcronyms
     } = body;
 
+    // --- NEW: SAFETY NET VALIDATION ---
+    if (settings?.oidc_force_sso === 'true') {
+        const adminWithPassword = await prisma.user.findFirst({
+            where: {
+                role: 'ADMIN',
+                password: { not: '' }
+            }
+        });
+
+        if (!adminWithPassword) {
+            return NextResponse.json({ 
+                error: "Cannot enable Force SSO: No Admin account with a local password exists. Please set a local password for an Admin account first to prevent lockouts." 
+            }, { status: 400 });
+        }
+    }
+
     await prisma.$transaction(async (tx) => {
         
         if (settings) {

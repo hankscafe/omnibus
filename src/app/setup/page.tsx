@@ -17,8 +17,10 @@ import {
     UserPlus, Database, HardDrive, Download, Search, Settings2, 
     CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw,
     Webhook, Bell, User, Zap, FolderOpen, UploadCloud, Send, AlertCircle, Mail, FileText,
-    Server, Globe, Filter, Fingerprint
+    Server, Globe, Filter, Fingerprint,
+    AlertTriangle
 } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
 const RECOMMENDED_KEYWORDS = "weekly young, young animal, weekly shonen, monthly shonen, gee-whiz, manga, hentai, doujinshi, shoujo, seinen, shojo, josei, gaze, lustiges taschenbuch enten-edition, les tuniques bleues, big comic superior, Creature Girls: A Hands-On Field Journal In Another World, Young King Bull, weekly playboy, big comic spirits, Young Champion Retsu, Big Comic Zōkan, Monthly Young Magazine, Comic Zenon, shonen sunday s, Chira Chiller, young champion, young king, yojng comic, Shana-Ou Yoshitsune";
@@ -74,6 +76,7 @@ export default function SetupWizard() {
     flaresolverr_url: '',
     filter_enabled: false, filter_publishers: '', filter_keywords: '',
     oidc_enabled: false, oidc_issuer: '', oidc_client_id: '', oidc_client_secret: '',
+    oidc_force_sso: false, oidc_auto_approve: false, oidc_admin_group: '', oidc_user_group: '',
     smtp_enabled: false, smtp_host: '', smtp_port: '', smtp_user: '', smtp_pass: '', smtp_from: ''
   });
 
@@ -405,6 +408,10 @@ export default function SetupWizard() {
               oidc_issuer: formData.oidc_issuer,
               oidc_client_id: formData.oidc_client_id,
               oidc_client_secret: formData.oidc_client_secret,
+              oidc_force_sso: formData.oidc_force_sso ? "true" : "false",
+              oidc_auto_approve: formData.oidc_auto_approve ? "true" : "false",
+              oidc_admin_group: formData.oidc_admin_group,
+              oidc_user_group: formData.oidc_user_group,
               smtp_enabled: formData.smtp_enabled ? "true" : "false",
               smtp_host: formData.smtp_host,
               smtp_port: formData.smtp_port,
@@ -1060,11 +1067,57 @@ export default function SetupWizard() {
                         </div>
 
                         {formData.oidc_enabled && (
-                            <div className="grid gap-4 p-6 border dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-950/50">
+                            <div className="grid gap-4 p-6 border dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-950/50 animate-in fade-in zoom-in-95">
                                 <div className="grid gap-2"><Label>Issuer URL</Label><Input placeholder="https://auth.yourdomain.com" value={formData.oidc_issuer} onChange={e => updateForm('oidc_issuer', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
                                 <div className="grid sm:grid-cols-2 gap-4">
                                     <div className="grid gap-2"><Label>Client ID</Label><Input value={formData.oidc_client_id} onChange={e => updateForm('oidc_client_id', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
                                     <div className="grid gap-2"><Label>Client Secret</Label><Input type="password" value={formData.oidc_client_secret} onChange={e => updateForm('oidc_client_secret', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
+                                </div>
+                                
+                                {/* NEW SSO BEHAVIOR OPTIONS */}
+                                <div className="border-t border-slate-200 dark:border-slate-800 pt-6 mt-4">
+                                    <h3 className="text-base font-bold text-foreground mb-4">SSO Behavior Options</h3>
+                                    <div className="grid gap-6">
+                                        <div className="flex items-center space-x-2">
+                                            <Switch checked={formData.oidc_force_sso} onCheckedChange={v => updateForm('oidc_force_sso', v)} />
+                                            <div className="grid gap-1">
+                                                <Label className="cursor-pointer font-bold">Disable Native Login (Force SSO)</Label>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center space-x-2">
+                                            <Switch checked={formData.oidc_auto_approve} onCheckedChange={v => updateForm('oidc_auto_approve', v)} />
+                                            <div className="grid gap-1">
+                                                <Label className="cursor-pointer font-bold">Auto-Approve New Logins</Label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {formData.oidc_auto_approve && !formData.oidc_admin_group && !formData.oidc_user_group && (
+                                    <Alert className="bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50 mt-6">
+                                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                                        <AlertTitle className="text-amber-800 dark:text-amber-300 font-bold">Security Warning: Blanket Approvals</AlertTitle>
+                                        <AlertDescription className="text-amber-700/90 dark:text-amber-400/90">
+                                            You have enabled Auto-Approve without specifying any Group Mappings. 
+                                            <strong> This means ANYONE with an account on your Identity Provider can log in to Omnibus.</strong> 
+                                            Only use this if your IdP strictly restricts access to the Omnibus application.
+                                        </AlertDescription>
+                                    </Alert>
+                                )}
+
+                                {/* NEW GROUP MAPPING OPTIONS */}
+                                <div className="border-t border-slate-200 dark:border-slate-800 pt-6 mt-4">
+                                    <h3 className="text-base font-bold text-foreground mb-4">Group Mapping (Optional)</h3>
+                                    <div className="grid sm:grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label>Admin Group Name</Label>
+                                            <Input placeholder="e.g. OmnibusAdmins" value={formData.oidc_admin_group} onChange={e => updateForm('oidc_admin_group', e.target.value)} className="bg-white dark:bg-slate-900" />
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label>Standard User Group Name</Label>
+                                            <Input placeholder="e.g. OmnibusUsers" value={formData.oidc_user_group} onChange={e => updateForm('oidc_user_group', e.target.value)} className="bg-white dark:bg-slate-900" />
+                                        </div>
+                                    </div>
                                 </div>
                                 <div className="border-t border-slate-200 dark:border-slate-800 pt-4 mt-2">
                                     <Label className="text-sm font-bold text-rose-500 mb-2 block">Redirect URI Setup</Label>

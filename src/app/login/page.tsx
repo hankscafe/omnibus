@@ -26,6 +26,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [ssoLoading, setSsoLoading] = useState(false)
   const [ssoProvider, setSsoProvider] = useState<boolean>(false)
+  const [nativeAuthEnabled, setNativeAuthEnabled] = useState<boolean>(true)
   
   // 2FA State
   const [showTwoFactor, setShowTwoFactor] = useState(false)
@@ -45,12 +46,26 @@ export default function LoginPage() {
     fetch('/api/setup/check')
       .then(res => res.json())
       .then(data => {
-          if (data.requiresSetup) router.push('/setup');
+          if (data.requiresSetup) {
+              router.push('/setup');
+          } else {
+              // --- NEW: Check for the bypass parameter and force SSO ---
+              const params = new URLSearchParams(window.location.search);
+              const isLocalBypass = params.get('local') === 'true';
+              const hasError = !!params.get('error');
+
+              if (data.forceSso && !isLocalBypass && !hasError) {
+                  setNativeAuthEnabled(false);
+                  signIn('oidc');
+              }
+          }
       })
       .catch(err => Logger.log(`Setup check failed: ${getErrorMessage(err)}`, 'error'));
 
     getProviders().then(prov => {
-        if (prov?.oidc) setSsoProvider(true);
+        if (prov?.oidc) {
+            setSsoProvider(true);
+        }
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -194,6 +209,8 @@ export default function LoginPage() {
                 <><Mail className="w-5 h-5 text-primary" /> Reset Password</>
             ) : showTwoFactor ? (
                 <><ShieldCheck className="w-5 h-5 text-primary" /> Two-Factor Auth</>
+            ) : !nativeAuthEnabled ? (
+                <><Fingerprint className="w-5 h-5 text-primary" /> Authenticating...</>
             ) : (
                 <><ShieldCheck className="w-5 h-5 text-primary" /> Login Required</>
             )}
@@ -201,6 +218,15 @@ export default function LoginPage() {
         </CardHeader>
         
         <CardContent className="relative z-10 pt-6">
+          {!nativeAuthEnabled ? (
+            <div className="flex flex-col items-center justify-center py-6 space-y-4">
+               <Loader2 className="w-8 h-8 animate-spin text-primary" />
+               <p className="text-sm font-semibold text-muted-foreground text-center">
+                 Redirecting to Single Sign-On provider...
+               </p>
+            </div>
+          ) : (
+          <>
           <form suppressHydrationWarning onSubmit={view === 'register' ? handleRegister : view === 'forgot' ? handleForgotPassword : handleLogin} className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
             
             {showTwoFactor ? (
@@ -384,6 +410,8 @@ export default function LoginPage() {
                       </p>
                   )}
               </div>
+          )}
+          </>
           )}
         </CardContent>
         

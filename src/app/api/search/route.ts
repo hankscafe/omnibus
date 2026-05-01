@@ -18,18 +18,28 @@ export async function GET(request: Request) {
   const provider = searchParams.get('provider') || 'COMICVINE';
   
   const page = parseInt(searchParams.get('page') || '1', 10);
-  const limit = 20;
+  const limit = 40; // Increased to 40 to mitigate pagination gaps after filtering
 
   if (!query) {
     return NextResponse.json({ error: 'Query parameter "q" is required' }, { status: 400 });
   }
 
   try {
+    // --- FETCH SETTINGS (Including new Foreign Publisher Filter) ---
+    const settings = await prisma.systemSetting.findMany({
+        where: { key: { in: ['cv_api_key', 'filter_foreign_publishers'] } }
+    });
+    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+
+    const blockedForeignPublishers = config.filter_foreign_publishers 
+        ? config.filter_foreign_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) 
+        : [];
+
     if (provider === 'METRON') {
         const metron = new MetronProvider();
         const mdResults = await metron.searchSeries(query);
         await logApiUsage('metron', '/search')
-        const results = mdResults.map((r: any) => ({
+        let results = mdResults.map((r: any) => ({
             id: r.sourceId,
             name: r.name,
             year: r.year,
@@ -38,11 +48,19 @@ export async function GET(request: Request) {
             image: r.coverUrl ? `/api/library/cover?path=${encodeURIComponent(r.coverUrl)}` : null, 
             description: r.description || "No description available."
         }));
+
+        // Apply foreign publisher filter to Metron
+        if (blockedForeignPublishers.length > 0) {
+            results = results.filter((r: any) => {
+                const pub = (r.publisher || "").toLowerCase();
+                return !blockedForeignPublishers.some((bp: string) => pub.includes(bp));
+            });
+        }
+
         return NextResponse.json({ results, hasMore: false }); 
     }
 
-    const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
-    const CV_API_KEY = setting?.value || process.env.CV_API_KEY;
+    const CV_API_KEY = config.cv_api_key || process.env.CV_API_KEY;
 
     if (!CV_API_KEY) {
       return NextResponse.json({ error: 'Server configuration error: Missing API Key' }, { status: 500 });
@@ -54,13 +72,15 @@ export async function GET(request: Request) {
         field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description' 
       },
       headers: { 'User-Agent': 'Omnibus/1.0' }
-    });await logApiUsage('comicvine', '/search');
+    });
+    
+    await logApiUsage('comicvine', '/search');
 
     if (!response.data || !Array.isArray(response.data.results)) {
         return NextResponse.json({ results: [], hasMore: false });
     }
 
-    const results: FormattedSearchResult[] = response.data.results.map((vol: ComicVineVolume) => {
+    let results: FormattedSearchResult[] = response.data.results.map((vol: ComicVineVolume) => {
       let desc = vol.deck;
       if (!desc && vol.description) {
          desc = vol.description.replace(/<[^>]*>?/gm, '').trim();
@@ -76,6 +96,14 @@ export async function GET(request: Request) {
         description: desc || "No description available."
       };
     });
+
+    // --- APPLY FOREIGN PUBLISHER BLOCKLIST TO COMICVINE ---
+    if (blockedForeignPublishers.length > 0) {
+        results = results.filter((r: FormattedSearchResult) => {
+            const pub = (r.publisher || "").toLowerCase();
+            return !blockedForeignPublishers.some((bp: string) => pub.includes(bp));
+        });
+    }
 
     const totalResults = response.data.number_of_total_results || 0;
     const hasMore = (page * limit) < totalResults;

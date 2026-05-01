@@ -75,6 +75,7 @@ export default function SetupWizard() {
     prowlarr_url: '', prowlarr_key: '', prowlarr_categories: '7030, 8030',
     flaresolverr_url: '',
     filter_enabled: false, filter_publishers: '', filter_keywords: '',
+    filter_foreign_publishers: '',
     oidc_enabled: false, oidc_issuer: '', oidc_client_id: '', oidc_client_secret: '',
     oidc_force_sso: false, oidc_auto_approve: false, oidc_admin_group: '', oidc_user_group: '',
     smtp_enabled: false, smtp_host: '', smtp_port: '', smtp_user: '', smtp_pass: '', smtp_from: ''
@@ -404,6 +405,7 @@ export default function SetupWizard() {
               filter_enabled: formData.filter_enabled ? "true" : "false",
               filter_publishers: formData.filter_publishers,
               filter_keywords: formData.filter_keywords,
+              filter_foreign_publishers: formData.filter_foreign_publishers,
               oidc_enabled: formData.oidc_enabled ? "true" : "false",
               oidc_issuer: formData.oidc_issuer,
               oidc_client_id: formData.oidc_client_id,
@@ -921,7 +923,7 @@ export default function SetupWizard() {
                             <div className="pt-4 border-t dark:border-slate-800 space-y-4">
                                 <Button 
                                     variant="secondary" 
-                                    className="w-full font-bold"
+                                    className="w-full font-bold bg-white dark:bg-slate-900 border dark:border-slate-800"
                                     onClick={() => {
                                         updateForm('filter_publishers', RECOMMENDED_PUBLISHERS);
                                         updateForm('filter_keywords', RECOMMENDED_KEYWORDS);
@@ -929,8 +931,22 @@ export default function SetupWizard() {
                                 >
                                     Load NSFW Defaults
                                 </Button>
-                                <div className="grid gap-2"><Label>Blocked Publishers</Label><Input value={formData.filter_publishers} onChange={e => updateForm('filter_publishers', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
+                                <div className="grid gap-2"><Label>Blocked NSFW Publishers</Label><Input value={formData.filter_publishers} onChange={e => updateForm('filter_publishers', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
                                 <div className="grid gap-2"><Label>Blocked Keywords</Label><Input value={formData.filter_keywords} onChange={e => updateForm('filter_keywords', e.target.value)} className="bg-white dark:bg-slate-900" /></div>
+                                
+                                <div className="grid gap-2 mt-2 pt-4 border-t dark:border-slate-800">
+                                    <Button 
+                                        variant="secondary" 
+                                        className="w-full font-bold bg-white dark:bg-slate-900 border dark:border-slate-800 mb-2"
+                                        onClick={() => {
+                                            updateForm('filter_foreign_publishers', "panini, panini espana, panini france, panini comics, panini verlag, urban comics, ecc ediciones, editorial televisa, planeta deagostini, ediciones zinco, norma editorial, panini brasil, panini mexico, panini uk, delcourt, glenat, dargaud, soleil, epsilon");
+                                        }}
+                                    >
+                                        Load Foreign Defaults
+                                    </Button>
+                                    <Label>Blocked Foreign Publishers (Manual Search)</Label>
+                                    <Input value={formData.filter_foreign_publishers} onChange={e => updateForm('filter_foreign_publishers', e.target.value)} placeholder="e.g. panini espana, urban comics" className="bg-white dark:bg-slate-900" />
+                                </div>
                             </div>
                         )}
                     </div>

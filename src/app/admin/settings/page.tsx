@@ -172,6 +172,7 @@ export default function SettingsPage() {
     export_series_json: "false", 
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
+    filter_foreign_publishers: "",
     show_popular_issues: "true", show_new_releases: "true", 
     manga_publishers: "", western_publishers: "",
     discover_manga_filter_mode: "SHOW_ALL", discover_manga_allowed_publishers: "",
@@ -457,7 +458,15 @@ export default function SettingsPage() {
           filter_publishers: RECOMMENDED_PUBLISHERS,
           filter_keywords: RECOMMENDED_KEYWORDS
       }));
-      toast({ title: "Filters Applied", description: "Recommended blocklists loaded. Click 'Save All Changes' to apply." });
+      toast({ title: "Filters Applied", description: "NSFW blocklists loaded. Click 'Save All Changes' to apply." });
+  }
+
+  const applyForeignFilters = () => {
+      setConfig((prev: any) => ({
+          ...prev,
+          filter_foreign_publishers: "panini, panini espana, panini france, panini comics, panini verlag, urban comics, ecc ediciones, editorial televisa, planeta deagostini, ediciones zinco, norma editorial, panini brasil, panini mexico, panini uk, delcourt, glenat, dargaud, soleil, epsilon"
+      }));
+      toast({ title: "Filters Applied", description: "Foreign publisher blocklist loaded. Click 'Save All Changes' to apply." });
   }
 
   const refreshIndexers = async () => {
@@ -1518,6 +1527,15 @@ export default function SettingsPage() {
                         </div>
                         
                         <div className="space-y-4 mt-4">
+                            <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex flex-col sm:flex-row justify-between items-center gap-4 mb-4">
+                                <div className="text-sm text-foreground/80">
+                                    <strong className="text-primary">Quick Setup:</strong> Load a pre-configured blocklist of common adult/NSFW publishers and keywords.
+                                </div>
+                                <Button variant="secondary" onClick={applyRecommendedFilters} className="h-12 sm:h-10 w-full sm:w-auto font-bold shrink-0 bg-background border-border shadow-sm text-foreground hover:bg-muted">
+                                    Load NSFW Defaults
+                                </Button>
+                            </div>
+
                             <div className="grid gap-2">
                                 <Label className="text-foreground font-semibold">Blocked Publishers (Comma Separated)</Label>
                                 <textarea 
@@ -1538,17 +1556,27 @@ export default function SettingsPage() {
                                     className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
                                 />
                             </div>
+                            {/* --- NEW FOREIGN BLOCKLIST TEXTAREA --- */}
+                            <div className="grid gap-2 mt-4 pt-4 border-t border-border">
+                                <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex flex-col sm:flex-row justify-between items-center gap-4 mb-2">
+                                    <div className="text-sm text-foreground/80">
+                                        <strong className="text-primary">Quick Setup:</strong> Load a pre-configured blocklist of common foreign publishers to hide them from Manual Search.
+                                    </div>
+                                    <Button variant="secondary" onClick={applyForeignFilters} className="h-12 sm:h-10 w-full sm:w-auto font-bold shrink-0 bg-background border-border shadow-sm text-foreground hover:bg-muted">
+                                        Load Foreign Defaults
+                                    </Button>
+                                </div>
+                                <Label className="text-foreground font-semibold">Foreign Publisher Blocklist (Comma Separated)</Label>
+                                <textarea 
+                                    rows={3}
+                                    value={config.filter_foreign_publishers || ""} 
+                                    onChange={e => setConfig({...config, filter_foreign_publishers: e.target.value})} 
+                                    placeholder="e.g. panini espana, urban comics, ecc ediciones" 
+                                    className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
+                                />
+                                <p className="text-[10px] text-muted-foreground">These publishers will be hidden from your Manual Search results.</p>
+                            </div>
                         </div>
-                    </div>
-
-                    <div className="border-t border-border my-4" />
-                    <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex flex-col sm:flex-row justify-between items-center gap-4">
-                        <div className="text-sm text-foreground/80">
-                            <strong className="text-primary">Quick Setup:</strong> Load a pre-configured blocklist of common adult publishers and keywords.
-                        </div>
-                        <Button variant="secondary" onClick={applyRecommendedFilters} className="h-12 sm:h-10 w-full sm:w-auto font-bold shrink-0 bg-background border-border shadow-sm text-foreground hover:bg-muted">
-                            Load NSFW Defaults
-                        </Button>
                     </div>
 
                     {/* Acronym Customization */}

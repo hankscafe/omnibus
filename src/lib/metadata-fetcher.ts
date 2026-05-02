@@ -1,5 +1,4 @@
 // src/lib/metadata-fetcher.ts
-// import axios from 'axios';
 import { apiClient as axios } from '@/lib/api-client';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -25,6 +24,18 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             const details = await metron.getSeriesDetails(metadataId);
             
             let finalCoverUrl = details.coverUrl;
+
+            // --- FIX: Check if we already have a local cover. Prioritize it to heal the database.
+            if (folderPath && fs.existsSync(folderPath)) {
+                const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
+                for (const pc of possibleCovers) {
+                    if (fs.existsSync(path.join(folderPath, pc))) {
+                        finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
+                        break;
+                    }
+                }
+            }
+
             if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
                 try {
                     const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
@@ -136,6 +147,19 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     const { genres: volGenres } = parseComicVineCredits(undefined, undefined, volData.concepts || undefined);
 
     let finalCoverUrl = imageUrl;
+    
+    // --- FIX: Check if we already have a local cover. Prioritize it to heal the database.
+    if (folderPath && fs.existsSync(folderPath)) {
+        const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
+        for (const pc of possibleCovers) {
+            if (fs.existsSync(path.join(folderPath, pc))) {
+                finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
+                break;
+            }
+        }
+    }
+
+    // Attempt to fetch fresh metadata from CV, but don't overwrite the local DB path proxy if it fails
     if (imageUrl && folderPath && fs.existsSync(folderPath)) {
         try {
             const imgRes = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer' });

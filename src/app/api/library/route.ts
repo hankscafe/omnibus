@@ -91,17 +91,14 @@ export async function GET(request: Request) {
         let parsedQuery = q.trim();
         let targetField = type.toUpperCase();
 
-        // 1. Detect prefix-based search (e.g., "character: batman")
         const prefixMatch = parsedQuery.match(/^(character|team|arc|location|writer|artist|genre):\s*(.+)$/i);
         if (prefixMatch) {
             targetField = prefixMatch[1].toUpperCase();
             parsedQuery = prefixMatch[2].trim();
         }
 
-        // 2. Strip optional wrapping quotes used for exact phrase matching
         parsedQuery = parsedQuery.replace(/^["']|["']$/g, '');
 
-        // 3. Apply the targeted search
         if (targetField === 'CHARACTER') {
             where.AND.push({ issues: { some: { characters: { contains: parsedQuery } } } });
         } else if (targetField === 'TEAM') {
@@ -119,7 +116,6 @@ export async function GET(request: Request) {
         } else if (targetField === 'TITLE') {
             where.AND.push({ OR: [{ name: { contains: parsedQuery } }, { publisher: { contains: parsedQuery } }] });
         } else {
-            // Broad search fallback
             where.AND.push({
                 OR: [
                     { name: { contains: parsedQuery } }, 
@@ -162,6 +158,7 @@ export async function GET(request: Request) {
             issues: {
                 select: {
                     id: true,
+                    coverUrl: true,
                     readProgresses: {
                         where: { userId: userId || 'none' },
                         select: { isCompleted: true }
@@ -174,23 +171,40 @@ export async function GET(request: Request) {
 
     const publishersRaw = await prisma.series.findMany({ select: { publisher: true }, distinct: ['publisher'] });
 
-    const formatted = dbSeries.map(s => ({
-        id: s.id, 
-        name: s.name || "Unknown Series", 
-        year: s.year, 
-        publisher: s.publisher || "Unknown",
-        path: s.folderPath, 
-        isFavorite: s.favorites.length > 0,
-        count: s.issues.length,
-        unreadCount: s.issues.filter(i => !i.readProgresses[0]?.isCompleted).length,
-        progressPercentage: s.issues.length > 0 
-            ? Math.round((s.issues.filter(i => i.readProgresses[0]?.isCompleted).length / s.issues.length) * 100) 
-            : 0,
-        cover: s.coverUrl?.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(s.coverUrl)}` : s.coverUrl,
-        cvId: parseInt(s.metadataId || "") || undefined,
-        monitored: s.monitored,
-        isManga: s.isManga
-    }));
+    const formatted = dbSeries.map(s => {
+        let finalCover = s.coverUrl;
+        
+        if (!finalCover && s.issues?.length > 0) {
+            const issueWithCover = s.issues.find((i: any) => i.coverUrl !== null && i.coverUrl !== '');
+            if (issueWithCover) {
+                finalCover = issueWithCover.coverUrl;
+            }
+        }
+
+        if (finalCover && !finalCover.startsWith('/api/')) {
+            finalCover = `/api/library/cover?path=${encodeURIComponent(finalCover)}`;
+        } else if (!finalCover && s.folderPath) {
+            finalCover = `/api/library/cover?path=${encodeURIComponent(s.folderPath)}`;
+        }
+
+        return {
+            id: s.id, 
+            name: s.name || "Unknown Series", 
+            year: s.year, 
+            publisher: s.publisher || "Unknown",
+            path: s.folderPath, 
+            isFavorite: s.favorites.length > 0,
+            count: s.issues.length,
+            unreadCount: s.issues.filter(i => !i.readProgresses[0]?.isCompleted).length,
+            progressPercentage: s.issues.length > 0 
+                ? Math.round((s.issues.filter(i => i.readProgresses[0]?.isCompleted).length / s.issues.length) * 100) 
+                : 0,
+            cover: finalCover,
+            cvId: parseInt(s.metadataId || "") || undefined,
+            monitored: s.monitored,
+            isManga: s.isManga
+        }
+    });
 
     return NextResponse.json({ 
         series: formatted, 
@@ -204,6 +218,7 @@ export async function GET(request: Request) {
   }
 }
 
+// ... POST/DELETE endpoints remain below exactly the same ...
 export async function POST(request: Request) {
     try {
         const authOptions = await getAuthOptions();
@@ -239,7 +254,6 @@ export async function POST(request: Request) {
             const collectionId = status;
             const list = await prisma.readingList.findUnique({ where: { id: collectionId } });
 
-            // Ensure the user owns the list or is an admin
             if (!list || (list.userId !== userId && session?.user?.role !== 'ADMIN')) {
                 return NextResponse.json({ error: "Forbidden" }, { status: 403 });
             }
@@ -250,12 +264,10 @@ export async function POST(request: Request) {
             return NextResponse.json({ success: true });
         }
 
-        // The following actions physically alter the system and require Admin rights
         if (session?.user?.role !== 'ADMIN') {
             return NextResponse.json({ error: "Unauthorized. Admin required." }, { status: 403 });
         }
 
-        // ACTION: Start / Stop Monitoring
         if (action === 'bulk-monitor') {
             const monitored = status === 'MONITOR';
             await prisma.series.updateMany({
@@ -266,7 +278,6 @@ export async function POST(request: Request) {
             return NextResponse.json({ success: true });
         }
 
-        // ACTION: Change to Manga / Comic
         if (action === 'bulk-manga') {
             const isManga = status === 'MANGA';
             await prisma.series.updateMany({

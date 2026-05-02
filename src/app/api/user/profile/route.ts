@@ -63,7 +63,12 @@ export async function GET(req: Request) {
         const folderPath = rp.issue?.series?.folderPath;
         
         let seriesCoverUrl = (rp.issue?.series as any)?.coverUrl || null;
-        if (seriesCoverUrl && seriesCoverUrl.startsWith('http')) {
+
+        if (!seriesCoverUrl && rp.issue?.coverUrl) {
+            seriesCoverUrl = rp.issue.coverUrl;
+        }
+
+        if (seriesCoverUrl && !seriesCoverUrl.startsWith('/api/')) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(seriesCoverUrl)}`;
         } else if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
@@ -139,7 +144,6 @@ export async function POST(req: Request) {
         const base64Data = avatarBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
         
-        // --- FIX: Output URL routed through new uploads API endpoint ---
         const avatarUrl = `/api/uploads/avatars/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { avatar: avatarUrl } });
         return NextResponse.json({ success: true, avatarUrl });
@@ -153,7 +157,6 @@ export async function POST(req: Request) {
         const base64Data = bannerBase64.replace(/^data:image\/\w+;base64,/, "");
         await fs.writeFile(filePath, base64Data, 'base64');
         
-        // --- FIX: Output URL routed through new uploads API endpoint ---
         const bannerUrl = `/api/uploads/banners/${fileName}?t=${Date.now()}`;
         await prisma.user.update({ where: { id: token.id as string }, data: { banner: bannerUrl } });
         return NextResponse.json({ success: true, bannerUrl });

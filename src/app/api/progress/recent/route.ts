@@ -1,3 +1,4 @@
+// src/app/api/progress/recent/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -38,9 +39,13 @@ export async function GET(request: Request) {
         const percentage = Math.round((p.currentPage / p.totalPages) * 100);
         const folderPath = p.issue.series.folderPath;
         
-        // --- FIX: Proxy external URL if it hasn't been downloaded locally yet ---
         let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
-        if (seriesCoverUrl && seriesCoverUrl.startsWith('http')) {
+        
+        if (!seriesCoverUrl && p.issue.coverUrl) {
+            seriesCoverUrl = p.issue.coverUrl;
+        }
+
+        if (seriesCoverUrl && !seriesCoverUrl.startsWith('/api/')) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(seriesCoverUrl)}`;
         } else if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;

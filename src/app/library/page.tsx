@@ -1126,7 +1126,7 @@ function LibraryContent() {
                               <MoreHorizontal className="w-4 h-4" />
                           </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-56 bg-popover border-border z-[100]">
+                      <DropdownMenuContent align="end" className="w-64 bg-popover border-border z-[100]">
                           <DropdownMenuItem onClick={() => handleBulkAdvanced('bulk-monitor', 'MONITOR')} className="cursor-pointer font-medium h-10 sm:h-8 hover:bg-muted">
                               <Activity className="w-4 h-4 mr-2 text-primary" /> Monitor Series
                           </DropdownMenuItem>
@@ -1253,7 +1253,7 @@ function LibraryContent() {
                     </span>
                 </div>
             </div>
-            <DialogFooter className="flex gap-2 sm:gap-0">
+            <DialogFooter className="flex gap-2 sm:gap-2">
                 <Button variant="outline" onClick={() => setRenameModalOpen(false)} disabled={isBulkProcessing} className="h-12 sm:h-10 border-border hover:bg-muted">Cancel</Button>
                 <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 sm:h-10" onClick={handleBulkRename} disabled={isBulkProcessing}>
                     {isBulkProcessing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <FileEdit className="w-5 h-5 mr-2" />} Standardize Files
@@ -1273,7 +1273,7 @@ function LibraryContent() {
                       <strong className="text-foreground">Note:</strong> This process is CPU/disk intensive and will run in the background. Check System Logs for progress.
                   </DialogDescription>
               </DialogHeader>
-              <DialogFooter className="flex gap-2 sm:gap-0">
+              <DialogFooter className="flex gap-2 sm:gap-2">
                   <Button variant="outline" onClick={() => setRepackModalOpen(false)} disabled={isBulkProcessing} className="h-12 sm:h-10 border-border hover:bg-muted">Cancel</Button>
                   <Button className="bg-teal-600 hover:bg-teal-700 text-white font-bold h-12 sm:h-10" onClick={handleBulkRepack} disabled={isBulkProcessing}>
                       {isBulkProcessing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Layers className="w-5 h-5 mr-2" />} Start Repacking

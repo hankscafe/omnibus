@@ -1,3 +1,4 @@
+// src/app/api/library/recent/route.ts
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
@@ -10,13 +11,24 @@ export async function GET() {
             where: { issues: { some: {} } },
             orderBy: { id: 'desc' },
             take: 7,
-            include: { _count: { select: { issues: true } } }
+            include: { 
+                _count: { select: { issues: true } },
+                issues: { 
+                    where: { coverUrl: { not: null } },
+                    select: { coverUrl: true }, 
+                    take: 1 
+                } 
+            }
         });
 
         const formatted = recentSeries.map(s => {
-            // --- FIX: Proxy external URL if it hasn't been downloaded locally yet ---
             let coverUrl = (s as any).coverUrl || null;
-            if (coverUrl && coverUrl.startsWith('http')) {
+            
+            if (!coverUrl && s.issues && s.issues.length > 0 && s.issues[0].coverUrl) {
+                coverUrl = s.issues[0].coverUrl;
+            }
+
+            if (coverUrl && !coverUrl.startsWith('/api/')) {
                 coverUrl = `/api/library/cover?path=${encodeURIComponent(coverUrl)}`;
             } else if (!coverUrl && s.folderPath) {
                 coverUrl = `/api/library/cover?path=${encodeURIComponent(s.folderPath)}`;

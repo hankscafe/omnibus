@@ -1,4 +1,3 @@
-// src/app/api/library/cover/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
@@ -9,8 +8,6 @@ import { getErrorMessage } from '@/lib/utils/error';
 const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org', 'metron.cloud', 'static.metron.cloud'];
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
 
-// --- NEW: High-Resolution Scalable Vector Graphic (SVG) Fallback ---
-// This generates a perfectly crisp, 2:3 aspect ratio placeholder matching the Omnibus branding
 function getFallbackImage() {
     const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600">
@@ -42,7 +39,6 @@ export async function GET(request: NextRequest) {
   if (!filePath) return new Response("Missing path", { status: 400 });
 
   try {
-    // 1. SSRF MITIGATION: Validate External URLs
     if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
         const url = new URL(filePath);
         
@@ -82,38 +78,44 @@ export async function GET(request: NextRequest) {
                 }
             });
         } catch (e) {
-            // --- UPDATED: Return the high-res SVG fallback ---
             return getFallbackImage();
         }
     }
 
-    // 2. PATH TRAVERSAL FIX
-    const realTarget = fs.realpathSync(filePath);
+    // 2. PATH TRAVERSAL FIX & ROBUST LOCAL COVER LOOKUP
+    // FIX: Replaced fs.realpathSync with path.normalize to prevent crashes on mapped network drives
+    const realTarget = path.normalize(filePath);
     const libraries = await prisma.library.findMany();
     
     const isAuthorized = libraries.some(lib => {
-        const realLibRoot = fs.realpathSync(lib.path);
-        return realTarget.startsWith(realLibRoot);
+        try {
+            const realLibRoot = path.normalize(lib.path).toLowerCase();
+            return realTarget.toLowerCase().startsWith(realLibRoot);
+        } catch (e) {
+            return false;
+        }
     });
 
     if (!isAuthorized) {
-      return new Response("Unauthorized", { status: 403 });
+      return getFallbackImage(); 
     }
 
     if (!fs.existsSync(realTarget)) {
-        // --- UPDATED: Return the high-res SVG fallback ---
         return getFallbackImage();
     }
 
-    // --- FIX: Prevent EISDIR crashes by checking if the target is a directory ---
     const stat = fs.statSync(realTarget);
     if (stat.isDirectory()) {
-        const possibleCover = path.join(realTarget, 'cover.jpg');
-        if (fs.existsSync(possibleCover)) {
-            const buffer = fs.readFileSync(possibleCover);
-            return new NextResponse(buffer, { 
-                headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' } 
-            });
+        const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
+        for (const pc of possibleCovers) {
+            const coverPath = path.join(realTarget, pc);
+            if (fs.existsSync(coverPath)) {
+                const buffer = fs.readFileSync(coverPath);
+                const ext = path.extname(pc).toLowerCase();
+                return new NextResponse(buffer, { 
+                    headers: { 'Content-Type': ext === '.png' ? 'image/png' : 'image/jpeg', 'Cache-Control': 'public, max-age=86400' } 
+                });
+            }
         }
         return getFallbackImage();
     }
@@ -130,7 +132,6 @@ export async function GET(request: NextRequest) {
     
   } catch (error) {
     Logger.log(`Cover Error: ${getErrorMessage(error)}`, 'error');
-    // --- UPDATED: Return the high-res SVG fallback ---
     return getFallbackImage();
   }
 }

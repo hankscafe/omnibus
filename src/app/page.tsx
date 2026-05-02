@@ -1,7 +1,7 @@
 // src/app/page.tsx
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useSession } from "next-auth/react"
 import { RequestSearch } from "@/components/request-search"
 import { ComicGrid } from "@/components/comic-grid"
@@ -41,6 +41,7 @@ export default function Home() {
 
   const [refreshSignal, setRefreshSignal] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // --- NEW: Discover Grid Visibility States ---
   const [showPopular, setShowPopular] = useState(true)
@@ -130,19 +131,48 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [isAdmin])
 
+  useEffect(() => {
+      return () => {
+          if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      }
+  }, []);
+
   const handleRefreshData = async () => {
     setIsRefreshing(true);
+    const requestTime = Date.now();
     try {
         await fetch('/api/admin/jobs/trigger', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ job: 'popular' }) 
         });
-        setRefreshSignal(Date.now()); 
+        
+        pollIntervalRef.current = setInterval(async () => {
+            try {
+                const res = await fetch('/api/admin/job-logs');
+                if (res.ok) {
+                    const logs = await res.json();
+                    const recentJob = logs.find((l: any) => l.jobType === 'DISCOVER_SYNC' && new Date(l.createdAt).getTime() >= requestTime);
+                    if (recentJob) {
+                        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+                        setRefreshSignal(Date.now()); 
+                        setIsRefreshing(false);
+                    }
+                }
+            } catch (e) {}
+        }, 3000);
+
+        // Safety timeout
+        setTimeout(() => {
+            if (pollIntervalRef.current) {
+                clearInterval(pollIntervalRef.current);
+                setIsRefreshing(false);
+            }
+        }, 5 * 60 * 1000);
+
     } catch (e) {
         Logger.log(`Failed to refresh data: ${getErrorMessage(e)}`, 'error');
-    } finally {
-        setTimeout(() => setIsRefreshing(false), 2000); 
+        setIsRefreshing(false);
     }
   }
 

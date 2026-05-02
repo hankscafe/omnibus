@@ -1,3 +1,4 @@
+// src/app/api/progress/history/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -25,9 +26,13 @@ export async function GET(request: Request) {
     const items = history.map((p) => {
         const folderPath = p.issue.series.folderPath;
         
-        // --- FIX: Proxy external URL if it hasn't been downloaded locally yet ---
         let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
-        if (seriesCoverUrl && seriesCoverUrl.startsWith('http')) {
+        
+        if (!seriesCoverUrl && p.issue.coverUrl) {
+            seriesCoverUrl = p.issue.coverUrl;
+        }
+
+        if (seriesCoverUrl && !seriesCoverUrl.startsWith('/api/')) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(seriesCoverUrl)}`;
         } else if (!seriesCoverUrl && folderPath) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;

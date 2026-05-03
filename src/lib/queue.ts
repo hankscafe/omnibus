@@ -208,7 +208,7 @@ export function initWorker() {
                     const startTime = Date.now();
                     await prisma.systemSetting.upsert({ where: { key: 'last_cache_cleanup' }, update: { value: nowStr }, create: { key: 'last_cache_cleanup', value: nowStr } });
                     
-                    let deletedCount = 0;
+                    let dbDeletedCount = 0;
                     try {
                         const oldCacheSettings = await prisma.systemSetting.findMany({
                             where: { key: { startsWith: 'cv_details_cache_' } }
@@ -220,17 +220,20 @@ export function initWorker() {
                                 // If cache is older than 24 hours
                                 if (Date.now() - parsed.timestamp > 24 * 60 * 60 * 1000) {
                                     await prisma.systemSetting.delete({ where: { key: cache.key } });
-                                    deletedCount++;
+                                    dbDeletedCount++;
                                 }
                             } catch(e) {}
                         }
                     } catch (e) {}
 
-                    // --- MAKE SURE THIS ELSE BLOCK IS PRESENT ---
-                    if (deletedCount > 0) {
-                        Logger.log(`[Cache Cleanup] Purged ${deletedCount} expired metadata entries.`, 'success');
+                    // --- NEW: Trigger the in-memory cache cleanup ---
+                    const { cleanupMetadataExtractorCache } = await import('@/lib/metadata-extractor');
+                    const memDeletedCount = cleanupMetadataExtractorCache();
+
+                    if (dbDeletedCount > 0 || memDeletedCount > 0) {
+                        Logger.log(`[Cache Cleanup] Purged ${dbDeletedCount} expired DB entries and ${memDeletedCount} memory entries.`, 'success');
                     } else {
-                        Logger.log(`[Cache Cleanup] No expired metadata entries found to purge.`, 'info');
+                        Logger.log(`[Cache Cleanup] No expired cache entries found to purge.`, 'info');
                     }
 
                     await prisma.jobLog.create({
@@ -238,11 +241,11 @@ export function initWorker() {
                             jobType: 'CACHE_CLEANUP',
                             status: 'COMPLETED',
                             durationMs: Date.now() - startTime,
-                            message: `Cache cleanup finished. Purged ${deletedCount} expired cache entries.`
+                            message: `Cache cleanup finished. Purged ${dbDeletedCount} DB entries and ${memDeletedCount} memory entries.`
                         }
                     });
 
-                    SystemNotifier.sendAlert('job_cache_cleanup', { description: `Cache cleanup finished. Purged ${deletedCount} expired cache entries.` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_cache_cleanup', { description: `Cache cleanup finished. Purged ${dbDeletedCount} DB entries and ${memDeletedCount} memory entries.` }).catch(() => {});
                     
                     break;
                 }

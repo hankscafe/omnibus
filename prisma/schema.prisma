@@ -157,6 +157,7 @@ model Issue {
   storyArcs       String?
   teams           String?  // <-- NEW
   locations       String?  // <-- NEW
+  hasCustomMetadata Boolean @default(false) // <-- NEW
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt

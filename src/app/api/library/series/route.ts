@@ -22,10 +22,20 @@ const safeParse = (str: string | null) => {
 function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-    const explicitMatch = clean.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-    if (explicitMatch) return parseFloat(explicitMatch[1]).toString();
-    const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) return parseFloat(matches[matches.length - 1][1]).toString();
+    
+    // 1. HIGHEST PRIORITY: Look strictly for Issue or Chapter indicators first
+    // Note: Maintains [a-zA-Z]? to support variant issues like #1A or #02B
+    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
+
+    // 2. SECONDARY PRIORITY: If no issue indicator is found, check for Volume indicators
+    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
+    
+    // 3. FALLBACK: Grab the very last standalone number in the filename
+    const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
+    if (matches.length > 0) return matches[matches.length - 1][1].replace(/^0+(?=\d)/, '');
+    
     return "1"; 
 }
 
@@ -110,7 +120,7 @@ export async function GET(request: Request) {
         
         const issuesByNum = new Map<string, any[]>();
         for (const issue of existingIssues) {
-            const stdNum = parseFloat(issue.number.replace(/[^0-9.]/g, '') || "0").toString();
+            const stdNum = issue.number.replace(/^0+(?=\d)/, '');
             if (!issuesByNum.has(stdNum)) issuesByNum.set(stdNum, []);
             issuesByNum.get(stdNum)!.push(issue);
         }

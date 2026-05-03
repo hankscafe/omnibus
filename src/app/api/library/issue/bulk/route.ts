@@ -1,5 +1,3 @@
-// src/app/api/library/issue/bulk/route.ts
-
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -15,15 +13,28 @@ export async function PUT(request: Request) {
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
     try {
-        const { updates } = await request.json(); // Array of { id, number, name, releaseDate }
+        const { updates, action } = await request.json(); 
         
+        if (action === 'restore') {
+            // Restore defaults: Unset the flag
+            await prisma.issue.updateMany({
+                where: { id: { in: updates } },
+                data: { hasCustomMetadata: false }
+            });
+
+            await AuditLogger.log('RESTORE_ISSUE_DEFAULTS', { count: updates.length }, (session.user as any).id);
+            return NextResponse.json({ success: true, message: "Defaults restored. Please refresh metadata." });
+        }
+
+        // Standard bulk edit: Set the flag to true
         const transactions = updates.map((update: any) => 
             prisma.issue.update({
                 where: { id: update.id },
                 data: { 
                     number: update.number, 
                     name: update.name, 
-                    releaseDate: update.releaseDate 
+                    releaseDate: update.releaseDate,
+                    hasCustomMetadata: true // <-- NEW: Lock the metadata
                 }
             })
         );
@@ -35,7 +46,6 @@ export async function PUT(request: Request) {
             updates: updates.map((u: any) => ({ id: u.id, name: u.name, number: u.number }))
         }, (session.user as any).id);
 
-        // --- NEW: Immediately trigger the XML Writer for the exact issues modified ---
         if (updates.length > 0) {
             await omnibusQueue.add('EMBED_METADATA', { 
                 type: 'EMBED_METADATA', 

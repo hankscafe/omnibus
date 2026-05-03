@@ -61,14 +61,23 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             
             for (const issue of issues) {
                 const issueNumStr = issue.issueNumber;
+                
                 const existingByMetaId = await prisma.issue.findFirst({ 
                     where: { metadataId: issue.sourceId, metadataSource: 'METRON' } 
                 });
 
+                const existingByNum = await prisma.issue.findFirst({
+                    where: { seriesId: series.id, number: issueNumStr }
+                });
+
+                // NEW: Check if the record exists and is locked by the Admin
+                const targetRecord = existingByMetaId || existingByNum;
+                const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
+
                 const issueDataPayload = {
-                    name: issue.name,
+                    name: isLocked ? targetRecord!.name : issue.name,
+                    releaseDate: isLocked ? targetRecord!.releaseDate : issue.releaseDate,
                     description: issue.description,
-                    releaseDate: issue.releaseDate,
                     coverUrl: issue.coverUrl,
                     writers: JSON.stringify(issue.writers),
                     artists: JSON.stringify(issue.artists),
@@ -81,28 +90,22 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                         where: { id: existingByMetaId.id },
                         data: { seriesId: series.id, number: issueNumStr, ...issueDataPayload }
                     });
-                } else {
-                    const existingByNum = await prisma.issue.findFirst({
-                        where: { seriesId: series.id, number: issueNumStr }
+                } else if (existingByNum) {
+                    await prisma.issue.update({
+                        where: { id: existingByNum.id },
+                        data: { metadataId: issue.sourceId, metadataSource: 'METRON', ...issueDataPayload }
                     });
-
-                    if (existingByNum) {
-                        await prisma.issue.update({
-                            where: { id: existingByNum.id },
-                            data: { metadataId: issue.sourceId, metadataSource: 'METRON', ...issueDataPayload }
-                        });
-                    } else {
-                        await prisma.issue.create({
-                            data: {
-                                seriesId: series.id, 
-                                metadataId: issue.sourceId, 
-                                metadataSource: 'METRON', 
-                                number: issueNumStr, 
-                                status: 'WANTED', 
-                                ...issueDataPayload
-                            }
-                        });
-                    }
+                } else {
+                    await prisma.issue.create({
+                        data: {
+                            seriesId: series.id, 
+                            metadataId: issue.sourceId, 
+                            metadataSource: 'METRON', 
+                            number: issueNumStr, 
+                            status: 'WANTED', 
+                            ...issueDataPayload
+                        }
+                    });
                 }
                 syncedCount++;
             }
@@ -220,10 +223,19 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 where: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE' } 
             });
 
+            const existingByNum = await prisma.issue.findFirst({
+                where: { seriesId: series.id, number: issueNumStr }
+            });
+
+            // NEW: Check if the record exists and is locked by the Admin
+            const targetRecord = existingByCvId || existingByNum;
+            const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
+
             const issueDataPayload = {
-                name: cvIssue.name,
+                // If locked, keep the existing name/date. Otherwise, use CV's data.
+                name: isLocked ? targetRecord!.name : cvIssue.name,
+                releaseDate: isLocked ? targetRecord!.releaseDate : (cvIssue.store_date || cvIssue.cover_date || null),
                 description: cvIssue.description || cvIssue.deck || null,
-                releaseDate: cvIssue.store_date || cvIssue.cover_date || null,
                 coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
             };
 
@@ -237,28 +249,22 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     where: { id: existingByCvId.id },
                     data: { seriesId: series.id, number: issueNumStr, ...dynamicPayload }
                 });
-            } else {
-                const existingByNum = await prisma.issue.findFirst({
-                    where: { seriesId: series.id, number: issueNumStr }
+            } else if (existingByNum) {
+                await prisma.issue.update({
+                    where: { id: existingByNum.id },
+                    data: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE', ...dynamicPayload }
                 });
-
-                if (existingByNum) {
-                    await prisma.issue.update({
-                        where: { id: existingByNum.id },
-                        data: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE', ...dynamicPayload }
-                    });
-                } else {
-                    await prisma.issue.create({
-                        data: {
-                            seriesId: series.id, 
-                            metadataId: cvIssue.id.toString(), 
-                            metadataSource: 'COMICVINE', 
-                            number: issueNumStr, 
-                            status: 'WANTED', 
-                            ...dynamicPayload
-                        }
-                    });
-                }
+            } else {
+                await prisma.issue.create({
+                    data: {
+                        seriesId: series.id, 
+                        metadataId: cvIssue.id.toString(), 
+                        metadataSource: 'COMICVINE', 
+                        number: issueNumStr, 
+                        status: 'WANTED', 
+                        ...dynamicPayload
+                    }
+                });
             }
             syncedCount++;
         }

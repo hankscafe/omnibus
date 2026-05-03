@@ -107,6 +107,13 @@ function SeriesContent() {
   const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
   const [bulkEditData, setBulkEditData] = useState<any[]>([]);
 
+  const [linkingState, setLinkingState] = useState<Record<string, string>>({});
+  const [isLinking, setIsLinking] = useState<string | null>(null);
+  
+  // Calculate unmatched issues
+  const unmatchedIssues = downloadedIssues.filter(i => i.cvId === null);
+  const matchedDownloadedIssues = downloadedIssues.filter(i => i.cvId !== null);
+
   const [reviews, setReviews] = useState<any[]>([]);
   const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });
   const [userReview, setUserReview] = useState({ rating: 0, text: "" });
@@ -662,6 +669,52 @@ function SeriesContent() {
     }
   }
 
+  const handleLinkIssue = async (unmatchedId: string) => {
+      const targetId = linkingState[unmatchedId];
+      if (!targetId) return toast({ title: "Please select an issue to link to.", variant: "destructive" });
+      
+      setIsLinking(unmatchedId);
+      try {
+          const res = await fetch('/api/library/issue/link', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ unmatchedId, targetId })
+          });
+          if (res.ok) {
+              toast({ title: "Issue Linked Successfully", description: "The file has been attached to the official metadata record." });
+              window.location.reload(); // Quick refresh to update the missing/downloaded arrays
+          } else {
+              throw new Error("Failed to link issue.");
+          }
+      } catch (e: any) {
+          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } finally {
+          setIsLinking(null);
+      }
+  };
+
+  const handleRestoreDefaults = async () => {
+      setIsBulkProcessing(true);
+      try {
+          const res = await fetch('/api/library/issue/bulk', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ updates: Array.from(selectedIssues), action: 'restore' })
+          });
+          if (res.ok) {
+              toast({ title: "Defaults Restored", description: "Fetching official names from provider in the background." });
+              // Trigger a background refresh so the names update immediately
+              if (seriesInfo.cvId) {
+                  fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: seriesInfo.cvId, folderPath }) });
+              }
+              setBulkEditModalOpen(false);
+              setSelectedIssues(new Set());
+              setIsSelectionMode(false);
+          }
+      } catch(e) { toast({ title: "Error", variant: "destructive" }); }
+      finally { setIsBulkProcessing(false); }
+  };
+
   const getImageUrl = (imageObj: any) => {
       if (!imageObj) return null;
       if (typeof imageObj === 'string') return imageObj;
@@ -995,6 +1048,54 @@ function SeriesContent() {
                       ))}
                   </div>
               </div>
+
+              {/* --- UNMATCHED FILES WARNING & RESOLUTION --- */}
+              {isAdmin && unmatchedIssues.length > 0 && (
+                  <div className="space-y-4 mb-8 bg-orange-50/50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900/50 rounded-xl p-4 sm:p-6 animate-in fade-in">
+                      <div className="flex items-center gap-3 text-orange-600 dark:text-orange-400">
+                          <AlertTriangle className="w-6 h-6" />
+                          <h4 className="font-bold text-lg">Unrecognized Files Detected ({unmatchedIssues.length})</h4>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                          Omnibus found files in this folder that it could not automatically map to ComicVine. Please select the correct missing issue for each file below.
+                      </p>
+
+                      <div className="space-y-3 pt-2">
+                          {unmatchedIssues.map(issue => (
+                              <div key={issue.id} className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-background p-3 rounded-lg border border-border shadow-sm">
+                                  <div className="min-w-0 flex-1">
+                                      <p className="text-xs font-mono text-muted-foreground truncate">{issue.fullPath?.split(/[\\/]/).pop()}</p>
+                                  </div>
+                                  <div className="flex gap-2 w-full md:w-auto shrink-0">
+                                      <Select 
+                                          value={linkingState[issue.id] || ""} 
+                                          onValueChange={(val) => setLinkingState(prev => ({ ...prev, [issue.id]: val }))}
+                                      >
+                                          <SelectTrigger className="w-full md:w-[250px] bg-background border-border h-9 text-xs">
+                                              <SelectValue placeholder="Select missing issue..." />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                              {missingIssues.map((missing) => (
+                                                  <SelectItem key={missing.id} value={missing.id}>
+                                                      Issue #{missing.parsedNum} - {missing.name}
+                                                  </SelectItem>
+                                              ))}
+                                          </SelectContent>
+                                      </Select>
+                                      <Button 
+                                          size="sm" 
+                                          className="h-9 px-4 font-bold shrink-0" 
+                                          disabled={!linkingState[issue.id] || isLinking === issue.id}
+                                          onClick={() => handleLinkIssue(issue.id)}
+                                      >
+                                          {isLinking === issue.id ? <Loader2 className="w-4 h-4 animate-spin" /> : "Link"}
+                                      </Button>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              )}
 
               {/* --- DOWNLOADED ISSUES SECTION --- */}
               <div className="space-y-6">
@@ -1412,14 +1513,24 @@ function SeriesContent() {
                       </tbody>
                   </table>
               </div>
-              <DialogFooter>
-                  <Button variant="outline" onClick={() => setBulkEditModalOpen(false)} disabled={isBulkProcessing} className="border-border hover:bg-muted">Cancel</Button>
-                  <Button onClick={handleSpreadsheetSave} disabled={isBulkProcessing} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
-                      {isBulkProcessing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
-                      Save All Changes
-                  </Button>
+              <DialogFooter className="flex flex-col sm:flex-row justify-between w-full sm:items-center mt-4 border-t border-border pt-4 gap-2">
+                  <Button 
+                      variant="outline" 
+                      onClick={handleRestoreDefaults} 
+                      disabled={isBulkProcessing || selectedIssues.size === 0} // <-- Added size check
+                      className="text-orange-600 border-orange-200 hover:bg-orange-50 dark:border-orange-900/50 dark:hover:bg-orange-900/20 sm:mr-auto"
+                  >
+                      <RefreshCw className="w-4 h-4 mr-2" /> Restore Default Data
+                </Button>
+                  <div className="flex gap-2">
+                      <Button variant="outline" onClick={() => setBulkEditModalOpen(false)} disabled={isBulkProcessing} className="border-border hover:bg-muted">Cancel</Button>
+                      <Button onClick={handleSpreadsheetSave} disabled={isBulkProcessing} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                          {isBulkProcessing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
+                          Save All Changes
+                      </Button>
+                  </div>
               </DialogFooter>
-          </DialogContent>
+            </DialogContent>
       </Dialog>
 
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>

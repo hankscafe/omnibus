@@ -145,6 +145,12 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
         }
 
         // 3. Build the Komga/Kavita compatible JSON structure
+        const cvUrl = (series.metadataSource === 'COMICVINE' && series.metadataId) 
+            ? `https://comicvine.gamespot.com/volume/4050-${series.metadataId}/` 
+            : '';
+
+        const links = cvUrl ? [{ label: "ComicVine", url: cvUrl }] : [];
+
         const komgaMetadata = {
             metadata: {
                 title: series.name,
@@ -157,7 +163,8 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
                 language: "en",
                 genres: Array.from(allGenres),
                 tags: [],
-                totalBookCount: series.issues.length
+                totalBookCount: series.issues.length,
+                links: links // <-- NEW: Injects the ComicVine URL
             }
         };
 

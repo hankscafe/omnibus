@@ -10,7 +10,7 @@ import {
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users
+  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -140,7 +140,33 @@ function LibraryContent() {
 
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [repackModalOpen, setRepackModalOpen] = useState(false);
-  const [renamePattern, setRenamePattern] = useState("{Series} ({Year}) - #{Issue}");
+  
+  // --- NEW STANDARDIZE NAMES STATE ---
+  const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
+  const [filePattern, setFilePattern] = useState("{Series} #{Issue}");
+  const [renamePreviews, setRenamePreviews] = useState<any[]>([]);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+
+  useEffect(() => {
+      if (renameModalOpen && selectedSeries.size > 0) {
+          setIsLoadingPreview(true);
+          fetch('/api/library/rename/preview', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  seriesIds: Array.from(selectedSeries), 
+                  folderPattern, 
+                  filePattern 
+              })
+          })
+          .then(res => res.json())
+          .then(data => { if (data.previews) setRenamePreviews(data.previews); })
+          .catch(() => {})
+          .finally(() => setIsLoadingPreview(false));
+      } else {
+          setRenamePreviews([]);
+      }
+  }, [renameModalOpen, folderPattern, filePattern, selectedSeries]);
 
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
@@ -630,7 +656,11 @@ function LibraryContent() {
           const res = await fetch('/api/library/rename', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ seriesIds: Array.from(selectedSeries), pattern: renamePattern })
+              body: JSON.stringify({ 
+                  seriesIds: Array.from(selectedSeries), 
+                  folderPattern, 
+                  filePattern 
+              })
           });
           if (res.ok) {
               const data = await res.json();
@@ -1220,46 +1250,102 @@ function LibraryContent() {
 
       {/* RENAME FILES MODAL */}
       <Dialog open={renameModalOpen} onOpenChange={setRenameModalOpen}>
-        <DialogContent className="sm:max-w-[450px] w-[95%] bg-background border-border rounded-xl">
-            <DialogHeader>
-                <DialogTitle className="flex items-center gap-2"><FileEdit className="w-5 h-5 text-primary"/> Standardize File Names</DialogTitle>
-                <DialogDescription className="pt-2">
-                    Omnibus will enforce the standard folder structure and perfectly rename all physical `.cbz` / `.cbr` files based on your chosen convention.
-                </DialogDescription>
-            </DialogHeader>
-            <div className="py-4 space-y-4">
-                <div className="space-y-2">
-                    <Label htmlFor="rename-convention-select">Select Naming Convention</Label>
-                    <Select value={renamePattern} onValueChange={setRenamePattern}>
-                        <SelectTrigger id="rename-convention-select" className="bg-background border-border h-12 sm:h-10">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-popover border-border">
-                            <SelectItem value="{Series} ({Year}) - #{Issue}">Series (Year) - #Issue</SelectItem>
-                            <SelectItem value="[{Publisher}] {Series} ({Year}) - #{Issue}">[Publisher] Series (Year) - #Issue</SelectItem>
-                            <SelectItem value="{Series} #{Issue}">Series #Issue</SelectItem>
-                            <SelectItem value="{Series} - v{Year} - {Issue}">Series - vYear - Issue</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="bg-muted p-3 rounded-lg border border-border text-xs text-muted-foreground" aria-live="polite">
-                    <span className="font-bold text-foreground mb-1 block">Live Example Preview:</span>
-                    <span className="font-mono text-primary">
-                    {renamePattern
-                        .replace('{Publisher}', 'Marvel')
-                        .replace('{Series}', 'Cyclops')
-                        .replace('{Year}', '2026')
-                        .replace('{Issue}', '001')}.cbz
-                    </span>
-                </div>
-            </div>
-            <DialogFooter className="flex gap-2 sm:gap-2">
-                <Button variant="outline" onClick={() => setRenameModalOpen(false)} disabled={isBulkProcessing} className="h-12 sm:h-10 border-border hover:bg-muted">Cancel</Button>
-                <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 sm:h-10" onClick={handleBulkRename} disabled={isBulkProcessing}>
-                    {isBulkProcessing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <FileEdit className="w-5 h-5 mr-2" />} Standardize Files
-                </Button>
-            </DialogFooter>
-        </DialogContent>
+          <DialogContent className="sm:max-w-[700px] w-[95%] bg-background border-border rounded-xl">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                      <FolderSearch className="w-5 h-5 text-primary" /> Standardize File Names
+                  </DialogTitle>
+                  <DialogDescription>
+                      This will physically move and rename the files on your hard drive for all <strong>{selectedSeries.size}</strong> selected series.
+                  </DialogDescription>
+              </DialogHeader>
+              
+              <div className="py-4 space-y-6">
+                  {/* Dropdowns */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                          <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Series Folder Format</Label>
+                          <Select value={folderPattern} onValueChange={setFolderPattern}>
+                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                                  <SelectValue placeholder="Select Format..." />
+                              </SelectTrigger>
+                              <SelectContent className="bg-popover border-border">
+                                  <SelectItem value="{Publisher}/{Series} ({Year})">Publisher / Series (Year)</SelectItem>
+                                  <SelectItem value="{Publisher}/{Series}">Publisher / Series</SelectItem>
+                                  <SelectItem value="{Series} ({Year})">Series (Year)</SelectItem>
+                                  <SelectItem value="{Series}">Series Only</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                          <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">File Naming Convention</Label>
+                          <Select value={filePattern} onValueChange={setFilePattern}>
+                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                                  <SelectValue placeholder="Select Format..." />
+                              </SelectTrigger>
+                              <SelectContent className="bg-popover border-border">
+                                  <SelectItem value="{Series} #{Issue}">Series #Issue</SelectItem>
+                                  <SelectItem value="{Series} ({Year}) - #{Issue}">Series (Year) - #Issue</SelectItem>
+                                  <SelectItem value="{Series} v{Year} #{Issue}">Series vYear #Issue</SelectItem>
+                                  <SelectItem value="#{Issue}">#Issue Only</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
+                  </div>
+
+                  {/* Real-time Preview Table */}
+                  <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Path Preview (Sample from Selected Series)</Label>
+                      <div className="border border-border rounded-lg overflow-hidden bg-muted/20">
+                          {isLoadingPreview ? (
+                              <div className="flex flex-col items-center justify-center p-8 text-muted-foreground">
+                                  <Loader2 className="w-6 h-6 animate-spin mb-2" />
+                                  <span className="text-sm font-medium">Generating cross-series preview...</span>
+                              </div>
+                          ) : renamePreviews.length === 0 ? (
+                              <div className="p-8 text-center text-sm text-muted-foreground italic">
+                                  No downloaded files found across the selected series.
+                              </div>
+                          ) : (
+                              <div className="max-h-[300px] overflow-y-auto">
+                                  <table className="w-full text-xs text-left">
+                                      <thead className="bg-muted sticky top-0 border-b border-border shadow-sm z-10">
+                                          <tr>
+                                              <th className="px-3 py-2 font-semibold">Series</th>
+                                              <th className="px-3 py-2 font-semibold">Current Path</th>
+                                              <th className="px-3 py-2 font-semibold text-primary">New Path</th>
+                                          </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-border/50">
+                                          {renamePreviews.map((preview, i) => (
+                                              <tr key={i} className="hover:bg-muted/30 transition-colors">
+                                                  <td className="px-3 py-2 font-bold text-foreground align-top max-w-[100px] truncate" title={preview.seriesName}>
+                                                      {preview.seriesName}
+                                                  </td>
+                                                  <td className="px-3 py-2 text-red-500/80 break-all font-mono align-top">
+                                                      {preview.oldPath}
+                                                  </td>
+                                                  <td className="px-3 py-2 text-green-500/90 break-all font-mono font-medium align-top">
+                                                      {preview.newPath}
+                                                  </td>
+                                              </tr>
+                                          ))}
+                                      </tbody>
+                                  </table>
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              </div>
+
+              <DialogFooter className="flex gap-2 sm:gap-2">
+                  <Button variant="outline" onClick={() => setRenameModalOpen(false)} disabled={isBulkProcessing} className="h-12 sm:h-10 border-border hover:bg-muted">Cancel</Button>
+                  <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 sm:h-10" onClick={handleBulkRename} disabled={isBulkProcessing || isLoadingPreview || renamePreviews.length === 0}>
+                      {isBulkProcessing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <FolderSearch className="w-5 h-5 mr-2" />} Standardize Selected
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
       </Dialog>
 
       {/* INTERNAL PAGE REPACKER MODAL */}

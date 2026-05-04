@@ -1,6 +1,7 @@
 // src/app/api/request/manual/route.ts
 import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import path from 'path'; // <-- Added path for safe joining
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { DownloadService } from '@/lib/download-clients';
@@ -67,8 +68,28 @@ export async function POST(request: NextRequest) {
                 : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
             if (!targetLib) targetLib = libraries[0];
 
+            // --- FIX: Fetch Settings and apply Custom Folder Naming Pattern ---
+            const settings = await prisma.systemSetting.findMany();
+            const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+            const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
+
             const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-            const safePubFolder = safePublisher.replace(/[<>:"/\\|?*]/g, '').trim();
+            const safePubFolder = safePublisher !== "Unknown" ? safePublisher.replace(/[<>:"/\\|?*]/g, '').trim() : "Other";
+
+            let relFolderPath = folderPattern
+                .replace(/{Publisher}/gi, safePubFolder)
+                .replace(/{Series}/gi, safeFolderName)
+                .replace(/{Year}/gi, year ? year.toString() : "")
+                .replace(/\(\s*\)/g, '') 
+                .replace(/\[\s*\]/g, '') 
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
+            const libraryTypeFolder = isManga ? 'Manga' : 'Comics';
+            const basePath = targetLib ? targetLib.path : `/${libraryTypeFolder}`;
+            
+            const folderPath = path.join(basePath, ...folderParts).replace(/\\/g, '/');
 
             await prisma.series.upsert({
                 where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
@@ -79,7 +100,7 @@ export async function POST(request: NextRequest) {
                     name, 
                     year: parseInt(year) || new Date().getFullYear(), 
                     publisher: safePublisher, 
-                    folderPath: targetLib ? `${targetLib.path}/${safePubFolder}/${safeFolderName}` : `/Comics/${safePubFolder}/${safeFolderName}`, 
+                    folderPath, // <-- Applies the dynamic custom path
                     monitored: true,
                     isManga: isManga,
                     libraryId: targetLib?.id,

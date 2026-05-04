@@ -80,7 +80,7 @@ export async function POST(request: Request) {
 
     const safePublisher = realPublisher.replace(/[<>:"/\\|?*]/g, '').trim();
     const safeName = realName.replace(/[<>:"/\\|?*]/g, '').trim();
-    const safeYear = realYear > 0 ? ` (${realYear})` : '';
+    const safeYear = realYear > 0 ? realYear.toString() : ''; // Raw year string
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
     
@@ -91,9 +91,22 @@ export async function POST(request: Request) {
     if (!targetLib) targetLib = libraries[0];
     if (!targetLib) return NextResponse.json({ error: "No libraries configured." }, { status: 400 });
 
-    let newFolderPath = targetLib.path;
-    if (safePublisher) newFolderPath = path.join(newFolderPath, safePublisher);
-    newFolderPath = path.join(newFolderPath, `${safeName}${safeYear}`);
+    // --- FIX: Fetch Settings and apply Custom Folder Naming Pattern ---
+    const settings = await prisma.systemSetting.findMany();
+    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
+
+    let relFolderPath = folderPattern
+        .replace(/{Publisher}/gi, safePublisher || "Other")
+        .replace(/{Series}/gi, safeName || "Unknown Series")
+        .replace(/{Year}/gi, safeYear)
+        .replace(/\(\s*\)/g, '') 
+        .replace(/\[\s*\]/g, '') 
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
+    let newFolderPath = path.join(targetLib.path, ...folderParts).replace(/\\/g, '/');
 
     const pubDir = path.dirname(newFolderPath);
     if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
@@ -202,7 +215,18 @@ export async function POST(request: Request) {
                     let formattedNum = issueNumStr;
                     if (!issueNumStr.includes('.') && issueNumStr.length === 1) formattedNum = `0${issueNumStr}`;
                     const prefix = isManga ? 'Vol. ' : '#';
-                    const newFileName = `${safeName} ${prefix}${formattedNum}${ext}`;
+                    
+                    // --- FIX: Respect file naming pattern here too! ---
+                    const filePatternToUse = isManga 
+                        ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
+                        : (config.file_naming_pattern || "{Series} #{Issue}");
+                        
+                    const newFileName = filePatternToUse
+                        .replace(/{Publisher}/gi, safePublisher || "Other")
+                        .replace(/{Series}/gi, safeName)
+                        .replace(/{Year}/gi, safeYear)
+                        .replace(/{Issue}/gi, formattedNum)
+                        .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
                     
                     const oldFilePath = path.join(activeFolderPath, file);
                     const newFilePath = path.join(activeFolderPath, newFileName);

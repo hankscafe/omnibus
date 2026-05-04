@@ -12,7 +12,7 @@ import {
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
-  MapPin, Shield
+  MapPin, Shield, FolderSearch
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -68,6 +68,7 @@ function SeriesContent() {
   
   const [copied, setCopied] = useState(false);
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false);
+  const [isScanningDirectory, setIsScanningDirectory] = useState(false);
 
   const [matchModalOpen, setMatchModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -92,12 +93,12 @@ function SeriesContent() {
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteFiles, setDeleteFiles] = useState(false);
+  const [deleteFiles, setDeleteFiles] = useState(true);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
 
   const [deleteIssueModalOpen, setDeleteIssueModalOpen] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<any>(null);
-  const [deleteIssueFile, setDeleteIssueFile] = useState(false);
+  const [deleteIssueFile, setDeleteIssueFile] = useState(true);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
 
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -123,6 +124,49 @@ function SeriesContent() {
 
   const isAdmin = session?.user?.role === 'ADMIN';
   const canDownload = isAdmin || (session?.user as any)?.canDownload;
+
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
+  const [filePattern, setFilePattern] = useState("{Series} #{Issue}");
+  const [renamePreviews, setRenamePreviews] = useState<any[]>([]);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+
+  useEffect(() => {
+      if (renameModalOpen && seriesInfo.id) {
+          setIsLoadingPreview(true);
+          fetch('/api/library/rename/preview', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern })
+          })
+          .then(res => res.json())
+          .then(data => { if (data.previews) setRenamePreviews(data.previews); })
+          .catch(() => {})
+          .finally(() => setIsLoadingPreview(false));
+      } else {
+          setRenamePreviews([]);
+      }
+  }, [renameModalOpen, folderPattern, filePattern, seriesInfo.id]);
+
+  const handleRenameSave = async () => {
+      setIsBulkProcessing(true);
+      try {
+          const res = await fetch('/api/library/rename', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern })
+          });
+          if (res.ok) {
+              toast({ title: "Files Standardized" });
+              setRenameModalOpen(false);
+              window.location.reload();
+          } else throw new Error("Failed to rename");
+      } catch (e) {
+          toast({ title: "Rename Failed", variant: "destructive" });
+      } finally {
+          setIsBulkProcessing(false);
+      }
+  };
 
   useEffect(() => {
     if (isAdmin) {
@@ -285,6 +329,45 @@ function SeriesContent() {
   const displayCover = activeIssue?.coverUrl || seriesInfo.cover;
   
   const hasCreators = writers.length > 0 || artists.length > 0 || coverArtists.length > 0 || colorists.length > 0 || letterers.length > 0;
+
+  const handleScanDirectory = async () => {
+      if (!folderPath) return;
+      setIsScanningDirectory(true);
+      toast({ title: "Scanning Directory", description: "Looking for new or removed files..." });
+      
+      try {
+          const res = await fetch(`/api/library/series?path=${encodeURIComponent(folderPath)}&t=${Date.now()}`);
+          const data = await res.json();
+          
+          if (data.error) throw new Error(data.error);
+          
+          setDownloadedIssues(data.downloadedIssues || []);
+          setMissingIssues(data.missingIssues || []);
+          
+          setSeriesInfo(prev => ({ 
+              ...prev,
+              name: data.seriesName || data.name || prev.name, 
+              cover: data.coverUrl !== undefined ? data.coverUrl : prev.cover, 
+              cvId: data.cvId !== undefined ? data.cvId : prev.cvId,
+              metadataId: data.metadataId !== undefined ? data.metadataId : prev.metadataId,
+              metadataSource: data.metadataSource || prev.metadataSource,
+              path: data.path || folderPath,
+              id: data.id || prev.id, 
+              isFavorite: data.isFavorite !== undefined ? data.isFavorite : prev.isFavorite,
+              publisher: data.publisher || prev.publisher, 
+              year: data.year ? data.year.toString() : prev.year,
+              description: data.description || prev.description,
+              status: data.status || prev.status,
+              monitored: data.monitored !== undefined ? data.monitored : prev.monitored
+          }));
+          
+          toast({ title: "Scan Complete", description: "Directory contents updated." });
+      } catch (e: any) {
+          toast({ title: "Scan Failed", description: e.message, variant: "destructive" });
+      } finally {
+          setIsScanningDirectory(false);
+      }
+  };
 
   const handleRefreshMetadata = async () => {
     if (!seriesInfo.metadataId && !seriesInfo.cvId) return;
@@ -521,15 +604,8 @@ function SeriesContent() {
           
           toast({ title: "Issue Deleted", description: "The issue has been successfully removed." });
           
-          setDownloadedIssues(prev => prev.filter(i => i.id !== issueToDelete.id));
-          
-          if (activeIssue?.id === issueToDelete.id) {
-              setActiveIssue(null); 
-          }
-
-          setIsDeletingIssue(false);
-          setDeleteIssueModalOpen(false);
-          setIssueToDelete(null);
+          // Force a reload to seamlessly transition the issue back to the Missing grid
+          window.location.reload();
 
       } catch (e: any) {
           toast({ title: "Delete Failed", description: e.message, variant: "destructive" });
@@ -817,6 +893,28 @@ function SeriesContent() {
                           <Search className="w-4 h-4 mr-2" /> {seriesInfo.cvId ? "Fix Match" : "Match Series"}
                       </Button>
                   )}
+
+                  {isAdmin && (
+                      <Button 
+                          variant="outline" 
+                          className="w-full border-border hover:bg-muted text-foreground font-bold" 
+                          disabled={isScanningDirectory} 
+                          onClick={handleScanDirectory}
+                      >
+                          {isScanningDirectory ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FolderSearch className="w-4 h-4 mr-2" />}
+                          Scan Directory
+                      </Button>
+                  )}
+
+                  {isAdmin && (
+                      <Button 
+                          variant="outline" 
+                          className="w-full border-border hover:bg-muted text-foreground font-bold" 
+                          onClick={() => setRenameModalOpen(true)}
+                      >
+                          <FolderSearch className="w-4 h-4 mr-2" /> Standardize Names
+                      </Button>
+                  )}
                   
                   {seriesInfo.cvId && (
                       <>
@@ -1052,9 +1150,21 @@ function SeriesContent() {
               {/* --- UNMATCHED FILES WARNING & RESOLUTION --- */}
               {isAdmin && unmatchedIssues.length > 0 && (
                   <div className="space-y-4 mb-8 bg-orange-50/50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900/50 rounded-xl p-4 sm:p-6 animate-in fade-in">
-                      <div className="flex items-center gap-3 text-orange-600 dark:text-orange-400">
-                          <AlertTriangle className="w-6 h-6" />
-                          <h4 className="font-bold text-lg">Unrecognized Files Detected ({unmatchedIssues.length})</h4>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 text-orange-600 dark:text-orange-400">
+                              <AlertTriangle className="w-6 h-6" />
+                              <h4 className="font-bold text-lg">Unrecognized Files Detected ({unmatchedIssues.length})</h4>
+                          </div>
+                          <Button 
+                              variant="outline" 
+                              size="sm"
+                              className="border-orange-300 text-orange-700 bg-orange-100 hover:bg-orange-200 dark:bg-orange-900/40 dark:border-orange-800 dark:text-orange-400 dark:hover:bg-orange-900/60 font-bold w-full sm:w-auto"
+                              disabled={isScanningDirectory}
+                              onClick={handleScanDirectory}
+                          >
+                              {isScanningDirectory ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FolderSearch className="w-4 h-4 mr-2" />}
+                              Rescan Directory
+                          </Button>
                       </div>
                       <p className="text-sm text-muted-foreground">
                           Omnibus found files in this folder that it could not automatically map to ComicVine. Please select the correct missing issue for each file below.
@@ -1113,7 +1223,7 @@ function SeriesContent() {
                   </div>
                   
                   {viewMode === 'grid' ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6 pb-4">
                           {downloadedIssues.map((issue) => {
                               const isSelected = activeIssue?.id === issue.id || selectedIssues.has(issue.id);
                               const isRead = issue.isRead || (issue.readProgress || 0) >= 100;
@@ -1144,8 +1254,8 @@ function SeriesContent() {
                                     </div>
                                     <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
                                       <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
-                                      <div className="flex items-center gap-2 mt-3">
-                                        <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
+                                      <div className="flex flex-wrap items-center gap-1.5 mt-3">
+                                        <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider min-w-[70px]" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                             <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
                                                 {getReadButtonLabel(issue)}
                                             </Link>
@@ -1157,7 +1267,14 @@ function SeriesContent() {
                                             </Button>
                                         )}
 
-                                        {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-9 px-3 bg-muted hover:bg-muted/80 text-foreground border-border" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                        {canDownload && !isSelectionMode && (
+                                            <Button size="sm" variant="secondary" className="h-9 w-9 p-0 flex items-center justify-center bg-muted hover:bg-muted/80 text-foreground border-border shrink-0" asChild onClick={(e) => e.stopPropagation()}>
+                                                <a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download>
+                                                    <Download className="w-4 h-4" />
+                                                </a>
+                                            </Button>
+                                        )}
+
                                         {isAdmin && !isSelectionMode && (
                                             <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200 dark:hover:border-red-900/50" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
                                                 <Trash2 className="w-4 h-4" />
@@ -1297,7 +1414,7 @@ function SeriesContent() {
                               <p className="text-sm text-green-700/70 dark:text-green-500/70 mt-1">All known issues are currently in your library.</p>
                           </div>
                       ) : viewMode === 'grid' ? (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-10">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6 pb-10">
                               {missingIssues.map((issue) => {
                                   const isRequesting = requestingIds.has(issue.id);
                                   const isAlreadyRequested = requestedIds.has(issue.id);
@@ -1306,7 +1423,7 @@ function SeriesContent() {
                                         <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border grayscale">{issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}</div>
                                         <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
                                             <div><h5 className="font-bold text-base line-clamp-2 text-foreground leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span></div>
-                                            <div className="flex items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] border-border hover:bg-muted uppercase tracking-wider" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
+                                            <div className="flex flex-wrap items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] border-border hover:bg-muted uppercase tracking-wider min-w-[80px]" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
                                         </div>
                                       </div>
                                   );
@@ -1423,6 +1540,101 @@ function SeriesContent() {
                   )}
 
               </div>
+              </DialogContent>
+      </Dialog>
+      
+          <Dialog open={renameModalOpen} onOpenChange={setRenameModalOpen}>
+          <DialogContent className="sm:max-w-[700px] bg-background border-border">
+              <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                      <FolderSearch className="w-5 h-5 text-primary" /> Standardize File Names
+                  </DialogTitle>
+                  <DialogDescription>
+                      This will physically move and rename the files on your hard drive to match your selected naming conventions.
+                  </DialogDescription>
+              </DialogHeader>
+              
+              <div className="py-4 space-y-6">
+                  {/* Dropdowns */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                          <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Series Folder Format</Label>
+                          <Select value={folderPattern} onValueChange={setFolderPattern}>
+                              <SelectTrigger className="bg-background border-border">
+                                  <SelectValue placeholder="Select Format..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                  <SelectItem value="{Publisher}/{Series} ({Year})">Publisher / Series (Year)</SelectItem>
+                                  <SelectItem value="{Publisher}/{Series}">Publisher / Series</SelectItem>
+                                  <SelectItem value="{Series} ({Year})">Series (Year)</SelectItem>
+                                  <SelectItem value="{Series}">Series Only</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                          <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">File Naming Convention</Label>
+                          <Select value={filePattern} onValueChange={setFilePattern}>
+                              <SelectTrigger className="bg-background border-border">
+                                  <SelectValue placeholder="Select Format..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                  <SelectItem value="{Series} #{Issue}">Series #Issue</SelectItem>
+                                  <SelectItem value="{Series} ({Year}) - #{Issue}">Series (Year) - #Issue</SelectItem>
+                                  <SelectItem value="{Series} v{Year} #{Issue}">Series vYear #Issue</SelectItem>
+                                  <SelectItem value="#{Issue}">#Issue Only</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
+                  </div>
+
+                  {/* Real-time Preview Table */}
+                  <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Path Preview (Sample)</Label>
+                      <div className="border border-border rounded-lg overflow-hidden bg-muted/20">
+                          {isLoadingPreview ? (
+                              <div className="flex flex-col items-center justify-center p-8 text-muted-foreground">
+                                  <Loader2 className="w-6 h-6 animate-spin mb-2" />
+                                  <span className="text-sm font-medium">Generating preview...</span>
+                              </div>
+                          ) : renamePreviews.length === 0 ? (
+                              <div className="p-8 text-center text-sm text-muted-foreground italic">
+                                  No downloaded files found for the selected series.
+                              </div>
+                          ) : (
+                              <div className="max-h-[250px] overflow-y-auto">
+                                  <table className="w-full text-xs text-left">
+                                      <thead className="bg-muted sticky top-0 border-b border-border shadow-sm">
+                                          <tr>
+                                              <th className="px-3 py-2 font-semibold">Current Physical Path</th>
+                                              <th className="px-3 py-2 font-semibold text-primary">New Proposed Path</th>
+                                          </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-border/50">
+                                          {renamePreviews.map((preview, i) => (
+                                              <tr key={i} className="hover:bg-muted/30 transition-colors">
+                                                  <td className="px-3 py-2 text-red-500/80 break-all font-mono align-top">
+                                                      {preview.oldPath}
+                                                  </td>
+                                                  <td className="px-3 py-2 text-green-500/90 break-all font-mono font-medium align-top">
+                                                      {preview.newPath}
+                                                  </td>
+                                              </tr>
+                                          ))}
+                                      </tbody>
+                                  </table>
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              </div>
+
+              <DialogFooter>
+                  <Button variant="outline" onClick={() => setRenameModalOpen(false)} disabled={isBulkProcessing}>Cancel</Button>
+                  <Button className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground" onClick={handleRenameSave} disabled={isBulkProcessing || isLoadingPreview || renamePreviews.length === 0}>
+                      {isBulkProcessing ? <Loader2 className="animate-spin mr-2" /> : "Standardize Files"}
+                  </Button>
+              </DialogFooter>
           </DialogContent>
       </Dialog>
 

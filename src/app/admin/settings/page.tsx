@@ -15,7 +15,8 @@ import {
   Clock,
   Smartphone,
   Globe,
-  AlertTriangle
+  AlertTriangle,
+  RotateCcw // <-- Added Icon Here
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -384,6 +385,20 @@ export default function SettingsPage() {
         setLoading(false) 
     }
   }
+
+  // --- NEW: Restore Naming Defaults Function ---
+  const handleRestoreNamingDefaults = () => {
+    setConfig((prev: any) => ({
+        ...prev,
+        folder_naming_pattern: "{Publisher}/{Series} ({Year})",
+        file_naming_pattern: "{Series} #{Issue}",
+        manga_file_naming_pattern: "{Series} Vol. {Issue}"
+    }));
+    toast({ 
+        title: "Defaults Restored", 
+        description: "Patterns reset to default. Don't forget to click 'Save All Changes' to apply!" 
+    });
+  };
 
   // --- Generic Provider Event Handler ---
   const toggleProviderEvent = (providerKey: string, eventId: string) => {
@@ -1149,12 +1164,23 @@ export default function SettingsPage() {
                     <StatusBox result={testResults.paths} />
 
                     <div className="grid gap-4 pt-6 border-t border-border">
-                        <div>
-                            <h3 className="text-lg font-bold text-foreground">Media Naming Conventions</h3>
-                            <p className="text-[11px] text-muted-foreground mt-1">
-                                Customize how Omnibus names your folders and files during imports. 
-                                Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>
-                            </p>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-foreground">Media Naming Conventions</h3>
+                                <p className="text-[11px] text-muted-foreground mt-1">
+                                    Customize how Omnibus names your folders and files during imports. 
+                                    Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>
+                                </p>
+                            </div>
+                            <Button 
+                                variant="outline" 
+                                type="button"
+                                onClick={handleRestoreNamingDefaults} 
+                                className="text-orange-600 border-orange-200 hover:bg-orange-50 dark:border-orange-900/50 dark:hover:bg-orange-900/20 shadow-sm font-bold shrink-0 w-full sm:w-auto h-12 sm:h-10"
+                            >
+                                <RotateCcw className="w-4 h-4 mr-2" /> 
+                                Restore Defaults
+                            </Button>
                         </div>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

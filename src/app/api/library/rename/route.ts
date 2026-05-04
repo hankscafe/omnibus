@@ -1,22 +1,20 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';
-import { getServerSession } from 'next-auth/next';
-import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getToken } from 'next-auth/jwt';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const authOptions = await getAuthOptions();
-    const session = await getServerSession(authOptions);
-    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const token = await getToken({ req: request });
+    if (token?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
-    const { seriesIds, pattern } = await request.json();
-
-    if (!seriesIds || !pattern) return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
+    const { seriesIds, folderPattern, filePattern } = await request.json();
+    
+    if (!seriesIds || !folderPattern || !filePattern) return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
 
     const seriesList = await prisma.series.findMany({
         where: { id: { in: seriesIds } }
@@ -26,8 +24,12 @@ export async function POST(request: Request) {
     
     // --- FETCH GLOBAL FOLDER SETTING ---
     const settings = await prisma.systemSetting.findMany();
-    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-    const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
+    const config = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
+    
+    // Use passed pattern, fallback to settings
+    const activeFolderPattern = folderPattern || config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
+    const activeFilePattern = filePattern || config.file_naming_pattern || "{Series} #{Issue}";
+    const activeMangaFilePattern = filePattern || config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
 
     let filesRenamed = 0;
     let foldersRenamed = 0;
@@ -48,8 +50,8 @@ export async function POST(request: Request) {
             const safeSeries = sanitize(s.name || "Unknown");
             const safeYear = s.year ? s.year.toString() : "";
             
-            // Generate dynamic folder name
-            let relFolderPath = folderPattern
+            // FIX: Use activeFolderPattern here
+            let relFolderPath = activeFolderPattern
                 .replace(/{Publisher}/gi, safePublisher)
                 .replace(/{Series}/gi, safeSeries)
                 .replace(/{Year}/gi, safeYear)
@@ -91,7 +93,10 @@ export async function POST(request: Request) {
                 paddedNum = `${parts[0].padStart(3, '0')}.${parts[1]}`;
             }
 
-            let newFileName = pattern
+            // FIX: Determine correct file pattern based on manga status
+            const patternToUse = s.isManga ? activeMangaFilePattern : activeFilePattern;
+
+            let newFileName = patternToUse
                 .replace(/{Publisher}/gi, s.publisher || 'Unknown')
                 .replace(/{Series}/gi, s.name || 'Unknown')
                 .replace(/{Year}/gi, s.year?.toString() || '0000')
@@ -123,8 +128,9 @@ export async function POST(request: Request) {
     await AuditLogger.log('BULK_RENAME_FILES', { 
         seriesRenamed: foldersRenamed, 
         filesRenamed: filesRenamed,
-        pattern: pattern
-    }, (session.user as any).id);
+        folderPattern: activeFolderPattern,
+        filePattern: activeFilePattern
+    }, (token.id || token.sub) as string);
 
     return NextResponse.json({ success: true, filesRenamed, foldersRenamed });
 

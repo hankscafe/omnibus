@@ -53,12 +53,11 @@ export async function GET(request: Request) {
 
     let where: any = { AND: [] };
 
-    if (!monitored && !unmatchedOnly) where.AND.push({ issues: { some: {} } });
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });
     if (publisherFilter !== 'ALL') where.AND.push({ publisher: publisherFilter });
     if (favorites) where.AND.push({ favorites: { some: { userId } } });
-    if (unmatchedOnly) where.AND.push({ metadataId: { startsWith: 'unmatched_' } });
+    if (unmatchedOnly) where.AND.push({ matchState: 'UNMATCHED' });
     if (monitored) where.AND.push({ monitored: true });
 
     if (era !== 'ALL') {
@@ -195,12 +194,13 @@ export async function GET(request: Request) {
             path: s.folderPath, 
             isFavorite: s.favorites.length > 0,
             count: s.issues.length,
-            unreadCount: s.issues.filter(i => !i.readProgresses[0]?.isCompleted).length,
+            unreadCount: s.issues.filter((i: any) => !i.readProgresses[0]?.isCompleted).length,
             progressPercentage: s.issues.length > 0 
-                ? Math.round((s.issues.filter(i => i.readProgresses[0]?.isCompleted).length / s.issues.length) * 100) 
+                ? Math.round((s.issues.filter((i: any) => i.readProgresses[0]?.isCompleted).length / s.issues.length) * 100) 
                 : 0,
             cover: finalCover,
             cvId: parseInt(s.metadataId || "") || undefined,
+            matchState: s.matchState, // <-- ADDED
             monitored: s.monitored,
             isManga: s.isManga
         }

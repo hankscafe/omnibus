@@ -57,6 +57,7 @@ interface LibrarySeries {
   cvId?: number;
   monitored?: boolean;
   isManga?: boolean;
+  matchState?: string;
 }
 
 interface Collection {
@@ -219,6 +220,21 @@ function LibraryContent() {
       }
   }, [searchParams]);
 
+  useEffect(() => {
+      fetch('/api/admin/config')
+          .then(res => res.ok ? res.json() : null)
+          .then(data => {
+              if (data?.settings) {
+                  const savedFolder = data.settings.find((s: any) => s.key === 'folder_naming_pattern')?.value;
+                  const savedFile = data.settings.find((s: any) => s.key === 'file_naming_pattern')?.value;
+                  
+                  if (savedFolder) setFolderPattern(savedFolder);
+                  if (savedFile) setFilePattern(savedFile);
+              }
+          })
+          .catch(() => {});
+  }, []);
+  
   useEffect(() => {
     fetch('/api/library/ids')
       .then(res => res.json())
@@ -925,12 +941,18 @@ function LibraryContent() {
                           )}
                           {!isSelectionMode && (
                               <div className="absolute top-1.5 left-1.5 flex flex-col gap-1 items-start z-30 pointer-events-none">
-                                  {isCompleted ? (
-                                      <Badge className="bg-green-600 hover:bg-green-600 text-white border-0 shadow-sm px-1.5 h-4 flex items-center gap-1 text-[9px] font-black uppercase tracking-wider"><Check className="w-2.5 h-2.5" /> Read</Badge>
-                                  ) : unread > 0 ? (
-                                      <Badge className="text-[9px] px-1.5 h-4 bg-primary hover:bg-primary/90 border-0 text-primary-foreground font-bold shadow-sm uppercase tracking-wider">{unread === item.count ? 'Unread' : `${unread} Left`}</Badge>
-                                  ) : null}
-                                  <Badge className="text-[9px] px-1.5 h-4 bg-black/70 hover:bg-black/70 border-0 text-white font-mono shadow-sm backdrop-blur-sm" title={`${item.count} total issues in this series`}>{item.count} {item.count === 1 ? 'Issue' : 'Issues'}</Badge>
+                                  {item.matchState === 'UNMATCHED' ? (
+                                      <Badge className="bg-orange-500 hover:bg-orange-600 text-white border-0 shadow-sm px-1.5 h-4 text-[9px] font-black uppercase tracking-wider">Unmatched</Badge>
+                                  ) : (
+                                      <>
+                                          {isCompleted ? (
+                                              <Badge className="bg-green-600 hover:bg-green-600 text-white border-0 shadow-sm px-1.5 h-4 flex items-center gap-1 text-[9px] font-black uppercase tracking-wider"><Check className="w-2.5 h-2.5" /> Read</Badge>
+                                          ) : unread > 0 ? (
+                                              <Badge className="text-[9px] px-1.5 h-4 bg-primary hover:bg-primary/90 border-0 text-primary-foreground font-bold shadow-sm uppercase tracking-wider">{unread === item.count ? 'Unread' : `${unread} Left`}</Badge>
+                                          ) : null}
+                                          <Badge className="text-[9px] px-1.5 h-4 bg-black/70 hover:bg-black/70 border-0 text-white font-mono shadow-sm backdrop-blur-sm" title={`${item.count} total issues in this series`}>{item.count} {item.count === 1 ? 'Issue' : 'Issues'}</Badge>
+                                      </>
+                                  )}
                               </div>
                           )}
                           {!isSelectionMode && (
@@ -1079,12 +1101,16 @@ function LibraryContent() {
                         <td className="px-4 py-3 text-muted-foreground hidden md:table-cell" title={item.publisher || 'Unknown'}>{item.publisher || 'Unknown'}</td>
                         <td className="px-4 py-3 text-center hidden sm:table-cell">{item.year || '????'}</td>
                         <td className="px-4 py-3 text-center">
-                            <div className="flex items-center justify-center gap-2">
-                                <Badge variant="secondary" className="font-mono bg-muted border-border" title={`${item.count} total issues in this series`}>{item.count}</Badge>
-                                {unread > 0 && !isCompleted && (
-                                    <Badge className="bg-primary/20 text-primary border-0 font-bold uppercase tracking-wider text-[10px]">{unread === item.count ? 'Unread' : `${unread} Left`}</Badge>
-                                )}
-                            </div>
+                            {item.matchState === 'UNMATCHED' ? (
+                                <Badge className="bg-orange-500 hover:bg-orange-600 text-white border-0 text-[9px] px-1.5 h-4 uppercase tracking-wider">Unmatched</Badge>
+                            ) : (
+                                <div className="flex items-center justify-center gap-2">
+                                    <Badge variant="secondary" className="font-mono bg-muted border-border" title={`${item.count} total issues in this series`}>{item.count}</Badge>
+                                    {unread > 0 && !isCompleted && (
+                                        <Badge className="bg-primary/20 text-primary border-0 font-bold uppercase tracking-wider text-[10px]">{unread === item.count ? 'Unread' : `${unread} Left`}</Badge>
+                                    )}
+                                </div>
+                            )}
                         </td>
                         {!isSelectionMode && (
                             <td className="px-4 py-3 text-right">
@@ -1261,36 +1287,24 @@ function LibraryContent() {
               </DialogHeader>
               
               <div className="py-4 space-y-6">
-                  {/* Dropdowns */}
+                  {/* Dropdowns replaced with Inputs */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-2">
                           <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Series Folder Format</Label>
-                          <Select value={folderPattern} onValueChange={setFolderPattern}>
-                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
-                                  <SelectValue placeholder="Select Format..." />
-                              </SelectTrigger>
-                              <SelectContent className="bg-popover border-border">
-                                  <SelectItem value="{Publisher}/{Series} ({Year})">Publisher / Series (Year)</SelectItem>
-                                  <SelectItem value="{Publisher}/{Series}">Publisher / Series</SelectItem>
-                                  <SelectItem value="{Series} ({Year})">Series (Year)</SelectItem>
-                                  <SelectItem value="{Series}">Series Only</SelectItem>
-                              </SelectContent>
-                          </Select>
+                          <Input 
+                              value={folderPattern} 
+                              onChange={(e) => setFolderPattern(e.target.value)}
+                              className="bg-background border-border h-12 sm:h-10 font-mono text-sm"
+                          />
                       </div>
 
                       <div className="space-y-2">
                           <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">File Naming Convention</Label>
-                          <Select value={filePattern} onValueChange={setFilePattern}>
-                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
-                                  <SelectValue placeholder="Select Format..." />
-                              </SelectTrigger>
-                              <SelectContent className="bg-popover border-border">
-                                  <SelectItem value="{Series} #{Issue}">Series #Issue</SelectItem>
-                                  <SelectItem value="{Series} ({Year}) - #{Issue}">Series (Year) - #Issue</SelectItem>
-                                  <SelectItem value="{Series} v{Year} #{Issue}">Series vYear #Issue</SelectItem>
-                                  <SelectItem value="#{Issue}">#Issue Only</SelectItem>
-                              </SelectContent>
-                          </Select>
+                          <Input 
+                              value={filePattern} 
+                              onChange={(e) => setFilePattern(e.target.value)}
+                              className="bg-background border-border h-12 sm:h-10 font-mono text-sm"
+                          />
                       </div>
                   </div>
 

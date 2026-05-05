@@ -100,6 +100,7 @@ export async function POST(request: Request) {
         .replace(/{Publisher}/gi, safePublisher || "Other")
         .replace(/{Series}/gi, safeName || "Unknown Series")
         .replace(/{Year}/gi, safeYear)
+        .replace(/{VolumeYear}/gi, safeYear)
         .replace(/\(\s*\)/g, '') 
         .replace(/\[\s*\]/g, '') 
         .replace(/\s+/g, ' ')
@@ -221,10 +222,14 @@ export async function POST(request: Request) {
                         ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
                         : (config.file_naming_pattern || "{Series} #{Issue}");
                         
+                    const issueYear = existingRecord ? (existingRecord.year?.toString() || safeYear) : safeYear; // Fallback
+                        
                     const newFileName = filePatternToUse
                         .replace(/{Publisher}/gi, safePublisher || "Other")
                         .replace(/{Series}/gi, safeName)
                         .replace(/{Year}/gi, safeYear)
+                        .replace(/{VolumeYear}/gi, safeYear)
+                        .replace(/{IssueYear}/gi, issueYear)
                         .replace(/{Issue}/gi, formattedNum)
                         .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
                     

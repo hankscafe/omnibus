@@ -1169,7 +1169,7 @@ export default function SettingsPage() {
                                 <h3 className="text-lg font-bold text-foreground">Media Naming Conventions</h3>
                                 <p className="text-[11px] text-muted-foreground mt-1">
                                     Customize how Omnibus names your folders and files during imports. 
-                                    Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>
+                                    Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{VolumeYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>
                                 </p>
                             </div>
                             <Button 
@@ -1216,41 +1216,6 @@ export default function SettingsPage() {
                                 />
                                 <p className="text-[10px] text-muted-foreground">Applied to items flagged as Manga.</p>
                             </div>
-                        </div>
-
-                        {/* --- IMAGE COMPRESSION UI --- */}
-                        <div className="grid gap-4 pt-6 border-t border-border mt-4">
-                            <div>
-                                <h3 className="text-lg font-bold text-foreground">Archive Compression (WEBP)</h3>
-                                <p className="text-[11px] text-muted-foreground mt-1">
-                                    Convert heavy JPEGs and PNGs to WEBP during CBR to CBZ conversions and when running the Repack tool. This saves massive amounts of disk space and significantly increases web reader performance.
-                                </p>
-                            </div>
-    
-                            <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border w-fit">
-                                <Switch 
-                                    id="webp-toggle"
-                                    checked={config.convert_to_webp === "true"} 
-                                    onCheckedChange={(c) => setConfig({...config, convert_to_webp: c ? "true" : "false"})} 
-                                />
-                                <Label htmlFor="webp-toggle" className="cursor-pointer font-bold text-base text-foreground">Convert images to WEBP</Label>
-                            </div>
-
-                            {config.convert_to_webp === "true" && (
-                                <div className="grid gap-2 max-w-sm">
-                                    <div className="flex items-center justify-between">
-                                        <Label className="text-foreground font-semibold">WEBP Quality</Label>
-                                        <span className="text-xs font-mono text-muted-foreground">{config.webp_quality || "80"}%</span>
-                                    </div>
-                                    <input 
-                                        type="range" min="10" max="100" step="5" 
-                                        value={config.webp_quality || "80"} 
-                                        onChange={(e) => setConfig({...config, webp_quality: e.target.value})} 
-                                        className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
-                                    />
-                                    <p className="text-[10px] text-muted-foreground">80% provides excellent visual quality while heavily reducing file size.</p>
-                                </div>
-                            )}
                         </div>
 
                         {/* --- LIVE PREVIEW BOX --- */}
@@ -1301,6 +1266,41 @@ export default function SettingsPage() {
                                     </span>
                                 </div>
                             </div>
+                        </div>
+
+                        {/* --- IMAGE COMPRESSION UI --- */}
+                        <div className="grid gap-4 pt-6 border-t border-border mt-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-foreground">Archive Compression (WEBP)</h3>
+                                <p className="text-[11px] text-muted-foreground mt-1">
+                                    Convert heavy JPEGs and PNGs to WEBP during CBR to CBZ conversions and when running the Repack tool. This saves massive amounts of disk space and significantly increases web reader performance.
+                                </p>
+                            </div>
+    
+                            <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border w-fit">
+                                <Switch 
+                                    id="webp-toggle"
+                                    checked={config.convert_to_webp === "true"} 
+                                    onCheckedChange={(c) => setConfig({...config, convert_to_webp: c ? "true" : "false"})} 
+                                />
+                                <Label htmlFor="webp-toggle" className="cursor-pointer font-bold text-base text-foreground">Convert images to WEBP</Label>
+                            </div>
+
+                            {config.convert_to_webp === "true" && (
+                                <div className="grid gap-2 max-w-sm">
+                                    <div className="flex items-center justify-between">
+                                        <Label className="text-foreground font-semibold">WEBP Quality</Label>
+                                        <span className="text-xs font-mono text-muted-foreground">{config.webp_quality || "80"}%</span>
+                                    </div>
+                                    <input 
+                                        type="range" min="10" max="100" step="5" 
+                                        value={config.webp_quality || "80"} 
+                                        onChange={(e) => setConfig({...config, webp_quality: e.target.value})} 
+                                        className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                                    />
+                                    <p className="text-[10px] text-muted-foreground">80% provides excellent visual quality while heavily reducing file size.</p>
+                                </div>
+                            )}
                         </div>
 
                         {/* --- DOCKER VOLUME BINDINGS UI --- */}

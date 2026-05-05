@@ -28,13 +28,26 @@ function extractIssueNumber(filename: string): string {
     const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
 
-    // 2. SECONDARY PRIORITY: If no issue indicator is found, check for Volume indicators
-    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    // 2. SECONDARY PRIORITY: Volume indicators (Max 3 digits to ignore V2024 or Vol 1998)
+    // The (?!\d) ensures we don't accidentally match the first 3 digits of a 4 digit year
+    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
     if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
     
-    // 3. FALLBACK: Grab the very last standalone number in the filename
+    // 3. FALLBACK: Grab the last standalone number, safely ignoring "Years" (1900-2099)
     const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) return matches[matches.length - 1][1].replace(/^0+(?=\d)/, '');
+    if (matches.length > 0) {
+        for (let i = matches.length - 1; i >= 0; i--) {
+            const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
+            const numVal = parseFloat(matchVal);
+            
+            // If the number looks exactly like a year (1900-2099) and has no letters (like 'A' or 'B'),
+            // skip it because it's almost certainly part of the title (e.g., 2000 AD, Spider-Man 2099)
+            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) {
+                continue; 
+            }
+            return matchVal;
+        }
+    }
     
     return "1"; 
 }
@@ -231,6 +244,7 @@ export async function GET(request: Request) {
       year: seriesRecord?.year || null, 
       status: seriesRecord?.status || null,
       monitored: seriesRecord?.monitored || false,
+      isManga: seriesRecord?.isManga || false,
       path: folderPath, 
       coverUrl: finalSeriesCoverUrl, 
       downloadedIssues, 

@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
                 .replace(/{Publisher}/gi, safePublisher)
                 .replace(/{Series}/gi, safeSeries)
                 .replace(/{Year}/gi, safeYear)
+                .replace(/{VolumeYear}/gi, safeYear)
                 .replace(/\(\s*\)/g, '') 
                 .replace(/\[\s*\]/g, '') 
                 .replace(/\s+/g, ' ')
@@ -96,10 +97,15 @@ export async function POST(request: NextRequest) {
             // FIX: Determine correct file pattern based on manga status
             const patternToUse = s.isManga ? activeMangaFilePattern : activeFilePattern;
 
+            // USE s.year directly instead of safeYear to avoid the scope error
+            const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : (s.year?.toString() || '0000');
+
             let newFileName = patternToUse
                 .replace(/{Publisher}/gi, s.publisher || 'Unknown')
                 .replace(/{Series}/gi, s.name || 'Unknown')
                 .replace(/{Year}/gi, s.year?.toString() || '0000')
+                .replace(/{VolumeYear}/gi, s.year?.toString() || '0000')
+                .replace(/{IssueYear}/gi, issueYear)
                 .replace(/{Issue}/gi, paddedNum);
             
             newFileName = sanitize(newFileName) + ext;

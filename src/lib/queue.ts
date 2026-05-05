@@ -527,6 +527,7 @@ export function initWorker() {
                                     .replace(/{Publisher}/gi, safePub)
                                     .replace(/{Series}/gi, safeSeries)
                                     .replace(/{Year}/gi, safeYear)
+                                    .replace(/{VolumeYear}/gi, safeYear)
                                     .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
 
                                 const destFolder = path.join(targetLib.path, ...relFolderPath.split(/[/\\]/).map(p => p.trim()).filter(Boolean));
@@ -535,11 +536,14 @@ export function initWorker() {
                                 const extractedNum = meta.number || "1";
                                 let formattedNum = extractedNum.includes('.') || extractedNum.length > 1 ? extractedNum : `0${extractedNum}`;
                                 
+                                const issueYear = meta.year ? meta.year.toString() : safeYear;
                                 const filePatToUse = isManga ? mangaFilePattern : filePattern;
                                 const newFileName = filePatToUse
                                     .replace(/{Publisher}/gi, safePub)
                                     .replace(/{Series}/gi, safeSeries)
                                     .replace(/{Year}/gi, safeYear)
+                                    .replace(/{VolumeYear}/gi, safeYear)
+                                    .replace(/{IssueYear}/gi, issueYear)
                                     .replace(/{Issue}/gi, formattedNum)
                                     .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
 
@@ -1134,9 +1138,27 @@ export function initWorker() {
                     // ------------------------------------------------------------------
                     const unreleasedRequests = allRequests.filter(r => r.status === 'UNRELEASED');
                     for (const req of unreleasedRequests) {
-                        const reqNumMatch = req.activeDownloadName?.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                        if (reqNumMatch) {
-                            const reqNum = parseFloat(reqNumMatch[1]);
+                        const extractNum = (str: string) => {
+                            const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+                            
+                            const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                            if (issueMatch) return parseFloat(issueMatch[1]);
+                            
+                            const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
+                            if (volMatch) return parseFloat(volMatch[1]);
+                            
+                            const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+                            if (fallbacks.length > 0) {
+                                for (let i = fallbacks.length - 1; i >= 0; i--) {
+                                    const numVal = parseFloat(fallbacks[i][1]);
+                                    if (numVal >= 1900 && numVal <= 2099) continue;
+                                    return numVal;
+                                }
+                            }
+                            return null;
+                        };
+                        const reqNum = extractNum(req.activeDownloadName || "");
+                        if (reqNum !== null) {
                             const matchedSeries = localSeriesList.find(s => s.metadataId === req.volumeId || s.id === req.volumeId);
                             if (matchedSeries) {
                                 const skeleton = matchedSeries.issues.find((i: any) => parseFloat(i.number) === reqNum);

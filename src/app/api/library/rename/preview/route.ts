@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
                 .replace(/{Publisher}/gi, safePublisher)
                 .replace(/{Series}/gi, safeName)
                 .replace(/{Year}/gi, safeYear)
+                .replace(/{VolumeYear}/gi, safeYear)
                 .replace(/\(\s*\)/g, '')
                 .replace(/\[\s*\]/g, '')
                 .replace(/\s+/g, ' ')
@@ -64,6 +65,7 @@ export async function POST(request: NextRequest) {
 
             for (const issue of downloadedIssues) {
                 const ext = path.extname(issue.filePath as string);
+                const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : safeYear;
                 
                 let formattedNum = String(issue.number || "0");
                 if (!formattedNum.includes('.')) {
@@ -73,11 +75,12 @@ export async function POST(request: NextRequest) {
                     formattedNum = `${parts[0].padStart(3, '0')}.${parts[1]}`;
                 }
 
-                // If Manga, you could swap patterns here, but the preview just uses what the user selects in the dropdown
                 const newFileName = filePattern
                     .replace(/{Publisher}/gi, safePublisher)
                     .replace(/{Series}/gi, safeName)
                     .replace(/{Year}/gi, safeYear)
+                    .replace(/{VolumeYear}/gi, safeYear)
+                    .replace(/{IssueYear}/gi, issueYear)
                     .replace(/{Issue}/gi, formattedNum || "")
                     .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
 

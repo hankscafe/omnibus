@@ -99,12 +99,28 @@ export const GetComicsService = {
     const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
     const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanOriginal.toLowerCase().includes(k));
 
-    let reqNumMatch = cleanOriginal.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-    let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+    // Tier 1: Explicit
+    const reqIssueMatch = cleanOriginal.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+    let reqNum = reqIssueMatch ? parseFloat(reqIssueMatch[1]) : null;
+
     if (reqNum === null) {
-        let noYearQuery = cleanOriginal.replace(/\b(19|20)\d{2}\b/g, '');
-        const fallbacks = [...noYearQuery.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-        if (fallbacks.length > 0) reqNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+        // Tier 2: Volume
+        const volMatch = cleanOriginal.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
+        if (volMatch) {
+            reqNum = parseFloat(volMatch[1]);
+        } else {
+            // Tier 3: Standalone with Year Trap
+            let noYearQuery = cleanOriginal.replace(/\b(19|20)\d{2}\b/g, '');
+            const fallbacks = [...noYearQuery.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+            if (fallbacks.length > 0) {
+                for (let i = fallbacks.length - 1; i >= 0; i--) {
+                    const numVal = parseFloat(fallbacks[i][1]);
+                    if (numVal >= 1900 && numVal <= 2099) continue;
+                    reqNum = numVal;
+                    break;
+                }
+            }
+        }
     }
 
     const reqYearMatch = cleanOriginal.match(/\b(19|20)\d{2}\b/);
@@ -131,7 +147,6 @@ export const GetComicsService = {
               }
           }
 
-          // --- NEW: Apply Variant Filter ---
           if (isRelevant && !userWantsVariant) {
               if (openVariantKeywords.some(k => titleLower.includes(k))) {
                   isRelevant = false;
@@ -155,11 +170,24 @@ export const GetComicsService = {
                   strippedForNumbers = strippedForNumbers.replace(/(?:book\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
               }
 
-              let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+              let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
               let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+              
               if (torNum === null) {
-                  const fallbacks = [...strippedForNumbers.matchAll(/(?:[^a-zA-Z0-9]|^)0*(\d+(?:\.\d+)?)(?:[^a-zA-Z0-9]|$)/g)];
-                  if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+                  const volMatch = strippedForNumbers.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
+                  if (volMatch) {
+                      torNum = parseFloat(volMatch[1]);
+                  } else {
+                      const fallbacks = [...strippedForNumbers.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+                      if (fallbacks.length > 0) {
+                          for (let i = fallbacks.length - 1; i >= 0; i--) {
+                              const numVal = parseFloat(fallbacks[i][1]);
+                              if (numVal >= 1900 && numVal <= 2099) continue;
+                              torNum = numVal;
+                              break;
+                          }
+                      }
+                  }
               }
 
               if (reqNum !== null) {

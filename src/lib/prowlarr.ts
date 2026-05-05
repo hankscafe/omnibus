@@ -1,3 +1,4 @@
+// src/lib/prowlarr.ts
 import axios from 'axios';
 import { prisma } from './db';
 import { Logger } from './logger';
@@ -47,8 +48,25 @@ export const ProwlarrService = {
 
       if (!Array.isArray(data)) return [];
 
-      let reqNumMatch = cleanQuery.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-      let reqNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+      const reqIssueMatch = cleanQuery.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+      let reqNum = reqIssueMatch ? parseFloat(reqIssueMatch[1]) : null;
+
+      if (reqNum === null) {
+          const volMatch = cleanQuery.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
+          if (volMatch) {
+              reqNum = parseFloat(volMatch[1]);
+          } else {
+              const fallbacks = [...cleanQuery.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+              if (fallbacks.length > 0) {
+                  for (let i = fallbacks.length - 1; i >= 0; i--) {
+                      const numVal = parseFloat(fallbacks[i][1]);
+                      if (numVal >= 1900 && numVal <= 2099) continue;
+                      reqNum = numVal;
+                      break;
+                  }
+              }
+          }
+      }
       
       const reqYearMatch = cleanQuery.match(/\b(19|20)\d{2}\b/);
       const reqYear = reqYearMatch ? reqYearMatch[1] : null;
@@ -88,7 +106,6 @@ export const ProwlarrService = {
                 return false;
             }
 
-            // --- NEW: Apply Variant Filter ---
             if (!userWantsVariant) {
                 if (openVariantKeywords.some(k => titleLower.includes(k))) return false;
                 for (const bk of boundedVariantKeywords) {
@@ -99,16 +116,27 @@ export const ProwlarrService = {
 
             // 5. Issue Number Check
             let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})\)/g, '');
-            let torNumMatch = cleanTor.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-            let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
+            
+            let torIssueMatch = cleanTor.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+            let torNum = torIssueMatch ? parseFloat(torIssueMatch[1]) : null;
             
             if (torNum === null) {
-                const fallbacks = [...cleanTor.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                // FIX: Corrected variable name from fallbackMatches to fallbacks
-                if (fallbacks.length > 0) torNum = parseFloat(fallbacks[fallbacks.length - 1][1]);
+                const volMatch = cleanTor.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
+                if (volMatch) {
+                    torNum = parseFloat(volMatch[1]);
+                } else {
+                    const fallbacks = [...cleanTor.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+                    if (fallbacks.length > 0) {
+                        for (let i = fallbacks.length - 1; i >= 0; i--) {
+                            const numVal = parseFloat(fallbacks[i][1]);
+                            if (numVal >= 1900 && numVal <= 2099) continue;
+                            torNum = numVal;
+                            break;
+                        }
+                    }
+                }
             }
 
-            // REJECTION LOGIC: If we asked for #18 and the result is #17, reject it.
             if (reqNum !== null) {
                 if (torNum !== null && torNum !== reqNum) return false;
                 if (torNum === null) return false; 

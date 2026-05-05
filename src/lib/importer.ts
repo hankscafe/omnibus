@@ -24,13 +24,26 @@ function extractIssueNumber(filename: string): string {
     const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
 
-    // 2. SECONDARY PRIORITY: If no issue indicator is found, check for Volume indicators
-    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    // 2. SECONDARY PRIORITY: Volume indicators (Max 3 digits to ignore V2024 or Vol 1998)
+    // The (?!\d) ensures we don't accidentally match the first 3 digits of a 4 digit year
+    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
     if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
     
-    // 3. FALLBACK: Grab the very last standalone number in the filename
+    // 3. FALLBACK: Grab the last standalone number, safely ignoring "Years" (1900-2099)
     const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) return matches[matches.length - 1][1].replace(/^0+(?=\d)/, '');
+    if (matches.length > 0) {
+        for (let i = matches.length - 1; i >= 0; i--) {
+            const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
+            const numVal = parseFloat(matchVal);
+            
+            // If the number looks exactly like a year (1900-2099) and has no letters (like 'A' or 'B'),
+            // skip it because it's almost certainly part of the title (e.g., 2000 AD, Spider-Man 2099)
+            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) {
+                continue; 
+            }
+            return matchVal;
+        }
+    }
     
     return "1"; 
 }
@@ -170,7 +183,6 @@ export const Importer = {
             try {
                 const zip = new AdmZip(sourcePath);
                 const entries = zip.getEntries();
-                // If the zip contains other comic archives (not just jpg/png pages)
                 const comicFiles = entries.filter((e: any) => !e.isDirectory && e.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i));
                 
                 if (comicFiles.length > 0) {
@@ -204,7 +216,6 @@ export const Importer = {
                     Logger.log(`[Importer] Failed to route ${path.basename(file)} to Watched folder.`, 'warn');
                 }
             }
-            // Cleanup empty DDL folders (Keep client torrent data intact for seeding)
             if (!isFromClient && !trackingHash) {
                 try { await fs.remove(sourcePath); } catch(e) {}
             }
@@ -232,13 +243,11 @@ export const Importer = {
             }
         }
 
-        // Mark request as completed
         await prisma.request.update({
             where: { id: requestId },
             data: { status: 'COMPLETED', progress: 100, notified: false }
         });
 
-        // Trigger WATCHED_FOLDER_SYNC
         try {
             const { omnibusQueue } = await import('./queue');
             await omnibusQueue.add('WATCHED_FOLDER_SYNC', { type: 'WATCHED_FOLDER_SYNC' }, {
@@ -248,7 +257,6 @@ export const Importer = {
 
         Logger.log(`[Importer] Successfully routed ${moveSuccessCount} files to Watched folder. Batch import complete.`, 'success');
         
-        // Notify user
         await SystemNotifier.sendAlert('comic_available', {
             title: `${req.activeDownloadName || "Batch Download"} - ${moveSuccessCount} Files`,
             imageUrl: req.imageUrl,
@@ -258,7 +266,6 @@ export const Importer = {
             date: new Date().toLocaleString()
         });
 
-        // Handle ignored_downloads cleanup so the queue is purged
         if (trackingHash) {
             try {
                 const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });
@@ -366,6 +373,7 @@ export const Importer = {
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
+        .replace(/{VolumeYear}/gi, seriesYearFromMeta.toString())
         .replace(/\(\s*\)/g, '') 
         .replace(/\[\s*\]/g, '') 
         .replace(/\s+/g, ' ')
@@ -410,6 +418,19 @@ export const Importer = {
         destFolder = idealDestFolder;
     }
 
+    let pageCount = 0;
+    let xmlMeta: any = null;
+
+    if (actualSourceFile.toLowerCase().match(/\.(cbz|zip|epub)$/i)) {
+        try {
+            const zip = new AdmZip(actualSourceFile);
+            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp|gif)$/i)).length;
+            
+            const { parseComicInfo } = await import('./metadata-extractor');
+            xmlMeta = await parseComicInfo(actualSourceFile);
+        } catch(e) {}
+    }
+
     const rawFileName = path.basename(actualSourceFile);
     const ext = path.extname(rawFileName);
     const extractedNum = extractIssueNumber(rawFileName);
@@ -417,11 +438,15 @@ export const Importer = {
     let formattedNum = extractedNum;
     if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
     
+    const issueYearFromMeta = xmlMeta?.year ? xmlMeta.year.toString() : seriesYearFromMeta.toString();
     const filePatToUse = isManga ? mangaFilePattern : filePattern;
+    
     let newFileName = filePatToUse
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
+        .replace(/{VolumeYear}/gi, seriesYearFromMeta.toString())
+        .replace(/{IssueYear}/gi, issueYearFromMeta)
         .replace(/{Issue}/gi, formattedNum)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')
@@ -476,19 +501,6 @@ export const Importer = {
               finalPath = convertedPath;
               fileName = path.basename(finalPath);
           }
-      }
-
-      let pageCount = 0;
-      let xmlMeta: any = null;
-
-      if (finalPath.toLowerCase().match(/\.(cbz|zip|epub)$/i)) {
-          try {
-              const zip = new AdmZip(finalPath);
-              pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp|gif)$/i)).length;
-              
-              const { parseComicInfo } = await import('./metadata-extractor');
-              xmlMeta = await parseComicInfo(finalPath);
-          } catch(e) {}
       }
 
       if (series?.id) {

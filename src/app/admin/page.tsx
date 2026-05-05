@@ -336,11 +336,17 @@ const mappedRequests = requests.map(req => {
                       if (chMatch) return parseFloat(chMatch[1]);
                       const issueMatch = clean.match(/(?:#|issue\s*#?)\s*0*(\d+(?:\.\d+)?)/i);
                       if (issueMatch) return parseFloat(issueMatch[1]);
-                      const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+                      const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
                       if (volMatch) return parseFloat(volMatch[1]);
-                      // FIX: Proper lookbehinds used here
                       const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                      if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
+                      if (fallbacks.length > 0) {
+                          for (let i = fallbacks.length - 1; i >= 0; i--) {
+                              const numVal = parseFloat(fallbacks[i][1]);
+                              // Ignore titles disguised as issue numbers
+                              if (numVal >= 1900 && numVal <= 2099) continue;
+                              return numVal;
+                          }
+                      }
                       return null;
                   };
 

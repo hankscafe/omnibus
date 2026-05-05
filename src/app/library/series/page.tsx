@@ -59,8 +59,8 @@ function SeriesContent() {
   const [missingIssues, setMissingIssues] = useState<any[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean}>({ 
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean, isManga: boolean}>({ 
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false, isManga: false
   });
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
@@ -148,6 +148,28 @@ function SeriesContent() {
       }
   }, [renameModalOpen, folderPattern, filePattern, seriesInfo.id]);
 
+  useEffect(() => {
+      fetch('/api/admin/config')
+          .then(res => res.ok ? res.json() : null)
+          .then(data => {
+              if (data?.settings) {
+                  const savedFolder = data.settings.find((s: any) => s.key === 'folder_naming_pattern')?.value;
+                  const savedFile = data.settings.find((s: any) => s.key === 'file_naming_pattern')?.value;
+                  const savedMangaFile = data.settings.find((s: any) => s.key === 'manga_file_naming_pattern')?.value;
+                  
+                  if (savedFolder) setFolderPattern(savedFolder);
+                  
+                  // Automatically pick the right file pattern based on whether the series is Manga
+                  if (seriesInfo.isManga && savedMangaFile) {
+                      setFilePattern(savedMangaFile);
+                  } else if (savedFile) {
+                      setFilePattern(savedFile);
+                  }
+              }
+          })
+          .catch(() => {});
+  }, [seriesInfo.isManga]); // Re-run if the manga status loads/changes
+
   const handleRenameSave = async () => {
       setIsBulkProcessing(true);
       try {
@@ -218,7 +240,8 @@ function SeriesContent() {
                 year: data.year ? data.year.toString() : null,
                 description: data.description || null,
                 status: data.status || null,
-                monitored: data.monitored || false
+                monitored: data.monitored || false,
+                isManga: data.isManga || false
             });
             
             setEditForm({
@@ -828,7 +851,11 @@ function SeriesContent() {
                   )}
 
                   <div className="aspect-[2/3] w-full bg-muted rounded-2xl border border-border shadow-xl flex items-center justify-center overflow-hidden relative">
-                      <img src={displayCover || seriesInfo.cover} alt="Cover" className="object-cover w-full h-full transition-opacity duration-300" />
+                      {displayCover || seriesInfo.cover ? (
+                          <img src={displayCover || seriesInfo.cover} alt="Cover" className="object-cover w-full h-full transition-opacity duration-300" />
+                      ) : (
+                          <ImageIcon className="w-16 h-16 text-muted-foreground/30" />
+                      )}
                   </div>
                   
                   <div className="text-center md:text-left space-y-1">
@@ -1551,6 +1578,8 @@ function SeriesContent() {
                   </DialogTitle>
                   <DialogDescription>
                       This will physically move and rename the files on your hard drive to match your selected naming conventions.
+                      <br/><br/>
+                      <span className="text-[11px] font-mono opacity-80">Available tags: {"{Publisher}"}, {"{Series}"}, {"{VolumeYear}"}, {"{IssueYear}"}, {"{Issue}"}</span>
                   </DialogDescription>
               </DialogHeader>
               
@@ -1559,32 +1588,20 @@ function SeriesContent() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-2">
                           <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Series Folder Format</Label>
-                          <Select value={folderPattern} onValueChange={setFolderPattern}>
-                              <SelectTrigger className="bg-background border-border">
-                                  <SelectValue placeholder="Select Format..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                  <SelectItem value="{Publisher}/{Series} ({Year})">Publisher / Series (Year)</SelectItem>
-                                  <SelectItem value="{Publisher}/{Series}">Publisher / Series</SelectItem>
-                                  <SelectItem value="{Series} ({Year})">Series (Year)</SelectItem>
-                                  <SelectItem value="{Series}">Series Only</SelectItem>
-                              </SelectContent>
-                          </Select>
+                          <Input 
+                              value={folderPattern} 
+                              onChange={(e) => setFolderPattern(e.target.value)}
+                              className="bg-background border-border h-12 sm:h-10 font-mono text-sm"
+                          />
                       </div>
 
                       <div className="space-y-2">
                           <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">File Naming Convention</Label>
-                          <Select value={filePattern} onValueChange={setFilePattern}>
-                              <SelectTrigger className="bg-background border-border">
-                                  <SelectValue placeholder="Select Format..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                  <SelectItem value="{Series} #{Issue}">Series #Issue</SelectItem>
-                                  <SelectItem value="{Series} ({Year}) - #{Issue}">Series (Year) - #Issue</SelectItem>
-                                  <SelectItem value="{Series} v{Year} #{Issue}">Series vYear #Issue</SelectItem>
-                                  <SelectItem value="#{Issue}">#Issue Only</SelectItem>
-                              </SelectContent>
-                          </Select>
+                          <Input 
+                              value={filePattern} 
+                              onChange={(e) => setFilePattern(e.target.value)}
+                              className="bg-background border-border h-12 sm:h-10 font-mono text-sm"
+                          />
                       </div>
                   </div>
 

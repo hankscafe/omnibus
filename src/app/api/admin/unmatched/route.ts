@@ -16,18 +16,7 @@ export async function GET() {
 
         // 1. Get Unmatched DB Records
         const unmatched = await prisma.series.findMany({
-            where: { 
-                AND: [
-                    { cvId: null },
-                    { matchState: 'UNMATCHED' },
-                    {
-                        OR: [
-                            { metadataId: null },
-                            { metadataId: { startsWith: 'unmatched_' } }
-                        ]
-                    }
-                ]
-            },
+            where: { matchState: 'UNMATCHED' },
             orderBy: { name: 'asc' }
         });
 

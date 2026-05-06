@@ -1,6 +1,7 @@
 // src/lib/api-auth.ts
 import { prisma } from './db';
 import crypto from 'crypto';
+import { Logger } from './logger';
 
 export async function validateApiKey(req: Request) {
     const authHeader = req.headers.get('authorization') || '';
@@ -28,8 +29,12 @@ export async function validateApiKey(req: Request) {
 
     const providedKey = apiKeyHeader || tokenFromBearer || basicAuthPassword || apiKeyQuery;
     
-    if (!providedKey) return { valid: false, user: null, keyType: null };
+    if (!providedKey) {
+        Logger.log(`[API Auth Debug] Authentication rejected: No token found in headers or query parameters.`, 'debug');
+        return { valid: false, user: null, keyType: null };
+    }
 
+    Logger.log(`[API Auth Debug] Validating provided key (Prefix: ${providedKey.substring(0, 10)}...)`, 'debug');
     const keyHash = crypto.createHash('sha256').update(providedKey).digest('hex');
 
     try {
@@ -40,7 +45,9 @@ export async function validateApiKey(req: Request) {
         });
 
         if (adminKey) {
+            Logger.log(`[API Auth Debug] Key matched ADMIN scope (User: ${adminKey.user.username})`, 'debug');
             if (adminKey.expiresAt && new Date() > adminKey.expiresAt) {
+                Logger.log(`[API Auth Debug] Key validation failed: Key has expired`, 'debug');
                 return { valid: false, user: null, keyType: null, error: "API Key has expired." };
             }
             prisma.apiKey.update({ where: { id: adminKey.id }, data: { lastUsedAt: new Date() } }).catch(() => {});

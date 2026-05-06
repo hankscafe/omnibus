@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import path from 'path';
 import { getToken } from 'next-auth/jwt';
+import { Logger } from '@/lib/logger';
 
 export async function POST(request: NextRequest) {
     try {
@@ -9,10 +10,10 @@ export async function POST(request: NextRequest) {
         if (token?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
         const { seriesIds, folderPattern, filePattern } = await request.json();
-        console.log("[Rename Preview] Incoming Series IDs:", seriesIds);
+        Logger.log(`[Rename Preview Debug] Incoming Request - Series Count: ${seriesIds?.length}, FolderPattern: "${folderPattern}", FilePattern: "${filePattern}"`, 'debug');
 
         if (!seriesIds || seriesIds.length === 0) {
-            console.log("[Rename Preview] Warning: No series IDs provided.");
+            Logger.log("[Rename Preview Debug] Warning: No series IDs provided.", 'warn');
             return NextResponse.json({ previews: [] });
         }
 
@@ -26,7 +27,7 @@ export async function POST(request: NextRequest) {
             });
 
             if (!series) {
-                console.log(`[Rename Preview] Series ${seriesId} not found in DB.`);
+                Logger.log(`[Rename Preview Debug] Series ${seriesId} not found in DB.`, 'debug');
                 continue;
             }
 
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
                 .filter((i: any) => i.filePath && i.filePath.trim() !== '')
                 .slice(0, 3); // Grab up to 3 valid, physical files
 
-            console.log(`[Rename Preview] Series "${series.name}" has ${downloadedIssues.length} downloaded files queued for preview.`);
+            Logger.log(`[Rename Preview Debug] Series "${series.name}" has ${downloadedIssues.length} downloaded files queued for preview.`, 'debug');
 
             if (downloadedIssues.length === 0) continue;
 
@@ -94,11 +95,11 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        console.log(`[Rename Preview] Successfully returning ${previews.length} rows.`);
+        Logger.log(`[Rename Preview Debug] Successfully returning ${previews.length} rows.`, 'debug');
         return NextResponse.json({ previews });
         
     } catch (error: any) {
-        console.error("[Rename Preview API Fatal Error]:", error.message);
+        Logger.log(`[Rename Preview API Fatal Error]: ${error.message}`, 'error');
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

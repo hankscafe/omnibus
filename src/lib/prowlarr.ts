@@ -44,6 +44,7 @@ export const ProwlarrService = {
 
     try {
       const url = `${config.prowlarr_url.replace(/\/$/, '')}/api/v1/search?${params.toString()}`;
+      Logger.log(`[Prowlarr Debug] Hitting endpoint: ${url}`, 'debug');
       const { data } = await axios.get<any[]>(url, { headers: reqHeaders, timeout: 30000 });
 
       if (!Array.isArray(data)) return [];
@@ -84,7 +85,10 @@ export const ProwlarrService = {
             const torYear = torYearMatch ? torYearMatch[0].replace(/[\[\]\(\)]/g, '') : null;
 
             if (originalReqYear) {
-                if (torYear && originalReqYear !== torYear) return false; 
+                if (torYear && originalReqYear !== torYear) {
+                    Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to year mismatch (${originalReqYear} vs ${torYear})`, 'debug');
+                    return false; 
+                }
                 if (!torYear && !titleLower.includes(originalReqYear)) return false; 
             }
 
@@ -97,7 +101,10 @@ export const ProwlarrService = {
             const resultWords = titleLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
                 .filter(w => !stopWords.includes(w) && w.length > 2 && w !== torYear);
             const extraWords = resultWords.filter(w => !significantQueryWords.includes(w));
-            if (extraWords.length > 1) return false;
+            if (extraWords.length > 1) {
+                Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to extra unwanted words: ${JSON.stringify(extraWords)}`, 'debug');
+                return false;
+            }
 
             // 4. TPB/Omnibus Filter
             const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'annual'];

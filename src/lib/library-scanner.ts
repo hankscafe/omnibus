@@ -5,6 +5,7 @@ import path from 'path';
 import { detectManga } from '@/lib/manga-detector';
 import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const LibraryScanner = {
     async scan(): Promise<boolean | null> {
@@ -44,11 +45,42 @@ export const LibraryScanner = {
                 Logger.log(`[Scan] Purged ${badIds.length} ghost series records.`, 'info');
             }
 
+            // --- NEW: Ghost Issue Cleanup ---
+            Logger.log(`[Scanner Debug] Searching for ghost issues with missing files...`, 'debug');
+            const allFiles = await prisma.issue.findMany({ where: { filePath: { not: null } } });
+            let ghostIssueCount = 0;
+
+            for (const issue of allFiles) {
+                if (issue.filePath && !fs.existsSync(issue.filePath)) {
+                    Logger.log(`[Scanner Debug] Removing ghost file path: ${issue.filePath}`, 'debug');
+                    try {
+                        if (issue.metadataId && !issue.metadataId.startsWith('unmatched')) {
+                            await prisma.issue.update({
+                                where: { id: issue.id },
+                                data: { filePath: null, status: 'WANTED' }
+                            });
+                        } else {
+                            // Prevent Foreign Key constraint crashes
+                            await prisma.readProgress.deleteMany({ where: { issueId: issue.id } }).catch(()=>({}));
+                            await prisma.issue.delete({ where: { id: issue.id } });
+                        }
+                        ghostIssueCount++;
+                    } catch (e: any) {
+                        Logger.log(`[Scanner Debug] Error removing ghost issue ${issue.id}: ${e.message}`, 'error');
+                    }
+                }
+            }
+            if (ghostIssueCount > 0) {
+                Logger.log(`[Scan] Cleared ${ghostIssueCount} ghost issue files.`, 'info');
+            }
+
             const existingFolders = new Set(allSeries.map(s => path.normalize(s.folderPath || "").toLowerCase()));
 
             const findSeriesFolders = async (dir: string, baseRoot: string, libId: string, libIsManga: boolean) => {
                 const folderName = path.basename(dir);
                 if (folderName.startsWith('.')) return;
+
+                Logger.log(`[Scanner Debug] Traversing directory: ${dir}`, 'debug');
 
                 const entries = await fs.promises.readdir(dir, { withFileTypes: true });
                 const files = entries.filter(e => !e.isDirectory()).map(e => e.name);
@@ -59,11 +91,15 @@ export const LibraryScanner = {
                     if (!existingFolders.has(normDir)) {
                         try {
                             const firstArchive = path.join(dir, bookFiles[0]);
+                            Logger.log(`[Scanner Debug] Found ${bookFiles.length} archives in new folder. Parsing metadata from: ${bookFiles[0]}`, 'debug');
+
                             const embeddedMeta = await parseComicInfo(firstArchive);
 
                             const cleanedName = embeddedMeta?.series || folderName.replace(/\s\(\d{4}\)$/, "").trim() || "Unknown Series";
                             const year = embeddedMeta?.year || parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0");
                             
+                            Logger.log(`[Scanner Debug] Extracted from folder/XML -> Name: "${cleanedName}", Year: ${year}, Publisher: "${embeddedMeta?.publisher || 'None'}"`, 'debug');
+
                             await prisma.series.create({
                                 data: {
                                     folderPath: dir.replace(/\\/g, '/'),
@@ -79,7 +115,11 @@ export const LibraryScanner = {
                                 }
                             });
                             Logger.log(`[Scan] Found and indexed new series: ${cleanedName}`, "success");
-                        } catch(e) {}
+                        } catch(e) {
+                            Logger.log(`[Scanner Debug] Failed to index folder ${dir}: ${getErrorMessage(e)}`, 'error');
+                        }
+                    } else {
+                        Logger.log(`[Scanner Debug] Skipping folder (already indexed): ${dir}`, 'debug');
                     }
                 }
                 

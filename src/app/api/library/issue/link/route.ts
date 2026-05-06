@@ -10,7 +10,6 @@ import { AuditLogger } from '@/lib/audit-logger';
 
 export async function POST(request: NextRequest) {
     try {
-        // Use getToken instead of getServerSession for reliable App Router auth
         const token = await getToken({ req: request });
         if (token?.role !== 'ADMIN') {
             return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
@@ -21,6 +20,8 @@ export async function POST(request: NextRequest) {
         if (!unmatchedId || !targetId) {
             return NextResponse.json({ error: "Missing required IDs." }, { status: 400 });
         }
+
+        Logger.log(`[Issue Link Debug] Incoming link request. Unmatched ID: [${unmatchedId}], Target ID: [${targetId}]`, 'debug');
 
         // 1. Fetch both the unmatched physical file record and the target metadata record
         const unmatchedIssue = await prisma.issue.findUnique({
@@ -33,10 +34,12 @@ export async function POST(request: NextRequest) {
         });
 
         if (!unmatchedIssue || !targetIssue) {
+            Logger.log(`[Issue Link Debug] Failed to find records in DB. Unmatched exists: ${!!unmatchedIssue}, Target exists: ${!!targetIssue}`, 'debug');
             return NextResponse.json({ error: "One or both issues could not be found." }, { status: 404 });
         }
 
         if (!unmatchedIssue.filePath) {
+            Logger.log(`[Issue Link Debug] Unmatched issue [${unmatchedId}] has no physical filePath. Aborting.`, 'debug');
             return NextResponse.json({ error: "The selected unmatched issue does not have a physical file path." }, { status: 400 });
         }
 
@@ -44,6 +47,10 @@ export async function POST(request: NextRequest) {
         const oldFilePath = unmatchedIssue.filePath;
         const activeFolderPath = path.dirname(oldFilePath);
         const ext = path.extname(oldFilePath);
+
+        // --- NEW: Human-readable context log ---
+        const targetTitle = targetIssue.name || "Untitled Issue";
+        Logger.log(`[Issue Link Debug] Linking file "${path.basename(oldFilePath)}" to official record: "${series.name}" Issue #${targetIssue.number} (${targetTitle})`, 'debug');
 
         // 2. Fetch System Settings for Naming Patterns
         const settings = await prisma.systemSetting.findMany();
@@ -56,7 +63,6 @@ export async function POST(request: NextRequest) {
         
         let issueNumStr = targetIssue.number;
         let formattedNum = issueNumStr;
-        // Pad single digit issue numbers with a leading zero
         if (issueNumStr && !issueNumStr.includes('.') && issueNumStr.length === 1) {
             formattedNum = `0${issueNumStr}`;
         }
@@ -79,18 +85,23 @@ export async function POST(request: NextRequest) {
         const newFilePath = path.join(activeFolderPath, newFileName);
         let finalFilePath = newFilePath;
 
-        // 5. Physically rename the file (safeguard against overwriting existing files)
+        Logger.log(`[Issue Link Debug] Generated new standardized path: ${finalFilePath}`, 'debug');
+
+        // 5. Physically rename the file
         try {
             if (oldFilePath !== newFilePath) {
                 if (fs.existsSync(newFilePath)) {
                     const baseName = path.basename(newFileName, ext);
                     finalFilePath = path.join(activeFolderPath, `${baseName} (Linked)${ext}`);
+                    Logger.log(`[Issue Link Debug] Target file already exists! Appended '(Linked)' to prevent overwrite: ${finalFilePath}`, 'debug');
                 }
+                Logger.log(`[Issue Link Debug] Executing OS rename: [${oldFilePath}] -> [${finalFilePath}]`, 'debug');
                 await fs.promises.rename(oldFilePath, finalFilePath);
+            } else {
+                Logger.log(`[Issue Link Debug] Old file path perfectly matches new file path. Skipping physical OS rename.`, 'debug');
             }
         } catch (err: any) {
-            Logger.log(`[Issue Link] Failed to rename file: ${err.message}`, 'error');
-            // If the rename fails (e.g., permissions), fallback to keeping the old path so the DB link still works
+            Logger.log(`[Issue Link Debug] OS RENAME FAILED: ${err.message}`, 'error');
             finalFilePath = oldFilePath;
         }
 
@@ -107,6 +118,8 @@ export async function POST(request: NextRequest) {
                 where: { id: unmatchedId }
             })
         ]);
+
+        Logger.log(`[Issue Link Debug] Database transaction complete. Unmatched dummy record deleted, Official record [${targetId}] attached to file.`, 'debug');
 
         await AuditLogger.log('LINK_ISSUE', { 
             unmatchedId, 

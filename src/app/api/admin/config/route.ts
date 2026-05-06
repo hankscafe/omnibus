@@ -185,6 +185,11 @@ export async function POST(request: Request) {
             }
         };
 
+        // Inside POST, around line 157 (after the transaction completes)
+        if (settings?.system_log_level) {
+            Logger.setLevel(settings.system_log_level);
+        }
+
         if (libraries) await syncTable(tx.library, libraries);
         if (downloadClients) await syncTable(tx.downloadClient, downloadClients);
         if (hosterAccounts) await syncTable(tx.hosterAccount, hosterAccounts); 

@@ -58,13 +58,21 @@ function isNewerVersion(latest: string, current: string): boolean {
 async function getFolderSize(folderPath: string): Promise<number> {
     try {
         if (!folderPath || !fs.existsSync(folderPath)) return 0;
+        Logger.log(`[Storage Scan Debug] Path invalid or missing: ${folderPath}`, 'debug');
         if (process.platform !== 'win32') {
             try {
                 const { stdout } = await execFileAsync('du', ['-sb', folderPath]);
                 const match = stdout.match(/^(\d+)/);
-                if (match) return parseInt(match[1], 10);
-            } catch (duError) {}
+                if (match) {
+                    const size = parseInt(match[1], 10);
+                    Logger.log(`[Storage Scan Debug] Fast 'du' calculation for ${folderPath}: ${Math.round(size / 1024 / 1024)} MB`, 'debug');
+                    return size;
+                }
+            } catch (duError) {
+                Logger.log(`[Storage Scan Debug] du command failed for ${folderPath}: ${getErrorMessage(duError)}`, 'debug');
+            }
         }
+        Logger.log(`[Storage Scan Debug] Manually calculating folder size for: ${folderPath}`, 'debug');
         const files = await fs.promises.readdir(folderPath, { withFileTypes: true });
         let totalSize = 0;
         for (const file of files) {
@@ -77,12 +85,14 @@ async function getFolderSize(folderPath: string): Promise<number> {
             }
         }
         return totalSize;
-    } catch (e) {
+    } catch (e: any) {
+        Logger.log(`[Storage Scan Debug] Failed to calculate size for ${folderPath}: ${e.message}`, 'error');
         return 0;
     }
 }
 
 async function runStorageScan() {
+    Logger.log(`[Storage Scan Debug] Initializing deep storage scan...`, 'debug');
     const nowStr = Date.now().toString();
     await prisma.systemSetting.upsert({
         where: { key: 'storage_deep_dive_last_run' },
@@ -94,8 +104,11 @@ async function runStorageScan() {
         select: { id: true, name: true, publisher: true, folderPath: true, isManga: true, _count: { select: { issues: true } } }
     });
 
+    Logger.log(`[Storage Scan Debug] Found ${seriesList.length} series to evaluate.`, 'debug');
+
     const storageData: any[] = [];
     for (const s of seriesList) {
+        Logger.log(`[Storage Scan Debug] Evaluating Series: "${s.name}" at path [${s.folderPath}]`, 'debug');
         const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
         await prisma.series.update({ where: { id: s.id }, data: { size } }).catch(() => {});
         storageData.push({
@@ -106,6 +119,7 @@ async function runStorageScan() {
     }
 
     storageData.sort((a, b) => b.sizeBytes - a.sizeBytes);
+    Logger.log(`[Storage Scan Debug] Completed deep storage scan. Caching results...`, 'debug');
 
     await prisma.systemSetting.upsert({
         where: { key: 'storage_deep_dive_cache' },
@@ -534,6 +548,7 @@ export function initWorker() {
                                 await fs.ensureDir(destFolder);
 
                                 const extractedNum = meta.number || "1";
+                                Logger.log(`[Queue Debug] WATCHED_FOLDER_SYNC: Extracted issue number ${extractedNum} for file ${file}`, 'debug');
                                 let formattedNum = extractedNum.includes('.') || extractedNum.length > 1 ? extractedNum : `0${extractedNum}`;
                                 
                                 const issueYear = meta.year ? meta.year.toString() : safeYear;
@@ -898,6 +913,8 @@ export function initWorker() {
                                 const mPubName = normalize(mIssue.publisher?.name || mIssue.series?.publisher?.name);
                                 const mNumStr = mIssue.number || mIssue.issue;
                                 const mNum = parseFloat(mNumStr);
+
+                                Logger.log(`[Queue Debug] SERIES_MONITOR: Metron issue parsed number: ${mNum}`, 'debug');
                                 
                                 if (isNaN(mNum)) continue;
                                 
@@ -1039,6 +1056,7 @@ export function initWorker() {
                                 
                                 for (const cvIssue of cvIssues) {
                                     const cvNum = parseFloat(cvIssue.issue_number);
+                                    Logger.log(`[Queue Debug] SERIES_MONITOR: CV issue parsed number: ${cvNum}`, 'debug');
                                     if (isNaN(cvNum)) continue;
 
                                     const alreadyInLibrary = seriesRecord.issues.some((i: any) => 
@@ -1196,7 +1214,53 @@ export function initWorker() {
                         issuesFound += ghosts.length;
                     }
 
-                    if (issuesFound === 0) details += "Library is in perfect health. 100% Integrity.\n";
+                    // --- CRITICAL FAILSAFE: Verify drives are online before wiping missing files ---
+                    const libraries = await prisma.library.findMany();
+                    let drivesOnline = true;
+                    for (const lib of libraries) {
+                        if (!fs.existsSync(lib.path)) {
+                            drivesOnline = false;
+                            details += `[CRITICAL] Drive disconnected: ${lib.path}. Skipping Ghost Issue scan to prevent accidental data loss.\n`;
+                            Logger.log(`[Diagnostics] Drive disconnected: ${lib.path}. Ghost issue sweep aborted.`, 'error');
+                        }
+                    }
+
+                    if (drivesOnline) {
+                        Logger.log(`[Diagnostics Debug] Scanning all issues for missing physical files...`, 'debug');
+                        const allIssues = await prisma.issue.findMany({ 
+                            where: { filePath: { not: null } } 
+                        });
+
+                        let ghostIssueCount = 0;
+                        for (const issue of allIssues) {
+                            if (issue.filePath && !fs.existsSync(issue.filePath)) {
+                                Logger.log(`[Diagnostics Debug] Ghost Issue Detected! File missing: ${issue.filePath}`, 'debug');
+                                
+                                try {
+                                    if (issue.metadataId && !issue.metadataId.startsWith('unmatched')) {
+                                        await prisma.issue.update({
+                                            where: { id: issue.id },
+                                            data: { filePath: null, status: 'WANTED' }
+                                        });
+                                    } else {
+                                        // Delete associated read progress first if your DB requires it, or just catch the error
+                                        await prisma.readProgress.deleteMany({ where: { issueId: issue.id } }).catch(()=>({}));
+                                        await prisma.issue.delete({ where: { id: issue.id } });
+                                    }
+                                    ghostIssueCount++;
+                                } catch (delErr: any) {
+                                    Logger.log(`[Diagnostics Debug] Failed to clear ghost issue ${issue.id}: ${delErr.message}`, 'error');
+                                }
+                            }
+                        }
+
+                        if (ghostIssueCount > 0) {
+                            details += `[WARNING] Found and repaired ${ghostIssueCount} ghost issue files.\n`;
+                            issuesFound += ghostIssueCount;
+                        }
+                    }
+
+                    if (issuesFound === 0 && drivesOnline) details += "Library is in perfect health. 100% Integrity.\n";
 
                     await prisma.jobLog.create({ data: { jobType: 'DIAGNOSTICS', status: issuesFound > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', durationMs: Date.now() - startTime, message: details } });
                     SystemNotifier.sendAlert('job_diagnostics', { description: `Diagnostics Complete. Issues found: ${issuesFound}` }).catch(() => {});

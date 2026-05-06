@@ -47,7 +47,45 @@ export default function LogsPage() {
   const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false) 
   const [clearAuditConfirmOpen, setClearAuditConfirmOpen] = useState(false) 
   const [purgeOldConfirmOpen, setPurgeOldConfirmOpen] = useState(false) 
-  const [isClearing, setIsClearing] = useState(false) 
+  const [isClearing, setIsClearing] = useState(false)
+  
+  const [logLevel, setLogLevel] = useState("info");
+
+  // Inside useEffect / initial fetch, pull the config
+  useEffect(() => {
+    document.title = "Omnibus - System Logs";
+    fetchLiveLogs();
+    fetchJobLogs();
+    fetchAuditLogs();
+
+    // Fetch current log level
+    fetch('/api/admin/config')
+      .then(res => res.json())
+      .then(data => {
+        if (data.settings) {
+          const levelSetting = data.settings.find((s: any) => s.key === 'system_log_level');
+          if (levelSetting) setLogLevel(levelSetting.value);
+        }
+      }).catch(()=>{});
+
+    const interval = setInterval(fetchLiveLogs, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Add the save handler
+  const handleLogLevelChange = async (newLevel: string) => {
+      setLogLevel(newLevel);
+      try {
+          await fetch('/api/admin/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ settings: { system_log_level: newLevel } })
+          });
+          toast({ title: "Log Level Updated", description: `System is now running in ${newLevel.toUpperCase()} mode.` });
+      } catch (e) {
+          toast({ title: "Failed to update log level", variant: "destructive" });
+      }
+  }
 
   useEffect(() => {
     document.title = "Omnibus - System Logs";
@@ -223,19 +261,30 @@ export default function LogsPage() {
 
         {/* --- LIVE TERMINAL TAB --- */}
         <TabsContent value="live" className="space-y-4 mt-6 animate-in fade-in slide-in-from-bottom-2">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
-                <p className="text-sm text-muted-foreground">Real-time output and persistent logs from the backend server.</p>
-                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                    <Button variant="outline" size="sm" asChild className="border-border hover:bg-muted font-bold flex-1 sm:flex-none">
-                        <a href="/api/admin/logs/download" download>
-                            <Download className="w-4 h-4 mr-2" /> Download Log
-                        </a>
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setClearLiveConfirmOpen(true)} className="border-border hover:bg-muted text-red-500 hover:text-red-600 font-bold flex-1 sm:flex-none">
-                        <Trash2 className="w-4 h-4 mr-2" /> Clear Logs
-                    </Button>
-                </div>
-            </div>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
+          <p className="text-sm text-muted-foreground">Real-time output and persistent logs from the backend server.</p>
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              {/* NEW DROPDOWN */}
+              <Select value={logLevel} onValueChange={handleLogLevelChange}>
+                  <SelectTrigger className="w-[140px] h-9 bg-background border-border text-xs font-bold">
+                      <SelectValue placeholder="Log Level" />
+                  </SelectTrigger>
+                  <SelectContent>
+                      <SelectItem value="info">Info (Standard)</SelectItem>
+                      <SelectItem value="debug">Debug (Detailed)</SelectItem>
+                  </SelectContent>
+              </Select>
+              
+              <Button variant="outline" size="sm" asChild className="border-border hover:bg-muted font-bold flex-1 sm:flex-none">
+                  <a href="/api/admin/logs/download" download>
+                      <Download className="w-4 h-4 mr-2" /> Download Log
+                  </a>
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setClearLiveConfirmOpen(true)} className="border-border hover:bg-muted text-red-500 hover:text-red-600 font-bold flex-1 sm:flex-none">
+                  <Trash2 className="w-4 h-4 mr-2" /> Clear Logs
+              </Button>
+          </div>
+      </div>
             
             <div className="border border-border rounded-lg overflow-hidden bg-background shadow-sm transition-colors duration-300">
                 <div className="p-4 border-b border-border bg-muted/50">
@@ -247,13 +296,14 @@ export default function LogsPage() {
                     {liveLogs.length === 0 && <p className="text-muted-foreground italic">Waiting for system activity...</p>}
                     {liveLogs.map((log, i) => (
                     <div key={i} className="flex gap-3 border-b border-border/40 py-1.5 transition-colors hover:bg-muted/50">
-                        <span className="text-muted-foreground shrink-0">[{log.timestamp}]</span>
                         <span className={
                             log.type === 'error' ? 'text-red-500 font-bold' : 
                             log.type === 'success' ? 'text-green-600 dark:text-green-400 font-bold' : 
                             log.type === 'warn' ? 'text-orange-500' : 
+                            log.type === 'debug' ? 'text-cyan-600 dark:text-cyan-400 opacity-80' : 
                             'text-foreground'
                         }>
+                            {log.type === 'debug' && <span className="font-black mr-2">[DEBUG]</span>}
                             {log.message}
                         </span>
                     </div>

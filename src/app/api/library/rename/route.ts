@@ -1,3 +1,4 @@
+// src/app/api/library/rename/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
@@ -31,13 +32,22 @@ export async function POST(request: NextRequest) {
     const activeFilePattern = filePattern || config.file_naming_pattern || "{Series} #{Issue}";
     const activeMangaFilePattern = filePattern || config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
 
+    // --- NEW: LOG ACTIVE PATTERNS ---
+    Logger.log(`[Rename Debug] Initiating standardize procedure for ${seriesList.length} series.`, 'debug');
+    Logger.log(`[Rename Debug] Active Patterns -> Folder: "${activeFolderPattern}" | File: "${activeFilePattern}" | Manga: "${activeMangaFilePattern}"`, 'debug');
+
     let filesRenamed = 0;
     let foldersRenamed = 0;
 
     function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
 
     for (const s of seriesList) {
-        if (!s.folderPath || !fs.existsSync(s.folderPath)) continue;
+        if (!s.folderPath || !fs.existsSync(s.folderPath)) {
+            Logger.log(`[Rename Debug] Skipping series "${s.name}" - Folder missing: ${s.folderPath}`, 'debug');
+            continue;
+        }
+
+        Logger.log(`[Rename Debug] Processing Series: "${s.name}" (ID: ${s.id}, isManga: ${s.isManga})`, 'debug');
 
         const lib = libraries.find(l => l.id === s.libraryId) || libraries.find(l => l.isDefault && l.isManga === s.isManga) || libraries[0];
         if (!lib) continue;
@@ -64,6 +74,8 @@ export async function POST(request: NextRequest) {
             const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
             const targetFolder = path.join(libraryRoot, ...folderParts);
 
+            Logger.log(`[Rename Debug] Folder Evaluation: Current=[${currentFolder}] | Target=[${targetFolder}]`, 'debug');
+
             if (path.normalize(currentFolder).toLowerCase() !== path.normalize(targetFolder).toLowerCase()) {
                 await fs.ensureDir(path.dirname(targetFolder));
                 await fs.move(currentFolder, targetFolder, { overwrite: true });
@@ -83,7 +95,10 @@ export async function POST(request: NextRequest) {
             const currentFileName = path.basename(issue.filePath || "");
             const actualFilePath = path.join(currentFolder, currentFileName);
 
-            if (!fs.existsSync(actualFilePath)) continue;
+            if (!fs.existsSync(actualFilePath)) {
+                Logger.log(`[Rename Debug] Skipping issue "${issue.name}" - File missing: ${actualFilePath}`, 'debug');
+                continue;
+            }
 
             const ext = path.extname(actualFilePath);
             let paddedNum = issue.number;
@@ -100,6 +115,9 @@ export async function POST(request: NextRequest) {
             // USE s.year directly instead of safeYear to avoid the scope error
             const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : (s.year?.toString() || '0000');
 
+            // --- NEW: TRACE ISSUE REPLACEMENT VARIABLES ---
+            Logger.log(`[Rename Debug] Issue Formatting Data: Series="${s.name}", Publisher="${s.publisher}", SeriesYear="${s.year}", IssueYear="${issueYear}", IssueNum="${paddedNum}", Ext="${ext}"`, 'debug');
+
             let newFileName = patternToUse
                 .replace(/{Publisher}/gi, s.publisher || 'Unknown')
                 .replace(/{Series}/gi, s.name || 'Unknown')
@@ -111,6 +129,8 @@ export async function POST(request: NextRequest) {
             newFileName = sanitize(newFileName) + ext;
             const newFilePath = path.join(currentFolder, newFileName);
 
+            Logger.log(`[Rename Debug] File Evaluation: Current=[${actualFilePath}] | Target=[${newFilePath}]`, 'debug');
+
             if (actualFilePath !== newFilePath) {
                 try {
                     if (!fs.existsSync(newFilePath)) {
@@ -120,9 +140,14 @@ export async function POST(request: NextRequest) {
                             data: { filePath: newFilePath }
                         });
                         filesRenamed++;
+                    } else {
+                        Logger.log(`[Rename Debug] Cannot rename: Target file already exists at ${newFilePath}`, 'warn');
                     }
-                } catch (e) { }
+                } catch (e: any) { 
+                    Logger.log(`[Rename Debug] File move failed for ${actualFilePath}: ${e.message}`, 'error');
+                }
             } else if (issue.filePath !== newFilePath) {
+                 // DB Path is out of sync with physical path
                  await prisma.issue.update({
                     where: { id: issue.id },
                     data: { filePath: newFilePath }

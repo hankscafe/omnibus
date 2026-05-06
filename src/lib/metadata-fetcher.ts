@@ -129,6 +129,8 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
     if (!setting?.value) throw new Error("No ComicVine API Key configured.");
 
+    Logger.log(`[Metadata Fetcher Debug] Requesting ComicVine Volume: https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, 'debug');
+    
     let volRes;
     try {
         volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
@@ -193,7 +195,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let syncedCount = 0;
     let issuesCallsMade = 0;
 
+    Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
     while (offset < totalResults && loopCount < 20) {
+        Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
         let issueRes;
         try {
             issueRes = await axios.get<{ number_of_total_results: number; results: any[] }>(`https://comicvine.gamespot.com/api/issues/`, {

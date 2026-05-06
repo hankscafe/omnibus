@@ -34,6 +34,7 @@ export async function parseComicInfo(filePath: string) {
         const result = parser.parse(xmlString);
 
         const info = result.ComicInfo;
+        Logger.log(`[Metadata Extractor Debug] Successfully parsed ComicInfo.xml for: ${filePath}`, 'debug');
         if (!info) return null;
 
         const seriesName = info.Series ? String(info.Series).trim() : null;
@@ -60,12 +61,15 @@ export async function parseComicInfo(filePath: string) {
             parsedYear = info.Year ? parseInt(info.Year) : null;
         }
 
+        Logger.log(`[Metadata Extractor Debug] Parsed values from ComicInfo.xml -> Series: "${seriesName}", Number: "${info.Number}", Volume/Year: "${parsedYear}", Manga: "${info.Manga}"`, 'debug');
+
         // 4. Safely resolve Volume ID from Issue URL using a Composite Key
         const cacheKey = `${seriesName}_${parsedYear || 'unknown'}`;
 
         if (!cvId && cvIssueId) {
             // Check the cache using the Name + Year
             if (seriesName && volumeResolutionCache.has(cacheKey)) {
+                Logger.log(`[Metadata Extractor Debug] Cache HIT for composite key: ${cacheKey}`, 'debug');
                 cvId = volumeResolutionCache.get(cacheKey)!.cvId; // <-- UPDATED: Read the cvId property
             } else {
                 try {

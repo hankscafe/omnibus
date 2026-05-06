@@ -204,25 +204,42 @@ export async function POST(request: Request) {
                 const oldName = path.basename(file, ext);
                 let issueNumStr = "";
                 
-                const explicitMatch = oldName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-                if (explicitMatch) issueNumStr = explicitMatch[1];
-                else {
-                    const cleanName = oldName.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').replace(/\s+of\s+\d+/gi, '').trim();
-                    const endMatch = cleanName.match(/(?:issue\s?|-|\s|^)0*(\d+(?:\.\d+)?[a-zA-Z]?)\s*$/i);
-                    if (endMatch) issueNumStr = endMatch[1];
+                Logger.log(`[Match Series Debug] Evaluating file for rename: "${file}"`, 'debug');
+                
+                // --- FIX: Priority Waterfall Extraction (Prevents V2023 bug) ---
+                const explicitMatch = oldName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+                if (explicitMatch) {
+                    issueNumStr = explicitMatch[1];
+                    Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via explicit #/Issue match.`, 'debug');
+                } else {
+                    // Note the (?!\d) lookahead to ensure it's not grabbing a 4-digit year if it's less than 4 digits
+                    const volMatch = oldName.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
+                    if (volMatch) {
+                        issueNumStr = volMatch[1];
+                        Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via Volume/V match.`, 'debug');
+                    } else {
+                        const cleanName = oldName.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').replace(/\s+of\s+\d+/gi, '').trim();
+                        const endMatch = cleanName.match(/(?:issue\s?|-|\s|^)0*(\d+(?:\.\d+)?[a-zA-Z]?)\s*$/i);
+                        if (endMatch) {
+                            issueNumStr = endMatch[1];
+                            Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via fallback end-of-string match.`, 'debug');
+                        }
+                    }
+                }
+                
+                if (!issueNumStr) {
+                    Logger.log(`[Match Series Debug] Failed to extract any issue number from ${oldName}`, 'warn');
                 }
                 
                 if (issueNumStr) {
                     let formattedNum = issueNumStr;
                     if (!issueNumStr.includes('.') && issueNumStr.length === 1) formattedNum = `0${issueNumStr}`;
-                    const prefix = isManga ? 'Vol. ' : '#';
                     
-                    // --- FIX: Respect file naming pattern here too! ---
                     const filePatternToUse = isManga 
                         ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
                         : (config.file_naming_pattern || "{Series} #{Issue}");
                         
-                    const issueYear = existingRecord ? (existingRecord.year?.toString() || safeYear) : safeYear; // Fallback
+                    const issueYear = existingRecord ? (existingRecord.year?.toString() || safeYear) : safeYear;
                         
                     const newFileName = filePatternToUse
                         .replace(/{Publisher}/gi, safePublisher || "Other")
@@ -236,7 +253,10 @@ export async function POST(request: Request) {
                     const oldFilePath = path.join(activeFolderPath, file);
                     const newFilePath = path.join(activeFolderPath, newFileName);
                     
+                    Logger.log(`[Match Series Debug] Generated new path: [${newFilePath}]`, 'debug');
+                    
                     if (oldFilePath !== newFilePath && !fs.existsSync(newFilePath)) {
+                        Logger.log(`[Match Series Debug] Executing OS File Rename: ${file} -> ${newFileName}`, 'debug');
                         await fs.promises.rename(oldFilePath, newFilePath);
                         if (existingRecord) {
                             pathUpdates.push(prisma.issue.updateMany({
@@ -244,6 +264,8 @@ export async function POST(request: Request) {
                                 data: { filePath: newFilePath }
                             }));
                         }
+                    } else if (oldFilePath !== newFilePath) {
+                        Logger.log(`[Match Series Debug] Skipping rename: Target file already exists at ${newFilePath}`, 'debug');
                     }
                 }
             }

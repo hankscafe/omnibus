@@ -34,21 +34,27 @@ export const DownloadService = {
       timeout: 30000 
     };
 
+    Logger.log(`[DownloadService Debug] Preparing to send payload to ${client.type.toUpperCase()} client at ${cleanUrl}`, 'debug');
+    Logger.log(`[DownloadService Debug] Payload Details: Title="${title}", Category="${primaryCategory}", SeedLimit=${seedTimeLimit}`, 'debug');
+
     try {
       let fileBuffer: Buffer | null = null;
       if (!downloadUrl.startsWith('magnet:') && !client.type.includes('nzb')) {
         try {
+            Logger.log(`[DownloadService Debug] Fetching physical .torrent file from: ${downloadUrl}`, 'debug');
             const fileRes = await axios.get(downloadUrl, { responseType: 'arraybuffer', ...baseConfig });
             fileBuffer = Buffer.from(fileRes.data);
         } catch (err) { Logger.log(`[Proxy] File fetch failed, using URL instead.`, 'info'); }
       }
 
       if (client.type === 'qbit') {
+        Logger.log(`[DownloadService Debug] Authenticating with qBittorrent...`, 'debug');
         const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
           new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
           { ...baseConfig, headers: { ...baseConfig.headers, 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
         const cookie = loginRes.headers['set-cookie'];
+        Logger.log(`[DownloadService Debug] qBittorrent Auth successful. Received cookie.`, 'debug');
         const form = new FormData();
         if (fileBuffer) form.append('torrents', fileBuffer, 'comic.torrent');
         else form.append('urls', downloadUrl);
@@ -62,24 +68,29 @@ export const DownloadService = {
         });
       }
       else if (client.type === 'deluge') {
+        Logger.log(`[DownloadService Debug] Authenticating with Deluge...`, 'debug');
         const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, baseConfig);
         const cookie = authRes.headers['set-cookie'];
+        Logger.log(`[DownloadService Debug] Sending payload to Deluge RPC API...`, 'debug');
         const options: any = { download_location: primaryCategory };
         if (seedRatio > 0) { options.stop_at_ratio = true; options.stop_ratio = seedRatio; }
         const method = downloadUrl.startsWith('magnet:') ? "core.add_torrent_magents" : "core.add_torrent_url";
         await axios.post(`${cleanUrl}/json`, { method: method, params: [[downloadUrl], options], id: 2 }, { ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie } });
       }
       else if (client.type === 'sab') {
+          Logger.log(`[DownloadService Debug] Sending payload to SABnzbd API...`, 'debug');
           await axios.get(`${cleanUrl}/api`, { params: { mode: 'addurl', name: downloadUrl, nzbname: title, cat: primaryCategory, apikey: client.apiKey, output: 'json' }, ...baseConfig });
       }
       else if (client.type === 'nzbget') {
           const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
+          Logger.log(`[DownloadService Debug] Sending payload to NZBGet API...`, 'debug');
           await axios.post(`${cleanUrl}/jsonrpc`, { method: "append", params: [title, downloadUrl, primaryCategory, 0, false, false, "", 0, "SCORE", []] }, { ...baseConfig, headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } });
       }
 
       Logger.log(`[${client.type.toUpperCase()}] SUCCESS: Added ${title}`, 'success');
       return { success: true };
     } catch (error: unknown) {
+      Logger.log(`[DownloadService Debug] Client API threw an error: ${getErrorMessage(error)}`, 'debug');
       Logger.log(`[Download Service] Failed: ${getErrorMessage(error)}`, 'error');
       throw error;
     }

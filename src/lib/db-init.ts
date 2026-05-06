@@ -222,6 +222,12 @@ export async function initDatabase() {
         Logger.log(`[DB Init] Metadata ID Split Migration Failed: ${getErrorMessage(e)}`, "error");
     }
 
+    // Inside initDatabase(), right before Logger.log("[DB Init] Schema mapping complete.")
+    const logLevelSetting = await prisma.systemSetting.findUnique({ where: { key: 'system_log_level' } });
+    if (logLevelSetting?.value) {
+        Logger.setLevel(logLevelSetting.value as 'info' | 'debug');
+    }
+
     Logger.log("[DB Init] Schema mapping complete.", "success");
 
   } catch (error: unknown) {

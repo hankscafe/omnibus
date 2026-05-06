@@ -16,6 +16,7 @@ export class MetronProvider implements IMetadataProvider {
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
         
         if (!config.metron_user || !config.metron_pass || config.metron_pass === '********') {
+            Logger.log(`[Metron Debug] Auth requested but credentials are missing or masked.`, 'debug');
             return undefined;
         }
         
@@ -23,6 +24,7 @@ export class MetronProvider implements IMetadataProvider {
     }
 
     async searchSeries(query: string): Promise<MetadataSeries[]> {
+        Logger.log(`[Metron Debug] Initiating series search for query: "${query}"`, 'debug');
         const auth = await this.getAuth();
         if (!auth) {
             Logger.log('[Metron] Missing credentials. Please configure Metron in Settings.', 'warn');
@@ -37,6 +39,8 @@ export class MetronProvider implements IMetadataProvider {
         });
 
         await logApiUsage('metron', '/series');
+        const resultsCount = res.data.results?.length || 0;
+        Logger.log(`[Metron Debug] Search returned ${resultsCount} raw results from /series/ endpoint`, 'debug');
 
         return (res.data.results || []).map((series: any) => ({
             sourceId: series.id.toString(),
@@ -51,6 +55,7 @@ export class MetronProvider implements IMetadataProvider {
     }
 
     async getSeriesDetails(id: string): Promise<MetadataSeries> {
+        Logger.log(`[Metron Debug] Fetching series details for Metron ID: ${id}`, 'debug');
         const auth = await this.getAuth();
         const res = await axios.get(`${this.baseUrl}/series/${id}/`, { 
             headers: this.requestHeaders, 
@@ -59,8 +64,8 @@ export class MetronProvider implements IMetadataProvider {
         });
         
         await logApiUsage('metron', `/series/${id}`);
-        
         const series = res.data;
+        Logger.log(`[Metron Debug] Successfully fetched details for series: "${series.name}"`, 'debug');
 
         return {
             sourceId: series.id.toString(),
@@ -75,19 +80,23 @@ export class MetronProvider implements IMetadataProvider {
     }
 
     async getSeriesIssues(id: string): Promise<MetadataIssue[]> {
+        Logger.log(`[Metron Debug] Fetching all issues for Series ID: ${id}`, 'debug');
         const auth = await this.getAuth();
         let allIssues: any[] = [];
         let nextUrl = `${this.baseUrl}/issue/?series=${id}`;
         let callsMade = 0;
 
         while (nextUrl) {
+            Logger.log(`[Metron Debug] Paginating issues. Hitting URL: ${nextUrl}`, 'debug');
             const res = await axios.get(nextUrl, { 
                 headers: this.requestHeaders, 
                 auth, 
                 timeout: 10000 
             });
             callsMade++;
-            allIssues = allIssues.concat(res.data.results || []);
+            const pageResults = res.data.results || [];
+            allIssues = allIssues.concat(pageResults);
+            Logger.log(`[Metron Debug] Fetched ${pageResults.length} issues on this page. Total so far: ${allIssues.length}`, 'debug');
             nextUrl = res.data.next;
         }
 
@@ -97,7 +106,6 @@ export class MetronProvider implements IMetadataProvider {
 
         return allIssues.map((issue: any) => {
             const credits = issue.credits || [];
-            
             const writers = credits.filter((c: any) => c.role?.name?.toLowerCase().includes('writer')).map((c: any) => c.creator?.name);
             const artists = credits.filter((c: any) => c.role?.name?.toLowerCase().includes('artist') || c.role?.name?.toLowerCase().includes('penciller')).map((c: any) => c.creator?.name);
             const characters = (issue.characters || []).map((c: any) => c.name);

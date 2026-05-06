@@ -198,7 +198,13 @@ export const DiscordNotifier = {
         if (hook.botUsername) discordPayload.username = hook.botUsername;
         if (hook.botAvatarUrl) discordPayload.avatar_url = hook.botAvatarUrl;
 
+        Logger.log(`[Discord Debug] Dispatching event '${event}' to Webhook '${hook.name}' at URL: ${hook.url.replace(/webhooks\/[^\/]+\//, "webhooks/REDACTED/")}`, 'debug');
+        Logger.log(`[Discord Debug] Payload generated: ${JSON.stringify(discordPayload)}`, 'debug');
+
         await axios.post(hook.url, discordPayload).catch((e: unknown) => {
+            // Both errBody and the Logger.log using it must be INSIDE this catch block
+            const errBody = (e as any).response?.data ? JSON.stringify((e as any).response.data) : 'Unknown Discord API Error';
+            Logger.log(`[Discord Debug] Webhook POST failed with response: ${errBody}`, 'debug');
             Logger.log(`[Discord] Failed to send webhook to ${hook.name}: ${getErrorMessage(e)}`, "error");
         });
       }

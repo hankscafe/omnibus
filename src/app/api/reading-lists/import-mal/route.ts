@@ -77,6 +77,8 @@ export async function POST(request: Request) {
                 const romajiTitle = manga.title ? normalize(manga.title) : "";
                 const displayTitle = manga.title_english || manga.title;
 
+                Logger.log(`[MAL Import Debug] Evaluating MAL entry: "${displayTitle}" (Normalized Eng: "${engTitle}", Romaji: "${romajiTitle}")`, 'debug');
+
                 const match = localManga.find(m => {
                     const localTitle = normalize(m.name);
                     return (engTitle && localTitle === engTitle) || 
@@ -86,8 +88,10 @@ export async function POST(request: Request) {
                 });
 
                 if (match) {
+                    Logger.log(`[MAL Import Debug] SUCCESS -> Matched MAL "${displayTitle}" to local database series [ID: ${match.id}] ("${match.name}")`, 'debug');
                     matchedSeriesIds.add(match.id);
                 } else if (requestMissing && displayTitle) {
+                    Logger.log(`[MAL Import Debug] FAILED -> No local match found for "${displayTitle}". Auto-requesting...`, 'debug');
                     const existingReq = await prisma.request.findFirst({
                         where: { activeDownloadName: displayTitle, userId: userId }
                     });

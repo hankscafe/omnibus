@@ -61,6 +61,7 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         }
 
         await findImages(tempDir);
+        Logger.log(`[Converter Debug] Found ${allImages.length} images inside CBR archive: ${path.basename(cbrPath)}`, 'debug');
 
         if (allImages.length === 0) {
             throw new Error("Archive contained no valid images after extraction.");
@@ -77,6 +78,7 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
             
             if (convertToWebp && imgExt.toLowerCase() !== '.webp' && imgExt.toLowerCase() !== '.gif') {
                 try {
+                    Logger.log(`[Converter Debug] Converting ${path.basename(imgPath)} to WEBP at ${webpQuality}% quality...`, 'debug');
                     const newName = `page_${imageCount.toString().padStart(4, '0')}.webp`;
                     const tempWebpPath = path.join(tempDir, newName);
                     
@@ -170,6 +172,7 @@ export async function repackArchive(filePath: string): Promise<boolean> {
         }
 
         await findImages(tempDir);
+        Logger.log(`[Repacker Debug] Found ${allImages.length} raw images inside archive. Initializing sequential repack...`, 'debug');
 
         if (allImages.length === 0) {
             throw new Error("Archive contained no valid images after extraction.");

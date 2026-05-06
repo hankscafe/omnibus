@@ -17,6 +17,7 @@ export async function getDownloadClient() {
 export async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
   const acronyms = await getCustomAcronyms();
   const queries = generateSearchQueries(name, year, acronyms, isManga);
+  Logger.log(`[Automation Debug] Generated Fuzzy Queries for req [${requestId}]: ${JSON.stringify(queries)}`, 'debug');
 
   // 1. Parse Hoster Settings
   const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
@@ -49,6 +50,7 @@ export async function searchAndDownload(requestId: string, name: string, year: s
   if (hasEnabledHosters) {
       Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
       for (const query of queries) {
+        Logger.log(`[Automation Debug] Evaluating GetComics search phrase: "${query}"`, 'debug');
           getComicsResults = await GetComicsService.search(query, false, isManga);
           if (getComicsResults.length > 0) break;
       }
@@ -137,8 +139,11 @@ export async function searchAndDownload(requestId: string, name: string, year: s
 
       for (const query of queries) {
           Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
+          Logger.log(`[Automation Debug] Searching Prowlarr: "${query}"`, 'debug');
           const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga);
+          Logger.log(`[Automation Debug] Prowlarr Raw Results Count: ${prowlarrResults.length}. Healthy Results (Seeders > 0): ${healthyResults.length}`, 'debug');
           healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
+          Logger.log(`[Automation Debug] Prowlarr Raw Results Count: ${prowlarrResults.length}. Healthy Results (Seeders > 0): ${healthyResults.length}`, 'debug');
           if (healthyResults.length > 0) {
               break; 
           }

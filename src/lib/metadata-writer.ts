@@ -82,6 +82,7 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
   <ComicVineIssueId>${(isCvIssue && issue.metadataId) ? issue.metadataId : ''}</ComicVineIssueId>
 </ComicInfo>`;
 
+        Logger.log(`[Metadata Writer Debug] Generated XML content for issue ${issueId}`, 'debug');
         const zip = new AdmZip(issue.filePath);
         
         const existingEntry = zip.getEntries().find(e => e.entryName.toLowerCase() === 'comicinfo.xml');
@@ -95,6 +96,7 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         zip.writeZip(tmpPath);
         await fs.move(tmpPath, issue.filePath, { overwrite: true });
 
+        Logger.log(`[Metadata Writer Debug] Successfully wrote ComicInfo.xml to ${issue.filePath}`, 'debug');
         return true;
     } catch (error) {
         Logger.log(`[Writer] Failed to write XML for ${issueId}: ${getErrorMessage(error)}`, 'error');
@@ -167,6 +169,8 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
                 links: links // <-- NEW: Injects the ComicVine URL
             }
         };
+
+        Logger.log(`[Metadata Writer Debug] Generated series.json for series ${seriesId}:\n${JSON.stringify(komgaMetadata)}`, 'debug');
 
         // 4. Write it to disk
         const jsonPath = path.join(series.folderPath, 'series.json');

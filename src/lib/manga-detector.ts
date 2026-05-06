@@ -6,6 +6,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
 import { prisma } from './db';
+import { title } from 'process';
 
 // Default Internal Publisher Dictionary Fallbacks
 const DEFAULT_MANGA_PUBLISHERS = [
@@ -162,6 +163,8 @@ export async function detectManga(
  * Helper Function: Queries AniList GraphQL API with Fuzzy Year Logic
  */
 async function checkAniList(title: string, releaseYear: number): Promise<boolean> {
+    Logger.log(`[Manga Engine Debug] Querying AniList GraphQL API for title: "${title}"`, 'debug');
+
     const query = `
         query ($search: String) {
             Page(page: 1, perPage: 3) {

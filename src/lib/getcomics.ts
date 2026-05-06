@@ -24,6 +24,7 @@ async function fetchGetComicsHtml(url: string) {
         if (err.response?.status === 403) {
             if (flareUrl) {
                 Logger.log(`[GetComics] 403 Forbidden detected. Attempting Cloudflare bypass via FlareSolverr...`, 'warn');
+                Logger.log(`[GetComics Debug] Attempting Cloudflare bypass via FlareSolverr with payload: ${JSON.stringify({ cmd: 'request.get', url: url })}`, 'debug');
                 try {
                     const targetUrl = flareUrl.endsWith('/v1') ? flareUrl : `${flareUrl}/v1`;
                     const flareRes = await axios.post(targetUrl, {
@@ -34,7 +35,7 @@ async function fetchGetComicsHtml(url: string) {
                     
                     if (flareRes.data?.solution?.response) {
                         Logger.log(`[GetComics] FlareSolverr bypass successful!`, 'success');
-                        return flareRes.data.solution.response;
+                        Logger.log(`[GetComics Debug] FlareSolverr bypass successful with response length: ${flareRes.data.solution.response.length}`, 'debug');                        return flareRes.data.solution.response;
                     }
                 } catch (flareErr) {
                      await markSystemFlag('cloudflare_block_time');
@@ -84,7 +85,7 @@ export const GetComicsService = {
 
   async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false) {
     const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
-    
+    Logger.log(`[GetComics Debug] Performing search with URL: ${url}`, 'debug');
     Logger.log(`[GetComics] Rate-limit throttle: Delaying search for 2.5s...`, 'info');
     await new Promise(resolve => setTimeout(resolve, 2500));
 
@@ -268,6 +269,8 @@ export const GetComicsService = {
 
               const decoded = decodeLink(rawHref);
               if (!decoded) return;
+
+              Logger.log(`[GetComics Debug] Decoded raw deep link: ${decoded}`, 'debug');
 
               const isMainServerBtn = text.includes('main server') || titleAttr.includes('main server') || text.includes('download now') || text.includes('direct download');
               

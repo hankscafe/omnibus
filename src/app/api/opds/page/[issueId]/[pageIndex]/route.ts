@@ -25,6 +25,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
     }
 
     try {
+        Logger.log(`[OPDS Debug] Incoming stream request for Issue [${issueId}], Page Index [${pageIndex}]`, 'debug');
         const zip = new AdmZip(issue.filePath);
         
         // We must sort the exact same way we did in the manifest so the indexes match perfectly
@@ -32,7 +33,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
             .filter(e => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i))
             .sort((a, b) => a.entryName.localeCompare(b.entryName, undefined, { numeric: true, sensitivity: 'base' }));
 
+        Logger.log(`[OPDS Debug] Extracted ${pages.length} valid images from archive.`, 'debug');
+
         if (pageIndex < 0 || pageIndex >= pages.length) {
+            Logger.log(`[OPDS Debug] Request REJECTED: Page index ${pageIndex} is out of bounds (Max: ${pages.length - 1})`, 'debug');
             return new Response('Page Not Found', { status: 404 });
         }
 
@@ -43,6 +47,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
         let contentType = 'image/jpeg';
         if (ext === '.png') contentType = 'image/png';
         if (ext === '.webp') contentType = 'image/webp';
+
+        Logger.log(`[OPDS Debug] Serving file "${pageEntry.entryName}" as ${contentType} (${Math.round(buffer.length/1024)}KB)`, 'debug');
 
         // Fix: Cast the Node.js Buffer to BodyInit to satisfy TypeScript
         return new Response(buffer as unknown as BodyInit, {

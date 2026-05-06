@@ -1,13 +1,10 @@
+// src/lib/search-engine.ts
 import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { DownloadService } from './download-clients';
 import { getCustomHeaders } from './utils/headers';
 import { getErrorMessage } from './utils/error';
-
-// =========================================================================
-// 1. FUZZY SEARCH GENERATOR UTILITIES
-// Used by the automation queue to create smart search variations
-// =========================================================================
+import { Logger } from './logger';
 
 export async function getCustomAcronyms(): Promise<Record<string, string>> {
     const acronyms = await prisma.searchAcronym.findMany();
@@ -22,10 +19,10 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     const queries = new Set<string>();
     const baseName = name.replace(/[#]/g, '').trim();
 
-    // 1. ANCHOR: Full Name + Year (Highest priority for monitoring)
+    Logger.log(`[Search Engine Debug] Generating queries for Base Name: "${baseName}", Year: "${year}"`, 'debug');
+
     if (year) queries.add(`${baseName} ${year}`.trim());
 
-    // 2. RESTORED: All fuzzy variations from your original logic
     const noPossessive = baseName.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
     const broadClean = noPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     
@@ -33,15 +30,12 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     if (year) queries.add(`${broadClean} ${year}`.trim());
     queries.add(broadClean);
 
-    // 3. RESTORED: Dash Special Cleaning
     if (baseName.match(/[\/:\&]/)) {
         const dashed = baseName.replace(/[\/:\&]/g, ' - ').replace(/\s+/g, ' ').trim();
         if (year) queries.add(`${dashed} ${year}`.trim());
         queries.add(dashed);
     }
 
-    // 4. Subtitle extraction and Main Part isolation for complex titles
-    // We strictly look for separators that appear AFTER the issue number to avoid truncating series names that naturally contain colons.
     const issueMatch = name.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     
     let mainPart = name;
@@ -52,7 +46,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         const afterIssueIdx = issueMatch.index + issueMatch[0].length;
         const remainder = name.substring(afterIssueIdx);
         
-        // Only split if the remainder starts with a colon or spaced hyphen
         const splitMatch = remainder.match(/^\s*(:| - )\s*(.*)$/);
         if (splitMatch) {
             mainPart = name.substring(0, afterIssueIdx).trim();
@@ -60,8 +53,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
             hasSubtitle = true;
         }
     } else {
-        // For volumes/events without an issue number, we only split if there is a spaced hyphen.
-        // Splitting on colons here is too dangerous (e.g. "Avatar: The Last Airbender")
         if (name.includes(' - ')) {
             const parts = name.split(' - ');
             mainPart = parts[0].trim();
@@ -71,7 +62,8 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     }
 
     if (hasSubtitle) {
-        // 4a. Isolate the Main Part (e.g. "Superman Unlimited 012")
+        Logger.log(`[Search Engine Debug] Split detected. Main Part: "${mainPart}", Subtitle: "${subtitle}"`, 'debug');
+
         const mainPartClean = mainPart.replace(/[#]/g, '').trim();
         const mainNoPossessive = mainPartClean.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
         const mainBroadClean = mainNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -86,19 +78,17 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
                 mainExpanded = mainExpanded.replace(regex, full);
             }
             if (mainExpanded.toLowerCase() !== mainBroadClean.toLowerCase()) {
+                Logger.log(`[Search Engine Debug] Expanded acronym in Main Part: "${mainBroadClean}" -> "${mainExpanded}"`, 'debug');
                 if (year) queries.add(`${mainExpanded} ${year}`.trim());
                 queries.add(mainExpanded);
             }
         }
 
-        // 4b. Isolate the Subtitle (e.g. "Besides Myself")
         const subNoPossessive = subtitle.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
         const subBroadClean = subNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
         
         if (subBroadClean.length > 3) {
-            if (year) {
-                queries.add(`${subBroadClean} ${year}`.trim());
-            }
+            if (year) queries.add(`${subBroadClean} ${year}`.trim());
             
             let subExpanded = subBroadClean;
             for (const [ac, full] of Object.entries(acronyms)) {
@@ -106,30 +96,25 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
                 subExpanded = subExpanded.replace(regex, full);
             }
             if (subExpanded.toLowerCase() !== subBroadClean.toLowerCase()) {
-                if (year) {
-                    queries.add(`${subExpanded} ${year}`.trim());
-                }
+                Logger.log(`[Search Engine Debug] Expanded acronym in Subtitle: "${subBroadClean}" -> "${subExpanded}"`, 'debug');
+                if (year) queries.add(`${subExpanded} ${year}`.trim());
             }
         }
     }
 
-    // 5. Acronym expansion logic
     let expanded = broadClean;
     for (const [ac, full] of Object.entries(acronyms)) {
         const regex = new RegExp(`\\b${ac}\\b`, 'gi');
         expanded = expanded.replace(regex, full);
     }
     if (expanded.toLowerCase() !== broadClean.toLowerCase()) {
+        Logger.log(`[Search Engine Debug] Expanded Base Acronym: "${broadClean}" -> "${expanded}"`, 'debug');
         if (year) queries.add(`${expanded} ${year}`.trim());
         queries.add(expanded);
     }
 
     return Array.from(queries);
 }
-
-// =========================================================================
-// 2. ADMIN FORCE-SEARCH ENGINE
-// =========================================================================
 
 export const SearchEngine = {
     async performSmartSearch(query: string) {
@@ -143,6 +128,8 @@ export const SearchEngine = {
         const indexerConfigs = await prisma.indexer.findMany();
         const customHeaders = await getCustomHeaders();
         const cleanUrl = config.prowlarr_url.replace(/\/$/, "");
+
+        Logger.log(`[SearchEngine Debug] Hitting Prowlarr endpoint: ${cleanUrl}/api/v1/search with query: ${query}`, 'debug');
 
         const res = await axios.get(`${cleanUrl}/api/v1/search`, {
             params: { query, type: 'search' }, 
@@ -165,6 +152,7 @@ export const SearchEngine = {
             const seedTime = idxConfig ? idxConfig.seedTime : 0; 
 
             const score = (priority * 1000000) + release.seeders;
+            Logger.log(`[SearchEngine Debug] Scored release "${release.title}": Priority [${priority}] + Seeders [${release.seeders}] = Total Score: ${score}`, 'debug');
 
             return {
                 ...release,

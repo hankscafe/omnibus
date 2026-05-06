@@ -771,6 +771,11 @@ function SeriesContent() {
   const handleLinkIssue = async (unmatchedId: string) => {
       const targetId = linkingState[unmatchedId];
       if (!targetId) return toast({ title: "Please select an issue to link to.", variant: "destructive" });
+
+      // NEW FRONTEND DEBUG TRACE
+      if (typeof window !== 'undefined') {
+          console.debug(`[Series Page Debug] Initiating link for unmatched file [${unmatchedId}] to target metadata record [${targetId}]`);
+      }
       
       setIsLinking(unmatchedId);
       try {
@@ -1205,18 +1210,24 @@ function SeriesContent() {
                                   </div>
                                   <div className="flex gap-2 w-full md:w-auto shrink-0">
                                       <Select 
-                                          value={linkingState[issue.id] || ""} 
+                                          value={linkingState[issue.id] ? String(linkingState[issue.id]) : undefined} 
                                           onValueChange={(val) => setLinkingState(prev => ({ ...prev, [issue.id]: val }))}
                                       >
                                           <SelectTrigger className="w-full md:w-[250px] bg-background border-border h-9 text-xs">
-                                              <SelectValue placeholder="Select missing issue..." />
+                                              <SelectValue placeholder={missingIssues?.length ? "Select missing issue..." : "No missing issues"} />
                                           </SelectTrigger>
                                           <SelectContent>
-                                              {missingIssues.map((missing) => (
-                                                  <SelectItem key={missing.id} value={missing.id}>
-                                                      Issue #{missing.parsedNum} - {missing.name}
+                                              {missingIssues && missingIssues.length > 0 ? (
+                                                  missingIssues.map((missing) => (
+                                                      <SelectItem key={String(missing.id)} value={String(missing.id)}>
+                                                          Issue #{missing.parsedNum} - {missing.name}
+                                                      </SelectItem>
+                                                  ))
+                                              ) : (
+                                                  <SelectItem value="none" disabled>
+                                                      No missing issues available
                                                   </SelectItem>
-                                              ))}
+                                              )}
                                           </SelectContent>
                                       </Select>
                                       <Button 

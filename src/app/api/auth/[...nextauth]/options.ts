@@ -114,6 +114,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       clientId: oidcClientId,
       clientSecret: oidcClientSecret,
       profile(profile: any) {
+        Logger.log(`[SSO Debug] Received OIDC Profile Payload: ${JSON.stringify(profile)}`, 'debug');
         return { 
           id: profile.sub, 
           name: profile.name || profile.preferred_username || profile.nickname || profile.email?.split('@')[0] || "SSO User", 
@@ -132,6 +133,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         if (account?.provider === "credentials") return true;
         if (account?.provider === "oidc") {
           if (!user.email) return false;
+          Logger.log(`[SSO Debug] Processing sign in for: ${user.email}`, 'debug');
           const inputEmail = user.email.toLowerCase();
           const dbUsers: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(email) = ${inputEmail} LIMIT 1`;
           let dbUser = dbUsers[0];
@@ -141,17 +143,21 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           let isApproved = oidcAutoApprove;
 
           const userGroups = Array.isArray((user as any).groups) ? (user as any).groups : [];
+          Logger.log(`[SSO Debug] Extracted User Groups: ${JSON.stringify(userGroups)}. Checking against Admin Group: "${oidcAdminGroup}" and User Group: "${oidcUserGroup}"`, 'debug');
           const hasAdminGroup = oidcAdminGroup && userGroups.includes(oidcAdminGroup);
           const hasUserGroup = oidcUserGroup && userGroups.includes(oidcUserGroup);
 
           // Group enforcement if configured
           if (oidcAdminGroup || oidcUserGroup) {
               if (hasAdminGroup) {
+                Logger.log(`[SSO Debug] User matched Admin Group criteria. Granting ADMIN role.`, 'debug');
                   targetRole = "ADMIN";
                   isApproved = true; // Admins map implicitly handles approval
               } else if (hasUserGroup) {
+                Logger.log(`[SSO Debug] User matched User Group criteria. Granting USER role.`, 'debug');
                   targetRole = "USER";
               } else {
+                Logger.log(`[SSO Debug] Login rejected for ${user.email}: User does not belong to the required OIDC groups.`, 'debug');
                   Logger.log(`[SSO] Login rejected for ${user.email}: User does not belong to the required OIDC groups.`, 'warn');
                   return false;
               }

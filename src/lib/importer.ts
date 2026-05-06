@@ -19,32 +19,38 @@ function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
     
-    // 1. HIGHEST PRIORITY: Look strictly for Issue or Chapter indicators first
-    // Note: Maintains [a-zA-Z]? to support variant issues like #1A or #02B
+    // 1. HIGHEST PRIORITY
     const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
+    if (issueMatch) {
+        const num = issueMatch[1].replace(/^0+(?=\d)/, '');
+        Logger.log(`[Issue Extractor Debug] Matched explicit #/Issue rule for "${filename}" -> Result: ${num}`, 'debug');
+        return num;
+    }
 
-    // 2. SECONDARY PRIORITY: Volume indicators (Max 3 digits to ignore V2024 or Vol 1998)
-    // The (?!\d) ensures we don't accidentally match the first 3 digits of a 4 digit year
+    // 2. SECONDARY PRIORITY
     const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
-    if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
+    if (volMatch) {
+        const num = volMatch[1].replace(/^0+(?=\d)/, '');
+        Logger.log(`[Issue Extractor Debug] Matched Volume/V rule for "${filename}" -> Result: ${num}`, 'debug');
+        return num;
+    }
     
-    // 3. FALLBACK: Grab the last standalone number, safely ignoring "Years" (1900-2099)
+    // 3. FALLBACK
     const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) {
         for (let i = matches.length - 1; i >= 0; i--) {
             const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
             const numVal = parseFloat(matchVal);
             
-            // If the number looks exactly like a year (1900-2099) and has no letters (like 'A' or 'B'),
-            // skip it because it's almost certainly part of the title (e.g., 2000 AD, Spider-Man 2099)
             if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) {
                 continue; 
             }
+            Logger.log(`[Issue Extractor Debug] Matched Fallback end-of-string rule for "${filename}" -> Result: ${matchVal}`, 'debug');
             return matchVal;
         }
     }
     
+    Logger.log(`[Issue Extractor Debug] Failed to match any extraction rule for "${filename}". Defaulting to "1"`, 'debug');
     return "1"; 
 }
 
@@ -58,6 +64,7 @@ export const Importer = {
     if (!req || req.status === 'COMPLETED' || req.status === 'IMPORTED') return false;
 
     Logger.log(`[Importer] Starting import for: ${req.activeDownloadName || requestId}`, 'info');
+    Logger.log(`[Importer Debug] Resolving physical path for request [${requestId}]...`, 'debug');
 
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -194,6 +201,7 @@ export const Importer = {
 
     // --- BATCH ROUTING EXECUTION ---
     if (isBatchFolder || isBatchArchive) {
+        Logger.log(`[Importer Debug] Detected batch payload. isBatchFolder: ${isBatchFolder}, isBatchArchive: ${isBatchArchive}. Total files: ${batchFiles.length}`, 'debug');
         Logger.log(`[Importer] Batch download detected. Routing to WATCHED folder...`, 'info');
         const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
         await fs.ensureDir(watchedDir);
@@ -434,6 +442,7 @@ export const Importer = {
     const rawFileName = path.basename(actualSourceFile);
     const ext = path.extname(rawFileName);
     const extractedNum = extractIssueNumber(rawFileName);
+    Logger.log(`[Importer Debug] Extracted internal issue number as: ${extractedNum} from raw string: ${rawFileName}`, 'debug');
     
     let formattedNum = extractedNum;
     if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
@@ -455,6 +464,8 @@ export const Importer = {
 
     let fileName = `${sanitize(newFileName)}${ext}`;
     let finalPath = path.join(destFolder, fileName);
+
+    Logger.log(`[Importer Debug] Target move operation: [${actualSourceFile}] -> [${finalPath}]`, 'debug');
 
     try {
       await fs.ensureDir(destFolder);

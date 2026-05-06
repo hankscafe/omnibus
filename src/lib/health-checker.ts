@@ -1,6 +1,8 @@
 // src/lib/health-checker.ts
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
+import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export interface HealthCheckResult {
     id: string;
@@ -11,6 +13,7 @@ export interface HealthCheckResult {
 }
 
 export async function runSystemHealthCheck() {
+    Logger.log(`[Health Check Debug] Initializing system health diagnostics...`, 'debug');
     const results: HealthCheckResult[] = [];
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -49,6 +52,7 @@ export async function runSystemHealthCheck() {
         try {
             const stat = await fs.promises.statfs(config.download_path);
             const freeGB = (stat.bavail * stat.bsize) / (1024 * 1024 * 1024);
+            Logger.log(`[Health Check Debug] Calculated Disk Space: ${freeGB.toFixed(2)}GB available at mount point ${config.download_path}`, 'debug');
             if (freeGB < 2) {
                 isDiskFull = true;
                 results.push({ id: 'disk_space', name: 'Drive Space', status: 'error', message: `Critically full! Only ${freeGB.toFixed(2)}GB remaining. Downloads paused.`, actionLink: '/admin/storage' });
@@ -57,7 +61,9 @@ export async function runSystemHealthCheck() {
             } else {
                 results.push({ id: 'disk_space', name: 'Drive Space', status: 'ok', message: `${freeGB.toFixed(2)}GB free` });
             }
-        } catch (e) {}
+        } catch (e) {
+            Logger.log(`[Health Check Debug] StatFS failed for ${config.download_path}: ${getErrorMessage(e)}`, 'debug');
+        }
     }
 
     await prisma.systemSetting.upsert({
@@ -105,6 +111,7 @@ export async function runSystemHealthCheck() {
         try {
             const usage = JSON.parse(config.cv_api_usage);
             const now = Date.now();
+            Logger.log(`[Health Check Debug] Parsing ComicVine rolling window usage array: ${config.cv_api_usage}`, 'debug');
             for (const ep in usage) {
                 const validTs = usage[ep].filter((ts: number) => now - ts < 3600000); // Past hour
                 if (validTs.length > 0) {
@@ -176,6 +183,8 @@ export async function runSystemHealthCheck() {
     let overallStatus: 'HEALTHY' | 'WARNING' | 'DEGRADED' = 'HEALTHY';
     if (results.some(r => r.status === 'error')) overallStatus = 'DEGRADED';
     else if (results.some(r => r.status === 'warning')) overallStatus = 'WARNING';
+
+    Logger.log(`[Health Check Debug] Completed diagnostics. Final state: ${overallStatus} across ${results.length} checks.`, 'debug');
 
     const finalData = { status: overallStatus, lastRun: Date.now(), checks: results };
 

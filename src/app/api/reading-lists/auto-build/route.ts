@@ -181,6 +181,13 @@ export async function POST(request: Request) {
                 issueTitle = `Issue #${issueNum}`;
             }
 
+            // NEW: Extremely detailed matching trace
+            if (existingIssue) {
+                Logger.log(`[Auto-Build Debug] Matched arc item [ID: ${targetId}] to local file: ${existingIssue.filePath}`, 'debug');
+            } else {
+                Logger.log(`[Auto-Build Debug] Could NOT find local file match for arc item [ID: ${targetId}] ("${issueTitle}")`, 'debug');
+            }
+
             issuesToCreate.push({
                 listId: newList.id,
                 issueId: existingIssue ? existingIssue.id : null,

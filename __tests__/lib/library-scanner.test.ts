@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     deleteLock: vi.fn().mockResolvedValue(true), // FIX: Add mockResolvedValue so .catch() works!
     findManyLibraries: vi.fn(),
     findManySeries: vi.fn(),
+    findManyIssues: vi.fn(), // <-- NEW: Added mock for ghost issue scanner
     createSeries: vi.fn(),
     parseComicInfo: vi.fn(),
     log: vi.fn()
@@ -17,7 +18,15 @@ vi.mock('@/lib/db', () => ({
         jobLock: { findUnique: mocks.findUniqueLock, upsert: mocks.upsertLock, delete: mocks.deleteLock },
         library: { findMany: mocks.findManyLibraries },
         series: { findMany: mocks.findManySeries, create: mocks.createSeries, deleteMany: vi.fn() },
-        issue: { deleteMany: vi.fn() }
+        issue: { 
+            findMany: mocks.findManyIssues, // <-- NEW: Link to hoisted mock
+            deleteMany: vi.fn(),
+            update: vi.fn().mockResolvedValue({}), // <-- NEW: Prevent crashes during ghost sweep
+            delete: vi.fn().mockResolvedValue({})  // <-- NEW: Prevent crashes during ghost sweep
+        },
+        readProgress: {
+            deleteMany: vi.fn().mockResolvedValue({ count: 0 }) // <-- NEW: Prevent crashes during ghost sweep
+        }
     }
 }));
 
@@ -50,6 +59,7 @@ describe('File System: Library Scanner', () => {
         mocks.findUniqueLock.mockResolvedValue(null);
         mocks.findManyLibraries.mockResolvedValue([{ id: 'lib_1', path: '/library/comics', isManga: false }]);
         mocks.findManySeries.mockResolvedValue([]);
+        mocks.findManyIssues.mockResolvedValue([]); // <-- NEW: Return empty array by default to pass tests
     });
 
     it('should abort if another scan is currently running (Job Lock)', async () => {

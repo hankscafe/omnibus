@@ -18,7 +18,7 @@ import {
   Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, 
   ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Webhook, Copy, 
   Plus, Smartphone, TabletSmartphone, Wifi, Flame, BookType, Sparkles, Layers,
-  ChevronDown, ChevronUp, Settings
+  ChevronDown, ChevronUp, Settings, Server, Library
 } from "lucide-react"
 
 // --- Helper Component: Collapsible Section ---
@@ -47,10 +47,11 @@ function CollapsibleSection({ title, icon: Icon, children, defaultOpen = false }
 }
 
 // --- Helper Component: Individual Activity Card ---
-function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (status: string) => React.ReactNode }) {
+function ActivityCard({ req, getStatusBadge, onCancel }: { req: any, getStatusBadge: (status: string) => React.ReactNode, onCancel: (id: string) => void }) {
   const [desc, setDesc] = useState<string | null>(null)
   const [loadingDesc, setLoadingDesc] = useState(false)
   const [showDesc, setShowDesc] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
 
   const handleShowDesc = async () => {
     if (showDesc) {
@@ -88,8 +89,51 @@ function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (stat
     }
   }
 
+  const handleCancel = async () => {
+      setIsCancelling(true);
+      await onCancel(req.id);
+      setIsCancelling(false);
+  }
+
   const displayName = (req.seriesName || "Unknown Request").replace(/\.(cbz|cbr|zip)$/i, '');
   const isCompleted = ['IMPORTED', 'COMPLETED'].includes(req.status);
+
+  // Parse Provider
+  let provider = "Pending Search";
+  if (req.indexer) {
+      provider = req.indexer; // <--- 1. Pull directly from the database if available
+  } else if (req.downloadLink === 'DIRECT_GETCOMICS') {
+      provider = "GetComics";
+  } else if (req.downloadLink?.startsWith('http')) {
+      try {
+          const url = new URL(req.downloadLink);
+          const hostname = url.hostname.replace('www.', '');
+          const parts = hostname.split('.');
+          let name = parts.length > 1 ? parts[parts.length - 2] : hostname;
+          name = name.charAt(0).toUpperCase() + name.slice(1);
+          
+          if (hostname.includes('mediafire')) name = 'MediaFire';
+          else if (hostname.includes('mega.nz') || hostname.includes('mega.co.nz')) name = 'Mega';
+          else if (hostname.includes('pixeldrain')) name = 'Pixeldrain';
+          else if (hostname.includes('terabox')) name = 'Terabox';
+          else if (hostname.includes('vikingfile')) name = 'VikingFile';
+          else if (hostname.includes('annas-archive')) name = "Anna's Archive";
+          else if (hostname.includes('rootz')) name = 'Rootz';
+          else if (hostname.includes('comicfiles') || hostname.includes('comic-files') || hostname.includes('getcomics')) name = 'GetComics';
+          
+          provider = `${name} (DDL)`;
+      } catch (e) {
+          provider = "Direct Download (DDL)";
+      }
+  } else if (req.downloadLink?.startsWith('magnet:')) {
+      provider = "Torrent Indexer";
+  } else if (req.downloadLink) {
+      provider = "Usenet / Torrent Indexer";
+  } else if (req.status === 'PENDING_APPROVAL') {
+      provider = "Awaiting Approval";
+  } else if (['FAILED', 'ERROR', 'CANCELLED', 'STALLED'].includes(req.status)) {
+      provider = "N/A";
+  }
 
   return (
     <div className="p-4 flex flex-col sm:flex-row gap-4 hover:bg-muted/50 transition-colors">
@@ -111,15 +155,38 @@ function ActivityCard({ req, getStatusBadge }: { req: any, getStatusBadge: (stat
                     </div>
                 )}
             </div>
-            <div className="flex flex-wrap gap-4 mt-3">
-                <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-                    <Calendar className="w-3 h-3" /> Requested: {new Date(req.createdAt).toLocaleDateString()}
-                </p>
-                {isCompleted && req.updatedAt && (
-                    <p className="text-[10px] text-green-600 dark:text-green-500 font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> Completed: {new Date(req.updatedAt).toLocaleDateString()}
-                    </p>
-                )}
+
+            <div className="mt-4 pt-4 border-t border-border flex flex-col gap-3">
+                <div className="flex flex-wrap gap-x-6 gap-y-2 text-[11px] font-medium">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <Calendar className="w-3.5 h-3.5" />
+                        Requested: {new Date(req.createdAt).toLocaleDateString()}
+                    </div>
+                    {isCompleted && req.updatedAt && (
+                        <div className="flex items-center gap-1.5 text-green-600 dark:text-green-500">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Completed: {new Date(req.updatedAt).toLocaleDateString()}
+                        </div>
+                    )}
+                </div>
+                
+                <div className="flex flex-col gap-1 text-[11px] text-muted-foreground font-medium">
+                    <span className="flex items-center gap-1.5"><Server className="w-3.5 h-3.5" /> Provider: <span className="font-bold text-foreground">{provider}</span></span>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-wrap gap-2 w-full mt-1">
+                     {req.seriesPath && (
+                        <Button size="sm" asChild variant="secondary" className="flex-1 font-bold shadow-sm h-9">
+                            <Link href={`/library/series?path=${encodeURIComponent(req.seriesPath)}`}><Library className="w-4 h-4 mr-2" /> Go to Series</Link>
+                        </Button>
+                     )}
+                     {['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR', 'MANUAL_DDL'].includes(req.status) && (
+                         <Button size="sm" variant="destructive" className="flex-1 font-bold shadow-sm h-9" onClick={handleCancel} disabled={isCancelling}>
+                            {isCancelling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />} Cancel Request
+                         </Button>
+                     )}
+                </div>
             </div>
         </div>
     </div>
@@ -313,6 +380,20 @@ export default function ProfilePage() {
   useEffect(() => { 
       if (session?.user?.id) fetchData() 
   }, [session])
+
+  const handleCancelRequest = async (id: string) => {
+      try {
+          const res = await fetch(`/api/request?id=${id}`, { method: 'DELETE' });
+          if (res.ok) {
+              toast({ title: "Request Cancelled" });
+              setRecentReqs(prev => prev.map(r => r.id === id ? { ...r, status: 'CANCELLED' } : r));
+          } else {
+              toast({ title: "Failed to cancel request", variant: "destructive" });
+          }
+      } catch (e) {
+          toast({ title: "Error cancelling request", variant: "destructive" });
+      }
+  };
 
   // --- HEATMAP GENERATOR HELPER ---
   const renderHeatmap = () => {
@@ -817,7 +898,7 @@ export default function ProfilePage() {
                                 <div className="p-10 text-center text-muted-foreground italic">No requests made yet.</div>
                             ) : (
                                 recentReqs.map((req: any) => (
-                                    <ActivityCard key={req.id} req={req} getStatusBadge={getStatusBadge} />
+                                    <ActivityCard key={req.id} req={req} getStatusBadge={getStatusBadge} onCancel={handleCancelRequest} />
                                 ))
                             )}
                         </div>

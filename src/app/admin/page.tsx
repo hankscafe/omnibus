@@ -996,6 +996,15 @@ const mappedRequests = requests.map(req => {
                             <p className={`text-xs mt-0.5 ${check.status === 'error' ? 'text-red-500 font-medium' : check.status === 'warning' ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-muted-foreground'}`}>
                                 {check.message}
                             </p>
+                            
+                            {/* NEW: Render the details list for the stalled items */}
+                            {check.details && check.details.length > 0 && (
+                                <ul className="mt-2 text-[11px] text-muted-foreground list-disc pl-4 space-y-0.5 bg-background/50 p-2 rounded border border-border/50 max-h-24 overflow-y-auto">
+                                    {check.details.map((detail: string, i: number) => (
+                                        <li key={i} className="truncate" title={detail}>{detail}</li>
+                                    ))}
+                                </ul>
+                            )}
                         </div>
                         {(check.actionLink || check.id === 'system_update') && (
                             <Button variant="outline" size="sm" asChild className="shrink-0 h-8 text-[10px] uppercase font-bold tracking-wider">

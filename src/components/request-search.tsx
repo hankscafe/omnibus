@@ -1,7 +1,6 @@
-// src/components/request-search.tsx
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useSession } from "next-auth/react" 
 import { Search, Loader2, X, Plus, Calendar, Info, Layers, ChevronLeft, Download, CheckCircle2, Clock, Globe, PenTool, Paintbrush, Users, Image as ImageIcon, Activity, Library, FileCheck, Tags, BookMarked, Shield, MapPin, ExternalLink } from "lucide-react"
 import { Input } from "@/components/ui/input"
@@ -10,6 +9,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } f
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
 import { InteractiveSearchModal } from "./interactive-search-modal"
 
@@ -59,6 +59,7 @@ export function RequestSearch() {
   const { data: session } = useSession()
   const [open, setOpen] = useState(false)
   const [homeQuery, setHomeQuery] = useState("")
+  const [searchSort, setSearchSort] = useState("relevance")
   const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
   
   const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string } | null>(null);
@@ -158,6 +159,16 @@ export function RequestSearch() {
       setIsSearchingMore(false);
     }
   }
+
+  const sortedResults = useMemo(() => {
+      let sorted = [...results];
+      if (searchSort === 'year_desc') sorted.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
+      if (searchSort === 'year_asc') sorted.sort((a, b) => parseInt(a.year || '0') - parseInt(b.year || '0'));
+      if (searchSort === 'name_asc') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      if (searchSort === 'name_desc') sorted.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+      if (searchSort === 'issues_desc') sorted.sort((a, b) => (b.count || 0) - (a.count || 0));
+      return sorted;
+  }, [results, searchSort]);
 
   const handleSelectSearchResult = async (item: SearchResult) => {
       setLoading(true);
@@ -306,20 +317,36 @@ export function RequestSearch() {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0 border-none shadow-2xl [&>button]:hidden bg-background">
-          <div className="p-4 border-b border-border bg-muted/30 flex items-center justify-between z-10 transition-colors duration-300">
+          <div className="p-4 border-b border-border bg-muted/30 flex flex-col sm:flex-row items-start sm:items-center justify-between z-10 transition-colors duration-300 gap-4">
             <div className="flex items-center gap-2">
               {selectedItem && (<Button variant="ghost" size="sm" onClick={() => setSelectedItem(null)} className="mr-2 -ml-2 text-foreground"><ChevronLeft className="w-4 h-4 mr-1" /> Back</Button>)}
               <DialogTitle className="text-xl font-bold truncate max-w-md text-foreground">{selectedItem ? selectedItem.name : `Results for "${homeQuery}"`}</DialogTitle>
               {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
             </div>
-            <Button variant="ghost" size="icon" className="text-foreground" onClick={() => setOpen(false)}><X className="h-5 w-5" /></Button>
+            {!selectedItem && sortedResults.length > 0 && (
+                <div className="flex items-center gap-2">
+                    <Select value={searchSort} onValueChange={setSearchSort}>
+                        <SelectTrigger className="w-[150px] shrink-0 h-9 bg-background"><SelectValue placeholder="Sort By" /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="relevance">Relevance</SelectItem>
+                            <SelectItem value="year_desc">Newest Year</SelectItem>
+                            <SelectItem value="year_asc">Oldest Year</SelectItem>
+                            <SelectItem value="name_asc">Name (A-Z)</SelectItem>
+                            <SelectItem value="name_desc">Name (Z-A)</SelectItem>
+                            <SelectItem value="issues_desc">Most Issues</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Button variant="ghost" size="icon" className="text-foreground" onClick={() => setOpen(false)}><X className="h-5 w-5" /></Button>
+                </div>
+            )}
+            {selectedItem && <Button variant="ghost" size="icon" className="text-foreground hidden sm:flex" onClick={() => setOpen(false)}><X className="h-5 w-5" /></Button>}
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 bg-background transition-colors duration-300">
             {!selectedItem ? (
                 <>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 pb-4 px-1">
-                  {results.map((item) => {
+                  {sortedResults.map((item) => {
                     const volStatus = getVolumeStatus(item.id, item.name);
                     return (
                     <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleSelectSearchResult(item)}>

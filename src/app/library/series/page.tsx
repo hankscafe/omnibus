@@ -1,7 +1,7 @@
 // src/app/library/series/page.tsx
 "use client"
 
-import { useState, useEffect, useTransition, Suspense } from "react"
+import { useState, useEffect, useTransition, Suspense, useMemo } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
@@ -130,6 +130,8 @@ function SeriesContent() {
   const [filePattern, setFilePattern] = useState("{Series} #{Issue}");
   const [renamePreviews, setRenamePreviews] = useState<any[]>([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+
+  const [matchSort, setMatchSort] = useState("relevance");
 
   useEffect(() => {
       if (renameModalOpen && seriesInfo.id) {
@@ -834,6 +836,16 @@ function SeriesContent() {
 
   if (!folderPath) return <div className="p-10 text-center text-muted-foreground">No series selected.</div>;
 
+  const sortedMatchResults = useMemo(() => {
+    let sorted = [...searchResults];
+    if (matchSort === 'year_desc') sorted.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
+    if (matchSort === 'year_asc') sorted.sort((a, b) => parseInt(a.year || '0') - parseInt(b.year || '0'));
+    if (matchSort === 'name_asc') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (matchSort === 'name_desc') sorted.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+    if (matchSort === 'issues_desc') sorted.sort((a, b) => (b.count || 0) - (a.count || 0));
+    return sorted;
+}, [searchResults, matchSort]);
+  
   return (
     <div className="container mx-auto py-10 px-6 max-w-[1400px] transition-colors duration-300">
       <Button variant="ghost" asChild className="mb-6 -ml-4 text-muted-foreground hover:text-foreground">
@@ -1524,25 +1536,40 @@ function SeriesContent() {
               <DialogHeader><DialogTitle>Match Series</DialogTitle></DialogHeader>
               
               {/* --- NEW: Hide dropdown if Metron isn't configured, but keep the search bar functioning perfectly --- */}
-              <form onSubmit={(e) => performSearch(e, false)} className="flex gap-2">
-                  {metronConfigured && (
-                      <Select value={searchProvider} onValueChange={setSearchProvider}>
-                          <SelectTrigger className="w-[140px] bg-background border-border shrink-0">
-                              <SelectValue placeholder="Source" />
-                          </SelectTrigger>
-                          <SelectContent>
-                              <SelectItem value="COMICVINE">ComicVine</SelectItem>
-                              <SelectItem value="METRON">Metron.Cloud</SelectItem>
-                          </SelectContent>
-                      </Select>
-                  )}
-                  <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-background border-border w-full" />
-                  <Button type="submit" disabled={isSearching}><Search className="w-4 h-4" /></Button>
+              <form onSubmit={(e) => performSearch(e, false)} className="flex flex-wrap gap-2">
+                {metronConfigured && (
+                    <Select value={searchProvider} onValueChange={setSearchProvider}>
+                        <SelectTrigger className="w-[140px] bg-background border-border shrink-0">
+                            <SelectValue placeholder="Source" />
+                        </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="COMICVINE">ComicVine</SelectItem>
+                        <SelectItem value="METRON">Metron.Cloud</SelectItem>
+                    </SelectContent>
+                </Select>
+              )}
+              <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-background border-border w-full flex-1" />
+  
+              <Select value={matchSort} onValueChange={setMatchSort}>
+                <SelectTrigger className="w-[140px] bg-background border-border shrink-0">
+                    <SelectValue placeholder="Sort By" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="relevance">Relevance</SelectItem>
+                            <SelectItem value="year_desc">Newest Year</SelectItem>
+                            <SelectItem value="year_asc">Oldest Year</SelectItem>
+                            <SelectItem value="name_asc">Name (A-Z)</SelectItem>
+                            <SelectItem value="name_desc">Name (Z-A)</SelectItem>
+                            <SelectItem value="issues_desc">Most Issues</SelectItem>
+                        </SelectContent>
+                    </Select>
+  
+                    <Button type="submit" disabled={isSearching}><Search className="w-4 h-4" /></Button>
               </form>
               
               <div className="flex-1 overflow-y-auto mt-4 pb-4 px-1">
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                      {searchResults.map((item) => (
+                      {sortedMatchResults.map((item) => (
                           <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleMatch(item)}>
                               <div className="aspect-[2/3] bg-muted rounded-lg overflow-hidden border border-border relative shadow-sm">
                                   {item.image && <img src={getImageUrl(item.image) || ""} className="object-cover w-full h-full" alt="" />}

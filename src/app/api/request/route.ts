@@ -75,6 +75,7 @@ export async function GET(request: NextRequest) {
         id: req.id,
         userId: req.userId,
         volumeId: req.volumeId, 
+        seriesPath: series?.folderPath || null,
         seriesName: req.activeDownloadName || (series ? `${series.name}${issueNumberStr} (${series.year})` : `Volume ${req.volumeId}`), 
         activeDownloadName: req.activeDownloadName,
         userName: token.name || 'User',
@@ -83,6 +84,7 @@ export async function GET(request: NextRequest) {
         status: req.status,
         progress: req.progress, 
         downloadLink: req.downloadLink,
+        indexer: (req as any).indexer,
         imageUrl: finalImageUrl && finalImageUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(finalImageUrl)}` : finalImageUrl,
         retryCount: req.retryCount || 0 
       };
@@ -489,6 +491,35 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error: any) {
     Logger.log(`[Request API] Approval Error: ${error.message}`, 'error');
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const token = await getToken({ req: request });
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const userId = (token.id || token.sub) as string;
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
+
+    const reqRecord = await prisma.request.findUnique({ where: { id } });
+    if (!reqRecord || reqRecord.userId !== userId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    await prisma.request.update({
+      where: { id },
+      data: { status: 'CANCELLED', notified: false }
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    Logger.log(`[Request API] Cancel Error: ${error.message}`, 'error');
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

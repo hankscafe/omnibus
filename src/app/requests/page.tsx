@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Loader2, Search, RefreshCw, Clock, CheckCircle2, Calendar, FileText, ChevronLeft, ChevronRight, Info, List, ImageIcon } from "lucide-react"
+import { Loader2, Search, RefreshCw, Clock, CheckCircle2, Calendar, FileText, ChevronLeft, ChevronRight, Info, List, ImageIcon, Server, XCircle, Library } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import {
   Select,
@@ -18,10 +18,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (status: string) => string }) {
+function RequestCard({ req, getStatusColor, onCancel }: { req: any, getStatusColor: (status: string) => string, onCancel: (id: string) => void }) {
   const [desc, setDesc] = useState<string | null>(null)
   const [loadingDesc, setLoadingDesc] = useState(false)
   const [showDesc, setShowDesc] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
 
   const handleShowDesc = async () => {
     if (showDesc) {
@@ -58,14 +59,56 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
     }
   }
 
+  const handleCancel = async () => {
+      setIsCancelling(true);
+      await onCancel(req.id);
+      setIsCancelling(false);
+  }
+
   const displayName = (req.seriesName || "Unknown Request").replace(/\.(cbz|cbr|zip)$/i, '');
   const isCompleted = ['IMPORTED', 'COMPLETED'].includes(req.status);
+
+  // Parse Provider
+  let provider = "Pending Search";
+  if (req.indexer) {
+      provider = req.indexer; // <--- 1. Pull directly from the database if available
+  } else if (req.downloadLink === 'DIRECT_GETCOMICS') {
+      provider = "GetComics";
+  } else if (req.downloadLink?.startsWith('http')) {
+      try {
+          const url = new URL(req.downloadLink);
+          const hostname = url.hostname.replace('www.', '');
+          const parts = hostname.split('.');
+          let name = parts.length > 1 ? parts[parts.length - 2] : hostname;
+          name = name.charAt(0).toUpperCase() + name.slice(1);
+          
+          if (hostname.includes('mediafire')) name = 'MediaFire';
+          else if (hostname.includes('mega.nz') || hostname.includes('mega.co.nz')) name = 'Mega';
+          else if (hostname.includes('pixeldrain')) name = 'Pixeldrain';
+          else if (hostname.includes('terabox')) name = 'Terabox';
+          else if (hostname.includes('vikingfile')) name = 'VikingFile';
+          else if (hostname.includes('annas-archive')) name = "Anna's Archive";
+          else if (hostname.includes('rootz')) name = 'Rootz';
+          else if (hostname.includes('comicfiles') || hostname.includes('comic-files') || hostname.includes('getcomics')) name = 'GetComics';
+          
+          provider = `${name} (DDL)`;
+      } catch (e) {
+          provider = "Direct Download (DDL)";
+      }
+  } else if (req.downloadLink?.startsWith('magnet:')) {
+      provider = "Torrent Indexer";
+  } else if (req.downloadLink) {
+      provider = "Usenet / Torrent Indexer";
+  } else if (req.status === 'PENDING_APPROVAL') {
+      provider = "Awaiting Approval";
+  } else if (['FAILED', 'ERROR', 'CANCELLED', 'STALLED'].includes(req.status)) {
+      provider = "N/A";
+  }
 
   return (
     <Card className="shadow-sm hover:border-primary/50 transition-colors overflow-hidden border-border bg-background max-w-4xl mx-auto w-full">
       <CardContent className="p-4 flex flex-col sm:flex-row gap-6 items-start">
         
-        {/* Fixed image dimensions to prevent "giant" cards on mobile/desktop */}
         <div className="w-28 h-40 sm:w-32 sm:h-48 shrink-0 bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
             {req.imageUrl && req.imageUrl.trim() !== "" ? (
                 <img src={req.imageUrl} alt={displayName} className="object-cover w-full h-full" />
@@ -74,7 +117,7 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
             )}
         </div>
 
-        <div className="flex-1 flex flex-col min-w-0 pt-1">
+        <div className="flex-1 flex flex-col min-w-0 pt-1 w-full">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-3">
                 <div className="space-y-1">
                     <h3 className="font-bold text-lg sm:text-xl leading-tight line-clamp-1 text-foreground" title={displayName}>{displayName}</h3>
@@ -108,17 +151,37 @@ function RequestCard({ req, getStatusColor }: { req: any, getStatusColor: (statu
                 )}
             </div>
 
-            <div className="mt-4 pt-4 border-t border-border flex flex-wrap gap-x-6 gap-y-2 text-[11px] font-medium">
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <Calendar className="w-3.5 h-3.5" />
-                    Requested: {new Date(req.createdAt).toLocaleDateString()}
-                </div>
-                {isCompleted && req.updatedAt && (
-                    <div className="flex items-center gap-1.5 text-green-600 dark:text-green-500">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Completed: {new Date(req.updatedAt).toLocaleDateString()}
+            <div className="mt-4 pt-4 border-t border-border flex flex-col gap-3">
+                <div className="flex flex-wrap gap-x-6 gap-y-2 text-[11px] font-medium">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <Calendar className="w-3.5 h-3.5" />
+                        Requested: {new Date(req.createdAt).toLocaleDateString()}
                     </div>
-                )}
+                    {isCompleted && req.updatedAt && (
+                        <div className="flex items-center gap-1.5 text-green-600 dark:text-green-500">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Completed: {new Date(req.updatedAt).toLocaleDateString()}
+                        </div>
+                    )}
+                </div>
+                
+                <div className="flex flex-col gap-1 text-[11px] text-muted-foreground font-medium">
+                    <span className="flex items-center gap-1.5"><Server className="w-3.5 h-3.5" /> Provider: <span className="font-bold text-foreground">{provider}</span></span>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-wrap gap-2 w-full mt-1">
+                     {req.seriesPath && (
+                        <Button size="sm" asChild variant="secondary" className="flex-1 font-bold shadow-sm h-9">
+                            <Link href={`/library/series?path=${encodeURIComponent(req.seriesPath)}`}><Library className="w-4 h-4 mr-2" /> Go to Series</Link>
+                        </Button>
+                     )}
+                     {['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR', 'MANUAL_DDL'].includes(req.status) && (
+                         <Button size="sm" variant="destructive" className="flex-1 font-bold shadow-sm h-9" onClick={handleCancel} disabled={isCancelling}>
+                            {isCancelling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />} Cancel Request
+                         </Button>
+                     )}
+                </div>
             </div>
         </div>
       </CardContent>
@@ -157,6 +220,20 @@ export default function RequestsPage() {
     const interval = setInterval(fetchRequests, 15000) 
     return () => clearInterval(interval)
   }, [session])
+
+  const handleCancelRequest = async (id: string) => {
+      try {
+          const res = await fetch(`/api/request?id=${id}`, { method: 'DELETE' });
+          if (res.ok) {
+              toast({ title: "Request Cancelled" });
+              setRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'CANCELLED' } : r));
+          } else {
+              toast({ title: "Failed to cancel request", variant: "destructive" });
+          }
+      } catch (e) {
+          toast({ title: "Error cancelling request", variant: "destructive" });
+      }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -223,7 +300,7 @@ export default function RequestsPage() {
 
       <div className="grid grid-cols-1 gap-6 min-h-[400px]">
           {paginatedRequests.map((req) => (
-              <RequestCard key={req.id} req={req} getStatusColor={getStatusColor} />
+              <RequestCard key={req.id} req={req} getStatusColor={getStatusColor} onCancel={handleCancelRequest} />
           ))}
           
           {paginatedRequests.length === 0 && !loading && (

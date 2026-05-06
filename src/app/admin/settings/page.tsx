@@ -374,12 +374,18 @@ export default function SettingsPage() {
         
         if (res.ok) {
             setInitialStateHash(currentStateString);
-            toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
-            fetch('/api/admin/jobs/trigger', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job: 'popular' })
-            }).catch(() => {});
+            
+            // --- NEW: Only trigger Discover Sync if saving from the Filters tab ---
+            if (activeTab === 'filters') {
+                toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
+                fetch('/api/admin/jobs/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job: 'popular' })
+                }).catch(() => {});
+            } else {
+                toast({ title: "Settings Saved", description: "Configuration persisted to database." })
+            }
         }
     } finally { 
         setLoading(false) 

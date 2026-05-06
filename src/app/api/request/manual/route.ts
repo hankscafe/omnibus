@@ -161,7 +161,9 @@ export async function POST(request: NextRequest) {
                 await DownloadService.addDownload(client, searchResult.downloadUrl, searchResult.title, searchResult.seedTime || 0, searchResult.seedRatio || 0);
                 await prisma.request.update({
                   where: { id: targetReqId },
-                  data: { downloadLink: searchResult.infoHash || searchResult.guid || null }
+                  data: { downloadLink: searchResult.infoHash || searchResult.guid || null,
+                    indexer: searchResult.indexer
+                   }
                 });
             }
         } 

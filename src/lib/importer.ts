@@ -157,6 +157,7 @@ export const Importer = {
     let isBatchFolder = false;
     let isBatchArchive = false;
     let batchFiles: string[] = [];
+    let nestedArchiveCount = 0; // NEW: Track nested items
 
     if (fs.statSync(sourcePath).isDirectory()) {
         async function getComicFilesInDir(dir: string) {
@@ -177,6 +178,7 @@ export const Importer = {
 
         if (batchFiles.length > 1) {
             isBatchFolder = true;
+            Logger.log(`[Importer Debug] Detected multiple archives (${batchFiles.length}) in directory: ${sourcePath}`, 'debug');
         } else if (batchFiles.length === 1) {
             actualSourceFile = batchFiles[0];
             Logger.log(`[Importer] Extracted single archive from folder: ${path.basename(actualSourceFile)}`, "info");
@@ -194,21 +196,28 @@ export const Importer = {
                 
                 if (comicFiles.length > 0) {
                     isBatchArchive = true;
+                    nestedArchiveCount = comicFiles.length;
+                    Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(sourcePath)}`, 'debug');
                 }
-            } catch(e) {}
+            } catch(e: any) {
+                Logger.log(`[Importer Debug] Error inspecting zip for nested archives: ${e.message}`, 'error');
+            }
         }
     }
 
     // --- BATCH ROUTING EXECUTION ---
     if (isBatchFolder || isBatchArchive) {
-        Logger.log(`[Importer Debug] Detected batch payload. isBatchFolder: ${isBatchFolder}, isBatchArchive: ${isBatchArchive}. Total files: ${batchFiles.length}`, 'debug');
+        const totalItems = isBatchFolder ? batchFiles.length : nestedArchiveCount;
+        Logger.log(`[Importer Debug] Detected batch payload. isBatchFolder: ${isBatchFolder}, isBatchArchive: ${isBatchArchive}. Total items: ${totalItems}`, 'debug');
         Logger.log(`[Importer] Batch download detected. Routing to WATCHED folder...`, 'info');
+        
         const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
         await fs.ensureDir(watchedDir);
         let moveSuccessCount = 0;
 
         if (isBatchFolder) {
             for (const file of batchFiles) {
+                Logger.log(`[Importer Debug] Routing nested file to Watched: ${path.basename(file)}`, 'debug');
                 let finalDest = path.join(watchedDir, path.basename(file));
                 if (fs.existsSync(finalDest)) {
                     finalDest = path.join(watchedDir, `${Date.now()}_${path.basename(file)}`);
@@ -220,8 +229,8 @@ export const Importer = {
                         await fs.move(file, finalDest, { overwrite: true });
                     }
                     moveSuccessCount++;
-                } catch(err) {
-                    Logger.log(`[Importer] Failed to route ${path.basename(file)} to Watched folder.`, 'warn');
+                } catch(err: any) {
+                    Logger.log(`[Importer Debug] Failed to route ${path.basename(file)} to Watched folder: ${err.message}`, 'warn');
                 }
             }
             if (!isFromClient && !trackingHash) {
@@ -234,6 +243,7 @@ export const Importer = {
                 for (const entry of entries) {
                     if (!entry.isDirectory && entry.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
                         const fileName = path.basename(entry.entryName);
+                        Logger.log(`[Importer Debug] Extracting nested archive from ZIP to Watched: ${fileName}`, 'debug');
                         let finalDest = path.join(watchedDir, fileName);
                         if (fs.existsSync(finalDest)) {
                             finalDest = path.join(watchedDir, `${Date.now()}_${fileName}`);

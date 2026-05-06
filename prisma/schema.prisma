@@ -72,6 +72,7 @@ model Request {
   status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED
   progress           Int      @default(0)
   retryCount         Int      @default(0)
+  indexer            String?
   downloadLink       String?
   activeDownloadName String?
   imageUrl           String?

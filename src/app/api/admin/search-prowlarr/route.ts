@@ -16,8 +16,9 @@ export async function GET(request: Request) {
   try {
     Logger.log(`[Manual Search] Searching Prowlarr for: ${query}`, 'info');
     
-    // CHANGED: We are now calling the correct function name 'searchComics'
-    const results = await ProwlarrService.searchComics(query);
+    // --- THE FIX: Pass `true` so the engine knows it's an Interactive search
+    // and doesn't aggressively filter out results with messy titles.
+    const results = await ProwlarrService.searchComics(query, true, false);
     
     return NextResponse.json({ results });
   } catch (error: unknown) {

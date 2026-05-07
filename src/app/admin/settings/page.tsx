@@ -16,7 +16,7 @@ import {
   Smartphone,
   Globe,
   AlertTriangle,
-  RotateCcw // <-- Added Icon Here
+  RotateCcw
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -168,7 +168,7 @@ export default function SettingsPage() {
   const { toast } = useToast()
   
   const [config, setConfig] = useState<any>({
-    prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030, 8030", download_path: "", cv_api_key: "",
+    prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030", download_path: "", cv_api_key: "",
     metron_user: "", metron_pass: "",
     export_series_json: "false", 
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
@@ -188,6 +188,9 @@ export default function SettingsPage() {
     telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
     apprise_enabled: "false", apprise_url: "", apprise_events: "[]"
   })
+
+  // --- NEW: Custom Prowlarr Categories State ---
+  const [customProwlarrCategories, setCustomProwlarrCategories] = useState("")
 
   // --- UNSAVED CHANGES STATES ---
   const [isDataLoaded, setIsDataLoaded] = useState(false)
@@ -316,11 +319,16 @@ export default function SettingsPage() {
         }
 
         if (!newConfig.download_retry_delay) newConfig.download_retry_delay = "5";
-        if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030, 8030";
+        if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030";
         if (newConfig.discord_enabled === undefined) newConfig.discord_enabled = "true";
         if (newConfig.oidc_force_sso === undefined) newConfig.oidc_force_sso = "false";
         if (newConfig.oidc_auto_approve === undefined) newConfig.oidc_auto_approve = "false";
         
+        // Populate custom categories input
+        const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
+        const currentCats = (newConfig.prowlarr_categories).split(',').map((c:string) => c.trim()).filter(Boolean);
+        setCustomProwlarrCategories(currentCats.filter((c:string) => !predefinedIds.includes(c)).join(', '));
+
         setConfig(newConfig);
         setTimeout(() => setIsDataLoaded(true), 500);
     })
@@ -392,7 +400,31 @@ export default function SettingsPage() {
     }
   }
 
-  // --- NEW: Restore Naming Defaults Function ---
+  // --- NEW: Category Update Helper ---
+  const updateProwlarrCategories = (toggledId?: string, isChecked?: boolean, newCustom?: string) => {
+      const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
+      let current = (config.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
+      let activePredefined = current.filter((c: string) => predefinedIds.includes(c));
+      
+      // Update toggles
+      if (toggledId) {
+          if (isChecked && !activePredefined.includes(toggledId)) activePredefined.push(toggledId);
+          if (!isChecked) activePredefined = activePredefined.filter((c: string) => c !== toggledId);
+      }
+
+      // Update custom input
+      const customVal = newCustom !== undefined ? newCustom : customProwlarrCategories;
+      if (newCustom !== undefined) {
+          setCustomProwlarrCategories(newCustom);
+      }
+
+      // Merge and remove duplicates
+      const customList = customVal.split(',').map((c: string) => c.trim()).filter(Boolean);
+      const finalCategories = Array.from(new Set([...activePredefined, ...customList])).join(', ');
+      
+      setConfig({ ...config, prowlarr_categories: finalCategories });
+  };
+
   const handleRestoreNamingDefaults = () => {
     setConfig((prev: any) => ({
         ...prev,
@@ -406,7 +438,6 @@ export default function SettingsPage() {
     });
   };
 
-  // --- Generic Provider Event Handler ---
   const toggleProviderEvent = (providerKey: string, eventId: string) => {
     let current = [];
     try { current = JSON.parse(config[`${providerKey}_events`] || "[]"); } catch(e){}
@@ -414,7 +445,6 @@ export default function SettingsPage() {
     setConfig({...config, [`${providerKey}_events`]: JSON.stringify(updated)});
   }
 
-  // --- Library Methods ---
   const addLibrary = () => {
     setConfiguredLibraries([...configuredLibraries, {
         id: `tmp_${Date.now()}`, name: "", path: "", isManga: false, isDefault: configuredLibraries.length === 0
@@ -431,7 +461,6 @@ export default function SettingsPage() {
     }));
   }
 
-  // --- Hoster Methods ---
   const moveHosterPriority = (index: number, direction: -1 | 1) => {
       const newPriority = [...hosterPriority];
       const temp = newPriority[index];
@@ -791,7 +820,6 @@ export default function SettingsPage() {
                             </div>
                         </div>
                         
-                        {/* --- NEW METRON TEST BUTTON --- */}
                         <div className="border-t border-border my-4" />
                         <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('metron')} disabled={!!testing}>
                             {testing === 'metron' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Connection
@@ -799,7 +827,6 @@ export default function SettingsPage() {
                         <StatusBox result={testResults.metron} />
                     </div>
 
-                    {/* --- SERIES.JSON EXPORT --- */}
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
                         <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
                             <Switch 
@@ -848,7 +875,6 @@ export default function SettingsPage() {
                                     placeholder="viz media, kodansha, yen press, seven seas, shueisha..." 
                                     className="flex-1 min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border resize-y"
                                 />
-                                {/* Invisible spacer to maintain perfect visual alignment with the left column */}
                                 <p className="text-[10px] opacity-0 pointer-events-none select-none hidden md:block">Spacer</p>
                             </div>
                         </div>
@@ -886,10 +912,63 @@ export default function SettingsPage() {
                         <Input type="password" value={config.prowlarr_key} onChange={(e) => setConfig({...config, prowlarr_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
                         <p className="text-[0.8rem] text-muted-foreground">Found in Prowlarr Settings → General → Security → API Key</p>
                     </div>
-                    <div className="grid gap-2">
-                        <Label className="text-foreground font-semibold">Search Categories (Torznab IDs)</Label>
-                        <Input value={config.prowlarr_categories || ""} onChange={(e) => setConfig({...config, prowlarr_categories: e.target.value})} placeholder="e.g. 7030, 8030" className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
-                        <p className="text-[0.8rem] text-muted-foreground">Standard categories: <strong>7030</strong> (Comics), <strong>8030</strong> (Manga). Use a comma-separated list.</p>
+                    
+                    {/* --- THE FIX: NEW DYNAMIC CATEGORIES UI --- */}
+                    <div className="space-y-3 pt-2">
+                        <div>
+                            <Label className="text-foreground font-semibold">Search Categories (Torznab IDs)</Label>
+                            <p className="text-[11px] text-muted-foreground mt-1">Select the categories Prowlarr should use when searching. <strong>7030</strong> is required for standard comic indexers.</p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border border-border rounded-lg p-4 bg-muted/20">
+                            <div className="space-y-3">
+                                <Label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Books / Comics (7000s)</Label>
+                                <div className="grid gap-3">
+                                    {[
+                                        { id: '7000', label: '7000 - Books' },
+                                        { id: '7010', label: '7010 - Books/Mags' },
+                                        { id: '7020', label: '7020 - Books/EBook' },
+                                        { id: '7030', label: '7030 - Books/Comics' }
+                                    ].map(cat => (
+                                        <div key={cat.id} className="flex items-center space-x-3 bg-background p-2 rounded border border-border shadow-sm">
+                                            <Switch 
+                                                id={`cat-${cat.id}`}
+                                                checked={(config.prowlarr_categories || "").split(',').map((c: string) => c.trim()).includes(cat.id)}
+                                                onCheckedChange={(checked) => updateProwlarrCategories(cat.id, checked)}
+                                                className="scale-90 sm:scale-100 ml-1"
+                                            />
+                                            <Label htmlFor={`cat-${cat.id}`} className="cursor-pointer font-bold text-sm text-foreground">{cat.label}</Label>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <div className="space-y-6">
+                                <div className="space-y-3">
+                                    <Label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Other / Misc (8000s)</Label>
+                                    <div className="flex items-center space-x-3 bg-background p-2 rounded border border-border shadow-sm">
+                                        <Switch 
+                                            id="cat-8000"
+                                            checked={(config.prowlarr_categories || "").split(',').map((c: string) => c.trim()).includes("8000")}
+                                            onCheckedChange={(checked) => updateProwlarrCategories("8000", checked)}
+                                            className="scale-90 sm:scale-100 ml-1"
+                                        />
+                                        <Label htmlFor="cat-8000" className="cursor-pointer font-bold text-sm text-foreground">8000 - Other</Label>
+                                    </div>
+                                </div>
+                                
+                                <div className="space-y-3 pt-2">
+                                    <Label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Custom Categories</Label>
+                                    <Input 
+                                        placeholder="e.g. 5070, 2000" 
+                                        value={customProwlarrCategories} 
+                                        onChange={(e) => updateProwlarrCategories(undefined, undefined, e.target.value)} 
+                                        className="h-10 bg-background border-border text-foreground text-sm font-mono"
+                                    />
+                                    <p className="text-[10px] text-muted-foreground">Comma-separated custom Newznab/Torznab IDs.</p>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="border-t border-border my-4" />

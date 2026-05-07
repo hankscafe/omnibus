@@ -68,11 +68,12 @@ export default function SetupWizard() {
   const [testStates, setTestStates] = useState<Record<string, 'idle' | 'success' | 'error'>>({});
   const [adminCreated, setAdminCreated] = useState(false);
 
+  // --- THE FIX: Change default from "7030, 8030" to strictly "7030" ---
   const [formData, setFormData] = useState({
     username: '', email: '', password: '', confirmPassword: '',
     cv_api_key: '', metron_user: '', metron_pass: '',
     download_path: '',
-    prowlarr_url: '', prowlarr_key: '', prowlarr_categories: '7030, 8030',
+    prowlarr_url: '', prowlarr_key: '', prowlarr_categories: '7030',
     flaresolverr_url: '',
     filter_enabled: false, filter_publishers: '', filter_keywords: '',
     filter_foreign_publishers: '',
@@ -80,6 +81,9 @@ export default function SetupWizard() {
     oidc_force_sso: false, oidc_auto_approve: false, oidc_admin_group: '', oidc_user_group: '',
     smtp_enabled: false, smtp_host: '', smtp_port: '', smtp_user: '', smtp_pass: '', smtp_from: ''
   });
+
+  // --- THE FIX: Custom Category State ---
+  const [customProwlarrCategories, setCustomProwlarrCategories] = useState("");
 
   // Relational States
   const [libraries, setLibraries] = useState<any[]>([{ id: 'tmp_1', name: 'Standard Comics', path: '', isManga: false, isDefault: true }]);
@@ -126,6 +130,31 @@ export default function SetupWizard() {
     if (testStates[key] !== undefined) {
         setTestStates(prev => ({ ...prev, [key]: 'idle' }));
     }
+  };
+
+  // --- THE FIX: Category Update Logic for the Wizard ---
+  const updateProwlarrCategories = (toggledId?: string, isChecked?: boolean, newCustom?: string) => {
+      const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
+      let current = (formData.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
+      let activePredefined = current.filter((c: string) => predefinedIds.includes(c));
+      
+      // Update toggles
+      if (toggledId) {
+          if (isChecked && !activePredefined.includes(toggledId)) activePredefined.push(toggledId);
+          if (!isChecked) activePredefined = activePredefined.filter((c: string) => c !== toggledId);
+      }
+
+      // Update custom input
+      const customVal = newCustom !== undefined ? newCustom : customProwlarrCategories;
+      if (newCustom !== undefined) {
+          setCustomProwlarrCategories(newCustom);
+      }
+
+      // Merge and remove duplicates
+      const customList = customVal.split(',').map((c: string) => c.trim()).filter(Boolean);
+      const finalCategories = Array.from(new Set([...activePredefined, ...customList])).join(', ');
+      
+      updateForm('prowlarr_categories', finalCategories);
   };
 
   const updateEditingClient = (key: string, value: any) => {
@@ -633,11 +662,65 @@ export default function SetupWizard() {
                             <Label>API Key</Label>
                             <Input value={formData.prowlarr_key} onChange={e => updateForm('prowlarr_key', e.target.value)} className="h-12 bg-white dark:bg-slate-950"/>
                         </div>
-                        <div className="grid gap-2">
-                            <Label>Search Categories (Torznab IDs)</Label>
-                            <Input value={formData.prowlarr_categories} onChange={(e) => updateForm('prowlarr_categories', e.target.value)} placeholder="e.g. 7030, 8030" className="h-12 bg-white dark:bg-slate-950"/>
-                            <p className="text-xs text-muted-foreground mt-1">Standard categories: <strong>7030</strong> (Comics), <strong>8030</strong> (Manga). Use a comma-separated list.</p>
+                        
+                        {/* --- THE FIX: NEW DYNAMIC CATEGORIES UI FOR SETUP WIZARD --- */}
+                        <div className="space-y-3 pt-2">
+                            <div>
+                                <Label className="text-foreground font-semibold">Search Categories (Torznab IDs)</Label>
+                                <p className="text-[11px] text-muted-foreground mt-1">Select the categories Prowlarr should use when searching. <strong>7030</strong> is required for standard comic indexers.</p>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border border-border rounded-lg p-4 bg-muted/20">
+                                <div className="space-y-3">
+                                    <Label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Books / Comics (7000s)</Label>
+                                    <div className="grid gap-3">
+                                        {[
+                                            { id: '7000', label: '7000 - Books' },
+                                            { id: '7010', label: '7010 - Books/Mags' },
+                                            { id: '7020', label: '7020 - Books/EBook' },
+                                            { id: '7030', label: '7030 - Books/Comics' }
+                                        ].map(cat => (
+                                            <div key={cat.id} className="flex items-center space-x-3 bg-white dark:bg-slate-950 p-2 rounded border border-border shadow-sm">
+                                                <Switch 
+                                                    id={`setup-cat-${cat.id}`}
+                                                    checked={(formData.prowlarr_categories || "").split(',').map((c: string) => c.trim()).includes(cat.id)}
+                                                    onCheckedChange={(checked) => updateProwlarrCategories(cat.id, checked)}
+                                                    className="scale-90 sm:scale-100 ml-1"
+                                                />
+                                                <Label htmlFor={`setup-cat-${cat.id}`} className="cursor-pointer font-bold text-sm text-foreground">{cat.label}</Label>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                
+                                <div className="space-y-6">
+                                    <div className="space-y-3">
+                                        <Label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Other / Misc (8000s)</Label>
+                                        <div className="flex items-center space-x-3 bg-white dark:bg-slate-950 p-2 rounded border border-border shadow-sm">
+                                            <Switch 
+                                                id="setup-cat-8000"
+                                                checked={(formData.prowlarr_categories || "").split(',').map((c: string) => c.trim()).includes("8000")}
+                                                onCheckedChange={(checked) => updateProwlarrCategories("8000", checked)}
+                                                className="scale-90 sm:scale-100 ml-1"
+                                            />
+                                            <Label htmlFor="setup-cat-8000" className="cursor-pointer font-bold text-sm text-foreground">8000 - Other</Label>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="space-y-3 pt-2">
+                                        <Label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Custom Categories</Label>
+                                        <Input 
+                                            placeholder="e.g. 5070, 2000" 
+                                            value={customProwlarrCategories} 
+                                            onChange={(e) => updateProwlarrCategories(undefined, undefined, e.target.value)} 
+                                            className="h-10 bg-white dark:bg-slate-950 border-border text-foreground text-sm font-mono"
+                                        />
+                                        <p className="text-[10px] text-muted-foreground">Comma-separated custom Newznab/Torznab IDs.</p>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
+
                         <Button className={`w-full h-12 font-bold mt-4 transition-colors ${getButtonClass('pr')}`} disabled={!formData.prowlarr_url || !formData.prowlarr_key || isTesting === 'pr'} onClick={handleFetchIndexers}>
                             {isTesting === 'pr' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />} 
                             {testStates['pr'] === 'success' ? "Refresh Indexers" : "Connect & Fetch Indexers"}

@@ -1,3 +1,4 @@
+// src/app/api/admin/prowlarr/indexers/route.ts
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
@@ -21,7 +22,13 @@ export async function POST(request: Request) {
     const { url, apiKey, headers } = await request.json();
     const cleanUrl = url.replace(/\/$/, '');
 
-    // FIXED: Explicitly typed the record
+    // --- THE FIX: Unmask the API key if it's currently hidden by the frontend UI ---
+    let realApiKey = apiKey;
+    if (realApiKey === '********') {
+        const setting = await prisma.systemSetting.findUnique({ where: { key: 'prowlarr_key' } });
+        realApiKey = setting?.value || "";
+    }
+
     const extraHeaders: Record<string, string> = {};
     if (headers && Array.isArray(headers)) {
         headers.forEach((h: any) => { if (h.key && h.value) extraHeaders[h.key] = h.value; });
@@ -30,7 +37,7 @@ export async function POST(request: Request) {
     Logger.log(`[Prowlarr] Fetching indexers from: ${cleanUrl}`, 'info'); 
 
     const res = await axios.get(`${cleanUrl}/api/v1/indexer`, {
-      headers: { 'X-Api-Key': apiKey, ...extraHeaders },
+      headers: { 'X-Api-Key': realApiKey, ...extraHeaders },
       timeout: 10000
     });
 

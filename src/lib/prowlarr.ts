@@ -32,9 +32,21 @@ export const ProwlarrService = {
     params.append('query', cleanQuery);
     params.append('type', 'search');
     
-    const categoriesStr = config.prowlarr_categories || '7030, 8030';
-    categoriesStr.split(',').map(c => c.trim()).filter(Boolean).forEach(cat => params.append('categories', cat));
+    // --- THE FIX: Explicitly set the limit so Usenet indexers don't return 0 results ---
+    params.append('limit', '100');
+    params.append('offset', '0');
+    
+    // --- SMART CATEGORY FILTERING ---
+    const categoriesStr = config.prowlarr_categories || '7030';
+    let categories = categoriesStr.split(',').map(c => c.trim()).filter(Boolean);
 
+    if (!isManga) {
+        categories = categories.filter(cat => cat !== '8030');
+    }
+
+    categories.forEach(cat => params.append('categories', cat));
+
+    // Explicitly enforce the specific indexers you configured in Omnibus
     if (configuredIndexers.length > 0) {
         configuredIndexers.forEach(idx => params.append('indexerIds', idx.id.toString()));
     }
@@ -166,7 +178,7 @@ export const ProwlarrService = {
             peers: Number(item.leechers || item.peers || 0),
             infoUrl: String(item.infoUrl || ""),
             downloadUrl: String(item.downloadUrl || item.magnetUrl || ""),
-            protocol: item.protocol === 'torrent' ? 'torrent' : 'usenet',
+            protocol: (item.protocol?.toLowerCase() === 'usenet' || item.protocol?.toLowerCase() === 'nzb') ? 'usenet' : 'torrent',
             publishDate: item.publishDate ? String(item.publishDate) : undefined,
             infoHash: parsedHash
           };

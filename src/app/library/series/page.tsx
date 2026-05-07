@@ -59,8 +59,8 @@ function SeriesContent() {
   const [missingIssues, setMissingIssues] = useState<any[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean, isManga: boolean}>({ 
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false, isManga: false
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({ 
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false, isManga: false, matchState: 'MATCHED'
   });
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
@@ -243,7 +243,8 @@ function SeriesContent() {
                 description: data.description || null,
                 status: data.status || null,
                 monitored: data.monitored || false,
-                isManga: data.isManga || false
+                isManga: data.isManga || false,
+                matchState: data.matchState || 'MATCHED'
             });
             
             setEditForm({
@@ -383,7 +384,8 @@ function SeriesContent() {
               year: data.year ? data.year.toString() : prev.year,
               description: data.description || prev.description,
               status: data.status || prev.status,
-              monitored: data.monitored !== undefined ? data.monitored : prev.monitored
+              monitored: data.monitored !== undefined ? data.monitored : prev.monitored,
+              matchState: data.matchState || prev.matchState
           }));
           
           toast({ title: "Scan Complete", description: "Directory contents updated." });
@@ -873,6 +875,19 @@ function SeriesContent() {
                       ) : (
                           <ImageIcon className="w-16 h-16 text-muted-foreground/30" />
                       )}
+
+                      {/* --- NEW PENDING/UNMATCHED BADGES --- */}
+                      <div className="absolute top-3 left-3 flex flex-col gap-2 z-20 pointer-events-none">
+                          {downloadedIssues.length === 0 ? (
+                              <Badge className="bg-blue-500 hover:bg-blue-600 text-white border-0 shadow-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-widest">
+                                  Pending
+                              </Badge>
+                          ) : seriesInfo.matchState === 'UNMATCHED' ? (
+                              <Badge className="bg-orange-500 hover:bg-orange-600 text-white border-0 shadow-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-widest">
+                                  Unmatched
+                              </Badge>
+                          ) : null}
+                      </div>
                   </div>
                   
                   <div className="text-center md:text-left space-y-1">

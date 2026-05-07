@@ -45,7 +45,6 @@ export const LibraryScanner = {
                 Logger.log(`[Scan] Purged ${badIds.length} ghost series records.`, 'info');
             }
 
-            // --- NEW: Ghost Issue Cleanup ---
             Logger.log(`[Scanner Debug] Searching for ghost issues with missing files...`, 'debug');
             const allFiles = await prisma.issue.findMany({ where: { filePath: { not: null } } });
             let ghostIssueCount = 0;
@@ -60,7 +59,6 @@ export const LibraryScanner = {
                                 data: { filePath: null, status: 'WANTED' }
                             });
                         } else {
-                            // Prevent Foreign Key constraint crashes
                             await prisma.readProgress.deleteMany({ where: { issueId: issue.id } }).catch(()=>({}));
                             await prisma.issue.delete({ where: { id: issue.id } });
                         }
@@ -75,6 +73,26 @@ export const LibraryScanner = {
             }
 
             const existingFolders = new Set(allSeries.map(s => path.normalize(s.folderPath || "").toLowerCase()));
+
+            // --- HELPER: Fast Issue Extraction ---
+            function extractIssueNumber(filename: string): string {
+                let clean = filename.replace(/\.\w+$/, ''); 
+                clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
+                const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+                if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
+                const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
+                if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
+                const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
+                if (matches.length > 0) {
+                    for (let i = matches.length - 1; i >= 0; i--) {
+                        const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
+                        const numVal = parseFloat(matchVal);
+                        if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) continue; 
+                        return matchVal;
+                    }
+                }
+                return "1"; 
+            }
 
             const findSeriesFolders = async (dir: string, baseRoot: string, libId: string, libIsManga: boolean) => {
                 const folderName = path.basename(dir);
@@ -100,7 +118,7 @@ export const LibraryScanner = {
                             
                             Logger.log(`[Scanner Debug] Extracted from folder/XML -> Name: "${cleanedName}", Year: ${year}, Publisher: "${embeddedMeta?.publisher || 'None'}"`, 'debug');
 
-                            await prisma.series.create({
+                            const createdSeries = await prisma.series.create({
                                 data: {
                                     folderPath: dir.replace(/\\/g, '/'),
                                     name: cleanedName,
@@ -114,7 +132,26 @@ export const LibraryScanner = {
                                     libraryId: libId
                                 }
                             });
-                            Logger.log(`[Scan] Found and indexed new series: ${cleanedName}`, "success");
+
+                            // --- NEW: Generate issues immediately so count is instantly accurate ---
+                            const issuesToCreate = bookFiles.map(file => {
+                                const stdNum = extractIssueNumber(file);
+                                return {
+                                    seriesId: createdSeries.id,
+                                    metadataId: `unmatched_${Math.random()}`,
+                                    metadataSource: 'LOCAL',
+                                    matchState: 'UNMATCHED',
+                                    number: stdNum,
+                                    status: 'DOWNLOADED',
+                                    filePath: path.join(dir, file).replace(/\\/g, '/')
+                                };
+                            });
+
+                            if (issuesToCreate.length > 0) {
+                                await prisma.issue.createMany({ data: issuesToCreate });
+                            }
+
+                            Logger.log(`[Scan] Found and indexed new series: ${cleanedName} with ${issuesToCreate.length} issues.`, "success");
                         } catch(e) {
                             Logger.log(`[Scanner Debug] Failed to index folder ${dir}: ${getErrorMessage(e)}`, 'error');
                         }

@@ -37,6 +37,7 @@ export async function GET(request: Request) {
                 id: { not: lastRead.issue.seriesId },
                 issues: { 
                     some: { 
+                        filePath: { not: null }, // <-- STRICT CHECK
                         OR: targetTags.map(tag => ({ 
                             genres: { 
                                 contains: tag
@@ -47,9 +48,9 @@ export async function GET(request: Request) {
             },
             take: 7, 
             include: { 
-                _count: { select: { issues: true } },
+                _count: { select: { issues: { where: { filePath: { not: null } } } } }, // <-- STRICT CHECK
                 issues: { 
-                    where: { coverUrl: { not: null } },
+                    where: { coverUrl: { not: null }, filePath: { not: null } }, // <-- STRICT CHECK
                     select: { coverUrl: true }, 
                     take: 1 
                 }

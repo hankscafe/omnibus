@@ -8,13 +8,13 @@ import { getErrorMessage } from '@/lib/utils/error';
 export async function GET() {
     try {
         const recentSeries = await prisma.series.findMany({
-            where: { issues: { some: {} } },
+            where: { issues: { some: { filePath: { not: null } } } }, // <-- STRICT CHECK
             orderBy: { id: 'desc' },
             take: 7,
             include: { 
-                _count: { select: { issues: true } },
+                _count: { select: { issues: { where: { filePath: { not: null } } } } }, // <-- STRICT CHECK
                 issues: { 
-                    where: { coverUrl: { not: null } },
+                    where: { coverUrl: { not: null }, filePath: { not: null } }, // <-- STRICT CHECK
                     select: { coverUrl: true }, 
                     take: 1 
                 } 

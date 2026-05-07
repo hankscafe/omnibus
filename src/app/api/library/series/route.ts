@@ -69,17 +69,20 @@ export async function GET(request: Request) {
     }
 
     // 2. Validate Path and Authorization
+    // FIX: Using path.normalize instead of fs.realpathSync to prevent crashing on missing placeholder folders
     const libraries = await prisma.library.findMany();
-    const realTarget = fs.realpathSync(folderPath);
-    const normalizedTarget = realTarget.replace(/\\/g, '/').toLowerCase();
+    const normalizedTarget = path.normalize(folderPath).replace(/\\/g, '/').toLowerCase();
 
     const isAuthorized = libraries.some(lib => {
-        const realLibRoot = fs.realpathSync(lib.path);
-        return realTarget.toLowerCase().startsWith(realLibRoot.toLowerCase());
+        try {
+            const normalizedLibRoot = path.normalize(lib.path).replace(/\\/g, '/').toLowerCase();
+            return normalizedTarget.startsWith(normalizedLibRoot);
+        } catch(e) {
+            return false;
+        }
     });
 
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
-    if (!fs.existsSync(realTarget)) return NextResponse.json({ error: "The physical folder is missing." }, { status: 404 });
 
     // 3. Series Lookup
     let seriesRecord = await prisma.series.findFirst({ 
@@ -89,7 +92,7 @@ export async function GET(request: Request) {
     if (!seriesRecord) {
         const allSeries = await prisma.series.findMany({ select: { id: true, folderPath: true } });
         const matched = allSeries.find(s => 
-            s.folderPath.replace(/\\/g, '/').toLowerCase() === normalizedTarget
+            s.folderPath && path.normalize(s.folderPath).replace(/\\/g, '/').toLowerCase() === normalizedTarget
         );
         if (matched) {
             seriesRecord = await prisma.series.findUnique({ where: { id: matched.id } });
@@ -97,10 +100,17 @@ export async function GET(request: Request) {
     }
 
     if (!seriesRecord) {
-        const folderName = path.basename(realTarget);
+        const folderName = path.basename(folderPath);
         seriesRecord = await prisma.series.findFirst({
             where: { name: folderName }
         });
+    }
+
+    const folderExists = fs.existsSync(folderPath);
+
+    // If it is completely unknown and missing physically, abort.
+    if (!seriesRecord && !folderExists) {
+        return NextResponse.json({ error: "The physical folder is missing." }, { status: 404 });
     }
 
     // 4. Load Metadata and Progress
@@ -123,8 +133,6 @@ export async function GET(request: Request) {
 
     let downloadedIssues: any[] = [];
     let missingIssues: any[] = [];
-
-    // --- FIX: Expensive disk scanning removed. Relying entirely on DB cache. ---
 
     if (seriesRecord) {
         let existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
@@ -153,34 +161,36 @@ export async function GET(request: Request) {
         const activeFilePaths = new Set();
         const creatingNums = new Set();
 
-        // We only scan the folder for issues, NOT covers.
-        const files = await fs.promises.readdir(folderPath);
+        // FIX: We only scan the folder for issues if it physically exists.
+        if (folderExists) {
+            const files = await fs.promises.readdir(folderPath);
 
-        for (const file of files) {
-            if (file.toLowerCase().match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) { 
-                const fullPath = path.join(folderPath, file);
-                activeFilePaths.add(fullPath);
-                const stdNum = extractIssueNumber(file);
-                const existingIssue = dbIssueMap.get(stdNum);
+            for (const file of files) {
+                if (file.toLowerCase().match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) { 
+                    const fullPath = path.join(folderPath, file);
+                    activeFilePaths.add(fullPath);
+                    const stdNum = extractIssueNumber(file);
+                    const existingIssue = dbIssueMap.get(stdNum);
 
-                if (existingIssue) {
-                    if (existingIssue.filePath !== fullPath) {
-                        updateOperations.push(prisma.issue.update({ 
-                            where: { id: existingIssue.id }, 
-                            data: { filePath: fullPath, status: "DOWNLOADED" } 
-                        }));
+                    if (existingIssue) {
+                        if (existingIssue.filePath !== fullPath) {
+                            updateOperations.push(prisma.issue.update({ 
+                                where: { id: existingIssue.id }, 
+                                data: { filePath: fullPath, status: "DOWNLOADED" } 
+                            }));
+                        }
+                    } else if (!creatingNums.has(stdNum)) {
+                        createsToFire.push({ 
+                            seriesId: seriesRecord.id, 
+                            metadataId: `unmatched_${Math.random()}`, 
+                            metadataSource: 'LOCAL', 
+                            matchState: 'UNMATCHED',
+                            number: stdNum, 
+                            status: "DOWNLOADED", 
+                            filePath: fullPath
+                        });
+                        creatingNums.add(stdNum); 
                     }
-                } else if (!creatingNums.has(stdNum)) {
-                    createsToFire.push({ 
-                        seriesId: seriesRecord.id, 
-                        metadataId: `unmatched_${Math.random()}`, 
-                        metadataSource: 'LOCAL', 
-                        matchState: 'UNMATCHED',
-                        number: stdNum, 
-                        status: "DOWNLOADED", 
-                        filePath: fullPath
-                    });
-                    creatingNums.add(stdNum); 
                 }
             }
         }
@@ -188,20 +198,22 @@ export async function GET(request: Request) {
         if (createsToFire.length > 0) await prisma.issue.createMany({ data: createsToFire });
         if (updateOperations.length > 0) await Promise.all(updateOperations);
 
-        await prisma.issue.deleteMany({
-            where: {
-                seriesId: seriesRecord.id,
-                metadataId: { startsWith: 'unmatched_' },
-                filePath: { notIn: Array.from(activeFilePaths) as string[] }
-            }
-        }).catch(() => {});
+        // FIX: Don't delete unmatched entries if the folder just hasn't been created yet
+        if (folderExists) {
+            await prisma.issue.deleteMany({
+                where: {
+                    seriesId: seriesRecord.id,
+                    metadataId: { startsWith: 'unmatched_' },
+                    filePath: { notIn: Array.from(activeFilePaths) as string[] }
+                }
+            }).catch(() => {});
+        }
 
         existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
         for (const issue of existingIssues) {
             const fileName = issue.filePath ? path.basename(issue.filePath) : null;
             const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
             
-            // --- FIX: Issue covers strictly route through DB proxy URL ---
             const finalIssueCoverUrl = issue.coverUrl && (issue.coverUrl.startsWith('http') || issue.coverUrl.match(/^[a-zA-Z]:\\/))
                 ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}` 
                 : issue.coverUrl;
@@ -230,7 +242,6 @@ export async function GET(request: Request) {
     downloadedIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
     missingIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
     
-    // --- FIX: Series covers strictly route through DB proxy URL ---
     const finalSeriesCoverUrl = seriesRecord?.coverUrl && (seriesRecord.coverUrl.startsWith('http') || seriesRecord.coverUrl.match(/^[a-zA-Z]:\\/))
         ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 
         : seriesRecord?.coverUrl || null;
@@ -245,6 +256,7 @@ export async function GET(request: Request) {
       status: seriesRecord?.status || null,
       monitored: seriesRecord?.monitored || false,
       isManga: seriesRecord?.isManga || false,
+      matchState: seriesRecord?.matchState || 'UNMATCHED',
       path: folderPath, 
       coverUrl: finalSeriesCoverUrl, 
       downloadedIssues, 

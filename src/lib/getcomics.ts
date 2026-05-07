@@ -251,6 +251,10 @@ export const GetComicsService = {
 
           const getHosterFromUrl = (url: string, isMainServerBtn: boolean) => {
               if (isMainServerBtn) return 'getcomics';
+              
+              // Only whitelist dedicated file-serving domains here (DO NOT ADD GETCOMICS HERE)
+              if (url.includes('comicfiles') || url.includes('comic-files')) return 'getcomics';
+              
               if (url.includes('mediafire.com')) return 'mediafire';
               if (url.includes('mega.nz') || url.includes('mega.co.nz')) return 'mega';
               if (url.includes('pixeldrain.com')) return 'pixeldrain';
@@ -266,16 +270,27 @@ export const GetComicsService = {
               const text = $(el).text().toLowerCase();
               const titleAttr = ($(el).attr('title') || "").toLowerCase();
               const rawHref = $(el).attr('href') || "";
+              const btnClass = ($(el).attr('class') || "").toLowerCase();
 
               const decoded = decodeLink(rawHref);
               if (!decoded) return;
 
               Logger.log(`[GetComics Debug] Decoded raw deep link: ${decoded}`, 'debug');
 
-              const isMainServerBtn = text.includes('main server') || titleAttr.includes('main server') || text.includes('download now') || text.includes('direct download');
+              // Ensure we accurately target the actual download button, even if text varies slightly
+              const isMainServerBtn = text.includes('main server') || 
+                                      titleAttr.includes('main server') || 
+                                      text.includes('download now') || 
+                                      text.includes('direct download') || 
+                                      (btnClass.includes('aio-button') && text.includes('download'));
               
               if (isMainServerBtn && !rawHref.includes('go.php') && !decoded.match(/\.(cbz|cbr|zip)$/i)) {
-                  return;
+                  // THE FIX: Allow native GetComics file servers (like dl.getcomics.org or comicfiles) 
+                  // to bypass the strict file extension check, but do NOT allow this block to trust 
+                  // the word 'getcomics' on every anchor tag on the webpage.
+                  if (!decoded.includes('comicfiles') && !decoded.includes('comic-files') && !decoded.includes('getcomics')) {
+                      return;
+                  }
               }
 
               const hoster = getHosterFromUrl(decoded, isMainServerBtn);

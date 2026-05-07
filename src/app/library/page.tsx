@@ -58,6 +58,7 @@ interface LibrarySeries {
   monitored?: boolean;
   isManga?: boolean;
   matchState?: string;
+  isPendingReq?: boolean;
 }
 
 interface Collection {
@@ -111,7 +112,7 @@ function LibraryContent() {
   const [searchType, setSearchType] = useState("ALL") 
   const [publisherFilter, setPublisherFilter] = useState("ALL")
   const [uniquePublishers, setUniquePublishers] = useState<string[]>([])
-  const [libraryFilter, setLibraryFilter] = useState<'ALL' | 'COMICS' | 'MANGA' | 'UNMATCHED'>('ALL') 
+  const [libraryFilter, setLibraryFilter] = useState<'ALL' | 'COMICS' | 'MANGA' | 'UNMATCHED' | 'PENDING'>('ALL') 
   const [sortOption, setSortOption] = useState("alpha_asc")
   
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false) 
@@ -301,8 +302,9 @@ function LibraryContent() {
       
       if (isRefreshScan) params.append('refresh', 'true');
       if (f.search.trim()) { params.append('q', f.search.trim()); params.append('type', f.type); }
-      if (f.library !== 'ALL' && f.library !== 'UNMATCHED') params.append('library', f.library);
+      if (f.library !== 'ALL' && f.library !== 'UNMATCHED' && f.library !== 'PENDING') params.append('library', f.library);
       if (f.library === 'UNMATCHED') params.append('unmatched', 'true');
+      if (f.library === 'PENDING') params.append('pending', 'true');
       if (f.pub !== 'ALL') params.append('publisher', f.pub);
       if (f.sort) params.append('sort', f.sort);
       if (f.favs) params.append('favorites', 'true');
@@ -657,7 +659,6 @@ function LibraryContent() {
               failCount++;
           }
           
-          // RATE LIMIT SAFEGUARD: Increased from 2000 to 4000
           if (i < seriesList.length - 1) await new Promise(r => setTimeout(r, 4000));
       }
       
@@ -738,6 +739,12 @@ function LibraryContent() {
                 {isAdmin && (
                     <Button role="tab" aria-selected={libraryFilter === 'UNMATCHED'} variant={libraryFilter === 'UNMATCHED' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'UNMATCHED' ? 'shadow-sm bg-orange-500 hover:bg-orange-600 text-white' : 'text-orange-500 hover:text-orange-600'}`} onClick={() => setLibraryFilter('UNMATCHED')}>
                         Unmatched
+                    </Button>
+                )}
+                {/* --- NEW PENDING BUTTON --- */}
+                {isAdmin && (
+                    <Button role="tab" aria-selected={libraryFilter === 'PENDING'} variant={libraryFilter === 'PENDING' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'PENDING' ? 'shadow-sm bg-blue-500 hover:bg-blue-600 text-white' : 'text-blue-500 hover:text-blue-600'}`} onClick={() => setLibraryFilter('PENDING')}>
+                        Pending
                     </Button>
                 )}
             </div>
@@ -941,7 +948,9 @@ function LibraryContent() {
                           )}
                           {!isSelectionMode && (
                               <div className="absolute top-1.5 left-1.5 flex flex-col gap-1 items-start z-30 pointer-events-none">
-                                  {item.matchState === 'UNMATCHED' ? (
+                                  {item.isPendingReq ? (
+                                      <Badge className="bg-blue-500 hover:bg-blue-600 text-white border-0 shadow-sm px-1.5 h-4 text-[9px] font-black uppercase tracking-wider">Pending</Badge>
+                                  ) : item.matchState === 'UNMATCHED' ? (
                                       <Badge className="bg-orange-500 hover:bg-orange-600 text-white border-0 shadow-sm px-1.5 h-4 text-[9px] font-black uppercase tracking-wider">Unmatched</Badge>
                                   ) : (
                                       <>
@@ -1101,7 +1110,9 @@ function LibraryContent() {
                         <td className="px-4 py-3 text-muted-foreground hidden md:table-cell" title={item.publisher || 'Unknown'}>{item.publisher || 'Unknown'}</td>
                         <td className="px-4 py-3 text-center hidden sm:table-cell">{item.year || '????'}</td>
                         <td className="px-4 py-3 text-center">
-                            {item.matchState === 'UNMATCHED' ? (
+                            {item.isPendingReq ? (
+                                <Badge className="bg-blue-500 hover:bg-blue-600 text-white border-0 text-[9px] px-1.5 h-4 uppercase tracking-wider">Pending</Badge>
+                            ) : item.matchState === 'UNMATCHED' ? (
                                 <Badge className="bg-orange-500 hover:bg-orange-600 text-white border-0 text-[9px] px-1.5 h-4 uppercase tracking-wider">Unmatched</Badge>
                             ) : (
                                 <div className="flex items-center justify-center gap-2">

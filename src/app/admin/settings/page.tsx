@@ -1081,7 +1081,7 @@ export default function SettingsPage() {
                                                     )}
                                                 </div>
                                                 <div className="flex gap-1 shrink-0">
-                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => {setEditingClient(client); setClientModalOpen(true)}}><Settings className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
+                                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-muted text-foreground" onClick={() => {setTestResults(prev => ({ ...prev, clients: null }));setEditingClient(client); setClientModalOpen(true);}}><Settings className="h-5 w-5 sm:h-4 sm:w-4"/></Button>
                                                     <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteClient(client.id)}><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
                                                 </div>
                                             </div>
@@ -2427,6 +2427,7 @@ export default function SettingsPage() {
                           )} 
                           {testResults['clients']?.success ? "Connection Verified!" : "Test Connection"}
                         </Button>
+                        <StatusBox result={testResults.clients} />
                     </div>
                 </div>
             )}

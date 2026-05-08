@@ -221,6 +221,29 @@ export async function POST(request: Request) {
                 throw new Error("Invalid API Key or response.");
             }
         }
+        else if (clientType === 'nzbget') {
+            const realPass = (pass === '********') 
+                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                : pass;
+            const auth = Buffer.from(`${user || ''}:${realPass || ''}`).toString('base64');
+            const res = await axios.post(`${cleanUrl}/jsonrpc`, { method: "version", params: [] }, { headers: { ...headers, Authorization: `Basic ${auth}` }, timeout: 5000 });
+            if (res.data && res.data.result) {
+                return NextResponse.json({ success: true, message: `NZBGet Connected! (v${res.data.result})` });
+            } else {
+                throw new Error("Invalid credentials or response.");
+            }
+        }
+        else if (clientType === 'deluge') {
+            const realPass = (pass === '********') 
+                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                : pass;
+            const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [realPass || ''], id: 1 }, { headers, timeout: 5000 });
+            if (authRes.data && authRes.data.result) {
+                return NextResponse.json({ success: true, message: `Deluge Connected!` });
+            } else {
+                throw new Error("Deluge Authentication Failed. Check password.");
+            }
+        }
         
         return NextResponse.json({ success: true, message: 'Client Ping Sent.' });
     }

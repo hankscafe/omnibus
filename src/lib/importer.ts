@@ -81,15 +81,24 @@ export const Importer = {
           const downloadItem = allActive.find((t: any) => t.id === trackingHash || t.name === req.activeDownloadName);
           if (downloadItem) {
               isFromClient = true;
-              const rawPath = path.join(downloadRoot, downloadItem.name);
+              
+              // Fetch the specific client to check if it has a custom Local Path override
+              const clientConfig = await prisma.downloadClient.findFirst({
+                  where: { name: downloadItem.clientName }
+              });
+              
+              const clientRoot = clientConfig?.localPath || downloadRoot;
+              const rawPath = path.join(clientRoot, downloadItem.name);
               sourcePath = await resolveRemotePath(rawPath);
+              
+              Logger.log(`[Importer Debug] Using client root path: ${clientRoot} for ${downloadItem.name}`, 'debug');
           } else {
               Logger.log("[Importer] Download not found in active client list. Falling back to folder search.", "warn");
           }
       } catch (e: any) {
           Logger.log(`[Importer] Failed to fetch client info: ${e.message}`, "error");
       }
-    } 
+    }
     
     if (!sourcePath) {
       const rootRawPath = path.join(downloadRoot, req.activeDownloadName || "");

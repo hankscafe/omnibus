@@ -65,28 +65,6 @@ export async function GET() {
                 }));
                 allDownloads.push(...mapped);
             }
-            else if (client.type === 'sab') {
-                const res = await axios.get(`${cleanUrl}/api`, {
-                    params: { mode: 'queue', apikey: client.apiKey, output: 'json' },
-                    headers,
-                    timeout: 15000
-                });
-
-                if (res.data?.queue?.slots) {
-                    const validSlots = res.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
-                    const mapped = validSlots.map((t: any) => ({
-                        id: t.nzo_id,
-                        name: t.filename,
-                        progress: t.percentage,
-                        status: t.status.toLowerCase(),
-                        size: t.size,
-                        clientName: client.name
-                    }));
-                    allDownloads.push(...mapped);
-                } else {
-                    throw new Error("SABnzbd returned invalid data");
-                }
-            }
             else if (client.type === 'deluge') {
                 const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers, timeout: 15000 });
                 const cookie = authRes.headers['set-cookie'];
@@ -99,13 +77,45 @@ export async function GET() {
                     })));
                 }
             }
+            else if (client.type === 'sab') {
+                // 1. Fetch Active Queue
+                const queueRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'queue', apikey: client.apiKey, output: 'json' }, headers, timeout: 15000 });
+                if (queueRes.data.queue?.slots) {
+                    const validSlots = queueRes.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
+                    allDownloads.push(...validSlots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
+                }
+                
+                // 2. Fetch Recent History to catch completed downloads
+                try {
+                    const historyRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'history', limit: 20, apikey: client.apiKey, output: 'json' }, headers, timeout: 15000 });
+                    if (historyRes.data.history?.slots) {
+                        const validHistory = historyRes.data.history.slots.filter((s: any) => isAllowedCategory(s.category));
+                        allDownloads.push(...validHistory.map((s: any) => ({
+                            id: s.nzo_id, name: s.name, progress: s.status === 'Completed' ? "100.0" : "0.0", status: s.status, clientName: client.name, size: s.size
+                        })));
+                    }
+                } catch (e) { Logger.log(`[Active Downloads] Failed to fetch SABnzbd history`, 'warn'); }
+            }
             else if (client.type === 'nzbget') {
                 const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
+                
+                // 1. Fetch Active Queue
                 const listRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "listgroups", params: [] }, { headers: { ...headers, Authorization: `Basic ${auth}` }, timeout: 15000 });
                 if (Array.isArray(listRes.data.result)) {
                     const validGroups = listRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
                     allDownloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
                 }
+                
+                // 2. Fetch Recent History
+                try {
+                    const historyRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "history", params: [] }, { headers: { ...headers, Authorization: `Basic ${auth}` }, timeout: 15000 });
+                    if (Array.isArray(historyRes.data.result)) {
+                        const validHistory = historyRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
+                        allDownloads.push(...validHistory.map((g: any) => ({
+                            id: String(g.NZBID), name: g.Name, progress: g.Status.includes('SUCCESS') ? "100.0" : "0.0", status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB"
+                        })));
+                    }
+                } catch (e) { Logger.log(`[Active Downloads] Failed to fetch NZBGet history`, 'warn'); }
             }
         } catch (e: any) {
             Logger.log(`[Active Downloads] ${client.name} failed to respond or timed out. Skipping.`, 'warn');

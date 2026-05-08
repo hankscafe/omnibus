@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
     if (cvId === undefined || cvId === null || !name) return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
 
     Logger.log(`[Manual Request] User ${token.name} initiated request for: ${name}`, 'info');
+    Logger.log(`[Manual Request Debug] Payload received: type=${type}, source=${source}, searchResultTitle=${searchResult?.title}`, 'debug');
 
     const isAutoApprove = token.role === 'ADMIN' || token.autoApproveRequests;
     let initialStatus = isAutoApprove ? 'DOWNLOADING' : 'PENDING_APPROVAL';
@@ -151,13 +152,18 @@ export async function POST(request: NextRequest) {
 
     // --- AUTOMATION INJECTION ---
     if (isAutoApprove && source !== 'flag_admin') {
+        Logger.log(`[Manual Request Debug] Processing source: ${source}, status: ${initialStatus}`, 'debug');
+        
         if (source === 'prowlarr') {
-            const setting = await prisma.systemSetting.findUnique({ where: { key: 'download_clients_config' } });
-            if (!setting?.value) throw new Error("No download client configured.");
-            const clients = JSON.parse(setting.value);
-            const client = clients.length > 0 ? clients[0] : null;
+            const clients = await prisma.downloadClient.findMany();
+            if (clients.length === 0) throw new Error("No download client configured.");
+            
+            const protocol = searchResult.protocol || 'torrent';
+            // Use optional chaining/fallbacks to protect against undefined test mocks
+            const client = clients.find(c => (c.protocol || 'torrent').toLowerCase() === protocol.toLowerCase()) || clients[0];
 
             if (client) {
+                Logger.log(`[Manual Request Debug] Routing download "${searchResult.title}" to client "${client.name}" (Protocol: ${protocol})`, 'debug');
                 await DownloadService.addDownload(client, searchResult.downloadUrl, searchResult.title, searchResult.seedTime || 0, searchResult.seedRatio || 0);
                 await prisma.request.update({
                   where: { id: targetReqId },

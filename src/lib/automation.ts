@@ -9,9 +9,11 @@ import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
 import { SystemNotifier } from '@/lib/notifications';
 
-export async function getDownloadClient() {
+export async function getDownloadClient(protocol: string = 'torrent') {
   const clients = await prisma.downloadClient.findMany();
-  return clients.length > 0 ? clients[0] : null;
+  if (clients.length === 0) return null;
+  // Use optional chaining/fallbacks to protect against undefined test mocks
+  return clients.find(c => (c.protocol || 'torrent').toLowerCase() === (protocol || 'torrent').toLowerCase()) || clients[0];
 }
 
 export async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
@@ -153,9 +155,10 @@ export async function searchAndDownload(requestId: string, name: string, year: s
         healthyResults.sort((a: any, b: any) => b.score - a.score);
         const best = healthyResults[0];
         
-        const config = await getDownloadClient();
+        const config = await getDownloadClient(best.protocol);
         if (config) {
-          Logger.log(`[Automation] Sending to Client: ${best.title}`, 'info');
+          Logger.log(`[Automation] Sending to Client: ${config.name} for ${best.title}`, 'info');
+          Logger.log(`[Automation Debug] Matched client "${config.name}" (Protocol: ${config.protocol}) for result with protocol: ${best.protocol}`, 'debug');
           await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
           
           const trackingHash = best.infoHash || best.guid || null;

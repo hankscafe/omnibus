@@ -15,6 +15,7 @@ export async function GET(req: Request) {
 
     try {
         Logger.log(`[Interactive Search] Fetching live results for: ${q}`, 'info');
+        Logger.log(`[Interactive Search Debug] Initializing interactive search for query: "${q}"`, 'debug');
         
         // 1. Fetch hoster settings to check if ANY are enabled
         const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
@@ -40,6 +41,8 @@ export async function GET(req: Request) {
         }
 
         const results = await Promise.all(promises);
+
+        Logger.log(`[Interactive Search Debug] Search completed. Prowlarr results: ${results[0].length}, GetComics results: ${hasEnabledHosters ? results[1].length : 0}`, 'debug');
 
         return NextResponse.json({ 
             prowlarr: results[0], 

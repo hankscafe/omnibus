@@ -89,6 +89,11 @@ export default async function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        {/* --- EXPLICIT PWA LINKS --- */}
+        <link rel="manifest" href="/manifest.json" />
+        <link rel="apple-touch-icon" href="/icon-192x192.png" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        
         {/* EXACT ANTI-FOUC SCRIPT: Perfectly matches your ThemeProvider & globals.css */}
         <script
           dangerouslySetInnerHTML={{

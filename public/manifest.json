@@ -2,7 +2,7 @@
   "name": "Omnibus",
   "short_name": "Omnibus",
   "description": "A self-hosted comic book manager. Your Universe. Organized.",
-  "start_url": "/",
+  "start_url": "/?pwa=true",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#3b82f6",

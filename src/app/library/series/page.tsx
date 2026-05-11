@@ -58,6 +58,7 @@ function SeriesContent() {
   const [downloadedIssues, setDownloadedIssues] = useState<any[]>([]);
   const [missingIssues, setMissingIssues] = useState<any[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
+  const [duplicates, setDuplicates] = useState<any[]>([]);
   
   const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({ 
     name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false, isManga: false, matchState: 'MATCHED'
@@ -228,6 +229,7 @@ function SeriesContent() {
             if (data.error) throw new Error(data.error);
             setDownloadedIssues(data.downloadedIssues || []);
             setMissingIssues(data.missingIssues || []);
+            setDuplicates(data.duplicates || []);
             
             setSeriesInfo({ 
                 name: data.seriesName || data.name || "Unknown Series", 
@@ -1265,6 +1267,33 @@ function SeriesContent() {
                                       >
                                           {isLinking === issue.id ? <Loader2 className="w-4 h-4 animate-spin" /> : "Link"}
                                       </Button>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              )}
+
+              {/* --- DUPLICATE FILES WARNING --- */}
+              {isAdmin && duplicates.length > 0 && (
+                  <div className="space-y-4 mb-8 bg-red-50/50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/50 rounded-xl p-4 sm:p-6 animate-in fade-in">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 text-red-600 dark:text-red-400">
+                              <AlertTriangle className="w-6 h-6" />
+                              <h4 className="font-bold text-lg">Duplicate Files Detected ({duplicates.length})</h4>
+                          </div>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                          Multiple physical files mapped to the exact same issue number. This usually happens if a download restarts, an alternate release is added, or files are dumped manually. You can safely delete these via the Admin Diagnostics panel.
+                      </p>
+                      <div className="space-y-3 pt-2">
+                          {duplicates.map(dup => (
+                              <div key={dup.issueNumber} className="flex flex-col bg-background p-3 rounded-lg border border-border shadow-sm">
+                                  <p className="font-bold text-sm mb-2 text-foreground">Issue #{dup.issueNumber}</p>
+                                  <div className="flex flex-col gap-2 pl-4 border-l-2 border-muted">
+                                      {dup.files.map((file: string, idx: number) => (
+                                          <p key={idx} className="text-xs font-mono text-muted-foreground break-all">{file}</p>
+                                      ))}
                                   </div>
                               </div>
                           ))}

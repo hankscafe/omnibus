@@ -133,6 +133,7 @@ export async function GET(request: Request) {
 
     let downloadedIssues: any[] = [];
     let missingIssues: any[] = [];
+    let duplicatesList: any[] = [];
 
     if (seriesRecord) {
         let existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
@@ -165,32 +166,50 @@ export async function GET(request: Request) {
         if (folderExists) {
             const files = await fs.promises.readdir(folderPath);
 
+            // 1. Group files by their extracted issue number first
+            const filesByNum = new Map<string, string[]>();
             for (const file of files) {
                 if (file.toLowerCase().match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) { 
-                    const fullPath = path.join(folderPath, file);
-                    activeFilePaths.add(fullPath);
                     const stdNum = extractIssueNumber(file);
-                    const existingIssue = dbIssueMap.get(stdNum);
+                    if (!filesByNum.has(stdNum)) filesByNum.set(stdNum, []);
+                    filesByNum.get(stdNum)!.push(file);
+                }
+            }
 
-                    if (existingIssue) {
-                        if (existingIssue.filePath !== fullPath) {
-                            updateOperations.push(prisma.issue.update({ 
-                                where: { id: existingIssue.id }, 
-                                data: { filePath: fullPath, status: "DOWNLOADED" } 
-                            }));
-                        }
-                    } else if (!creatingNums.has(stdNum)) {
-                        createsToFire.push({ 
-                            seriesId: seriesRecord.id, 
-                            metadataId: `unmatched_${Math.random()}`, 
-                            metadataSource: 'LOCAL', 
-                            matchState: 'UNMATCHED',
-                            number: stdNum, 
-                            status: "DOWNLOADED", 
-                            filePath: fullPath
-                        });
-                        creatingNums.add(stdNum); 
+            // 2. Process groups instead of individual files to prevent DB thrashing
+            for (const [stdNum, fileList] of filesByNum.entries()) {
+                if (fileList.length > 1) {
+                    duplicatesList.push({
+                        issueNumber: stdNum,
+                        files: fileList
+                    });
+                }
+
+                // Take the first file as the primary DB file
+                const file = fileList[0];
+                const fullPath = path.join(folderPath, file);
+                activeFilePaths.add(fullPath);
+                
+                const existingIssue = dbIssueMap.get(stdNum);
+
+                if (existingIssue) {
+                    if (existingIssue.filePath !== fullPath) {
+                        updateOperations.push(prisma.issue.update({ 
+                            where: { id: existingIssue.id }, 
+                            data: { filePath: fullPath, status: "DOWNLOADED" } 
+                        }));
                     }
+                } else if (!creatingNums.has(stdNum)) {
+                    createsToFire.push({ 
+                        seriesId: seriesRecord.id, 
+                        metadataId: `unmatched_${Math.random()}`, 
+                        metadataSource: 'LOCAL', 
+                        matchState: 'UNMATCHED',
+                        number: stdNum, 
+                        status: "DOWNLOADED", 
+                        filePath: fullPath
+                    });
+                    creatingNums.add(stdNum); 
                 }
             }
         }
@@ -260,7 +279,8 @@ export async function GET(request: Request) {
       path: folderPath, 
       coverUrl: finalSeriesCoverUrl, 
       downloadedIssues, 
-      missingIssues
+      missingIssues,
+      duplicates: duplicatesList
     });
 
   } catch (error: any) {

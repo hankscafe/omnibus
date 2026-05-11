@@ -50,53 +50,67 @@ async function fetchGetComicsHtml(url: string) {
 }
 
 export const GetComicsService = {
-  async search(query: string, isInteractive: boolean = false, isManga: boolean = false) {
-    const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
-    const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
-    
-    const searches = [
-        query,
-        query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
-        noYearQuery,
-        noYearQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
-        noIssueQuery, 
-        noIssueQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim() 
-    ];
-    
-    const uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
+  // Add originalName as an optional 4th parameter
+async search(query: string, isInteractive: boolean = false, isManga: boolean = false, originalName?: string) {
+    let uniqueSearches = [query];
+
+    if (isInteractive) {
+        const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
+        const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
+        const searches = [
+            query,
+            query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
+            noYearQuery,
+            noYearQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
+            noIssueQuery, 
+            noIssueQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim() 
+        ];
+        uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
+    }
     
     for (const q of uniqueSearches) {
-        let retries = 2;
+        let retries = 1; 
         while (retries > 0) {
             try {
-                const results = await this.performSearch(q, query, isInteractive, isManga); 
-                if (results.length > 0) return results;
+                // THE FIX: Pass originalName (if provided) so the TPB validation has the true full title!
+                const results = await this.performSearch(q, originalName || query, isInteractive, isManga); 
+                
+                if (results.length > 0) {
+                    if (!isInteractive) return [results[0]];
+                    return results;
+                }
                 break; 
             } catch (e: any) { 
                 Logger.log(`[GetComics] Search failed for "${q}": ${e.message}`, 'warn');
                 retries--;
                 if (retries === 0) break;
-                await new Promise(r => setTimeout(r, 3000));
+                await new Promise(r => setTimeout(r, isInteractive ? 3000 : 5000));
             }
         }
     }
     return [];
-  },
+},
 
   async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false) {
     const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
     Logger.log(`[GetComics Debug] Performing search with URL: ${url}`, 'debug');
-    Logger.log(`[GetComics] Rate-limit throttle: Delaying search for 2.5s...`, 'info');
-    await new Promise(resolve => setTimeout(resolve, 2500));
+    
+    // Increase throttle to 4 seconds for maximum Cloudflare safety on background tasks
+    const delayTime = isInteractive ? 2500 : 4000;
+    Logger.log(`[GetComics] Rate-limit throttle: Delaying search for ${delayTime/1000}s...`, 'info');
+    await new Promise(resolve => setTimeout(resolve, delayTime));
 
     const data = await fetchGetComicsHtml(url);
     const $ = cheerio.load(data);
     const results: any[] = [];
     
+    // Generate both word arrays for TPB vs Single Issue validation
     const cleanOriginal = originalQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
-    const queryWords = cleanOriginal.toLowerCase().split(' ').filter(w => w.trim().length > 0);
+    const originalQueryWords = cleanOriginal.toLowerCase().split(' ').filter(w => w.trim().length > 0);
+    const safeQueryWords = safeQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase().split(' ').filter(w => w.trim().length > 0);
 
-    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut'];
+    // Added foreign languages to exclusion list
+    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut', 'spa', 'spanish', 'ita', 'italian', 'fre', 'french', 'ger', 'german', 'pol', 'portuguese'];
     const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
     const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanOriginal.toLowerCase().includes(k));
 
@@ -141,7 +155,8 @@ export const GetComicsService = {
           const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
           if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
 
-          const isLookingForOmnibus = queryWords.some(w => tpbTerms.includes(w));
+          // FIX: Look for TPB terms in the full original query
+          const isLookingForOmnibus = originalQueryWords.some(w => tpbTerms.includes(w));
           if (reqNum !== null && !isLookingForOmnibus) {
               if (tpbTerms.some(term => titleLower.includes(term))) {
                   isRelevant = false;
@@ -209,7 +224,10 @@ export const GetComicsService = {
           }
 
           if (isRelevant) {
-              for (let w of queryWords) {
+              // If it's a single issue, use the short words. If it's a TPB/Volume, strictly enforce the full original name.
+              const wordsToEnforce = (reqNum !== null && !isLookingForOmnibus) ? safeQueryWords : originalQueryWords;
+              
+              for (let w of wordsToEnforce) {
                   if (!/^\d+$/.test(w) && !titleLower.includes(w)) {
                       isRelevant = false;
                       break;
@@ -225,7 +243,20 @@ export const GetComicsService = {
       }
     });
 
-    return results.sort((a, b) => a.title.length - b.title.length);
+    // Smarter Sorting Logic to bypass lazy uploaders who omitted the year
+    return results.sort((a, b) => {
+        // Priority 1: If we requested a year, heavily prefer titles that explicitly contain that year
+        if (reqYear) {
+            const aHasYear = a.title.includes(reqYear) ? 1 : 0;
+            const bHasYear = b.title.includes(reqYear) ? 1 : 0;
+            if (aHasYear !== bHasYear) {
+                return bHasYear - aHasYear; 
+            }
+        }
+        
+        // Priority 2: If both have the year (or neither do), sort by shortest length (cleanest title)
+        return a.title.length - b.title.length;
+    });
   },
 
   async scrapeDeepLink(articleUrl: string): Promise<{ url: string, isDirect: boolean, hoster: string }> {

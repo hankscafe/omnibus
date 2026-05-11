@@ -7,6 +7,7 @@ import { Logger } from '@/lib/logger';
 import { GetComicsService } from '@/lib/getcomics';
 import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
 import { Importer } from '@/lib/importer';
+import { omnibusQueue } from '@/lib/queue'; // <-- IMPORT BULLMQ
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,23 @@ export async function POST(request: NextRequest) {
         const { id } = await request.json();
         const req = await prisma.request.findUnique({ where: { id } });
         if (!req) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+
+        // --- NEW: PURGE GHOST JOBS ---
+        // Find any delayed/waiting automated jobs in BullMQ related to this specific request and obliterate them
+        try {
+            const existingJobs = await omnibusQueue.getJobs(['waiting', 'delayed', 'active', 'paused']);
+            let purged = 0;
+            for (const job of existingJobs) {
+                if (job.id === `SEARCH_${id}` || job.data?.requestId === id) {
+                    await job.remove();
+                    purged++;
+                }
+            }
+            if (purged > 0) Logger.log(`[Retry API] Purged ${purged} conflicting ghost jobs from BullMQ for request: ${id}`, 'info');
+        } catch (queueErr) {
+            Logger.log(`[Retry API] Non-fatal error purging jobs: ${queueErr}`, 'warn');
+        }
+        // -----------------------------
 
         const settings = await prisma.systemSetting.findMany();
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));

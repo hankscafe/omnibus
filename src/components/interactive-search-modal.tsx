@@ -166,56 +166,61 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
 
             {/* THE FIX: Desktop Table View (md and up) */}
             <div className="hidden lg:block border border-border rounded-lg overflow-hidden bg-background shadow-sm">
-                <table className="w-full text-sm text-left">
-                    <thead className="text-xs text-muted-foreground uppercase bg-muted border-b border-border">
-                        <tr>
-                            {/* whitespace-nowrap and w-[1%] force the data columns to perfectly hug their content without squishing */}
-                            <th className="px-4 py-3 whitespace-nowrap w-[1%]">Protocol</th>
-                            <th className="px-4 py-3 whitespace-nowrap w-[1%]">Age</th>
-                            <th className="px-4 py-3">Title</th>
-                            <th className="px-4 py-3 whitespace-nowrap w-[1%]">Indexer</th>
-                            <th className="px-4 py-3 whitespace-nowrap w-[1%]">Size</th>
-                            <th className="px-4 py-3 whitespace-nowrap w-[1%]">Peers</th>
-                            <th className="px-4 py-3 whitespace-nowrap w-[1%] text-right">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y border-border">
-                        {loading ? (
-                            <tr><td colSpan={7} className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></td></tr>
-                        ) : results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).length === 0 ? (
-                            <tr><td colSpan={7} className="text-center py-12 text-muted-foreground italic text-base">No results found.</td></tr>
-                        ) : (
-                            results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).map((res, idx) => {
-                                const trackingId = res.guid || res.infoHash || res.downloadUrl;
-                                const isTorrent = res.protocol === 'torrent';
-                                const isDdl = res.protocol === 'ddl';
-                                return (
-                                <tr key={trackingId || idx} className="hover:bg-muted/50 transition-colors">
-                                    <td className="px-4 py-3 whitespace-nowrap">
-                                        <Badge variant="outline" className={isTorrent ? "text-green-600 border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800" : isDdl ? "text-primary border-primary/30 bg-primary/10" : "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-800"}>
-                                            {isTorrent ? <Database className="w-3 h-3 mr-1"/> : isDdl ? <Globe className="w-3 h-3 mr-1"/> : <HardDrive className="w-3 h-3 mr-1"/>}
-                                            {isDdl ? 'Direct' : res.protocol}
-                                        </Badge>
-                                    </td>
-                                    <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.age : getAge(res.publishDate)}</td>
-                                    {/* Title column soaks up all remaining flexible space */}
-                                    <td className="px-4 py-3 font-medium text-foreground break-words leading-tight">{res.title}</td>
-                                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{res.indexer}</td>
-                                    <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.size : formatSize(res.size)}</td>
-                                    <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{isTorrent ? <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 font-bold"><Users className="w-4 h-4"/> S: {res.seeders}</span> : isDdl ? "-" : `Grabs: ${res.grabs || 0}`}</td>
-                                    <td className="px-4 py-3 whitespace-nowrap">
-                                        <div className="flex items-center justify-end gap-2">
-                                            <Button variant="ghost" size="icon" className="h-9 w-9 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setHiddenIds(prev => new Set(prev).add(trackingId))} title="Hide/Block Release"><Ban className="w-4 h-4" /></Button>
-                                            <Button size="sm" onClick={() => initiateManualRequest(res, isDdl ? 'getcomics' : 'prowlarr')} disabled={downloadingId !== null} className="font-bold h-9 bg-primary text-primary-foreground hover:bg-primary/90">
-                                                {downloadingId === trackingId ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Download className="w-4 h-4 mr-2" /> Download</>}
-                                            </Button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            )})
-                        )}
-                    </tbody>
-                </table>
+                {/* Add the overflow-x-auto wrapper here */}
+                <div className="overflow-x-auto">
+                    {/* Add min-w-[800px] to the table class list */}
+                    <table className="w-full text-sm text-left min-w-[800px]">
+                        <thead className="text-xs text-muted-foreground uppercase bg-muted border-b border-border">
+                            <tr>
+                                {/* whitespace-nowrap and w-[1%] force the data columns to perfectly hug their content without squishing */}
+                                <th className="px-4 py-3 whitespace-nowrap w-[1%]">Protocol</th>
+                                <th className="px-4 py-3 whitespace-nowrap w-[1%]">Age</th>
+                                <th className="px-4 py-3">Title</th>
+                                <th className="px-4 py-3 whitespace-nowrap w-[1%]">Indexer</th>
+                                <th className="px-4 py-3 whitespace-nowrap w-[1%]">Size</th>
+                                <th className="px-4 py-3 whitespace-nowrap w-[1%]">Peers</th>
+                                <th className="px-4 py-3 whitespace-nowrap w-[1%] text-center">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y border-border">
+                            {loading ? (
+                                <tr><td colSpan={7} className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></td></tr>
+                            ) : results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).length === 0 ? (
+                                <tr><td colSpan={7} className="text-center py-12 text-muted-foreground italic text-base">No results found.</td></tr>
+                            ) : (
+                                results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).map((res, idx) => {
+                                    const trackingId = res.guid || res.infoHash || res.downloadUrl;
+                                    const isTorrent = res.protocol === 'torrent';
+                                    const isDdl = res.protocol === 'ddl';
+                                    return (
+                                    <tr key={trackingId || idx} className="hover:bg-muted/50 transition-colors">
+                                        <td className="px-4 py-3 whitespace-nowrap">
+                                            <Badge variant="outline" className={isTorrent ? "text-green-600 border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800" : isDdl ? "text-primary border-primary/30 bg-primary/10" : "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-800"}>
+                                                {isTorrent ? <Database className="w-3 h-3 mr-1"/> : isDdl ? <Globe className="w-3 h-3 mr-1"/> : <HardDrive className="w-3 h-3 mr-1"/>}
+                                                {isDdl ? 'Direct' : res.protocol}
+                                            </Badge>
+                                        </td>
+                                        <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.age : getAge(res.publishDate)}</td>
+                                        {/* Title column soaks up all remaining flexible space */}
+                                        <td className="px-4 py-3 font-medium text-foreground break-words leading-tight">{res.title}</td>
+                                        <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{res.indexer}</td>
+                                        <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.size : formatSize(res.size)}</td>
+                                        <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{isTorrent ? <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 font-bold"><Users className="w-4 h-4"/> S: {res.seeders}</span> : isDdl ? "-" : `Grabs: ${res.grabs || 0}`}</td>
+                                        <td className="px-4 py-3 whitespace-nowrap">
+                                            <div className="flex items-center justify-end gap-2">
+                                                <Button variant="ghost" size="icon" className="h-9 w-9 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setHiddenIds(prev => new Set(prev).add(trackingId))} title="Hide/Block Release"><Ban className="w-4 h-4" /></Button>
+                                                <Button size="sm" onClick={() => initiateManualRequest(res, isDdl ? 'getcomics' : 'prowlarr')} disabled={downloadingId !== null} className="font-bold h-9 bg-primary text-primary-foreground hover:bg-primary/90">
+                                                    {downloadingId === trackingId ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Download className="w-4 h-4 mr-2" /> Download</>}
+                                                </Button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                )})
+                            )}
+                        </tbody>
+                    </table>
+                {/* Close the new wrapper div */}
+                </div>
             </div>
 
             {/* THE FIX: Mobile Card View (hidden on lg screens and up) */}

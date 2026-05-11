@@ -16,26 +16,15 @@ export async function getCustomAcronyms(): Promise<Record<string, string>> {
 }
 
 export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false): string[] {
-    const queries = new Set<string>();
+    const primaryQueries = new Set<string>(); 
+    const secondaryQueries = new Set<string>();
+
     const baseName = name.replace(/[#]/g, '').trim();
-
     Logger.log(`[Search Engine Debug] Generating queries for Base Name: "${baseName}", Year: "${year}"`, 'debug');
-
-    if (year) queries.add(`${baseName} ${year}`.trim());
 
     const noPossessive = baseName.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
     const broadClean = noPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     
-    queries.add(baseName);
-    if (year) queries.add(`${broadClean} ${year}`.trim());
-    queries.add(broadClean);
-
-    if (baseName.match(/[\/:\&]/)) {
-        const dashed = baseName.replace(/[\/:\&]/g, ' - ').replace(/\s+/g, ' ').trim();
-        if (year) queries.add(`${dashed} ${year}`.trim());
-        queries.add(dashed);
-    }
-
     const issueMatch = name.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     
     let mainPart = name;
@@ -45,7 +34,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     if (issueMatch && issueMatch.index !== undefined) {
         const afterIssueIdx = issueMatch.index + issueMatch[0].length;
         const remainder = name.substring(afterIssueIdx);
-        
         const splitMatch = remainder.match(/^\s*(:| - )\s*(.*)$/);
         if (splitMatch) {
             mainPart = name.substring(0, afterIssueIdx).trim();
@@ -69,8 +57,9 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         const mainBroadClean = mainNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
         
         if (mainBroadClean.length > 2) {
-            if (year) queries.add(`${mainBroadClean} ${year}`.trim());
-            queries.add(mainBroadClean);
+            // Push these to PRIMARY so they search before subtitles!
+            if (year) primaryQueries.add(`${mainBroadClean} ${year}`.trim());
+            primaryQueries.add(mainBroadClean);
             
             let mainExpanded = mainBroadClean;
             for (const [ac, full] of Object.entries(acronyms)) {
@@ -79,27 +68,22 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
             }
             if (mainExpanded.toLowerCase() !== mainBroadClean.toLowerCase()) {
                 Logger.log(`[Search Engine Debug] Expanded acronym in Main Part: "${mainBroadClean}" -> "${mainExpanded}"`, 'debug');
-                if (year) queries.add(`${mainExpanded} ${year}`.trim());
-                queries.add(mainExpanded);
+                if (year) primaryQueries.add(`${mainExpanded} ${year}`.trim());
+                primaryQueries.add(mainExpanded);
             }
         }
+    }
 
-        const subNoPossessive = subtitle.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
-        const subBroadClean = subNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        
-        if (subBroadClean.length > 3) {
-            if (year) queries.add(`${subBroadClean} ${year}`.trim());
-            
-            let subExpanded = subBroadClean;
-            for (const [ac, full] of Object.entries(acronyms)) {
-                const regex = new RegExp(`\\b${ac}\\b`, 'gi');
-                subExpanded = subExpanded.replace(regex, full);
-            }
-            if (subExpanded.toLowerCase() !== subBroadClean.toLowerCase()) {
-                Logger.log(`[Search Engine Debug] Expanded acronym in Subtitle: "${subBroadClean}" -> "${subExpanded}"`, 'debug');
-                if (year) queries.add(`${subExpanded} ${year}`.trim());
-            }
-        }
+    // Push all full-length names and subtitle fallbacks to SECONDARY
+    if (year) secondaryQueries.add(`${baseName} ${year}`.trim());
+    secondaryQueries.add(baseName);
+    if (year) secondaryQueries.add(`${broadClean} ${year}`.trim());
+    secondaryQueries.add(broadClean);
+
+    if (baseName.match(/[\/:\&]/)) {
+        const dashed = baseName.replace(/[\/:\&]/g, ' - ').replace(/\s+/g, ' ').trim();
+        if (year) secondaryQueries.add(`${dashed} ${year}`.trim());
+        secondaryQueries.add(dashed);
     }
 
     let expanded = broadClean;
@@ -109,11 +93,12 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     }
     if (expanded.toLowerCase() !== broadClean.toLowerCase()) {
         Logger.log(`[Search Engine Debug] Expanded Base Acronym: "${broadClean}" -> "${expanded}"`, 'debug');
-        if (year) queries.add(`${expanded} ${year}`.trim());
-        queries.add(expanded);
+        if (year) secondaryQueries.add(`${expanded} ${year}`.trim());
+        secondaryQueries.add(expanded);
     }
 
-    return Array.from(queries);
+    // Return Primary (Short) queries first, followed by Secondary (Long) queries
+    return [...Array.from(primaryQueries), ...Array.from(secondaryQueries)];
 }
 
 export const SearchEngine = {

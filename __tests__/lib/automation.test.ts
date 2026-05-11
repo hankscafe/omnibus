@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { searchAndDownload } from '@/lib/automation';
+import { executeSearchAndDownload } from '@/lib/automation';
 import { GetComicsService } from '@/lib/getcomics';
 import { ProwlarrService } from '@/lib/prowlarr';
 import { DownloadService } from '@/lib/download-clients';
@@ -57,7 +57,7 @@ describe('Core Logic: Automation Engine', () => {
         // 2. Mock the deep-link scraper finding a valid premium hoster
         vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'http://mediafire/file.cbz', isDirect: false, hoster: 'mediafire' });
 
-        await searchAndDownload('req_1', 'Batman', '2024', 'DC');
+        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
 
         // Assert it hit the Direct File Downloader, NOT the Torrent downloader
         expect(DownloadService.downloadDirectFile).toHaveBeenCalledWith(
@@ -83,7 +83,7 @@ describe('Core Logic: Automation Engine', () => {
             { title: 'Batman #01 (2024)', downloadUrl: 'magnet:?xt=123', seeders: 50, protocol: 'torrent', score: 100 } as any
         ]);
 
-        await searchAndDownload('req_1', 'Batman', '2024', 'DC');
+        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
 
         // Assert GetComics was completely bypassed
         expect(GetComicsService.search).not.toHaveBeenCalled();
@@ -99,7 +99,7 @@ describe('Core Logic: Automation Engine', () => {
             { title: 'Batman #01 (2024)', downloadUrl: 'magnet:?xt=123', seeders: 50, protocol: 'torrent', score: 100 } as any
         ]);
 
-        await searchAndDownload('req_1', 'Batman', '2024', 'DC');
+        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
 
         // Assert it handed the torrent magnet link to the standard client adder
         expect(DownloadService.addDownload).toHaveBeenCalledWith(
@@ -116,7 +116,7 @@ describe('Core Logic: Automation Engine', () => {
         vi.mocked(GetComicsService.search).mockResolvedValueOnce([]);
         vi.mocked(ProwlarrService.searchComics).mockResolvedValueOnce([]);
 
-        await searchAndDownload('req_1', 'Batman', '2024', 'DC');
+        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
 
         // Assert the database was updated to STALLED
         expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({

@@ -16,7 +16,50 @@ export async function getDownloadClient(protocol: string = 'torrent') {
   return clients.find(c => (c.protocol || 'torrent').toLowerCase() === (protocol || 'torrent').toLowerCase()) || clients[0];
 }
 
+// --- NEW: Global Tracker for Rate Limiting ---
+let nextAvailableSearchTime = Date.now();
+
 export async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
+  // 1. Calculate how long this specific job needs to wait
+  const now = Date.now();
+  if (nextAvailableSearchTime < now) {
+      nextAvailableSearchTime = now;
+  }
+  
+  const delayMs = nextAvailableSearchTime - now;
+  nextAvailableSearchTime += 5000; // Reserve the next 5-second slot
+
+  // 2. Hand it to BullMQ with the calculated delay
+  const { omnibusQueue } = await import('@/lib/queue');
+  
+  await omnibusQueue.add('SEARCH_AND_DOWNLOAD', {
+    type: 'SEARCH_AND_DOWNLOAD',
+    requestId, name, year, publisher, isManga, skipIndexers
+  }, {
+    jobId: `SEARCH_${requestId}`,
+    delay: delayMs // <--- BullMQ will natively hold the job in Redis until this time passes
+  });
+}
+
+// Rename back to normal, as the worker will call this directly
+export async function executeSearchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
+  
+  // --- NEW: THE STATE GUARD ---
+  const freshReq = await prisma.request.findUnique({ where: { id: requestId } });
+  
+  // If the request is already being downloaded, completed, or imported, completely abort the background job!
+  if (!freshReq || ['DOWNLOADING', 'COMPLETED', 'IMPORTED'].includes(freshReq.status)) {
+      Logger.log(`[Automation] Aborting duplicate execution for ${name}. Request is already in status: ${freshReq?.status}`, 'warn');
+      return; 
+  }
+  
+  // Switch status to processing so subsequent overlapping jobs hit the guard above
+  await prisma.request.update({
+      where: { id: requestId },
+      data: { status: 'PENDING' }
+  });
+  // -----------------------------
+  
   const acronyms = await getCustomAcronyms();
   const queries = generateSearchQueries(name, year, acronyms, isManga);
   Logger.log(`[Automation Debug] Generated Fuzzy Queries for req [${requestId}]: ${JSON.stringify(queries)}`, 'debug');
@@ -53,7 +96,8 @@ export async function searchAndDownload(requestId: string, name: string, year: s
       Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
       for (const query of queries) {
         Logger.log(`[Automation Debug] Evaluating GetComics search phrase: "${query}"`, 'debug');
-          getComicsResults = await GetComicsService.search(query, false, isManga);
+          // THE FIX: Pass `name` as the 4th parameter so GetComics knows the true title
+          getComicsResults = await GetComicsService.search(query, false, isManga, name);
           if (getComicsResults.length > 0) break;
       }
       
@@ -145,10 +189,13 @@ export async function searchAndDownload(requestId: string, name: string, year: s
           const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga);
           Logger.log(`[Automation Debug] Prowlarr Raw Results Count: ${prowlarrResults.length}. Healthy Results (Seeders > 0): ${healthyResults.length}`, 'debug');
           healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
-          Logger.log(`[Automation Debug] Prowlarr Raw Results Count: ${prowlarrResults.length}. Healthy Results (Seeders > 0): ${healthyResults.length}`, 'debug');
+          
           if (healthyResults.length > 0) {
               break; 
           }
+          
+          // THE FIX: Add a 2-second delay between fallback queries to protect private indexers from API bans
+          await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       if (healthyResults.length > 0) {
@@ -210,11 +257,6 @@ export async function searchAndDownload(requestId: string, name: string, year: s
 
 export async function processAutomationQueue(items: any[]) {
   for (const item of items) {
-    try {
-      await searchAndDownload(item.id, item.name, item.year, item.publisher, item.isManga, item.skipIndexers);
-      await new Promise(r => setTimeout(r, 5000)); 
-    } catch (e) {
-      Logger.log(`Automation failed for ${item.name}`, 'error');
-    }
+    await searchAndDownload(item.id, item.name, item.year, item.publisher, item.isManga, item.skipIndexers);
   }
 }

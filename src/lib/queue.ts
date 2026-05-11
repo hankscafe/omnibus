@@ -218,6 +218,17 @@ export function initWorker() {
 
         try {
             switch (type) {
+                // --- Process the Search Queue ---
+                case 'SEARCH_AND_DOWNLOAD': {
+                    const { requestId, name, year, publisher, isManga, skipIndexers } = job.data;
+                    const { executeSearchAndDownload } = await import('@/lib/automation');
+                    
+                    await executeSearchAndDownload(requestId, name, year, publisher, isManga, skipIndexers);
+                    
+                    // We removed the setTimeout here so the worker is instantly freed!
+                    break;
+                }
+
                 case 'CACHE_CLEANUP': {
                     const startTime = Date.now();
                     await prisma.systemSetting.upsert({ where: { key: 'last_cache_cleanup' }, update: { value: nowStr }, create: { key: 'last_cache_cleanup', value: nowStr } });
@@ -615,6 +626,12 @@ export function initWorker() {
                                     }
                                 } catch(e: any) {
                                     Logger.log(`[Art Sweep] FATAL ERROR during sweep: ${e.message}`, 'error');
+                                }
+
+                                // Sanitize the year to prevent ComicVine IDs from invading the DB
+                                let safeMetaYear = meta.year;
+                                if (safeMetaYear && (safeMetaYear < 1900 || safeMetaYear > 2100)) {
+                                safeMetaYear = null; 
                                 }
 
                                 const seriesRecord = await prisma.series.upsert({

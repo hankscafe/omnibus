@@ -69,6 +69,7 @@ model Request {
   id                 String   @id @default(cuid())
   userId             String   
   volumeId           String
+  metadataSource     String   @default("COMICVINE")
   status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED
   progress           Int      @default(0)
   retryCount         Int      @default(0)
@@ -100,6 +101,7 @@ model Library {
 model Series {
   id              String   @id @default(cuid())
   cvId            Int?
+  metronId        Int?
   metadataId      String?  
   metadataSource  String   @default("COMICVINE") 
   matchState      String?  @default("UNMATCHED")
@@ -135,6 +137,7 @@ model Issue {
   seriesId        String
   series          Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
   cvId            Int?
+  metronId        Int?
   metadataId      String?  
   metadataSource  String   @default("COMICVINE")
   matchState      String?  @default("UNMATCHED")
@@ -365,6 +368,7 @@ model ReadingListItem {
   issue       Issue?       @relation(fields: [issueId], references: [id], onDelete: Cascade)
   
   cvIssueId   Int?
+  metadataSource     String   @default("COMICVINE")
   title       String       
   order       Int          
 

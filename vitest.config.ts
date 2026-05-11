@@ -5,6 +5,7 @@ export default defineConfig({
   // Because this file is now in the root, this plugin will perfectly read your tsconfig.json!
   plugins: [tsconfigPaths()],
   test: {
+    exclude: ['**/node_modules/**', '**/dist/**', '**/.claude/**'],
     environment: 'node',
     globals: true,
     coverage: {

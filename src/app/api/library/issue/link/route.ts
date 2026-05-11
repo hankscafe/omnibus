@@ -67,15 +67,20 @@ export async function POST(request: NextRequest) {
             formattedNum = `0${issueNumStr}`;
         }
 
+        // --- NEW: Calculate Issue Year from the target issue's release date (fallback to Volume Year) ---
+        const issueYear = targetIssue.releaseDate ? targetIssue.releaseDate.toString().split('-')[0] : safeYear;
+
         const filePatternToUse = series.isManga 
             ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
             : (config.file_naming_pattern || "{Series} #{Issue}");
 
-        // 4. Generate the new file name
+        // 4. Generate the new file name (Added {VolumeYear} and {IssueYear} tags)
         const newFileName = filePatternToUse
             .replace(/{Publisher}/gi, safePublisher)
             .replace(/{Series}/gi, safeName)
             .replace(/{Year}/gi, safeYear)
+            .replace(/{VolumeYear}/gi, safeYear)
+            .replace(/{IssueYear}/gi, issueYear)
             .replace(/{Issue}/gi, formattedNum || "")
             .replace(/\(\s*\)/g, '')
             .replace(/\[\s*\]/g, '')

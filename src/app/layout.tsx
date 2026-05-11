@@ -1,6 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
-import "./globals.css";
+import "@/app/globals.css";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { AuthProvider } from "@/components/AuthProvider";
@@ -8,6 +8,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationWrapper } from "@/components/navigation-wrapper";
 import { TitleManager } from "@/components/title-manager";
 import { Toaster } from "@/components/ui/toaster";
+import { PwaRegistry } from "@/components/pwa-registry"; // <-- IMPORT PWA REGISTRY
 
 // --- NEW IMPORTS FOR SERVER-SIDE REDIRECT ---
 import { headers } from "next/headers";
@@ -16,14 +17,29 @@ import { prisma } from "@/lib/db";
 
 const inter = Inter({ subsets: ["latin"] });
 
+// --- ADDED VIEWPORT EXPORT FOR NATIVE APP FEEL ---
+export const viewport: Viewport = {
+  themeColor: "#0f172a",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false, // Prevents zooming when tapping input fields
+};
+
 export const metadata: Metadata = {
   title: "Omnibus",
   description: "A self-hosted comic book manager. Your Universe. Organized.",
   manifest: "/manifest.json",
+  // --- ADDED APPLE WEB APP CONFIG ---
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Omnibus",
+  },
   icons: {
     icon: '/favicon.ico',
     shortcut: '/favicon.ico',
-    apple: '/favicon.ico',
+    apple: '/icon-192x192.png', // <-- UPDATED to use PWA icon
   },
 };
 
@@ -100,6 +116,9 @@ export default async function RootLayout({
       {/* Set body to bg-transparent so the fixed layer below can be seen */}
       <body className={`${inter.className} text-foreground antialiased overflow-x-hidden bg-transparent`}>
         
+        {/* --- INJECT PWA REGISTRY --- */}
+        <PwaRegistry />
+
         {/* --- FIXED BACKGROUND LAYER --- */}
         {/* This completely ignores scrollbar padding and stays locked to the edges of the monitor */}
         <div className="fixed inset-0 z-[-1] pointer-events-none">

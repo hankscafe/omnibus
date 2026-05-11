@@ -466,6 +466,12 @@ export const Importer = {
     let formattedNum = extractedNum;
     if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
     
+    // Sanitize the XML year to prevent ComicVine IDs in the filename
+    let xmlYear = xmlMeta?.year;
+    if (xmlYear && (xmlYear < 1900 || xmlYear > 2100)) {
+        xmlYear = null;
+    }
+    
     const issueYearFromMeta = xmlMeta?.year ? xmlMeta.year.toString() : seriesYearFromMeta.toString();
     const filePatToUse = isManga ? mangaFilePattern : filePattern;
     

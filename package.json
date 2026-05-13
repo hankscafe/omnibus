@@ -1,6 +1,6 @@
 {
   "name": "omnibus",
-  "version": "1.0.9-beta.067",
+  "version": "1.0.9-beta.068",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -19,7 +19,7 @@
     "adm-zip": "^0.5.16",
     "axios": "^1.13.5",
     "bcryptjs": "^3.0.3",
-    "bullmq": "^5.72.0",
+    "bullmq": "^5.76.8",
     "cheerio": "^1.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -51,20 +51,26 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/typography": "^0.5.19",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/adm-zip": "^0.5.8",
     "@types/bcryptjs": "^2.4.6",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.19.33",
     "@types/nodemailer": "^7.0.11",
     "@types/qrcode": "^1.5.6",
-    "@types/react": "^19.0.8",
-    "@types/react-dom": "^19.0.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@types/sanitize-html": "^2.16.1",
+    "@types/testing-library__react": "^10.0.1",
+    "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^4.1.5",
     "brace-expansion": "5.0.5",
     "cross-env": "^10.1.0",
     "eslint": "^8.57.0",
     "eslint-config-next": "15.1.7",
+    "jsdom": "^29.1.1",
     "node-mocks-http": "^1.17.2",
     "picomatch": "4.0.4",
     "shadcn": "^3.8.4",
@@ -77,6 +83,7 @@
   },
   "overrides": {
     "picomatch": "4.0.4",
-    "brace-expansion": "5.0.5"
+    "brace-expansion": "5.0.5",
+    "postcss": "^8.5.1"
   }
 }

@@ -1635,12 +1635,12 @@ export function initWorker() {
         concurrency: 1 
     });
 
-    worker.on('completed', (job) => {
+    worker.on('completed', (job: Job) => {
         Logger.log(`[BullMQ] Job ${job?.id} (${job?.data.type}) completed successfully.`, "success");
     });
 
-    worker.on('failed', (job, err) => {
-        Logger.log(`[BullMQ] Job ${job?.id} (${job?.data.type}) failed: ${err.message}`, "error");
+    worker.on('failed', (job: Job | undefined, err: Error) => {
+        Logger.log(`[BullMQ] Job ${job?.id} (${job?.data?.type || 'Unknown'}) failed: ${err.message}`, "error");
     });
 
     if (process.env.NODE_ENV !== 'production') {

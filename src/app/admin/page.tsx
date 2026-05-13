@@ -4,6 +4,8 @@
 import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { 
   TrendingUp, Download, HardDrive, ArrowRight, Loader2, RefreshCw, 
@@ -98,6 +100,18 @@ export default function AdminPage() {
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   
   const [interactiveSearchReq, setInteractiveSearchReq] = useState<any>(null)
+
+  const [selectedQueueItems, setSelectedQueueItems] = useState<Set<string>>(new Set());
+  const [isBulkQueueProcessing, setIsBulkQueueProcessing] = useState(false);
+
+  const toggleQueueSelection = (id: string) => {
+    setSelectedQueueItems(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   
   const { toast } = useToast()
 
@@ -105,6 +119,49 @@ export default function AdminPage() {
     document.title = "Omnibus - Admin"
   }, [statsLoading, reqsLoading, downloadsLoading]);
 
+  const handleBulkQueueRetry = async () => {
+    if (selectedQueueItems.size === 0) return;
+    setIsBulkQueueProcessing(true);
+    toast({ title: "Bulk Retry Started", description: `Queued ${selectedQueueItems.size} items for search.` });
+    
+    try {
+      const promises = Array.from(selectedQueueItems).map(id => 
+        fetch('/api/request/retry', { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify({ id }) 
+        })
+      );
+      await Promise.all(promises);
+      toast({ title: "Bulk Retry Complete" });
+      setSelectedQueueItems(new Set());
+      fetchRequests();
+    } catch (e) {
+      toast({ title: "Error", variant: "destructive" });
+    } finally {
+      setIsBulkQueueProcessing(false);
+    }
+  };
+
+  const handleBulkQueueDelete = async () => {
+    if (selectedQueueItems.size === 0) return;
+    setIsBulkQueueProcessing(true);
+    try {
+      const res = await fetch('/api/admin/requests', { 
+        method: 'DELETE', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ ids: Array.from(selectedQueueItems) }) 
+      });
+      if (res.ok) {
+        toast({ title: "Requests Removed" });
+        setSelectedQueueItems(new Set());
+        fetchRequests();
+      }
+    } finally {
+      setIsBulkQueueProcessing(false);
+    }
+  };
+  
   const fetchStats = async () => {
     try {
       const res = await fetch('/api/admin/stats');
@@ -739,10 +796,55 @@ const mappedRequests = requests.map(req => {
       )}
 
       <div className="space-y-4">
-        <div className="flex items-center gap-2 px-1">
-            <Activity className="w-5 h-5 text-primary" />
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Active Download Queue</h2>
+  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 px-1">
+    <div className="flex items-center gap-2">
+        <Activity className="w-5 h-5 text-primary" />
+        <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Active Download Queue</h2>
+        {pendingRequests.length > 0 && <Badge variant="secondary" className="ml-2">{pendingRequests.length}</Badge>}
+    </div>
+
+    {/* --- NEW BULK ACTIONS BAR --- */}
+    {pendingRequests.length > 0 && (
+      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+        <div className="flex items-center gap-2 mr-2 bg-muted/50 px-3 py-1.5 rounded-md border border-border">
+          <Checkbox 
+            id="select-all-queue"
+            checked={selectedQueueItems.size === pendingRequests.length && pendingRequests.length > 0}
+            onCheckedChange={(checked) => {
+              if (checked) setSelectedQueueItems(new Set(pendingRequests.map(r => r.id)));
+              else setSelectedQueueItems(new Set());
+            }}
+          />
+          <Label htmlFor="select-all-queue" className="text-xs font-bold cursor-pointer">Select All</Label>
         </div>
+
+        {selectedQueueItems.size > 0 && (
+          <div className="flex gap-2 animate-in fade-in zoom-in-95">
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="h-9 border-primary/30 text-primary bg-primary/10 hover:bg-primary/20 font-bold"
+              onClick={handleBulkQueueRetry}
+              disabled={isBulkQueueProcessing}
+            >
+              {isBulkQueueProcessing ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <RefreshCw className="w-4 h-4 mr-2"/>}
+              Retry ({selectedQueueItems.size})
+            </Button>
+            <Button 
+              size="sm" 
+              variant="destructive" 
+              className="h-9 font-bold"
+              onClick={handleBulkQueueDelete}
+              disabled={isBulkQueueProcessing}
+            >
+              <Trash2 className="w-4 h-4 mr-2"/>
+              Delete
+            </Button>
+          </div>
+        )}
+      </div>
+    )}
+  </div>
 
         <Card className={`shadow-sm bg-primary/5 transition-all ${pendingRequests.length === 0 && activeList.length === 0 ? 'border border-dashed border-primary/30' : 'border border-primary/20'}`}>
           <CardContent className="p-2 sm:p-4 space-y-4">
@@ -762,12 +864,25 @@ const mappedRequests = requests.map(req => {
                       )}
 
                       {pendingRequests.map((req) => {
-                          const isExhausted = ['STALLED', 'FAILED', 'ERROR'].includes(req.status) && (req.retryCount >= 3);
+                        const isExhausted = ['STALLED', 'FAILED', 'ERROR'].includes(req.status) && (req.retryCount >= 3);
+                        const isSelected = selectedQueueItems.has(req.id);
 
-                          return (
-                          <div key={req.id} className={`flex flex-col md:flex-row items-start md:items-center justify-between p-3 sm:p-4 bg-background border rounded-lg shadow-sm gap-3 sm:gap-4 transition-all hover:border-primary/50 ${isExhausted ? 'border-red-300 dark:border-red-900 bg-red-50/30 dark:bg-red-900/10' : 'border-border'}`}>
-                              
-                              <div className="flex gap-3 w-full md:w-auto md:flex-1 min-w-0">
+                        return (
+                        <div 
+                          key={req.id} 
+                          onClick={() => toggleQueueSelection(req.id)}
+                          className={`flex flex-col md:flex-row items-start md:items-center justify-between p-3 sm:p-4 bg-background border rounded-lg shadow-sm gap-3 sm:gap-4 transition-all cursor-pointer ${
+                            isSelected ? 'border-primary ring-2 ring-primary/10 bg-primary/5' : 'hover:border-primary/50 border-border'
+                          } ${isExhausted ? 'border-red-300 dark:border-red-900 bg-red-50/30 dark:bg-red-900/10' : ''}`}
+                        >
+                            <div className="flex gap-3 w-full md:w-auto md:flex-1 min-w-0">
+                              {/* --- NEW CHECKBOX --- */}
+                              <div className="flex items-center pt-1" onClick={(e) => e.stopPropagation()}>
+                                <Checkbox 
+                                    checked={isSelected}
+                                    onCheckedChange={() => toggleQueueSelection(req.id)}
+                                />
+                                </div>
                                 <div className="w-10 h-14 sm:w-12 sm:h-16 bg-muted shrink-0 rounded overflow-hidden border border-border flex items-center justify-center">
                                   {req.imageUrl ? (
                                       <img src={req.imageUrl} className="w-full h-full object-cover" alt="" />

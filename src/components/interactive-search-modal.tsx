@@ -1,3 +1,4 @@
+// src/components/interactive-search-modal.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -22,8 +23,45 @@ interface Props {
   requestId?: string;
 }
 
+// Aggressive formatter that forces 3-digit padding and strips subtitles
+const getOptimizedSearchQuery = (rawQuery: string, year?: string) => {
+    if (!rawQuery) return "";
+    
+    let query = String(rawQuery);
+    
+    // 1. Strip out subtitles (anything after a colon) to broaden indexer results
+    let clean = query.split(':')[0].trim();
+    
+    // 2. Remove trailing years in parentheses from the title text
+    clean = clean.replace(/\(\d{4}\)/g, '').trim(); 
+    
+    // 3. Hunt for an issue number (e.g. "#1", "Issue 1", "#001")
+    const issueMatch = clean.match(/(?:#|issue\s*#?)\s*0*(\d+(?:\.\d+)?)/i);
+    
+    if (issueMatch && issueMatch.index !== undefined) {
+        // Slice out the base name (everything before the issue number)
+        let baseName = clean.substring(0, issueMatch.index).trim();
+        baseName = baseName.replace(/[-]$/, '').trim(); 
+        
+        // Force the issue number to 3 digits (e.g. "1" -> "001", "18" -> "018")
+        const paddedNum = issueMatch[1].padStart(3, '0');
+        clean = `${baseName} ${paddedNum}`;
+    }
+    
+    // 4. Append the year
+    const yearStr = (year && year !== 'Unknown' && year !== '????') ? ` ${year}` : '';
+    
+    // Prevent duplicating the year if the base string miraculously already has it
+    if (yearStr && !clean.endsWith(yearStr.trim())) {
+        clean = `${clean}${yearStr}`;
+    }
+    
+    return clean.trim().replace(/\s+/g, ' ');
+};
+
 export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicData, requestId }: Props) {
-  const [query, setQuery] = useState(initialQuery)
+  // Initialize synchronously so the input box is formatted instantly
+  const [query, setQuery] = useState(() => getOptimizedSearchQuery(initialQuery, comicData?.year));
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<any[]>([])
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
@@ -35,9 +73,10 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
 
   useEffect(() => {
     if (isOpen && initialQuery) {
-        setQuery(initialQuery);
-        performSearch(initialQuery);
-    } else {
+        const optimized = getOptimizedSearchQuery(initialQuery, comicData?.year);
+        setQuery(optimized);
+        performSearch(optimized);
+    } else if (!isOpen) {
         setResults([]);
         setHiddenIds(new Set());
     }
@@ -45,7 +84,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   }, [isOpen, initialQuery])
 
   const performSearch = async (searchQuery: string) => {
-    if (!searchQuery.trim()) return;
+    if (!searchQuery || !searchQuery.trim()) return;
     setLoading(true);
     try {
       const res = await fetch(`/api/search/interactive?q=${encodeURIComponent(searchQuery)}`)
@@ -62,7 +101,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   }
 
   const initiateManualRequest = (searchResult: any, source: 'prowlarr' | 'getcomics' | 'flag_admin') => {
-      if (source !== 'flag_admin' && comicData.type === 'volume') {
+      if (source !== 'flag_admin' && comicData?.type === 'volume') {
           setMonitorPrompt({ result: searchResult, source: source as 'prowlarr' | 'getcomics' });
       } else {
           handleManualRequest(searchResult, source, false);
@@ -79,7 +118,8 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...comicData,
-          name: query, 
+          // Preserve the original full complex name for the UI / Database
+          name: initialQuery, 
           searchResult,
           source,
           monitored,
@@ -119,8 +159,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   return (
     <>
     <Dialog open={isOpen} onOpenChange={onClose}>
-      {/* THE FIX: Dynamic viewport widths (w-[95vw] lg:max-w-6xl) to stretch perfectly across all screens */}
-      <DialogContent className="max-w-[95vw] lg:max-w-6xl w-full max-h-[90vh] rounded-xl flex flex-col p-0 bg-background border-border overflow-hidden transition-colors duration-300">
+      <DialogContent className="w-[95vw] sm:max-w-[95vw] lg:max-w-[1400px] max-h-[90vh] rounded-xl flex flex-col p-0 bg-background border-border overflow-hidden transition-colors duration-300">
         <DialogTitle className="sr-only">Interactive Search</DialogTitle>
         <DialogDescription className="sr-only">Manually select a release from Indexers or GetComics.</DialogDescription>
 
@@ -164,15 +203,11 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                 </Button>
             </div>
 
-            {/* THE FIX: Desktop Table View (md and up) */}
             <div className="hidden lg:block border border-border rounded-lg overflow-hidden bg-background shadow-sm">
-                {/* Add the overflow-x-auto wrapper here */}
-                <div className="overflow-x-auto">
-                    {/* Add min-w-[800px] to the table class list */}
+                <div className="overflow-x-auto pb-2 [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:bg-muted/50 [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/50">
                     <table className="w-full text-sm text-left min-w-[800px]">
                         <thead className="text-xs text-muted-foreground uppercase bg-muted border-b border-border">
                             <tr>
-                                {/* whitespace-nowrap and w-[1%] force the data columns to perfectly hug their content without squishing */}
                                 <th className="px-4 py-3 whitespace-nowrap w-[1%]">Protocol</th>
                                 <th className="px-4 py-3 whitespace-nowrap w-[1%]">Age</th>
                                 <th className="px-4 py-3">Title</th>
@@ -201,8 +236,15 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                             </Badge>
                                         </td>
                                         <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.age : getAge(res.publishDate)}</td>
-                                        {/* Title column soaks up all remaining flexible space */}
-                                        <td className="px-4 py-3 font-medium text-foreground break-words leading-tight">{res.title}</td>
+                                        <td className="px-4 py-3">
+                                            <div 
+                                                className="font-medium text-foreground break-words whitespace-normal line-clamp-3 leading-tight"
+                                                title={res.title}
+                                            >
+                                                {res.title}
+                                            </div>
+                                        </td>
+                                        
                                         <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{res.indexer}</td>
                                         <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.size : formatSize(res.size)}</td>
                                         <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{isTorrent ? <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 font-bold"><Users className="w-4 h-4"/> S: {res.seeders}</span> : isDdl ? "-" : `Grabs: ${res.grabs || 0}`}</td>
@@ -219,11 +261,9 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                             )}
                         </tbody>
                     </table>
-                {/* Close the new wrapper div */}
                 </div>
             </div>
 
-            {/* THE FIX: Mobile Card View (hidden on lg screens and up) */}
             <div className="lg:hidden space-y-4 pb-6">
                 {loading ? (
                     <div className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></div>
@@ -236,7 +276,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                         const isDdl = res.protocol === 'ddl';
                         return (
                         <div key={trackingId || idx} className="flex flex-col gap-3 p-4 sm:p-5 bg-background border border-border rounded-lg shadow-sm">
-                            <div className="font-bold text-base break-words leading-tight text-foreground">{res.title}</div>
+                            <div className="font-bold text-base break-words leading-tight text-foreground line-clamp-3" title={res.title}>{res.title}</div>
                             <div className="flex flex-wrap gap-2 items-center">
                                 <Badge variant="outline" className={`text-xs uppercase tracking-wider px-2 py-0.5 ${isTorrent ? "text-green-600 border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800" : isDdl ? "text-primary border-primary/30 bg-primary/10" : "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-800"}`}>
                                     {isTorrent ? <Database className="w-3.5 h-3.5 mr-1.5"/> : isDdl ? <Globe className="w-3.5 h-3.5 mr-1.5"/> : <HardDrive className="w-3.5 h-3.5 mr-1.5"/>}

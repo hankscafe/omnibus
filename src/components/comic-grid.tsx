@@ -35,6 +35,7 @@ interface Comic {
   teams?: string[];
   locations?: string[];
   isVolume?: boolean;
+  isReleased?: boolean;
   volumeName?: string;
 }
 
@@ -190,7 +191,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       .finally(() => setLoadingRelated(false))
   }, [selectedComic?.volumeId])
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string, issueNumber?: string) => {
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string, issueNumber?: string, monitorOnly: boolean = false) => {
     if (!name || name === "Unknown" || name === "undefined") {
         toast({ title: "Request Failed", description: "Could not resolve series name. Please try interactive search.", variant: "destructive" });
         return;
@@ -213,15 +214,22 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
             type, 
             monitored, 
             directSource,
-            issueNumber: issueNumber || (type === 'issue' ? "1" : undefined)
+            issueNumber: issueNumber || (type === 'issue' ? "1" : undefined),
+            monitorOnly
         })
       });
 
       if (res.ok) {
-          toast({ title: "Success", description: `${exactIssueName} added to queue.` })
+          const data = await res.json();
+          toast({ title: "Success", description: data.message || `${exactIssueName} added to queue.` })
           
           if (type === 'volume') {
-              setRequestedVolumes(prev => new Set(prev).add(id));
+              if (monitorOnly) {
+                  setMonitoredSeries(prev => new Set(prev).add(id)); // Instantly update UI
+              } else {
+                  setRequestedVolumes(prev => new Set(prev).add(id));
+                  setSelectedComic(null);
+              }
           } else {
               setRequestedIssues(prev => new Set(prev).add(exactIssueName));
               setActiveRequests(prev => [
@@ -367,33 +375,60 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                             {(() => {
                                 const issueTargetName = selectedComic.isVolume ? `${seriesBaseName} #${selectedComic.issueNumber || "1"}` : selectedComic.name;
                                 
-                                const volStatus = getVolumeStatus(selectedComic.volumeId, seriesBaseName);
-                                const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, issueTargetName);
+                              const volStatus = getVolumeStatus(selectedComic.volumeId, seriesBaseName);
+                              const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, issueTargetName);
                                 
-                                const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';
-                                const isIssueOwned = issueStatus === 'ISSUE_OWNED';
-                                const overallStatus = selectedComic.isVolume ? volStatus : issueStatus;
+                              const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';
+                              const isIssueOwned = issueStatus === 'ISSUE_OWNED';
+                              const overallStatus = selectedComic.isVolume ? volStatus : issueStatus;
 
-                                return (
-                                  <div className="flex flex-col gap-2.5 sm:gap-3 w-full max-w-[300px] mx-auto md:max-w-none mt-2">
-                                      {/* VOLUME BUTTONS */}
-                                      {volStatus === 'PENDING_APPROVAL' || volStatus === 'REQUESTED' ? (
-                                          <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal" variant="default" disabled>
-                                              {volStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>}
-                                              {volStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
-                                          </Button>
-                                      ) : (
-                                          <Button 
-                                              className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
-                                              variant="default" 
-                                              onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined })} 
-                                              disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
-                                          >
-                                              {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
-                                                  isVolOwned ? <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
-                                              )}
-                                          </Button>
-                                      )}
+                              // NEW CODE: Calculate if all available issues are owned
+                              const missingAvailableIssues = relatedIssues.filter(issue => {
+                                  const relIssueStatus = getIssueStatus(issue.id, selectedComic.volumeId, issue.name);
+                                  const isReleased = issue.isReleased !== false; // Fallback to true if undefined
+                                  return isReleased && relIssueStatus !== 'ISSUE_OWNED';
+                              });
+                              const isAllAvailableOwned = isVolOwned && relatedIssues.length > 0 && missingAvailableIssues.length === 0;
+
+                              return (
+                                <div className="flex flex-col gap-2.5 sm:gap-3 w-full max-w-[300px] mx-auto md:max-w-none mt-2">
+                                    {/* VOLUME BUTTONS */}
+                                    {loadingRelated ? (
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal" variant="outline" disabled>
+                                            <Loader2 className="w-4 h-4 animate-spin shrink-0" /> <span className="leading-tight">Checking Library...</span>
+                                        </Button>
+                                    ) : volStatus === 'PENDING_APPROVAL' || volStatus === 'REQUESTED' ? (
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal" variant="default" disabled>
+                                            {volStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>}
+                                            {volStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
+                                        </Button>
+                                    ) : (isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') ? (
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" variant="outline" disabled>
+                                            <FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">Up to Date</span>
+                                        </Button>
+                                    ) : (isAllAvailableOwned && volStatus === 'LIBRARY_UNMONITORED') ? (
+                                        <Button 
+                                            className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white whitespace-normal" 
+                                            variant="default" 
+                                            onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'volume', selectedComic.publisher || 'Unknown', true, undefined, undefined, true)} 
+                                            disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
+                                        >
+                                            {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
+                                                <><Activity className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Subscribe to Series</span></>
+                                            )}
+                                        </Button>
+                                    ) : (
+                                        <Button 
+                                            className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
+                                            variant="default" 
+                                            onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined })} 
+                                            disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
+                                        >
+                                            {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
+                                                isVolOwned ? <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Missing</span></> : <><Plus className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Series</span></>
+                                            )}
+                                        </Button>
+                                    )}
                                       
                                       {/* ISSUE BUTTONS */}
                                       {issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || isIssueOwned ? (

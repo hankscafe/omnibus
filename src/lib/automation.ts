@@ -47,9 +47,14 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   // --- NEW: THE STATE GUARD ---
   const freshReq = await prisma.request.findUnique({ where: { id: requestId } });
   
+  if (!freshReq) {
+      Logger.log(`[Automation] Aborting execution for ${name}. Request no longer exists in the database (likely deleted).`, 'warn');
+      return; 
+  }
+
   // If the request is already being downloaded, completed, or imported, completely abort the background job!
-  if (!freshReq || ['DOWNLOADING', 'COMPLETED', 'IMPORTED'].includes(freshReq.status)) {
-      Logger.log(`[Automation] Aborting duplicate execution for ${name}. Request is already in status: ${freshReq?.status}`, 'warn');
+  if (['DOWNLOADING', 'COMPLETED', 'IMPORTED'].includes(freshReq.status)) {
+      Logger.log(`[Automation] Aborting duplicate execution for ${name}. Request is already in status: ${freshReq.status}`, 'warn');
       return; 
   }
   

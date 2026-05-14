@@ -125,6 +125,7 @@ export async function GET(request: Request) {
           issueNumber: item.issue_number, 
           issue_number: item.issue_number, 
           year: year,
+          isReleased: isReleased,
           publisher: item.volume?.publisher?.name || null,
           image: rawImage ? `/api/library/cover?path=${encodeURIComponent(rawImage)}` : null,
           description: desc || "No description available.",

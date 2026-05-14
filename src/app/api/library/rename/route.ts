@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
 
     let filesRenamed = 0;
     let foldersRenamed = 0;
+    let lastProcessedPath = ""; // --- NEW: Track the path ---
 
     function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
 
@@ -154,6 +155,8 @@ export async function POST(request: NextRequest) {
                 });
             }
         }
+        
+        lastProcessedPath = currentFolder; // --- NEW: Store the final path for this series ---
     }
 
     await AuditLogger.log('BULK_RENAME_FILES', { 
@@ -163,7 +166,8 @@ export async function POST(request: NextRequest) {
         filePattern: activeFilePattern
     }, (token.id || token.sub) as string);
 
-    return NextResponse.json({ success: true, filesRenamed, foldersRenamed });
+    // --- NEW: Return the newPath in the JSON payload ---
+    return NextResponse.json({ success: true, filesRenamed, foldersRenamed, newPath: lastProcessedPath });
 
   } catch (error: unknown) {
     Logger.log(`[Library Rename API] Error: ${getErrorMessage(error)}`, 'error');

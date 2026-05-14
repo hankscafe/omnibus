@@ -182,9 +182,17 @@ function SeriesContent() {
               body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern })
           });
           if (res.ok) {
+              const data = await res.json();
               toast({ title: "Files Standardized" });
               setRenameModalOpen(false);
-              window.location.reload();
+              
+              // --- NEW: Dynamically route to the new path if it changed! ---
+              if (data.newPath && data.newPath !== folderPath) {
+                  window.location.href = `/library/series?path=${encodeURIComponent(data.newPath)}`;
+              } else {
+                  window.location.reload();
+              }
+              // -------------------------------------------------------------
           } else throw new Error("Failed to rename");
       } catch (e) {
           toast({ title: "Rename Failed", variant: "destructive" });

@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     let name = body.name || body.seriesName || body.title;
-    const { cvId, type, monitored, directSource, metadataSource = 'COMICVINE' } = body; 
+    const { cvId, type, monitored, directSource, metadataSource = 'COMICVINE', monitorOnly } = body; 
     let { image, publisher, year, description } = body;
 
     if (!cvId) return NextResponse.json({ error: 'Missing Metadata ID' }, { status: 400 });
@@ -212,6 +212,15 @@ export async function POST(request: NextRequest) {
 
       Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');
 
+      // --- NEW BLOCK: Bail out early if we just wanted to subscribe ---
+      if (monitorOnly) {
+          return NextResponse.json({ 
+              success: true, 
+              message: "Subscribed! Omnibus will automatically download future issues." 
+          });
+      }
+      // ----------------------------------------------------------------
+
       if (initialStatus === 'PENDING_APPROVAL') {
           SystemNotifier.sendAlert('pending_request', {
               title: name,
@@ -226,11 +235,30 @@ export async function POST(request: NextRequest) {
 
       const createdRequests = [];
 
+      // --- FIX: Prevent duplicate downloads for physically imported library files ---
+      const existingLibraryIssues = await prisma.issue.findMany({
+          where: { seriesId: series.id, filePath: { not: null } },
+          select: { number: true }
+      });
+
+      const ownedIssueNumbers = new Set(existingLibraryIssues.map(i => {
+          const match = i.number.match(/(\d+(?:\.\d+)?)/);
+          return match ? parseFloat(match[1]) : NaN;
+      }).filter(n => !isNaN(n)));
+      // -------------------------------------------------------------------------------
+
       if (metadataSource === 'METRON') {
           const metron = new MetronProvider();
           const issues = await metron.getSeriesIssues(cvId.toString());
           
           for (const issue of issues) {
+              // --- NEW: Skip if already physically in the library ---
+              const parsedIssueNum = parseFloat(issue.issueNumber || (issue as any).issue || "");
+              if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) {
+                  continue; 
+              }
+              // ------------------------------------------------------
+
               const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : year;
               let searchName = `${name} #${issue.issueNumber}`;
               if (issue.name && issue.name !== name && !issue.name.includes(`#${issue.issueNumber}`)) {
@@ -283,6 +311,13 @@ export async function POST(request: NextRequest) {
           const issues = cvRes.data.results || [];
 
           for (const issue of issues) {
+            // --- NEW: Skip if already physically in the library ---
+            const parsedIssueNum = parseFloat(issue.issue_number);
+            if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) {
+                continue; 
+            }
+            // ------------------------------------------------------
+
             const issueYear = (issue.store_date || issue.cover_date || year || "").split('-')[0];
             let searchName = `${name} #${issue.issue_number}`;
             if (issue.name && issue.name !== name && !issue.name.includes(`#${issue.issue_number}`)) {

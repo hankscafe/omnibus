@@ -51,6 +51,7 @@ interface Issue {
   storyArcs?: string[];
   teams?: string[];
   locations?: string[];
+  isReleased?: boolean;
 }
 
 type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
@@ -224,7 +225,7 @@ export function RequestSearch() {
       });
   }, [selectedItem?.id, selectedItem?.isVolume]);
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string) => {
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, monitorOnly: boolean = false) => {
     if (!name || name === "Unknown" || name === "undefined") {
         toast({ title: "Request Failed", description: "Missing valid series name. Try interactive search.", variant: "destructive" });
         return;
@@ -246,15 +247,21 @@ export function RequestSearch() {
             image, 
             type, 
             monitored,
-            issueNumber: issueNumber || (type === 'issue' ? "1" : undefined)
+            issueNumber: issueNumber || (type === 'issue' ? "1" : undefined),
+            monitorOnly
         })
       });
 
       if (res.ok) {
-        toast({ title: "Success", description: `${exactIssueName} added to queue.` })
+        const data = await res.json();
+        toast({ title: "Success", description: data.message || `${exactIssueName} added to queue.` })
         if (type === 'volume') {
-            setRequestedVolumes(prev => new Set(prev).add(id));
-            setOpen(false);
+            if (monitorOnly) {
+                setMonitoredSeries(prev => new Set(prev).add(id)); // Instantly update UI
+            } else {
+                setRequestedVolumes(prev => new Set(prev).add(id));
+                setOpen(false); 
+            }
         } else {
             setRequestedIssues(prev => new Set(prev).add(exactIssueName));
             setActiveRequests(prev => [
@@ -417,13 +424,40 @@ export function RequestSearch() {
                               const isIssueOwned = issueStatus === 'ISSUE_OWNED';
                               const overallStatus = selectedItem.isVolume ? volStatus : issueStatus;
 
+                              // NEW CODE: Calculate if all available issues are owned
+                              const missingAvailableIssues = volumeIssues.filter(issue => {
+                                  const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, issue.name);
+                                  const isReleased = issue.isReleased !== false; // Fallback to true if undefined
+                                  return isReleased && relIssueStatus !== 'ISSUE_OWNED';
+                              });
+                              const isAllAvailableOwned = isVolOwned && volumeIssues.length > 0 && missingAvailableIssues.length === 0;
+
                               return (
                                 <div className="flex flex-col gap-2.5 sm:gap-3 w-full max-w-[300px] mx-auto md:max-w-none mt-2">
                                     {/* VOLUME BUTTONS */}
-                                    {volStatus === 'PENDING_APPROVAL' || volStatus === 'REQUESTED' ? (
+                                    {loading ? (
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal" variant="outline" disabled>
+                                            <Loader2 className="w-4 h-4 animate-spin shrink-0" /> <span className="leading-tight">Checking Library...</span>
+                                        </Button>
+                                    ) : volStatus === 'PENDING_APPROVAL' || volStatus === 'REQUESTED' ? (
                                         <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal" variant="default" disabled>
                                             {volStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>}
                                             {volStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
+                                        </Button>
+                                    ) : (isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') ? (
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" variant="outline" disabled>
+                                            <FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">Up to Date</span>
+                                        </Button>
+                                    ) : (isAllAvailableOwned && volStatus === 'LIBRARY_UNMONITORED') ? (
+                                        <Button 
+                                            className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white whitespace-normal" 
+                                            variant="default" 
+                                            onClick={() => handleRequest(selectedItem.volumeId, seriesBaseName, selectedItem.image, selectedItem.year, 'volume', selectedItem.publisher || 'Unknown', true, undefined, true)} 
+                                            disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
+                                        >
+                                            {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
+                                                <><Activity className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Subscribe to Series</span></>
+                                            )}
                                         </Button>
                                     ) : (
                                         <Button 

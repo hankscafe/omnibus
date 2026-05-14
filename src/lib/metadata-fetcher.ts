@@ -23,25 +23,48 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             const metron = new MetronProvider();
             const details = await metron.getSeriesDetails(metadataId);
             
-            let finalCoverUrl = details.coverUrl;
-
-            // --- FIX: Check if we already have a local cover. Prioritize it to heal the database.
+            // 1. Establish our fallback cover first
+            let fallbackCoverUrl = details.coverUrl;
             if (folderPath && fs.existsSync(folderPath)) {
                 const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
                 for (const pc of possibleCovers) {
                     if (fs.existsSync(path.join(folderPath, pc))) {
-                        finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
+                        fallbackCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
                         break;
                     }
                 }
             }
 
+            let finalCoverUrl = fallbackCoverUrl;
+
+            // 2. Safely attempt to download and overwrite with the newest cover
             if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
                 try {
                     const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
-                    await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-                    finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, 'cover.jpg'))}`;
-                } catch (e) {}
+                    
+                    const contentType = String(imgRes.headers['content-type'] || '').toLowerCase();
+                    const byteLength = imgRes.data.byteLength;
+                    
+                    // Validate the payload to ensure it is actually an image and not Cloudflare HTML
+                    if (contentType.includes('text/html') || byteLength < 1000) {
+                        throw new Error(`Invalid image payload. Type: ${contentType}, Size: ${byteLength} bytes.`);
+                    }
+
+                    // Determine correct extension based on headers (fallback to .jpg)
+                    let ext = '.jpg';
+                    if (contentType.includes('image/png')) ext = '.png';
+                    if (contentType.includes('image/webp')) ext = '.webp';
+
+                    const coverFileName = `cover${ext}`;
+
+                    // If it passes validation, overwrite the cover safely
+                    await fs.writeFile(path.join(folderPath, coverFileName), Buffer.from(imgRes.data));
+                    finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, coverFileName))}`;
+                    
+                } catch (e: unknown) {
+                    Logger.log(`[Metadata] Failed to save new cover, keeping existing fallback: ${getErrorMessage(e)}`, 'warn');
+                    // If the download fails, finalCoverUrl stays as the fallbackCoverUrl
+                }
             }
             
             await prisma.series.update({
@@ -150,28 +173,48 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     const imageUrl = volData.image?.medium_url || volData.image?.super_url;
 
     const { genres: volGenres } = parseComicVineCredits(undefined, undefined, volData.concepts || undefined);
-
-    let finalCoverUrl = imageUrl;
     
-    // --- FIX: Check if we already have a local cover. Prioritize it to heal the database.
+    // 1. Establish our fallback cover first
+    let fallbackCoverUrl = imageUrl;
     if (folderPath && fs.existsSync(folderPath)) {
         const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
         for (const pc of possibleCovers) {
             if (fs.existsSync(path.join(folderPath, pc))) {
-                finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
+                fallbackCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
                 break;
             }
         }
     }
 
-    // Attempt to fetch fresh metadata from CV, but don't overwrite the local DB path proxy if it fails
+    let finalCoverUrl = fallbackCoverUrl;
+
+    // 2. Safely attempt to download and overwrite with the newest cover
     if (imageUrl && folderPath && fs.existsSync(folderPath)) {
         try {
             const imgRes = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer' });
-            await fs.writeFile(path.join(folderPath, 'cover.jpg'), Buffer.from(imgRes.data));
-            finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, 'cover.jpg'))}`;
+            
+            const contentType = String(imgRes.headers['content-type'] || '').toLowerCase();
+            const byteLength = imgRes.data.byteLength;
+            
+            // Validate the payload to ensure it is actually an image and not Cloudflare HTML
+            if (contentType.includes('text/html') || byteLength < 1000) {
+                throw new Error(`Invalid image payload. Type: ${contentType}, Size: ${byteLength} bytes.`);
+            }
+
+            // Determine correct extension based on headers (fallback to .jpg)
+            let ext = '.jpg';
+            if (contentType.includes('image/png')) ext = '.png';
+            if (contentType.includes('image/webp')) ext = '.webp';
+
+            const coverFileName = `cover${ext}`;
+
+            // If it passes validation, overwrite the cover safely
+            await fs.writeFile(path.join(folderPath, coverFileName), Buffer.from(imgRes.data));
+            finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, coverFileName))}`;
+            
         } catch (e: unknown) {
-            Logger.log(`[Metadata] Failed to save cover image locally: ${getErrorMessage(e)}`, 'warn');
+            Logger.log(`[Metadata] Failed to save new cover, keeping existing fallback: ${getErrorMessage(e)}`, 'warn');
+            // If the download fails, finalCoverUrl stays as the fallbackCoverUrl
         }
     }
 

@@ -12,7 +12,7 @@ import {
   AlertTriangle, Users, CheckCircle2, Activity, XCircle, 
   Settings, Trophy, Calendar, FileText, ExternalLink, Clock, Trash2,
   ThumbsUp, ThumbsDown, ImageIcon, EyeOff, Sparkles, ShieldAlert, BarChart3,
-  Check, Search
+  Check, Search, Rocket
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -557,8 +557,8 @@ const mappedRequests = requests.map(req => {
               </Card>
 
               {/* System Health / Updates Card */}
+              <div className="block transition-transform hover:scale-[1.02] h-full" onClick={() => setHealthModalOpen(true)}>
               {updateData?.updateAvailable ? (
-                <Link href="/admin/updates" className="block transition-transform hover:scale-[1.02] h-full">
                   <Card className="shadow-sm border-primary bg-primary/10 hover:bg-primary/20 transition-colors cursor-pointer h-full">
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
                       <CardTitle className="text-xs sm:text-sm font-medium text-foreground">System Health</CardTitle>
@@ -574,9 +574,7 @@ const mappedRequests = requests.map(req => {
                       </p>
                     </CardContent>
                   </Card>
-                </Link>
               ) : (
-                <div className="block transition-transform hover:scale-[1.02] h-full" onClick={() => setHealthModalOpen(true)}>
                   <Card 
                   className={`shadow-sm transition-colors duration-500 h-full cursor-pointer hover:shadow-md ${
                       !healthData ? "border-border bg-background" :
@@ -607,8 +605,8 @@ const mappedRequests = requests.map(req => {
                     </p>
                   </CardContent>
               </Card>
-                </div>
               )}
+              </div>
             </>
           )}
       </div>
@@ -1099,16 +1097,19 @@ const mappedRequests = requests.map(req => {
             {!healthData ? (
                 <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
             ) : (
-                healthData.checks.map((check: any) => (
-                    <div key={check.id} className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/30">
+                healthData.checks.map((check: any) => {
+                    const isUpdateAvailable = check.id === 'system_update' && check.status === 'warning';
+                    return (
+                    <div key={check.id} className={`flex items-start gap-3 p-3 rounded-lg border ${isUpdateAvailable ? 'border-primary/50 bg-primary/10 shadow-sm' : 'border-border bg-muted/30'}`}>
                         <div className="shrink-0 mt-0.5">
-                            {check.status === 'ok' ? <CheckCircle2 className="w-5 h-5 text-green-500" /> :
+                            {isUpdateAvailable ? <Rocket className="w-5 h-5 text-primary" /> :
+                             check.status === 'ok' ? <CheckCircle2 className="w-5 h-5 text-green-500" /> :
                              check.status === 'warning' ? <AlertTriangle className="w-5 h-5 text-amber-500" /> :
                              <XCircle className="w-5 h-5 text-red-500" />}
                         </div>
                         <div className="flex-1 min-w-0">
-                            <h4 className="font-bold text-sm text-foreground">{check.name}</h4>
-                            <p className={`text-xs mt-0.5 ${check.status === 'error' ? 'text-red-500 font-medium' : check.status === 'warning' ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-muted-foreground'}`}>
+                            <h4 className={`font-bold text-sm ${isUpdateAvailable ? 'text-primary' : 'text-foreground'}`}>{check.name}</h4>
+                            <p className={`text-xs mt-0.5 ${check.status === 'error' ? 'text-red-500 font-medium' : isUpdateAvailable ? 'text-primary/80 font-medium' : check.status === 'warning' ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-muted-foreground'}`}>
                                 {check.message}
                             </p>
                             
@@ -1122,14 +1123,14 @@ const mappedRequests = requests.map(req => {
                             )}
                         </div>
                         {(check.actionLink || check.id === 'system_update') && (
-                            <Button variant="outline" size="sm" asChild className="shrink-0 h-8 text-[10px] uppercase font-bold tracking-wider">
+                            <Button variant={isUpdateAvailable ? "default" : "outline"} size="sm" asChild className={`shrink-0 h-8 text-[10px] uppercase font-bold tracking-wider ${isUpdateAvailable ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-md' : ''}`}>
                                 <Link href={check.actionLink || '/admin/updates'}>
-                                    {check.id === 'system_update' && check.status === 'ok' ? 'History' : 'Resolve'}
+                                    {check.id === 'system_update' ? (check.status === 'ok' ? 'History' : 'Review Update') : 'Resolve'}
                                 </Link>
                             </Button>
                         )}
                     </div>
-                ))
+                )})
             )}
           </div>
 

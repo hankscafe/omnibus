@@ -971,6 +971,16 @@ function LibraryContent() {
                                   </button>
                               </div>
                           )}
+
+                          {/* --- NEW CENTERED MONITORED BADGE --- */}
+                          {!isSelectionMode && item.monitored && (
+                            <div className="absolute bottom-3 w-full flex justify-center z-30 pointer-events-none">
+                                <Badge className="bg-emerald-600/95 backdrop-blur-sm text-white border-0 shadow-sm px-1.5 h-4 flex items-center gap-1 text-[9px] font-black uppercase tracking-wider">
+                                    <Activity className="w-2.5 h-2.5" /> Monitored
+                                </Badge>
+                            </div>
+                           )}
+                           
                           {progress > 0 && !isCompleted && (<div className="absolute bottom-0 left-0 right-0 h-2.5 bg-black/80 z-10 border-t border-black/40"><div className="h-full bg-primary transition-all duration-500 shadow-sm shadow-primary/50" style={{ width: `${progress}%` }} /></div>)}
                       </div>
 
@@ -1105,6 +1115,13 @@ function LibraryContent() {
                                     </button>
                                 )}
                                 {!isSelectionMode && (<button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`transition-colors focus:outline-none p-2 -m-2 ${item.isFavorite ? 'text-primary' : 'text-muted-foreground/50 hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}><Heart className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${item.isFavorite ? 'fill-current' : ''}`} /></button>)}
+                                
+                                {/* ADD THIS MONITORED BADGE */}
+                                {item.monitored && (
+                                    <Badge className="shrink-0 bg-emerald-600 hover:bg-emerald-600 text-white border-0 text-[9px] px-1.5 h-4 uppercase tracking-wider flex items-center">
+                                        <Activity className="w-2.5 h-2.5 mr-1" /> Monitored
+                                    </Badge>
+                                )}
                             </div>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground hidden md:table-cell" title={item.publisher || 'Unknown'}>{item.publisher || 'Unknown'}</td>

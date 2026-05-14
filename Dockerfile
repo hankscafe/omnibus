@@ -33,8 +33,7 @@ RUN find .next/standalone/node_modules -type d -name "uuid" -exec rm -rf {} + ||
 RUN find .next/standalone/node_modules -type d -name "postcss" -exec rm -rf {} + || true
 
 # Force secure versions into the standalone folder
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@latest uuid@latest postcss@latest --no-save --legacy-peer-deps
-
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@latest uuid@latest postcss@latest --no-save --legacy-peer-deps --force
 
 # --- Stage 2: Final Production Image ---
 FROM node:22-alpine3.20 AS runner

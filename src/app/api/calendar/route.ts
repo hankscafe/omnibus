@@ -19,7 +19,8 @@ export async function GET() {
 
         const upcoming = await prisma.issue.findMany({
             where: {
-                releaseDate: { gte: today }
+                releaseDate: { gte: today },
+                series: { monitored: true } // FIX: Ensure we only fetch actively tracked series
             },
             include: {
                 series: {
@@ -31,7 +32,8 @@ export async function GET() {
         });
 
         const formatted = upcoming.map((issue: any) => {
-            const rawCover = issue.coverUrl || issue.series.coverUrl;
+            // FIX: Added optional chaining to prevent 500 errors on orphaned issue records
+            const rawCover = issue.coverUrl || issue.series?.coverUrl;
             let safeCover = rawCover;
             
             // If the cover exists, but it is NOT a web URL or an absolute web path, route it through the local file proxy
@@ -42,13 +44,13 @@ export async function GET() {
             return {
                 id: issue.id,
                 seriesId: issue.seriesId,
-                seriesName: issue.series.name,
+                seriesName: issue.series?.name || "Unknown Series",
                 issueNumber: issue.number,
                 issueName: issue.name,
-                publisher: issue.series.publisher,
+                publisher: issue.series?.publisher || "Unknown",
                 releaseDate: issue.releaseDate,
                 coverUrl: safeCover,
-                seriesPath: issue.series.folderPath
+                seriesPath: issue.series?.folderPath
             };
         });
 

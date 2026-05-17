@@ -46,6 +46,7 @@ export async function GET(request: Request) {
         // FIX: Prefer the exact stored activeDownloadName over reconstructing it
         seriesName: req.activeDownloadName || (series ? `${series.name}${issueNumberStr} (${series.year})` : `Volume ${req.volumeId}`), 
         activeDownloadName: req.activeDownloadName,
+        seriesPath: series?.folderPath || null,
         userName: req.user?.username || 'System',
         createdAt: req.createdAt,
         updatedAt: req.updatedAt,

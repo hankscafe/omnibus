@@ -19,6 +19,7 @@ model User {
   isApproved          Boolean   @default(false)
   autoApproveRequests Boolean   @default(false)
   canDownload         Boolean   @default(false)
+  canCreateGlobalLists  Boolean   @default(false)
   avatar              String?
   banner              String?
   createdAt           DateTime  @default(now())
@@ -355,6 +356,7 @@ model ReadingList {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   shareId     String?           @unique
+  isGlobal    Boolean           @default(false)
 
   @@index([userId])
 }

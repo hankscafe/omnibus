@@ -104,12 +104,15 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Could not extract any valid comics from the CSV." }, { status: 400 });
         }
 
+        const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
+
         const newList = await prisma.readingList.create({
             data: {
                 name: listName,
                 description: `Imported from CSV. Items not currently in your library: ${missingCount}`,
-                coverUrl: listCoverUrl, // <--- Add the coverUrl here!
-                userId: isGlobal && (session?.user as any)?.role === 'ADMIN' ? null : userId
+                coverUrl: listCoverUrl,
+                isGlobal: isGlobal === true && canMakeGlobal,
+                userId: userId
             }
         });
 

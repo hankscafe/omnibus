@@ -12,7 +12,7 @@ import {
   AlertTriangle, Users, CheckCircle2, Activity, XCircle, 
   Settings, Trophy, Calendar, FileText, ExternalLink, Clock, Trash2,
   ThumbsUp, ThumbsDown, ImageIcon, EyeOff, Sparkles, ShieldAlert, BarChart3,
-  Check, Search, Rocket
+  Check, Search, Rocket, Library
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -921,32 +921,39 @@ const mappedRequests = requests.map(req => {
                                           <AlertTriangle className="w-3 h-3 hidden sm:block" /> Needs Admin
                                       </div>
                                   )}
+                                  {req.seriesPath && (
+                                      <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold border-border hover:bg-muted text-foreground flex-1 md:flex-none" onClick={(e) => e.stopPropagation()}>
+                                          <Link href={`/library/series?path=${encodeURIComponent(req.seriesPath)}`}>
+                                              <Library className="w-3 h-3 sm:mr-1" /> <span className="hidden sm:inline">Series</span>
+                                          </Link>
+                                      </Button>
+                                  )}
                                   {req.status === 'MANUAL_DDL' && (
                                       <div className="flex gap-1.5 w-full sm:w-auto">
-                                          <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground">
+                                          <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground" onClick={(e) => e.stopPropagation()}>
                                               <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Link</a>
                                           </Button>
                                           <Button 
                                               size="sm" 
                                               variant="outline" 
                                               className="h-10 sm:h-8 text-xs font-bold text-blue-500 border-blue-200 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800"
-                                              onClick={() => handleRetryRequest(req.id)}
+                                              onClick={(e) => { e.stopPropagation(); handleRetryRequest(req.id); }}
                                           >
                                               <RefreshCw className="w-3 h-3 mr-1" /> Retry GetComics
                                           </Button>
                                       </div>
                                   )}
                                   {['STALLED', 'FAILED', 'ERROR'].includes(req.status) && (
-                                      <Button size="sm" variant="outline" onClick={() => handleRetryRequest(req.id)} className="h-10 sm:h-8 text-xs font-bold text-primary border-primary/30 bg-primary/10 hover:bg-primary/20 flex-1 md:flex-none">
+                                      <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleRetryRequest(req.id); }} className="h-10 sm:h-8 text-xs font-bold text-primary border-primary/30 bg-primary/10 hover:bg-primary/20 flex-1 md:flex-none">
                                           <RefreshCw className="w-3 h-3 mr-1" /> Retry
                                       </Button>
                                   )}
                                   {req.status === 'STALLED' && (
-                                      <Button size="sm" variant="outline" onClick={() => setInteractiveSearchReq(req)} className="h-10 sm:h-8 text-xs font-bold text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800 flex-1 md:flex-none">
+                                      <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setInteractiveSearchReq(req); }} className="h-10 sm:h-8 text-xs font-bold text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800 flex-1 md:flex-none">
                                           <Search className="w-3 h-3 mr-1" /> <span className="hidden sm:inline">Interactive</span> Search
                                       </Button>
                                   )}
-                                  <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => initiateDeleteRequest(req.id, req.seriesName)}>
+                                  <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={(e) => { e.stopPropagation(); initiateDeleteRequest(req.id, req.seriesName); }}>
                                       <Trash2 className="w-4 h-4 sm:w-4 sm:h-4" />
                                   </Button>
                               </div>

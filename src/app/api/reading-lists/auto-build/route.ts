@@ -146,12 +146,15 @@ export async function POST(request: Request) {
 
         // 3. Create the List in Omnibus
         Logger.log(`[Auto-Build] Creating Reading List database entry for "${eventName}"...`, 'info');
+        const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
+
         const newList = await prisma.readingList.create({
             data: {
                 name: eventName,
                 description: eventDescription,
                 coverUrl: eventCoverUrl,
-                userId: isGlobal ? null : (userId || null) 
+                isGlobal: isGlobal === true && canMakeGlobal,
+                userId: userId
             }
         });
 

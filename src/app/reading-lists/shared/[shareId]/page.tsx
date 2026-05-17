@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 // This is a Server Component, meaning it loads instantly and has great SEO/sharing previews
-export default async function SharedReadingListPage({ params }: { params: { shareId: string } }) {
+export default async function SharedReadingListPage({ params }: { params: Promise<{ shareId: string }> }) {
     // 1. Await params in Next.js 15+
     const resolvedParams = await params;
     

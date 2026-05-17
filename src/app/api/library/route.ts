@@ -103,8 +103,14 @@ export async function GET(request: Request) {
         }
     }
 
+    // --- REFACTORED: Filter by Reading List instead of legacy Collection ---
     if (collectionId !== 'ALL') {
-        where.AND.push({ collections: { some: { collectionId: collectionId } } });
+        const listItems = await prisma.readingListItem.findMany({
+            where: { listId: collectionId, issueId: { not: null } },
+            select: { issueId: true }
+        });
+        const issueIds = listItems.map(i => i.issueId).filter(Boolean) as string[];
+        where.AND.push({ issues: { some: { id: { in: issueIds } } } });
     }
 
     const type = searchParams.get('type') || 'ALL';
@@ -276,17 +282,20 @@ export async function POST(request: Request) {
             return NextResponse.json({ success: true });
         }
 
-        // ACTION: Remove from Collection
+        // --- REFACTORED: Remove from Reading List instead of legacy Collection ---
         if (action === 'bulk-remove-list') {
-            const collectionId = status;
-            const list = await prisma.readingList.findUnique({ where: { id: collectionId } });
+            const listId = status;
+            const list = await prisma.readingList.findUnique({ where: { id: listId } });
 
             if (!list || (list.userId !== userId && session?.user?.role !== 'ADMIN')) {
                 return NextResponse.json({ error: "Forbidden" }, { status: 403 });
             }
 
-            await prisma.collectionItem.deleteMany({
-                where: { collectionId, seriesId: { in: seriesIds } }
+            const issues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } }, select: { id: true } });
+            const issueIds = issues.map(i => i.id);
+
+            await prisma.readingListItem.deleteMany({
+                where: { listId, issueId: { in: issueIds } }
             });
             return NextResponse.json({ success: true });
         }

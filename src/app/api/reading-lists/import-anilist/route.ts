@@ -110,12 +110,14 @@ export async function POST(request: Request) {
                     where: { name: listName, userId: isGlobal ? null : userId }
                 });
 
+                const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
+
                 const newList = await prisma.readingList.create({
                     data: {
                         name: listName,
                         description: `Imported from AniList user: ${username}`,
-                        // FIX: Safely access session and user roles with optional chaining
-                        userId: isGlobal && (session?.user as any)?.role === 'ADMIN' ? null : userId
+                        isGlobal: isGlobal === true && canMakeGlobal,
+                        userId: userId
                     }
                 });
 

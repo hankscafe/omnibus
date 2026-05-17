@@ -114,7 +114,8 @@ export async function POST(request: Request) {
                 role: "ADMIN",
                 isApproved: true,
                 autoApproveRequests: true,
-                canDownload: true
+                canDownload: true,
+                canCreateGlobalLists: true
             }
         });
     }

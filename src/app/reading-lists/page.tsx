@@ -542,7 +542,7 @@ function ReadingListsContent() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-8 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-8 items-start">
           <div className="space-y-4">
               <div className="flex flex-col gap-2">
                   <Button className="w-full font-bold shadow-md bg-primary hover:bg-primary/90 text-primary-foreground border-0" onClick={() => setAutoBuildModalOpen(true)}>
@@ -601,7 +601,7 @@ function ReadingListsContent() {
                                   <div className="min-w-0 pr-2">
                                       <div className="flex items-center gap-2">
                                           <h3 className={`font-bold truncate text-sm ${activeListId === list.id ? 'text-primary' : 'text-foreground'}`}>{list.name}</h3>
-                                          {!list.userId && <span title="Global List"><Globe className="w-3 h-3 text-emerald-500 shrink-0" /></span>}
+                                          {list.isGlobal && <span title={`Global List by ${list.user?.username || 'Unknown'}`}><Globe className="w-3 h-3 text-emerald-500 shrink-0" /></span>}
                                       </div>
                                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">{list.items.length} Issues</p>
                                   </div>
@@ -616,14 +616,14 @@ function ReadingListsContent() {
               <div className="space-y-6">
                   <Card className="shadow-sm border-primary/20 bg-primary/5">
                       <CardHeader className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                          <div>
+                          <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2">
-                                <CardTitle className="text-2xl font-black text-primary">{activeList.name}</CardTitle>
-                                {!activeList.userId && <Badge variant="outline" className="bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800"><Globe className="w-3 h-3 mr-1"/> Global</Badge>}
+                                <CardTitle className="text-2xl font-black text-primary truncate">{activeList.name}</CardTitle>
+                                {activeList.isGlobal && <Badge variant="outline" className="shrink-0 bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800"><Globe className="w-3 h-3 mr-1"/> Global ({activeList.user?.username || 'Unknown'})</Badge>}
                               </div>
-                              {activeList.description && <CardDescription className="mt-2 text-primary/80 max-w-2xl">{activeList.description}</CardDescription>}
+                              {activeList.description && <CardDescription className="mt-2 text-primary/80 max-w-2xl truncate">{activeList.description}</CardDescription>}
                           </div>
-                          <div className="flex gap-2 shrink-0">
+                          <div className="flex flex-wrap sm:flex-nowrap gap-2 shrink-0 w-full sm:w-auto">
                               <Button 
                                   size="sm" 
                                   variant="outline" 
@@ -700,7 +700,7 @@ function ReadingListsContent() {
 
                                                               <div className="flex-1 min-w-0">
                                                                   <div className="flex items-center gap-2 mb-1">
-                                                                      <Badge variant="secondary" className="text-[10px] font-mono h-5 bg-muted border-border text-muted-foreground">Part {index + 1}</Badge>
+                                                                      <Badge variant="secondary" className="shrink-0 text-[10px] font-mono h-5 bg-muted border-border text-muted-foreground">Part {index + 1}</Badge>
                                                                       <h4 className="font-bold text-sm truncate text-muted-foreground">{item.title}</h4>
                                                                   </div>
                                                                   <div className="text-[10px] font-bold uppercase tracking-wider text-orange-500 dark:text-orange-400 mt-1">Not in Library</div>
@@ -741,11 +741,11 @@ function ReadingListsContent() {
 
                                                           <div className="flex-1 min-w-0">
                                                               <div className="flex items-center gap-2 mb-1">
-                                                                  <Badge variant="secondary" className="text-[10px] font-mono h-5 bg-primary/20 text-primary border-primary/30">Part {index + 1}</Badge>
+                                                                  <Badge variant="secondary" className="shrink-0 text-[10px] font-mono h-5 bg-primary/20 text-primary border-primary/30">Part {index + 1}</Badge>
                                                                   <h4 className="font-bold text-sm truncate text-foreground">{series.name}</h4>
                                                               </div>
                                                               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                                                  <span className="font-bold text-foreground">Issue #{issue.number}</span>
+                                                                  <span className="font-bold text-foreground shrink-0">Issue #{issue.number}</span>
                                                                   <span className="truncate hidden sm:inline">• {issue.name || "Untitled Issue"}</span>
                                                               </div>
                                                           </div>
@@ -794,7 +794,7 @@ function ReadingListsContent() {
                     <Label>Description (Optional)</Label>
                     <Input placeholder="e.g. A custom list of great stories." value={newListDesc} onChange={e => setNewListDesc(e.target.value)} className="bg-background border-border" />
                 </div>
-                {isAdmin && (
+                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-muted border border-border rounded-lg">
                         <Switch id="global-toggle" checked={isGlobal} onCheckedChange={setIsGlobal} />
                         <div className="grid gap-0.5">
@@ -853,7 +853,7 @@ function ReadingListsContent() {
                         : "Find the ID in the URL of the event on Metron.Cloud (e.g. /arc/52/)"}
                 </p>
 
-                {isAdmin && (
+                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="auto-global-toggle" checked={autoBuildGlobal} onCheckedChange={setAutoBuildGlobal} />
                         <div className="grid gap-0.5">
@@ -917,7 +917,7 @@ function ReadingListsContent() {
                     />
                 </div>
 
-                {isAdmin && (
+                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="csv-global-toggle" checked={csvIsGlobal} onCheckedChange={setCsvIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1008,7 +1008,7 @@ function ReadingListsContent() {
                     />
                 </div>
 
-                {isAdmin && (
+                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="cbl-global-toggle" checked={cblIsGlobal} onCheckedChange={setCblIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1050,7 +1050,7 @@ function ReadingListsContent() {
                           <p className="text-[10px] text-muted-foreground">Omnibus will queue missing titles for download.</p>
                       </div>
                   </div>
-                  {isAdmin && (
+                  {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="anilist-global-toggle" checked={aniListIsGlobal} onCheckedChange={setAniListIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1058,7 +1058,7 @@ function ReadingListsContent() {
                             <p className="text-[10px] text-muted-foreground">These reading orders will be available to all users.</p>
                         </div>
                     </div>
-                  )}
+                )}
               </div>
               <DialogFooter>
                   <Button variant="outline" onClick={() => setAniListModalOpen(false)} disabled={isImportingAniList} className="border-border hover:bg-muted">Cancel</Button>
@@ -1092,7 +1092,7 @@ function ReadingListsContent() {
                           <p className="text-[10px] text-muted-foreground">Omnibus will queue missing titles for download.</p>
                       </div>
                   </div>
-                  {isAdmin && (
+                  {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="mal-global-toggle" checked={malIsGlobal} onCheckedChange={setMalIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1100,7 +1100,7 @@ function ReadingListsContent() {
                             <p className="text-[10px] text-muted-foreground">These reading orders will be available to all users.</p>
                         </div>
                     </div>
-                  )}
+                )}
               </div>
               <DialogFooter>
                   <Button variant="outline" onClick={() => setMalModalOpen(false)} disabled={isImportingMal} className="border-border hover:bg-muted">Cancel</Button>

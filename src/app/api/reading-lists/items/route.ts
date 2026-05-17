@@ -1,3 +1,4 @@
+// src/app/api/reading-lists/items/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -13,36 +14,71 @@ export async function POST(request: Request) {
 
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { listId, issueId, action } = await request.json();
+    const { listId, issueId, seriesId, seriesIds, action } = await request.json();
 
-    if (!listId || !issueId) {
+    if (!listId || (!issueId && !seriesId && (!seriesIds || seriesIds.length === 0))) {
         return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
     }
 
     // Verify ownership of the list
     const list = await prisma.readingList.findUnique({ where: { id: listId } });
-    if (!list || list.userId !== userId) {
+    if (!list || (list.userId !== userId && session?.user?.role !== 'ADMIN')) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     if (action === 'add') {
-      // Find the current highest order number so we append to the end of the list
       const lastItem = await prisma.readingListItem.findFirst({
         where: { listId },
         orderBy: { order: 'desc' }
       });
-      const nextOrder = lastItem ? lastItem.order + 1 : 0;
+      let nextOrder = lastItem ? lastItem.order + 1 : 0;
 
-      await prisma.readingListItem.create({
-          data: { list: { connect: { id: listId } }, issue: { connect: { id: issueId } }, order: nextOrder, title: "" }
-      });
+      if (issueId) {
+          await prisma.readingListItem.create({
+              data: { listId, issueId, order: nextOrder, title: "" }
+          });
+          return NextResponse.json({ success: true, message: `Added issue to reading list.` });
+      } else {
+          // Add all issues from one or more series
+          const idsToProcess = seriesIds || [seriesId];
+          const issues = await prisma.issue.findMany({
+              where: { seriesId: { in: idsToProcess } },
+              include: { series: true }
+          });
 
-      return NextResponse.json({ success: true, message: `Added issue to reading list.` });
+          issues.sort((a, b) => {
+              if (a.seriesId !== b.seriesId) return a.series.name.localeCompare(b.series.name);
+              return parseFloat(a.number.replace(/[^0-9.]/g, '')) - parseFloat(b.number.replace(/[^0-9.]/g, ''));
+          });
+
+          const itemsData = issues.map(issue => ({
+              listId,
+              issueId: issue.id,
+              title: `${issue.series.name} #${issue.number}`,
+              order: nextOrder++
+          }));
+
+          if (itemsData.length > 0) {
+              await prisma.readingListItem.createMany({ data: itemsData });
+          }
+
+          return NextResponse.json({ success: true, message: `Added ${itemsData.length} issues to reading list.` });
+      }
 
     } else if (action === 'remove') {
-      await prisma.readingListItem.deleteMany({
-        where: { listId, issueId }
-      });
+      if (issueId) {
+          await prisma.readingListItem.deleteMany({
+            where: { listId, issueId }
+          });
+      } else {
+          // Remove all issues that belong to one or more series
+          const idsToProcess = seriesIds || [seriesId];
+          const issues = await prisma.issue.findMany({ where: { seriesId: { in: idsToProcess } }, select: { id: true } });
+          const issueIds = issues.map(i => i.id);
+          await prisma.readingListItem.deleteMany({
+            where: { listId, issueId: { in: issueIds } }
+          });
+      }
       return NextResponse.json({ success: true, message: 'Removed from reading list' });
     }
 
@@ -66,7 +102,7 @@ export async function PUT(request: Request) {
   
         // Verify ownership
         const list = await prisma.readingList.findUnique({ where: { id: listId } });
-        if (!list || list.userId !== userId) {
+        if (!list || (list.userId !== userId && session?.user?.role !== 'ADMIN')) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
   

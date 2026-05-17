@@ -10,7 +10,7 @@ import {
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch
+  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -64,7 +64,10 @@ interface LibrarySeries {
 interface Collection {
   id: string;
   name: string;
+  userId?: string | null;
+  isGlobal?: boolean;
   items?: { id: string }[];
+  user?: { username: string } | null;
 }
 
 type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
@@ -128,6 +131,7 @@ function LibraryContent() {
   const [activeCollection, setActiveCollection] = useState("ALL")
   const [targetSeries, setTargetSeries] = useState<LibrarySeries | null>(null)
   const [newCollectionName, setNewCollectionName] = useState("")
+  const [isGlobalList, setIsGlobalList] = useState(false)
   const [selectedCollectionId, setSelectedCollectionId] = useState("")
   const [manageListsOpen, setManageListsOpen] = useState(false)
   const [addingToList, setAddingToList] = useState(false)
@@ -346,7 +350,7 @@ function LibraryContent() {
 
   const fetchCollections = useCallback(async () => {
     try {
-      const res = await fetch('/api/library/collections', { cache: 'no-store' });
+      const res = await fetch('/api/reading-lists', { cache: 'no-store' });
       if (res.ok) setCollections(await res.json());
     } catch (e) {}
   }, []);
@@ -472,15 +476,15 @@ function LibraryContent() {
       try {
           let colId = selectedCollectionId;
           if (newCollectionName.trim() && !selectedCollectionId) {
-              const res = await fetch('/api/library/collections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCollectionName.trim() }) });
+              const res = await fetch('/api/reading-lists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCollectionName.trim(), description: 'Created from Library', isGlobal: isGlobalList }) });
               const data = await res.json();
-              if (data.collection) colId = data.collection.id;
+              if (data.listId || data.id) colId = data.listId || data.id;
           }
           if (!colId) throw new Error("No collection selected");
-          const res2 = await fetch('/api/library/collections/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collectionId: colId, seriesId: targetSeries.id, action: 'add' }) });
+          const res2 = await fetch('/api/reading-lists/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ listId: colId, seriesId: targetSeries.id, action: 'add' }) });
           if (res2.ok) {
               toastRef.current({ title: "Success", description: "Series added to list." });
-              setTargetSeries(null); setNewCollectionName(""); setSelectedCollectionId(""); fetchCollections(); 
+              setTargetSeries(null); setNewCollectionName(""); setSelectedCollectionId(""); setIsGlobalList(false); fetchCollections(); 
           } else throw new Error("Failed to add to list");
       } catch (e) { 
           toastRef.current({ variant: "destructive", title: "Error", description: "Could not add to list." }); 
@@ -492,21 +496,21 @@ function LibraryContent() {
       try {
           let colId = selectedCollectionId;
           if (newCollectionName.trim() && !selectedCollectionId) {
-              const res = await fetch('/api/library/collections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCollectionName.trim() }) });
+              const res = await fetch('/api/reading-lists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCollectionName.trim(), description: 'Created from Library', isGlobal: isGlobalList }) });
               const data = await res.json();
-              if (data.collection) colId = data.collection.id;
+              if (data.listId || data.id) colId = data.listId || data.id;
           }
           if (!colId) throw new Error("No collection selected");
           
-          const res2 = await fetch('/api/library/collections/items', { 
+          const res2 = await fetch('/api/reading-lists/items', { 
               method: 'POST', 
               headers: { 'Content-Type': 'application/json' }, 
-              body: JSON.stringify({ collectionId: colId, seriesIds: Array.from(selectedSeries), action: 'add' }) 
+              body: JSON.stringify({ listId: colId, seriesIds: Array.from(selectedSeries), action: 'add' }) 
           });
           
           if (res2.ok) {
               toastRef.current({ title: "Mass Tagging Complete", description: `Added ${selectedSeries.size} series to your list.` });
-              setBulkListModalOpen(false); setNewCollectionName(""); setSelectedCollectionId("");
+              setBulkListModalOpen(false); setNewCollectionName(""); setSelectedCollectionId(""); setIsGlobalList(false);
               setSelectedSeries(new Set()); setIsSelectionMode(false);
               fetchCollections(); 
           } else throw new Error("Failed to add to list");
@@ -517,7 +521,7 @@ function LibraryContent() {
 
   const handleRemoveFromCollection = async (seriesId: string) => {
       try {
-          const res = await fetch('/api/library/collections/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collectionId: activeCollection, seriesId, action: 'remove' }) });
+          const res = await fetch('/api/reading-lists/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ listId: activeCollection, seriesId, action: 'remove' }) });
           if (res.ok) { 
               toastRef.current({ title: "Removed", description: "Series removed from list." }); 
               fetchCollections(); 
@@ -531,7 +535,7 @@ function LibraryContent() {
   const handleDeleteCollection = async () => {
       if (!collectionToDelete) return;
       try {
-          const res = await fetch(`/api/library/collections?id=${collectionToDelete}`, { method: 'DELETE' });
+          const res = await fetch(`/api/reading-lists?id=${collectionToDelete}`, { method: 'DELETE' });
           if (res.ok) {
               toastRef.current({ title: "List Deleted" });
               if (activeCollection === collectionToDelete) setActiveCollection("ALL");
@@ -1261,8 +1265,13 @@ function LibraryContent() {
                 collections.map(c => (
                     <div key={c.id} className="flex items-center justify-between bg-muted/50 p-3 rounded-lg border border-border">
                         <div>
-                            <p className="font-bold text-sm text-foreground">{c.name}</p>
-                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold mt-0.5">{c.items?.length || 0} Items</p>
+                            <p className="font-bold text-sm text-foreground flex items-center gap-1">
+                                {c.name}
+                                {c.isGlobal && <span title="Global List"><Globe className="w-3 h-3 text-emerald-500 shrink-0" /></span>}
+                            </p>
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold mt-0.5">
+                                {c.items?.length || 0} Items {c.isGlobal && ` • Global (${c.user?.username || 'Unknown'})`}
+                            </p>
                         </div>
                         <Button aria-label={`Delete list: ${c.name}`} variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setCollectionToDelete(c.id)}>
                             <Trash2 className="w-4 h-4" />
@@ -1276,7 +1285,7 @@ function LibraryContent() {
       </Dialog>
 
       {/* NEW BULK LIST MODAL */}
-      <Dialog open={bulkListModalOpen} onOpenChange={setBulkListModalOpen}>
+      <Dialog open={bulkListModalOpen} onOpenChange={(open) => { setBulkListModalOpen(open); if(!open) setIsGlobalList(false); }}>
         <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
           <DialogHeader>
             <DialogTitle>Add to Reading List</DialogTitle>
@@ -1289,7 +1298,12 @@ function LibraryContent() {
                 <SelectTrigger id="bulk-col-select" className="bg-background border-border h-12 sm:h-10"><SelectValue placeholder="Choose a list..." /></SelectTrigger>
                 <SelectContent className="bg-popover border-border">
                   {collections.length === 0 && <SelectItem value="none" disabled>No lists available</SelectItem>}
-                  {collections.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+                  {collections.map(c => (
+                          <SelectItem key={c.id} value={c.id}>
+                              {c.name} 
+                              {c.isGlobal && <span className="text-[10px] text-muted-foreground ml-1">- Global ({c.user?.username || 'Unknown'})</span>}
+                          </SelectItem>
+                      ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1297,6 +1311,14 @@ function LibraryContent() {
               <Label htmlFor="bulk-new-list-input">Or Create New List</Label>
               <Input id="bulk-new-list-input" placeholder="e.g. Webtoons, Marvel Events, Mature..." value={newCollectionName} className="bg-background h-12 sm:h-10 border-border" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} />
             </div>
+            {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                  <div className="flex items-center gap-3 mt-2 p-3 bg-muted border border-border rounded-lg">
+                      <Switch id="global-list-toggle-bulk" checked={isGlobalList} onCheckedChange={setIsGlobalList} />
+                      <div className="grid gap-0.5">
+                          <Label htmlFor="global-list-toggle-bulk" className="font-bold cursor-pointer">Make public for all users</Label>
+                      </div>
+                  </div>
+              )}
           </div>
           <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setBulkListModalOpen(false)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitBulkAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold w-full h-12 sm:h-10">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <ListPlus className="w-5 h-5 mr-2" />} Save to List</Button></DialogFooter>
         </DialogContent>
@@ -1418,12 +1440,20 @@ function LibraryContent() {
           </DialogContent>
       </Dialog>
 
-      <Dialog open={!!targetSeries} onOpenChange={(open) => !open && setTargetSeries(null)}>
+      <Dialog open={!!targetSeries} onOpenChange={(open) => { if (!open) { setTargetSeries(null); setIsGlobalList(false); } }}>
         <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
           <DialogHeader><DialogTitle>Add to Reading List</DialogTitle><DialogDescription>Add <strong className="text-primary">{targetSeries?.name}</strong> to a collection.</DialogDescription></DialogHeader>
           <div className="space-y-6 py-4">
               <div className="space-y-2"><Label htmlFor="col-select-single">Select Existing List</Label><Select value={selectedCollectionId} onValueChange={(v) => { setSelectedCollectionId(v); setNewCollectionName(""); }}><SelectTrigger id="col-select-single" className="bg-background border-border h-12 sm:h-10"><SelectValue placeholder="Choose a list..." /></SelectTrigger><SelectContent className="bg-popover border-border">{collections.length === 0 && <SelectItem value="none" disabled>No lists available</SelectItem>}{collections.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent></Select></div>
               <div className="space-y-2"><Label htmlFor="col-input-single">Create New List</Label><Input id="col-input-single" placeholder="e.g. Marvel Events" value={newCollectionName} className="bg-background border-border h-12 sm:h-10" onChange={e => {setNewCollectionName(e.target.value); setSelectedCollectionId("");}} /></div>
+              {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                  <div className="flex items-center gap-3 mt-2 p-3 bg-muted border border-border rounded-lg">
+                      <Switch id="global-list-toggle" checked={isGlobalList} onCheckedChange={setIsGlobalList} />
+                      <div className="grid gap-0.5">
+                          <Label htmlFor="global-list-toggle" className="font-bold cursor-pointer">Make public for all users</Label>
+                      </div>
+                  </div>
+              )}
           </div>
           <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setTargetSeries(null)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="h-12 sm:h-10 w-full sm:w-auto font-bold bg-primary hover:bg-primary/90 text-primary-foreground">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save to List</Button></DialogFooter>
         </DialogContent>

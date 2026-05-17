@@ -222,6 +222,22 @@ export async function initDatabase() {
         Logger.log(`[DB Init] Metadata ID Split Migration Failed: ${getErrorMessage(e)}`, "error");
     }
 
+    // 8. Migrate Legacy Global Reading Lists
+    try {
+        const legacyLists = await prisma.readingList.findMany({
+            where: { userId: null, isGlobal: false }
+        });
+        if (legacyLists.length > 0) {
+            await prisma.readingList.updateMany({
+                where: { userId: null },
+                data: { isGlobal: true }
+            });
+            Logger.log(`[DB Init] Migrated ${legacyLists.length} legacy global reading lists.`, "success");
+        }
+    } catch (e) {
+        Logger.log(`[DB Init] Legacy List Migration Failed: ${getErrorMessage(e)}`, "error");
+    }
+
     // Inside initDatabase(), right before Logger.log("[DB Init] Schema mapping complete.")
     const logLevelSetting = await prisma.systemSetting.findUnique({ where: { key: 'system_log_level' } });
     if (logLevelSetting?.value) {

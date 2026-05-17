@@ -18,8 +18,14 @@ export async function POST(request: Request) {
     try {
         const list = await prisma.readingList.findUnique({ where: { id: listId } });
         
-        // FIX: Add optional chaining to session?.user?.role
-        if (!list || (list.userId !== userId && session?.user?.role !== 'ADMIN')) {
+        // Safely check for Admin role
+        const isAdmin = (session?.user as any)?.role === 'ADMIN';
+        
+        // Consider it public if it has the new isGlobal flag OR the legacy userId = null
+        const isPublic = list?.isGlobal === true || list?.userId === null;
+
+        // Allow anyone to generate a share link if the list is already public
+        if (!list || (list.userId !== userId && !isAdmin && !isPublic)) {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 });
         }
 

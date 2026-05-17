@@ -5,7 +5,7 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff, Mail } from "lucide-react"
+import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff, Mail, Globe } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -50,7 +50,7 @@ export default function AdminUsersPage() {
   const [isCreating, setIsCreating] = useState(false)
   const [newUser, setNewUser] = useState({
       username: '', email: '', password: '', role: 'USER',
-      isApproved: true, autoApproveRequests: false, canDownload: false
+      isApproved: true, autoApproveRequests: false, canDownload: false, canCreateGlobalLists: false
   })
   
   const { toast } = useToast()
@@ -211,7 +211,7 @@ export default function AdminUsersPage() {
           if (res.ok) {
               toast({ title: "User Created", description: `${newUser.username} has been added.` });
               setCreateModalOpen(false);
-              setNewUser({ username: '', email: '', password: '', role: 'USER', isApproved: true, autoApproveRequests: false, canDownload: false });
+              setNewUser({ username: '', email: '', password: '', role: 'USER', isApproved: true, autoApproveRequests: false, canDownload: false, canCreateGlobalLists: false });
               fetchUsers();
           } else throw new Error("Failed to create user");
       } catch (error: unknown) {
@@ -264,6 +264,7 @@ export default function AdminUsersPage() {
                 <th className="px-6 py-4 text-center">Login Approved</th>
                 <th className="px-6 py-4 text-center">Auto-Approve</th>
                 <th className="px-6 py-4 text-center">Downloads</th>
+                <th className="px-6 py-4 text-center">Global Lists</th>
                 <th className="px-6 py-4 text-center">Actions</th>
               </tr>
             </thead>
@@ -289,6 +290,7 @@ export default function AdminUsersPage() {
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id || (user.id === session?.user?.id)} checked={user.isApproved} onCheckedChange={(val) => handleUpdateUser(user.id, 'isApproved', val)} /></td>
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} /></td>
                   <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.canDownload} onCheckedChange={(val) => handleUpdateUser(user.id, 'canDownload', val)} /></td>
+                  <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.canCreateGlobalLists} onCheckedChange={(val) => handleUpdateUser(user.id, 'canCreateGlobalLists', val)} /></td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-2">
                         <Button variant="outline" size="sm" disabled={user.id === session?.user?.id} onClick={() => handleImpersonate(user.id, user.username)} className="h-8 text-xs font-bold shrink-0 border-border hover:bg-muted text-foreground" title="Login as this user">
@@ -364,6 +366,14 @@ export default function AdminUsersPage() {
                     <Label className="font-semibold text-sm text-foreground">Can Download CBZ</Label>
                   </div>
                   <Switch disabled={updating === user.id} checked={user.canDownload} onCheckedChange={(val) => handleUpdateUser(user.id, 'canDownload', val)} className="scale-110" />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-muted-foreground" />
+                    <Label className="font-semibold text-sm text-foreground">Can Create Global Lists</Label>
+                  </div>
+                  <Switch disabled={updating === user.id} checked={user.canCreateGlobalLists} onCheckedChange={(val) => handleUpdateUser(user.id, 'canCreateGlobalLists', val)} className="scale-110" />
                 </div>
               </div>
 

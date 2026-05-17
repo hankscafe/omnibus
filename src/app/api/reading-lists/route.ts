@@ -1,3 +1,4 @@
+// src/app/api/reading-lists/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
@@ -16,8 +17,9 @@ export async function GET(request: Request) {
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         let lists = await prisma.readingList.findMany({
-            where: { OR: [ { userId: userId }, { userId: null } ] },
+            where: { OR: [ { userId: userId }, { isGlobal: true }, { userId: null } ] },
             include: {
+                user: { select: { username: true } }, // Important for the UI to display the creator of Global lists
                 items: {
                     orderBy: { order: 'asc' },
                     include: { issue: { include: { series: true } } }
@@ -27,34 +29,22 @@ export async function GET(request: Request) {
         });
 
         let requiresRefresh = false;
-        const unlinkIds: string[] = [];
         const missingCvIssueIds: number[] = [];
 
+        // Auto-link logic: Find items that were imported from a CSV or Auto-builder that have a ComicVine ID but no local database linkage yet
         for (const list of lists) {
             for (const item of list.items) {
-                if (item.issueId && (!item.issue || !item.issue.filePath || item.issue.filePath.length === 0)) {
-                    unlinkIds.push(item.id);
-                }
-                else if (!item.issueId && item.cvIssueId) {
+                if (!item.issueId && item.cvIssueId) {
                     missingCvIssueIds.push(item.cvIssueId);
                 }
             }
-        }
-
-        if (unlinkIds.length > 0) {
-            await prisma.readingListItem.updateMany({
-                where: { id: { in: unlinkIds } },
-                data: { issueId: null }
-            });
-            requiresRefresh = true;
         }
 
         if (missingCvIssueIds.length > 0) {
             const potentialIssues = await prisma.issue.findMany({
                 where: { 
                     metadataId: { in: missingCvIssueIds.map(String) },
-                    metadataSource: 'COMICVINE',
-                    filePath: { not: null } 
+                    metadataSource: 'COMICVINE'
                 }
             });
             
@@ -63,7 +53,7 @@ export async function GET(request: Request) {
             for (const list of lists) {
                 for (const item of list.items) {
                     if (!item.issueId && item.cvIssueId) {
-                        const validIssue = potentialIssues.find(i => i.metadataId === item.cvIssueId!.toString() && i.filePath && i.filePath.length > 0);
+                        const validIssue = potentialIssues.find(i => i.metadataId === item.cvIssueId!.toString());
                         
                         if (validIssue) {
                             linkUpdates.push(
@@ -85,8 +75,9 @@ export async function GET(request: Request) {
 
         if (requiresRefresh) {
             lists = await prisma.readingList.findMany({
-                where: { OR: [{ userId: userId }, { userId: null }] },
+                where: { OR: [{ userId: userId }, { isGlobal: true }, { userId: null }] },
                 include: {
+                    user: { select: { username: true } },
                     items: {
                         orderBy: { order: 'asc' },
                         include: { issue: { include: { series: true } } }
@@ -110,19 +101,27 @@ export async function POST(request: Request) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         
         const userId = (session.user as any).id;
-        const { name, description, isGlobal } = await request.json();
+        const { name, description, isGlobal, coverUrl } = await request.json();
 
         if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
+
+        // Ensure only admins can set the global flag
+        const isAdmin = (session.user as any).role === 'ADMIN';
+
+        const canMakeGlobal = (session.user as any).role === 'ADMIN' || (session.user as any).canCreateGlobalLists === true;
 
         const newList = await prisma.readingList.create({
             data: {
                 name,
                 description,
-                userId: isGlobal && session.user.role === 'ADMIN' ? null : userId 
+                coverUrl,
+                isGlobal: isGlobal === true && canMakeGlobal,
+                userId: userId // Always preserve the creator's ID
             }
         });
 
-        return NextResponse.json(newList);
+        // Provide both id and listId for unified compatibility with the Library page creation flow
+        return NextResponse.json({ success: true, id: newList.id, listId: newList.id, list: newList });
     } catch (error: unknown) {
         Logger.log(`[Reading Lists API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
@@ -143,11 +142,14 @@ export async function DELETE(request: Request) {
         const list = await prisma.readingList.findUnique({ where: { id } });
         if (!list) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-        if (list.userId !== (session.user as any).id && session.user.role !== 'ADMIN') {
+        if (list.userId !== (session.user as any).id && (session.user as any).role !== 'ADMIN') {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 });
         }
 
+        // Clean up items before deleting the list
+        await prisma.readingListItem.deleteMany({ where: { listId: id } });
         await prisma.readingList.delete({ where: { id } });
+        
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
         Logger.log(`[Reading Lists API] Error: ${getErrorMessage(error)}`, 'error');

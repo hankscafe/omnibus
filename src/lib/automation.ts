@@ -65,8 +65,19 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   });
   // -----------------------------
   
+  // --- NEW: Smart Subtitle Slicer for Background Searches ---
+  // If the request is for a single issue and contains a messy story-arc subtitle,
+  // slice off the subtitle before generating the automated search queries.
+  // This forces the automation to use clean, short queries (e.g., "Absolute Superman 12 2025")
+  // which vastly improves indexer hit rates and saves rate-limit slots.
+  let searchName = name;
+  const subtitleMatch = name.match(/(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+(?:\.\d+)?)\s*[:\-]\s*.*/i);
+  if (subtitleMatch) {
+      searchName = subtitleMatch[1].trim();
+  }
+
   const acronyms = await getCustomAcronyms();
-  const queries = generateSearchQueries(name, year, acronyms, isManga);
+  const queries = generateSearchQueries(searchName, year, acronyms, isManga);
   Logger.log(`[Automation Debug] Generated Fuzzy Queries for req [${requestId}]: ${JSON.stringify(queries)}`, 'debug');
 
   // 1. Parse Hoster Settings

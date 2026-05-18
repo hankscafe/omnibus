@@ -52,28 +52,29 @@ async function fetchGetComicsHtml(url: string) {
 export const GetComicsService = {
   // Add originalName as an optional 4th parameter
 async search(query: string, isInteractive: boolean = false, isManga: boolean = false, originalName?: string) {
-    let uniqueSearches = [query];
+        let uniqueSearches = [query];
 
-    if (isInteractive) {
-        const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
-        const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
-        const searches = [
-            query,
-            query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
-            noYearQuery,
-            noYearQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
-            noIssueQuery, 
-            noIssueQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim() 
-        ];
-        uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
-    }
-    
-    for (const q of uniqueSearches) {
-        let retries = 1; 
-        while (retries > 0) {
-            try {
-                // THE FIX: Pass originalName (if provided) so the TPB validation has the true full title!
-                const results = await this.performSearch(q, originalName || query, isInteractive, isManga); 
+        if (isInteractive) {
+            const noYearQuery = query.replace(/\s\d{4}$/, '').trim();
+            const noIssueQuery = noYearQuery.replace(/\s#?\d+(?:\.\d+)?$/, '').trim();
+            const searches = [
+                query,
+                query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
+                noYearQuery,
+                noYearQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim(),
+                noIssueQuery, 
+                noIssueQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim() 
+            ];
+            uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
+        }
+        
+        for (const q of uniqueSearches) {
+            let retries = 1; 
+            while (retries > 0) {
+                try {
+                    Logger.log(`[GetComics] Searching for: "${q}"`, 'info');
+                    // THE FIX: Pass originalName (if provided) so the TPB validation has the true full title!
+                    const results = await this.performSearch(q, originalName || query, isInteractive, isManga);
                 
                 if (results.length > 0) {
                     if (!isInteractive) return [results[0]];
@@ -152,13 +153,14 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
       let isRelevant = true;
 
       if (!isInteractive) {
-          const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'trade paperback', 'annual'];
+          const tpbTerms = ['omnibus', 'tpb', 'compendium', 'collection', 'hc', 'hardcover', 'trade paperback'];
           if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
 
-          // FIX: Look for TPB terms in the full original query
-          const isLookingForOmnibus = originalQueryWords.some(w => tpbTerms.includes(w));
+          const isLookingForOmnibus = tpbTerms.some(term => cleanOriginal.toLowerCase().includes(term));
+          
           if (reqNum !== null && !isLookingForOmnibus) {
-              if (tpbTerms.some(term => titleLower.includes(term))) {
+              const unexpectedTpbTerms = tpbTerms.filter(term => !cleanOriginal.toLowerCase().includes(term));
+              if (unexpectedTpbTerms.some(term => titleLower.includes(term))) {
                   isRelevant = false;
               }
           }
@@ -224,9 +226,29 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           }
 
           if (isRelevant) {
-              // If it's a single issue, use the short words. If it's a TPB/Volume, strictly enforce the full original name.
-              const wordsToEnforce = (reqNum !== null && !isLookingForOmnibus) ? safeQueryWords : originalQueryWords;
+              // Protect against Annuals slipping through
+              const isLookingForAnnual = cleanOriginal.toLowerCase().includes('annual');
+              if (!isLookingForAnnual && titleLower.includes('annual')) {
+                  isRelevant = false;
+              }
+          }
+
+          if (isRelevant) {
+              let wordsToEnforce = (reqNum !== null && !isLookingForOmnibus) ? safeQueryWords : originalQueryWords;
               
+              // Smart Subtitle Slicer: If this is a single issue, we only strictly enforce the Series Name (the words before the issue number).
+              // This prevents automated searches from failing when publishers append messy story-arc subtitles that GetComics omits.
+              if (reqNum !== null && !isLookingForOmnibus) {
+                  const numIndex = safeQueryWords.findIndex(w => {
+                      const numericMatch = w.match(/\d+(?:\.\d+)?/);
+                      return numericMatch && parseFloat(numericMatch[0]) === reqNum;
+                  });
+
+                  if (numIndex !== -1) {
+                      wordsToEnforce = safeQueryWords.slice(0, numIndex);
+                  }
+              }
+
               for (let w of wordsToEnforce) {
                   if (!/^\d+$/.test(w) && !titleLower.includes(w)) {
                       isRelevant = false;

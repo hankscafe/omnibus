@@ -16,37 +16,43 @@ export async function getCustomAcronyms(): Promise<Record<string, string>> {
 }
 
 export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false): string[] {
+    let searchName = name;
+    
+    // --- SMART SUBTITLE SLICER ---
+    // If this is a single issue (contains # or Issue), we aggressively strip the publisher's story-arc subtitle.
+    // We do NOT strip subtitles from TPBs or Volumes, because they are often needed (e.g. "Batman: Hush").
+    const isSingleIssue = /(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+/i.test(name);
+    if (isSingleIssue) {
+        const splitMatch = name.match(/^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*(.*)$/i);
+        if (splitMatch) {
+            searchName = splitMatch[1].trim();
+        }
+    }
+
     const primaryQueries = new Set<string>(); 
     const secondaryQueries = new Set<string>();
 
-    const baseName = name.replace(/[#]/g, '').trim();
+    const baseName = searchName.replace(/[#]/g, '').trim();
     Logger.log(`[Search Engine Debug] Generating queries for Base Name: "${baseName}", Year: "${year}"`, 'debug');
 
     const noPossessive = baseName.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
     const broadClean = noPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     
-    const issueMatch = name.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    
-    let mainPart = name;
+    let mainPart = searchName;
     let subtitle = "";
     let hasSubtitle = false;
 
-    if (issueMatch && issueMatch.index !== undefined) {
-        const afterIssueIdx = issueMatch.index + issueMatch[0].length;
-        const remainder = name.substring(afterIssueIdx);
-        const splitMatch = remainder.match(/^\s*(:| - )\s*(.*)$/);
-        if (splitMatch) {
-            mainPart = name.substring(0, afterIssueIdx).trim();
-            subtitle = splitMatch[2].trim();
-            hasSubtitle = true;
-        }
-    } else {
-        if (name.includes(' - ')) {
-            const parts = name.split(' - ');
-            mainPart = parts[0].trim();
-            subtitle = parts.slice(1).join(' - ').trim();
-            hasSubtitle = true;
-        }
+    // We only split here if it's a TPB that still has a subtitle, OR if the slicer didn't catch something.
+    if (searchName.includes(' - ')) {
+        const parts = searchName.split(' - ');
+        mainPart = parts[0].trim();
+        subtitle = parts.slice(1).join(' - ').trim();
+        hasSubtitle = true;
+    } else if (searchName.includes(': ')) {
+        const parts = searchName.split(': ');
+        mainPart = parts[0].trim();
+        subtitle = parts.slice(1).join(': ').trim();
+        hasSubtitle = true;
     }
 
     if (hasSubtitle) {
@@ -57,7 +63,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         const mainBroadClean = mainNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
         
         if (mainBroadClean.length > 2) {
-            // Push these to PRIMARY so they search before subtitles!
             if (year) primaryQueries.add(`${mainBroadClean} ${year}`.trim());
             primaryQueries.add(mainBroadClean);
             
@@ -74,7 +79,7 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         }
     }
 
-    // Push all full-length names and subtitle fallbacks to SECONDARY
+    // Push full length names
     if (year) secondaryQueries.add(`${baseName} ${year}`.trim());
     secondaryQueries.add(baseName);
     if (year) secondaryQueries.add(`${broadClean} ${year}`.trim());
@@ -97,7 +102,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         secondaryQueries.add(expanded);
     }
 
-    // Return Primary (Short) queries first, followed by Secondary (Long) queries
     return [...Array.from(primaryQueries), ...Array.from(secondaryQueries)];
 }
 

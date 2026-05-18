@@ -119,17 +119,15 @@ export const ProwlarrService = {
             }
 
             // 4. TPB/Omnibus Filter
-            const tpbTerms = ['omnibus', 'tpb', 'compendium', 'absolute', 'collection', 'hc', 'hardcover', 'annual'];
-            const isLookingForOmnibus = significantQueryWords.some(w => tpbTerms.includes(w));
-            if (reqNum !== null && !isLookingForOmnibus && tpbTerms.some(term => titleLower.includes(term))) {
-                return false;
-            }
+            const tpbTerms = ['omnibus', 'tpb', 'compendium', 'collection', 'hc', 'hardcover', 'trade paperback'];
+            if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
 
-            if (!userWantsVariant) {
-                if (openVariantKeywords.some(k => titleLower.includes(k))) return false;
-                for (const bk of boundedVariantKeywords) {
-                    const regex = new RegExp(`\\b${bk}\\b`, 'i');
-                    if (regex.test(titleLower)) return false;
+            const isLookingForOmnibus = tpbTerms.some(term => cleanQuery.toLowerCase().includes(term));
+            
+            if (reqNum !== null && !isLookingForOmnibus) {
+                const unexpectedTpbTerms = tpbTerms.filter(term => !cleanQuery.toLowerCase().includes(term));
+                if (unexpectedTpbTerms.some(term => titleLower.includes(term))) {
+                    return false;
                 }
             }
 

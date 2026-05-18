@@ -161,6 +161,44 @@ export const Importer = {
         });
     }
 
+    // --- NEW: MAGIC NUMBER / FAKE EXTENSION FIXER ---
+    // Uploaders often rename .cbr files to .cbz without actually converting the archive.
+    // This physically reads the first 4 bytes of the file to determine its true format
+    // and fixes the extension before the rest of Omnibus processes it.
+    if (fs.existsSync(sourcePath) && !fs.statSync(sourcePath).isDirectory()) {
+        try {
+            const buffer = Buffer.alloc(4);
+            const fd = fs.openSync(sourcePath, 'r');
+            fs.readSync(fd, buffer, 0, 4, 0);
+            fs.closeSync(fd);
+            const hex = buffer.toString('hex').toLowerCase();
+            
+            const currentExt = path.extname(sourcePath).toLowerCase();
+            let trueExt = currentExt;
+
+            // 52617221 is RAR, 504b0304 is ZIP
+            if (hex === '52617221') {
+                trueExt = '.cbr';
+            } else if (hex === '504b0304') {
+                trueExt = '.cbz';
+            }
+
+            if ((currentExt === '.cbz' || currentExt === '.zip') && trueExt === '.cbr') {
+                Logger.log(`[Importer] Detected fake CBZ! File is actually a RAR. Renaming to .cbr for conversion...`, 'info');
+                const correctedPath = sourcePath.replace(/\.[^/.]+$/, trueExt);
+                fs.renameSync(sourcePath, correctedPath);
+                sourcePath = correctedPath;
+            } else if ((currentExt === '.cbr' || currentExt === '.rar') && trueExt === '.cbz') {
+                Logger.log(`[Importer] Detected fake CBR! File is actually a ZIP. Renaming to .cbz...`, 'info');
+                const correctedPath = sourcePath.replace(/\.[^/.]+$/, trueExt);
+                fs.renameSync(sourcePath, correctedPath);
+                sourcePath = correctedPath;
+            }
+        } catch (e: any) {
+            Logger.log(`[Importer Debug] Failed to verify file signature: ${e.message}`, 'warn');
+        }
+    }
+
     // --- BATCH DOWNLOAD DETECTION ---
     let actualSourceFile = sourcePath;
     let isBatchFolder = false;

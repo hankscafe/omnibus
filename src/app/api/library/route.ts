@@ -187,6 +187,7 @@ export async function GET(request: Request) {
                 select: {
                     id: true,
                     coverUrl: true,
+                    filePath: true,
                     readProgresses: {
                         where: { userId: userId || 'none' },
                         select: { isCompleted: true }
@@ -204,10 +205,12 @@ export async function GET(request: Request) {
     } catch(e) {}
 
     const formatted = dbSeries.map(s => {
+        const downloadedIssues = s.issues?.filter((i: any) => i.filePath && i.filePath.trim().length > 0) || [];
+        
         let finalCover = s.coverUrl;
         
-        if (!finalCover && s.issues?.length > 0) {
-            const issueWithCover = s.issues.find((i: any) => i.coverUrl !== null && i.coverUrl !== '');
+        if (!finalCover && downloadedIssues.length > 0) {
+            const issueWithCover = downloadedIssues.find((i: any) => i.coverUrl !== null && i.coverUrl !== '');
             if (issueWithCover) {
                 finalCover = issueWithCover.coverUrl;
             }
@@ -226,17 +229,17 @@ export async function GET(request: Request) {
             publisher: s.publisher || "Unknown",
             path: s.folderPath, 
             isFavorite: s.favorites?.length > 0,
-            count: s.issues?.length || 0,
-            unreadCount: s.issues?.filter((i: any) => !i.readProgresses[0]?.isCompleted).length || 0,
-            progressPercentage: s.issues?.length > 0 
-                ? Math.round((s.issues.filter((i: any) => i.readProgresses[0]?.isCompleted).length / s.issues.length) * 100) 
+            count: downloadedIssues.length,
+            unreadCount: downloadedIssues.filter((i: any) => !i.readProgresses[0]?.isCompleted).length,
+            progressPercentage: downloadedIssues.length > 0 
+                ? Math.round((downloadedIssues.filter((i: any) => i.readProgresses[0]?.isCompleted).length / downloadedIssues.length) * 100) 
                 : 0,
             cover: finalCover,
             cvId: parseInt(s.metadataId || "") || undefined,
             matchState: s.matchState,
             monitored: s.monitored,
             isManga: s.isManga,
-            isPendingReq: s.issues?.length === 0 && !!s.metadataId && pendingVolIds.has(s.metadataId)
+            isPendingReq: downloadedIssues.length === 0
         }
     });
 

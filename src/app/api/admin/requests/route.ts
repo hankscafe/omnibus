@@ -29,11 +29,14 @@ export async function GET(request: Request) {
 
     const volumeIds = Array.from(new Set(requests.map(r => r.volumeId)));
     const seriesList = await prisma.series.findMany({ 
-        where: { metadataId: { in: volumeIds }, metadataSource: 'COMICVINE' } 
+        where: { metadataId: { in: volumeIds } } 
     });
 
     const formattedRequests = requests.map(req => {
-      const series = seriesList.find(s => s.metadataId === req.volumeId);
+      const series = seriesList.find(s => 
+        s.metadataId === req.volumeId && 
+        s.metadataSource === (req.metadataSource || 'COMICVINE')
+      );
       let issueNumberStr = "";
       if (req.activeDownloadName) {
           const match = req.activeDownloadName.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);

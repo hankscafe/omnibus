@@ -2,7 +2,6 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import axios from 'axios';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
@@ -17,10 +16,12 @@ export async function GET(request: Request) {
         const { searchParams } = new URL(request.url);
         const weekOffset = parseInt(searchParams.get('weekOffset') || '0', 10);
 
-        // 1. Calculate Rolling 7-Day Window Starting from TODAY
+        // --- STRICT SUNDAY TO SATURDAY WEEK ALIGNMENT ---
         const today = new Date();
+        const currentDayOfWeek = today.getUTCDay(); 
+        
         const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-        start.setUTCDate(start.getUTCDate() + (weekOffset * 7));
+        start.setUTCDate(start.getUTCDate() - currentDayOfWeek + (weekOffset * 7));
 
         const end = new Date(start);
         end.setUTCDate(start.getUTCDate() + 6); // 7 day window inclusive
@@ -29,8 +30,8 @@ export async function GET(request: Request) {
         const endDateStr = end.toISOString().split('T')[0];
         const todayStr = today.toISOString().split('T')[0];
         
-        // Bumped to v7 to force a cache bust and use the simplified logic
-        const cacheKey = `calendar_global_v7_${todayStr}_offset_${weekOffset}`;
+        // --- BUMP CACHE TO v14 TO DESTROY PREVIOUS BROKEN EMPTY CACHES ---
+        const cacheKey = `calendar_global_v14_${todayStr}_offset_${weekOffset}`;
         
         const cache = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
 
@@ -42,7 +43,6 @@ export async function GET(request: Request) {
             });
         }
 
-        // 2. Fetch Metron Credentials
         const settings = await prisma.systemSetting.findMany({
             where: { key: { in: ['metron_user', 'metron_pass'] } }
         });
@@ -52,24 +52,60 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: "Metron credentials missing in Settings. Cannot fetch global pull list." }, { status: 400 });
         }
 
-        // 3. Fetch Weekly Issues from Metron
-        let nextUrl = `https://metron.cloud/api/issue/?store_date_range_after=${startDateStr}&store_date_range_before=${endDateStr}`;
+        // --- THE FIX: Native Fetch with Explicit Basic Auth Headers ---
+        const authHeader = `Basic ${Buffer.from(`${config.metron_user}:${config.metron_pass}`).toString('base64')}`;
+        
+        let nextUrl: string | null = `https://metron.cloud/api/issue/?store_date_range_after=${startDateStr}&store_date_range_before=${endDateStr}`;
         let allIssues: any[] = [];
 
+        Logger.log(`[Global Calendar] Fetching Metron Releases: ${nextUrl}`, 'info');
+
         while (nextUrl && allIssues.length < 1000) {
-            const res = await axios.get(nextUrl, {
-                auth: { username: config.metron_user, password: config.metron_pass },
-                headers: { 'User-Agent': 'Omnibus/1.0' },
-                timeout: 15000
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+            // --- FIX: Explicit Type Assignment ---
+            const response: any = await fetch(nextUrl, {
+                method: 'GET',
+                headers: { 
+                    'User-Agent': 'Omnibus/1.0',
+                    'Authorization': authHeader
+                },
+                signal: controller.signal
             });
-            if (res.data && res.data.results) {
-                allIssues.push(...res.data.results);
+            
+            clearTimeout(timeoutId);
+
+            if (response.status === 429) {
+                const retryAfter = parseInt(response.headers.get('retry-after') || '60', 10);
+                Logger.log(`[Global Calendar] Metron Rate Limit hit (429)! Pausing for ${retryAfter} seconds...`, 'warn');
+                await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+                continue;
             }
-            nextUrl = res.data.next;
-            if (nextUrl) await new Promise(r => setTimeout(r, 1000));
+
+            // --- FIX: Explicit Type Assignment ---
+            const data: any = await response.json().catch(() => ({}));
+
+            if (data && data.results) {
+                allIssues.push(...data.results);
+            }
+            nextUrl = data.next || null;
+            
+            // Proactive Burst Tracking via Fetch Headers
+            const remaining = parseInt(response.headers.get('x-ratelimit-burst-remaining') || '20', 10);
+            if (remaining <= 2) {
+                const reset = parseInt(response.headers.get('x-ratelimit-burst-reset') || '0', 10);
+                if (reset > 0) {
+                    const sleepMs = Math.max(0, (reset * 1000) - Date.now()) + 500;
+                    if (sleepMs > 0) await new Promise(r => setTimeout(r, sleepMs));
+                } else {
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            } else if (nextUrl) {
+                await new Promise(r => setTimeout(r, 500));
+            }
         }
 
-        // 4. CROSS-REFERENCE LOCAL DATABASE
         const localSeries = await prisma.series.findMany({
             select: { id: true, name: true, publisher: true, metadataId: true, metadataSource: true, monitored: true }
         });
@@ -81,24 +117,20 @@ export async function GET(request: Request) {
             }
         });
 
-        // 5. Format the releases
         const formattedReleases = allIssues.map(issue => {
             const rawSeriesName = typeof issue.series === 'object' ? issue.series?.name : issue.series;
             const seriesName = rawSeriesName ? rawSeriesName.trim() : "Unknown";
             const normalizedName = seriesName.toLowerCase();
             
-            // Link a local volumeId so the Request/Subscribe buttons work properly
             const localMatch = localSeries.find(s => s.name.toLowerCase().trim() === normalizedName);
             const volumeId = localMatch ? localMatch.metadataId : (typeof issue.series === 'object' ? issue.series?.id : null);
-            const metadataSource = localMatch ? localMatch.metadataSource : 'METRON'; // <-- ADDED THIS
-            
-            // Fallback to local DB publisher if we have it, else Unknown
+            const metadataSource = localMatch ? localMatch.metadataSource : 'METRON'; 
             const publisher = nameToPubMap.get(normalizedName) || localMatch?.publisher || "Unknown";
 
             return {
                 id: issue.id,
                 volumeId: volumeId,
-                metadataSource: metadataSource, // <-- ADDED THIS
+                metadataSource: metadataSource, 
                 seriesName: seriesName,
                 issueNumber: issue.number || issue.issue || "1",
                 publisher: publisher,
@@ -109,7 +141,6 @@ export async function GET(request: Request) {
             };
         });
 
-        // 6. Auto-Inject Upcoming Issues into the Omnibus Tracked Series Tab
         const monitoredSeries = localSeries.filter(s => s.monitored);
         if (monitoredSeries.length > 0) {
             const existingIssues = await prisma.issue.findMany({
@@ -117,7 +148,7 @@ export async function GET(request: Request) {
                 select: { seriesId: true, number: true }
             });
 
-            const issuesToCreate = [];
+            const issuesToCreate: any[] = [];
             for (const release of formattedReleases) {
                 const matchedSeries = monitoredSeries.find(s => s.name.toLowerCase().trim() === release.seriesName.toLowerCase().trim());
                 if (matchedSeries) {
@@ -139,31 +170,24 @@ export async function GET(request: Request) {
             }
             
             if (issuesToCreate.length > 0) {
-                await prisma.issue.createMany({ data: issuesToCreate as any }).catch(()=> {});
-                Logger.log(`[Global Calendar] Auto-injected ${issuesToCreate.length} upcoming issues for monitored series.`, 'success');
+                await prisma.issue.createMany({ data: issuesToCreate }).catch(()=> {});
             }
         }
 
-        // Cache the results for the day
         await prisma.systemSetting.upsert({
             where: { key: cacheKey },
             update: { value: JSON.stringify(formattedReleases) },
             create: { key: cacheKey, value: JSON.stringify(formattedReleases) }
         });
 
-        // Cleanup old caches
         const oldDate = new Date(today);
         oldDate.setUTCDate(today.getUTCDate() - 1);
         const oldDateStr = oldDate.toISOString().split('T')[0];
         await prisma.systemSetting.deleteMany({ 
-            where: { key: { startsWith: `calendar_global_v7_${oldDateStr}` } } 
+            where: { key: { startsWith: `calendar_global_v14_${oldDateStr}` } } 
         }).catch(()=>{});
 
-        return NextResponse.json({ 
-            startDate: startDateStr, 
-            endDate: endDateStr, 
-            releases: formattedReleases 
-        });
+        return NextResponse.json({ startDate: startDateStr, endDate: endDateStr, releases: formattedReleases });
 
     } catch (error: any) {
         Logger.log(`Global Calendar API Error: ${getErrorMessage(error)}`, 'error');

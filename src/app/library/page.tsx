@@ -43,6 +43,7 @@ interface Comic {
   [key: string]: any;
 }
 
+// --- NEW: Added the missing Metadata fields to the Interface ---
 interface LibrarySeries {
   id: string;
   path: string;
@@ -55,6 +56,8 @@ interface LibrarySeries {
   progressPercentage?: number;
   isFavorite: boolean;
   cvId?: number;
+  metadataId?: string | null;
+  metadataSource?: string;
   monitored?: boolean;
   isManga?: boolean;
   matchState?: string;
@@ -125,7 +128,8 @@ function LibraryContent() {
   const [randomTrigger, setRandomTrigger] = useState(0)
 
   const [confirmOpen, setConfirmOpen] = useState(false)
-  const [refreshTarget, setRefreshTarget] = useState<{cvId: number, path: string} | null>(null)
+  // --- NEW: Using the new explicit Metadata variables ---
+  const [refreshTarget, setRefreshTarget] = useState<{metadataId: string, metadataSource: string, path: string} | null>(null)
   
   const [collections, setCollections] = useState<Collection[]>([])
   const [activeCollection, setActiveCollection] = useState("ALL")
@@ -147,7 +151,6 @@ function LibraryContent() {
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [repackModalOpen, setRepackModalOpen] = useState(false);
   
-  // --- NEW STANDARDIZE NAMES STATE ---
   const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
   const [filePattern, setFilePattern] = useState("{Series} #{Issue}");
   const [renamePreviews, setRenamePreviews] = useState<any[]>([]);
@@ -582,16 +585,18 @@ function LibraryContent() {
     } catch (e: any) { toastRef.current({ title: "Error", description: e.message, variant: "destructive" }); } finally { setUpdating(false) }
   }
 
-  const initiateRefreshMetadata = (cvId: number | undefined, folderPath: string) => {
-    if (!cvId) { toastRef.current({ title: "Missing ID", description: "This folder isn't linked to a ComicVine ID. Use 'Edit Info' to add one." }); return; }
-    setRefreshTarget({ cvId, path: folderPath }); setConfirmOpen(true);
+  // --- NEW: Using the new explicit Metadata variables ---
+  const initiateRefreshMetadata = (metadataId: string | undefined | null, metadataSource: string, folderPath: string) => {
+    if (!metadataId) { toastRef.current({ title: "Missing ID", description: "This folder isn't linked to an external provider ID. Use 'Edit Info' to map it to ComicVine." }); return; }
+    setRefreshTarget({ metadataId, metadataSource, path: folderPath }); setConfirmOpen(true);
   }
 
+  // --- NEW: Passes the exact payload to the API ---
   const handleConfirmedRefresh = async () => {
     if (!refreshTarget) return;
     setLoading(true); setConfirmOpen(false);
     try {
-      const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: refreshTarget.cvId, folderPath: refreshTarget.path }) });
+      const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ metadataId: refreshTarget.metadataId, metadataSource: refreshTarget.metadataSource, folderPath: refreshTarget.path }) });
       if (res.ok) { 
           toastRef.current({ title: "Success", description: "Metadata and cover art refreshed!" }); 
           setPage(1); loadLibraryData(1, false, false); 
@@ -645,30 +650,25 @@ function LibraryContent() {
       } catch (e) { toastRef.current({ title: "Error", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
+  // --- NEW: Adjusted to use the correct Database fields ---
   const handleBulkRefresh = async () => {
       const seriesList = series.filter(s => selectedSeries.has(s.id));
       setIsBulkProcessing(true);
-      toastRef.current({ title: "Starting Metadata Refresh", description: `Queued ${seriesList.length} series. Please keep this page open.` });
+      toastRef.current({ title: "Queuing Metadata Refresh", description: `Sending ${seriesList.length} series to the background queue.` });
       
       let successCount = 0;
-      let failCount = 0;
       for (let i = 0; i < seriesList.length; i++) {
           const s = seriesList[i];
-          if (!s.cvId) continue; 
+          const mId = s.metadataId || s.cvId?.toString(); // Failsafe
+          if (!mId) continue; 
           try {
-              const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: s.cvId, folderPath: s.path }) });
+              const res = await fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ metadataId: mId, metadataSource: s.metadataSource || 'COMICVINE', folderPath: s.path }) });
               if (res.ok) successCount++;
-              else failCount++;
-          } catch(e) {
-              failCount++;
-          }
-          
-          if (i < seriesList.length - 1) await new Promise(r => setTimeout(r, 4000));
+          } catch(e) {}
       }
       
-      toastRef.current({ title: "Refresh Complete", description: `Successfully refreshed ${successCount} series. ${failCount > 0 ? `Failed: ${failCount}` : ''}` });
-      setPage(1);
-      loadLibraryData(1, false, false); setIsBulkProcessing(false); setSelectedSeries(new Set()); setIsSelectionMode(false);
+      toastRef.current({ title: "Tasks Queued", description: `Successfully queued ${successCount} series for background refresh.` });
+      setIsBulkProcessing(false); setSelectedSeries(new Set()); setIsSelectionMode(false);
   }
 
   const handleBulkRename = async () => {
@@ -745,7 +745,6 @@ function LibraryContent() {
                         Unmatched
                     </Button>
                 )}
-                {/* --- NEW PENDING BUTTON --- */}
                 {isAdmin && (
                     <Button role="tab" aria-selected={libraryFilter === 'PENDING'} variant={libraryFilter === 'PENDING' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'PENDING' ? 'shadow-sm bg-blue-500 hover:bg-blue-600 text-white' : 'text-blue-500 hover:text-blue-600'}`} onClick={() => setLibraryFilter('PENDING')}>
                         Pending
@@ -976,7 +975,6 @@ function LibraryContent() {
                               </div>
                           )}
 
-                          {/* --- NEW CENTERED MONITORED BADGE --- */}
                           {!isSelectionMode && item.monitored && (
                             <div className="absolute bottom-3 w-full flex justify-center z-30 pointer-events-none">
                                 <Badge className="bg-emerald-600/95 backdrop-blur-sm text-white border-0 shadow-sm px-1.5 h-4 flex items-center gap-1 text-[9px] font-black uppercase tracking-wider">
@@ -1024,7 +1022,8 @@ function LibraryContent() {
                             )}
                         </div>
                         {isAdmin && (
-                            <Button aria-label={`Refresh cover art for ${item.name}`} variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold border-0 min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.cvId, item.path); }}>
+                            // --- NEW: Using the new explicit Metadata variables ---
+                            <Button aria-label={`Refresh cover art for ${item.name}`} variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold border-0 min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.metadataId || item.cvId?.toString(), item.metadataSource || 'COMICVINE', item.path); }}>
                                 <RefreshCw className="w-3 h-3 mr-1.5 shrink-0" /> 
                                 <span className="truncate">Fetch Cover</span>
                             </Button>
@@ -1120,7 +1119,6 @@ function LibraryContent() {
                                 )}
                                 {!isSelectionMode && (<button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`transition-colors focus:outline-none p-2 -m-2 ${item.isFavorite ? 'text-primary' : 'text-muted-foreground/50 hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}><Heart className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${item.isFavorite ? 'fill-current' : ''}`} /></button>)}
                                 
-                                {/* ADD THIS MONITORED BADGE */}
                                 {item.monitored && (
                                     <Badge className="shrink-0 bg-emerald-600 hover:bg-emerald-600 text-white border-0 text-[9px] px-1.5 h-4 uppercase tracking-wider flex items-center">
                                         <Activity className="w-2.5 h-2.5 mr-1" /> Monitored
@@ -1485,7 +1483,7 @@ function LibraryContent() {
         </DialogContent>
       </Dialog>
       
-      <ConfirmationDialog isOpen={confirmOpen} onClose={() => setConfirmOpen(false)} onConfirm={handleConfirmedRefresh} variant="default" title="Refresh Metadata?" description="This will re-fetch the latest data from ComicVine." confirmText="Refresh" />
+      <ConfirmationDialog isOpen={confirmOpen} onClose={() => setConfirmOpen(false)} onConfirm={handleConfirmedRefresh} variant="default" title="Refresh Metadata?" description="This will re-fetch the latest data from the provider." confirmText="Refresh" />
       
       <ConfirmationDialog 
           isOpen={!!collectionToDelete} 

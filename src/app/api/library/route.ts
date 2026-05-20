@@ -52,14 +52,12 @@ export async function GET(request: Request) {
         }
     }
 
-    // --- FETCH ACTIVE REQUESTS FOR PENDING FILTER & BADGES ---
     let pendingRequests: any[] = [];
     try {
         const reqs = await prisma.request.findMany({
             where: { status: { notIn: ['COMPLETED', 'IMPORTED', 'CANCELLED'] } },
             select: { volumeId: true }
         });
-        // SAFETY FIX: Check if the mock returned undefined during tests
         if (Array.isArray(reqs)) pendingRequests = reqs;
     } catch (e) {}
     
@@ -75,7 +73,6 @@ export async function GET(request: Request) {
     if (unmatchedOnly) where.AND.push({ matchState: 'UNMATCHED' });
     if (monitored) where.AND.push({ monitored: true });
 
-    // --- PENDING DATABASE FILTER ---
     if (pendingOnly) {
         where.AND.push({
             metadataId: { in: pendingVolIdsList },
@@ -103,7 +100,6 @@ export async function GET(request: Request) {
         }
     }
 
-    // --- REFACTORED: Filter by Reading List instead of legacy Collection ---
     if (collectionId !== 'ALL') {
         const listItems = await prisma.readingListItem.findMany({
             where: { listId: collectionId, issueId: { not: null } },
@@ -222,6 +218,7 @@ export async function GET(request: Request) {
             finalCover = `/api/library/cover?path=${encodeURIComponent(s.folderPath)}`;
         }
 
+        // --- NEW: Inject metadataId and metadataSource to fully support Metron bulk actions ---
         return {
             id: s.id, 
             name: s.name || "Unknown Series", 
@@ -236,6 +233,8 @@ export async function GET(request: Request) {
                 : 0,
             cover: finalCover,
             cvId: parseInt(s.metadataId || "") || undefined,
+            metadataId: s.metadataId,
+            metadataSource: s.metadataSource,
             matchState: s.matchState,
             monitored: s.monitored,
             isManga: s.isManga,
@@ -269,7 +268,6 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Missing series IDs" }, { status: 400 });
         }
 
-        // ACTION: Mark Read / Unread
         if (action === 'bulk-progress') {
             const isCompleted = status === 'READ';
             const issues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } } });
@@ -285,7 +283,6 @@ export async function POST(request: Request) {
             return NextResponse.json({ success: true });
         }
 
-        // --- REFACTORED: Remove from Reading List instead of legacy Collection ---
         if (action === 'bulk-remove-list') {
             const listId = status;
             const list = await prisma.readingList.findUnique({ where: { id: listId } });
@@ -378,7 +375,7 @@ export async function DELETE(request: Request) {
 
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
-        Logger.log(`[Library API] Delete Error: ${getErrorMessage(error)}`, 'error');
-        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+        Logger.log(`[Library Series API] Delete Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: "Deletion failed" }, { status: 500 });
     }
 }

@@ -19,6 +19,22 @@ import { getErrorMessage } from '@/lib/utils/error';
 
 const execFileAsync = promisify(execFile);
 
+function isSameIssue(num1: string | number, num2: string | number): boolean {
+    // Splits the string into [Full Match, Numbers, Letters]
+    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
+    const m1 = String(num1).trim().match(regex);
+    const m2 = String(num2).trim().match(regex);
+    
+    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
+
+    const float1 = parseFloat(m1[1] || "0");
+    const float2 = parseFloat(m2[1] || "0");
+    const suffix1 = m1[2].toUpperCase().trim();
+    const suffix2 = m2[2].toUpperCase().trim();
+
+    return float1 === float2 && suffix1 === suffix2;
+}
+
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
     const cleanCurrent = current.replace(/^v/, '');
@@ -890,7 +906,7 @@ export function initWorker() {
                         const futureStr = new Date(todayObj.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
                         
                         try {
-                            let nextUrl = `https://metron.cloud/api/issue/?store_date__gte=${pastStr}&store_date__lte=${futureStr}`;
+                            let nextUrl = `https://metron.cloud/api/issue/?store_date_range_after=${pastStr}&store_date_range_before=${futureStr}`;
                             const metronIssues: any[] = [];
                             
                             while (nextUrl && metronIssues.length < 3000) {
@@ -898,26 +914,36 @@ export function initWorker() {
                                     const res = await axios.get(nextUrl, {
                                         auth: { username: metronUser.value, password: metronPass.value },
                                         headers: { 'User-Agent': 'Omnibus/1.0' },
-                                        timeout: 15000
+                                        timeout: 15000,
+                                        validateStatus: (status) => status < 500
                                     });
+                                    
+                                    if (res.status === 429) {
+                                        const retryAfter = parseInt(res.headers['retry-after'] || '60', 10);
+                                        Logger.log(`[Phase 1] Metron API Rate Limit hit (429)! Pausing for ${retryAfter}s...`, 'warn');
+                                        await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+                                        continue;
+                                    }
                                     
                                     if (res.data && res.data.results) {
                                         metronIssues.push(...res.data.results);
                                     }
                                     nextUrl = res.data.next;
                                     
-                                    // Increased standard delay to 2 seconds to keep Metron happy
-                                    await new Promise(r => setTimeout(r, 2000)); 
-                                    
-                                } catch (axiosErr: any) {
-                                    // If we hit the rate limit, pause for 15 seconds and try the same URL again
-                                    if (axiosErr.response?.status === 429) {
-                                        Logger.log(`[Phase 1] Metron API Rate Limit hit (429)! Pausing for 15 seconds to cool down...`, 'warn');
-                                        await new Promise(r => setTimeout(r, 15000));
-                                        continue; 
-                                    } else {
-                                        throw axiosErr; // If it's a different error, throw it to the outer catch
+                                    const remaining = parseInt(res.headers['x-ratelimit-burst-remaining'] || '20', 10);
+                                    if (remaining <= 2) {
+                                        const reset = parseInt(res.headers['x-ratelimit-burst-reset'] || '0', 10);
+                                        if (reset > 0) {
+                                            const sleepMs = Math.max(0, (reset * 1000) - Date.now()) + 500;
+                                            if (sleepMs > 0) await new Promise(r => setTimeout(r, sleepMs));
+                                        } else {
+                                            await new Promise(r => setTimeout(r, 2000));
+                                        }
+                                    } else if (nextUrl) {
+                                        await new Promise(r => setTimeout(r, 500));
                                     }
+                                } catch (axiosErr: any) {
+                                    throw axiosErr;
                                 }
                             }
                             
@@ -990,12 +1016,18 @@ export function initWorker() {
                                     }
 
                                     // 2. Request Logic (Only if Monitored)
-                                    if (matchedSeries.monitored) {
-                                        const alreadyInLibrary = skeleton?.filePath && skeleton.filePath.length > 0;
-                                        if (alreadyInLibrary) continue;
+                                if (matchedSeries.monitored) {
+                                    const alreadyInLibrary = matchedSeries.issues.some((i: any) => isSameIssue(i.number, mNumStr) && i.filePath && i.filePath.length > 0);
+                                    if (alreadyInLibrary) continue;
 
-                                        const alreadyReq = allRequests.find(r => r.activeDownloadName === searchName);
-                                        const issueYear = issueDate ? issueDate.split('-')[0] : matchedSeries.year?.toString() || new Date().getFullYear().toString();
+                                    const alreadyReq = allRequests.find(r => {
+                                        if (r.volumeId !== (matchedSeries.metadataId || matchedSeries.id)) return false;
+                                        const match = r.activeDownloadName?.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+                                        const reqNum = match ? match[1] : null;
+                                        return reqNum ? isSameIssue(reqNum, mNumStr) : false;
+                                    });
+                                    
+                                    const issueYear = issueDate ? issueDate.split('-')[0] : matchedSeries.year?.toString() || new Date().getFullYear().toString();
 
                                         if (alreadyReq) {
                                             if (alreadyReq.status === 'UNRELEASED' && isReleased) {
@@ -1072,17 +1104,22 @@ export function initWorker() {
                                 const cvIssues = cvRes.data.results || [];
                                 
                                 for (const cvIssue of cvIssues) {
-                                    const cvNum = parseFloat(cvIssue.issue_number);
-                                    Logger.log(`[Queue Debug] SERIES_MONITOR: CV issue parsed number: ${cvNum}`, 'debug');
-                                    if (isNaN(cvNum)) continue;
+                                    const cvNumStr = cvIssue.issue_number?.toString();
+                                    Logger.log(`[Queue Debug] SERIES_MONITOR: CV issue parsed number: ${cvNumStr}`, 'debug');
+                                    if (!cvNumStr) continue;
 
                                     const alreadyInLibrary = seriesRecord.issues.some((i: any) => 
-                                        parseFloat(i.number) === cvNum && i.filePath && i.filePath.length > 0
+                                        isSameIssue(i.number, cvNumStr) && i.filePath && i.filePath.length > 0
                                     );
 
                                     const searchName = `${seriesRecord.name} #${cvIssue.issue_number}`;
                                     
-                                    const alreadyReq = allRequests.find(r => r.activeDownloadName === searchName);
+                                    const alreadyReq = allRequests.find(r => {
+                                        if (r.volumeId !== seriesRecord.metadataId) return false;
+                                        const match = r.activeDownloadName?.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+                                        const reqNum = match ? match[1] : null;
+                                        return reqNum ? isSameIssue(reqNum, cvNumStr) : false;
+                                    });
 
                                     let issueDate = cvIssue.store_date || cvIssue.cover_date || null;
                                     if (issueDate) {
@@ -1095,7 +1132,7 @@ export function initWorker() {
 
                                     // Calendar Skeleton
                                     if (!alreadyInLibrary) {
-                                        const existingSkeleton = seriesRecord.issues.find((i: any) => parseFloat(i.number) === cvNum);
+                                        const existingSkeleton = seriesRecord.issues.find((i: any) => isSameIssue(i.number, cvNumStr));
                                         if (!existingSkeleton) {
                                             await prisma.issue.create({
                                                 data: {

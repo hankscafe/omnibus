@@ -266,7 +266,11 @@ function SeriesContent() {
                 isManga: data.isManga || false
             });
 
-            const current = data.downloadedIssues.find((i: any) => !i.isRead && i.readProgress < 100) || data.downloadedIssues[0];
+            // --- FIX: Intelligently fallback to the first missing issue if nothing is downloaded yet ---
+            const current = data.downloadedIssues.find((i: any) => !i.isRead && i.readProgress < 100) 
+                || data.downloadedIssues[0] 
+                || (data.missingIssues && data.missingIssues.length > 0 ? data.missingIssues[0] : null);
+            
             setActiveIssue(current);
         })
         .catch(e => { Logger.log(`Scan Failed: ${e.message}`, 'error'); })
@@ -319,7 +323,7 @@ function SeriesContent() {
 
   const runAutoDeepScan = async (cvId: string, currentPath: string, source: string = 'COMICVINE') => {
       setIsRefreshingMetadata(true);
-      setTimeout(() => { toast({ title: "Downloading Deep Metadata", description: "Fetching writers, artists, and synopsis in the background..." }); }, 100);
+      setTimeout(() => { toast({ title: "Task Queued", description: "Fetching writers, artists, and synopsis in the background..." }); }, 100);
 
       try {
           const res = await fetch('/api/library/refresh-metadata', {
@@ -328,8 +332,7 @@ function SeriesContent() {
               body: JSON.stringify({ metadataId: cvId, metadataSource: source, folderPath: currentPath })
           });
           if (res.ok) {
-              toast({ title: "Metadata Complete!", description: "Refreshing page with new data..." });
-              setTimeout(() => { window.location.reload(); }, 1500);
+              toast({ title: "Metadata Queued!", description: "You will be notified when the background sync finishes." });
           }
       } catch (e) {
           Logger.log(getErrorMessage(e), 'error');
@@ -409,7 +412,7 @@ function SeriesContent() {
   const handleRefreshMetadata = async () => {
     if (!seriesInfo.metadataId && !seriesInfo.cvId) return;
     setIsRefreshingMetadata(true);
-    toast({ title: "Syncing Metadata", description: "Downloading issues, credits, and synopsis. This may take a few seconds..." });
+    toast({ title: "Sync Queued", description: "Metadata is being refreshed in the background." });
     
     try {
         const targetId = seriesInfo.metadataId || seriesInfo.cvId?.toString();
@@ -420,8 +423,7 @@ function SeriesContent() {
         });
         
         if (res.ok) {
-            toast({ title: "Success", description: "Metadata successfully stored in your database!" });
-            window.location.href = window.location.href; 
+            toast({ title: "Task Queued", description: "You will receive a notification when the sync is complete." });
         } else {
             const err = await res.json();
             toast({ title: "Refresh Failed", description: err.error, variant: "destructive" });

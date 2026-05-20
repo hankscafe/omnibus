@@ -30,8 +30,12 @@ interface UpcomingIssue {
 
 export default function CalendarPage() {
     const [activeTab, setActiveTab] = useState("my-pulls");
+    
+    // Local Tracked State
     const [localIssues, setLocalIssues] = useState<UpcomingIssue[]>([]);
     const [loadingLocal, setLoadingLocal] = useState(true);
+    const [localWeekOffset, setLocalWeekOffset] = useState(0);
+    const [localWeekLabel, setLocalWeekLabel] = useState("This Week");
     
     // Global Pull List State
     const [globalIssues, setGlobalIssues] = useState<UpcomingIssue[]>([]);
@@ -50,35 +54,40 @@ export default function CalendarPage() {
 
     // 1. Fetch Local Calendar
     useEffect(() => {
+        if (activeTab !== "my-pulls") return;
+        setLoadingLocal(true);
         document.title = "Omnibus - Release Calendar";
-        fetch('/api/calendar')
+        fetch(`/api/calendar?weekOffset=${localWeekOffset}`)
             .then(res => res.json())
             .then(data => {
-                if (Array.isArray(data)) setLocalIssues(data);
+                if (data.releases) {
+                    setLocalIssues(data.releases);
+                    const start = new Date(data.startDate + "T00:00:00Z");
+                    const end = new Date(data.endDate + "T00:00:00Z");
+                    setLocalWeekLabel(`${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}`);
+                }
             })
             .catch(() => {})
             .finally(() => setLoadingLocal(false));
-    }, []);
+    }, [activeTab, localWeekOffset]);
 
     // 2. Fetch Global Pull List (Metron)
     useEffect(() => {
         if (activeTab !== "global-pulls") return;
         setLoadingGlobal(true);
         fetch(`/api/calendar/global?weekOffset=${weekOffset}`)
-            .then(async res => {
-                const data = await res.json();
-                if (data.error) throw new Error(data.error);
-                setGlobalIssues(data.releases || []);
-                
-                const start = new Date(data.startDate + "T00:00:00Z");
-                const end = new Date(data.endDate + "T00:00:00Z");
-                setWeekLabel(`${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}`);
+            .then(res => res.json())
+            .then(data => {
+                if (data.releases) {
+                    setGlobalIssues(data.releases);
+                    const start = new Date(data.startDate + "T00:00:00Z");
+                    const end = new Date(data.endDate + "T00:00:00Z");
+                    setWeekLabel(`${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}`);
+                }
             })
-            .catch(e => {
-                toast({ title: "Failed to load global releases", description: e.message, variant: "destructive" });
-            })
+            .catch(() => {})
             .finally(() => setLoadingGlobal(false));
-    }, [activeTab, weekOffset, toast]);
+    }, [activeTab, weekOffset]);
 
     // Parse dates for grouping
     const parseDateGroup = (issuesToGroup: UpcomingIssue[]) => {
@@ -106,9 +115,9 @@ export default function CalendarPage() {
     const groupedLocalIssues = parseDateGroup(localIssues);
     const groupedGlobalIssues = parseDateGroup(globalIssues);
 
-    // Request & Monitor Logic
-    const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, metadataSource: string = 'COMICVINE') => {
-        const exactIssueName = name; // Passed exactly as formatted by the caller loop
+    // --- FIX: Added releaseDate parameter to dynamically map UNRELEASED requests ---
+    const handleRequest = async (id: number | string, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, metadataSource: string = 'COMICVINE', monitorOnly: boolean = false, releaseDate?: string) => {
+        const exactIssueName = name; 
         const targetKey = type === 'volume' ? `vol-${id}` : `iss-${exactIssueName}`;
         
         setRequestingTarget(targetKey);
@@ -118,14 +127,26 @@ export default function CalendarPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     cvId: id, name: exactIssueName, year, publisher: publisher || "Unknown", image, type, monitored, metadataSource,
-                    issueNumber: issueNumber || (type === 'issue' ? "1" : undefined)
+                    issueNumber: issueNumber || (type === 'issue' ? "1" : undefined),
+                    monitorOnly,
+                    releaseDate // <-- Passing to API
                 })
             });
 
             if (res.ok) {
-                toast({ title: "Success", description: `${exactIssueName} added to queue.` });
-                if (type === 'volume') setRequestedVolumes(prev => new Set(prev).add(id));
-                else setRequestedIssues(prev => new Set(prev).add(exactIssueName));
+                const data = await res.json();
+                toast({ title: "Success", description: data.message || `${exactIssueName} added to queue.` });
+                
+                if (type === 'volume') {
+                    if (!monitorOnly) {
+                        setRequestedVolumes(prev => new Set(prev).add(Number(id)));
+                    }
+                } else {
+                    setRequestedIssues(prev => new Set(prev).add(exactIssueName));
+                }
+            } else {
+                const errData = await res.json().catch(() => ({}));
+                toast({ title: "Request Failed", description: errData.error || "Server returned an error.", variant: "destructive" });
             }
         } catch (e) {
             toast({ title: "Error", description: "Failed to send request.", variant: "destructive" });
@@ -158,7 +179,24 @@ export default function CalendarPage() {
                 </TabsList>
 
                 {/* TAB 1: MY TRACKED SERIES */}
-                <TabsContent value="my-pulls" className="space-y-10 animate-in fade-in duration-500">
+                <TabsContent value="my-pulls" className="space-y-6 animate-in fade-in duration-500">
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-muted/50 p-4 rounded-xl border border-border">
+                        <div className="flex items-center gap-2">
+                            <Button variant="outline" size="sm" onClick={() => setLocalWeekOffset(w => w - 1)} disabled={loadingLocal} className="border-border">
+                                <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => setLocalWeekOffset(w => w + 1)} disabled={loadingLocal} className="border-border">
+                                Next <ChevronRight className="w-4 h-4 ml-1" />
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => setLocalWeekOffset(0)} disabled={localWeekOffset === 0 || loadingLocal} className="font-bold">
+                                Today
+                            </Button>
+                        </div>
+                        <div className="flex items-center gap-4 w-full sm:w-auto">
+                            <span className="font-mono text-sm font-bold bg-background px-3 py-1.5 rounded-md border border-border">{localWeekLabel}</span>
+                        </div>
+                    </div>
+
                     {loadingLocal ? (
                         <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
                     ) : Object.keys(groupedLocalIssues).length === 0 ? (
@@ -247,7 +285,6 @@ export default function CalendarPage() {
                                 </h2>
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                                     {monthIssues.map((issue) => {
-                                        // NEW: Construct the exact composite name of the issue seamlessly 
                                         let compositeName = `${issue.seriesName} #${issue.issueNumber}`;
                                         if (issue.issueName && issue.issueName !== issue.seriesName && !issue.issueName.includes(`#${issue.issueNumber}`)) {
                                             compositeName += `: ${issue.issueName}`;
@@ -298,8 +335,8 @@ export default function CalendarPage() {
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
-                                                                // Pass the composite name dynamically assembled above
-                                                                handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON')
+                                                                // --- FIX: Pass the precise release date so the backend sets it to UNRELEASED if needed ---
+                                                                handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
                                                             }}
                                                         >
                                                             {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />} Request Issue
@@ -347,13 +384,14 @@ export default function CalendarPage() {
                 </DialogHeader>
                 <div className="flex flex-col gap-3 mt-4 sm:mt-6">
                     <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
-                        if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true, monitorPrompt.issueNumber, monitorPrompt.metadataSource);
+                        // --- FIX: Pass monitorOnly: false so it acts as "Request & Monitor" ---
+                        if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true, monitorPrompt.issueNumber, monitorPrompt.metadataSource, false); 
                         setMonitorPrompt(null);
                     }}>
-                        Yes, Subscribe & Monitor
+                        Yes, Request & Monitor
                     </Button>
                     <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
-                        if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false, monitorPrompt.issueNumber, monitorPrompt.metadataSource);
+                        if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false, monitorPrompt.issueNumber, monitorPrompt.metadataSource, false); 
                         setMonitorPrompt(null);
                     }}>
                         No, Just Request Past Issues

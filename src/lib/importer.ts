@@ -15,6 +15,22 @@ function sanitize(str: string) {
   return str.replace(/[<>:"/\\|?*]/g, '').trim();
 }
 
+function isSameIssue(num1: string | number, num2: string | number): boolean {
+    // Splits the string into [Full Match, Numbers, Letters]
+    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
+    const m1 = String(num1).trim().match(regex);
+    const m2 = String(num2).trim().match(regex);
+    
+    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
+
+    const float1 = parseFloat(m1[1] || "0");
+    const float2 = parseFloat(m2[1] || "0");
+    const suffix1 = m1[2].toUpperCase().trim();
+    const suffix2 = m2[2].toUpperCase().trim();
+
+    return float1 === float2 && suffix1 === suffix2;
+}
+
 function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
@@ -354,10 +370,10 @@ export const Importer = {
 
 
     let series = await prisma.series.findFirst({ 
-        where: { metadataId: req.volumeId, metadataSource: 'COMICVINE' } 
+        where: { metadataId: req.volumeId, metadataSource: req.metadataSource || 'COMICVINE' } 
     });
     
-    if (!series && cvApiKey && req.volumeId !== "0") {
+    if (!series && cvApiKey && req.volumeId !== "0" && req.metadataSource !== 'METRON') {
         try {
             Logger.log(`[Importer] Fetching missing metadata for Volume ID: ${req.volumeId}`, 'info');
             const cvRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${req.volumeId}/`, {
@@ -380,6 +396,30 @@ export const Importer = {
             }
         } catch (e) {
             Logger.log("[Importer] Metadata pre-fetch failed during import", "warn");
+        }
+    }
+
+    if (!series && req.volumeId !== "0" && req.metadataSource === 'METRON') {
+        try {
+            Logger.log(`[Importer] Fetching missing metadata for Metron Series ID: ${req.volumeId}`, 'info');
+            const { MetronProvider } = await import('./metadata/providers/metron');
+            const metron = new MetronProvider();
+            const details = await metron.getSeriesDetails(req.volumeId);
+            if (details) {
+                series = await prisma.series.create({
+                    data: {
+                        metadataId: details.sourceId,
+                        metadataSource: 'METRON',
+                        matchState: 'MATCHED',
+                        name: details.name,
+                        year: details.year || 0,
+                        publisher: details.publisher || "Other",
+                        folderPath: "" 
+                    }
+                });
+            }
+        } catch (e) {
+            Logger.log("[Importer] Metron metadata pre-fetch failed during import", "warn");
         }
     }
 
@@ -585,10 +625,10 @@ export const Importer = {
          const artistsStr = xmlMeta?.artists?.length ? JSON.stringify(xmlMeta.artists) : null;
          const charsStr = xmlMeta?.characters?.length ? JSON.stringify(xmlMeta.characters) : null;
 
-         const existingIssue = await prisma.issue.findFirst({
-             where: { seriesId: series.id, number: issueNum }
+         const allSeriesIssues = await prisma.issue.findMany({
+             where: { seriesId: series.id }
          });
-
+         const existingIssue = allSeriesIssues.find(i => isSameIssue(i.number, issueNum));
          const targetMetaId = xmlMeta?.cvIssueId ? xmlMeta.cvIssueId.toString() : `unmatched_${Math.random()}`;
          const targetMetaSource = xmlMeta?.cvIssueId ? 'COMICVINE' : 'LOCAL';
          const matchState = xmlMeta?.cvIssueId ? 'MATCHED' : 'UNMATCHED';
@@ -641,7 +681,7 @@ export const Importer = {
       try {
           if (req.volumeId !== "0") {
               Logger.log("[Importer] Triggering direct internal metadata sync...", "info");
-              await syncSeriesMetadata(req.volumeId, destFolder, series?.metadataSource || 'COMICVINE');
+              await syncSeriesMetadata(req.volumeId, destFolder, series?.metadataSource || req.metadataSource || 'COMICVINE');
           }
       } catch (syncErr: any) {
           Logger.log(`[Importer] Metadata sync failed: ${syncErr.message}`, "warn");

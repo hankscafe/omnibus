@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     findManyLibraries: vi.fn(),
     findManySeries: vi.fn(),
     findManyIssues: vi.fn(), // <-- NEW: Added mock for ghost issue scanner
+    requestFindMany: vi.fn(), // <-- ADDED: Mock for active requests check
     createSeries: vi.fn(),
     parseComicInfo: vi.fn(),
     log: vi.fn()
@@ -24,6 +25,7 @@ vi.mock('@/lib/db', () => ({
             update: vi.fn().mockResolvedValue({}), // <-- NEW: Prevent crashes during ghost sweep
             delete: vi.fn().mockResolvedValue({})  // <-- NEW: Prevent crashes during ghost sweep
         },
+        request: { findMany: mocks.requestFindMany }, // <-- ADDED: Link to hoisted mock
         readProgress: {
             deleteMany: vi.fn().mockResolvedValue({ count: 0 }) // <-- NEW: Prevent crashes during ghost sweep
         }
@@ -60,6 +62,7 @@ describe('File System: Library Scanner', () => {
         mocks.findManyLibraries.mockResolvedValue([{ id: 'lib_1', path: '/library/comics', isManga: false }]);
         mocks.findManySeries.mockResolvedValue([]);
         mocks.findManyIssues.mockResolvedValue([]); // <-- NEW: Return empty array by default to pass tests
+        mocks.requestFindMany.mockResolvedValue([]); // <-- ADDED: Return empty array to pass active request test
     });
 
     it('should abort if another scan is currently running (Job Lock)', async () => {

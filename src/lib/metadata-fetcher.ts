@@ -10,6 +10,21 @@ import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
 import { markSystemFlag, logApiUsage } from './utils/system-flags'; 
 
+function isSameIssue(num1: string | number, num2: string | number): boolean {
+    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
+    const m1 = String(num1).trim().match(regex);
+    const m2 = String(num2).trim().match(regex);
+    
+    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
+
+    const float1 = parseFloat(m1[1] || "0");
+    const float2 = parseFloat(m2[1] || "0");
+    const suffix1 = m1[2].toUpperCase().trim();
+    const suffix2 = m2[2].toUpperCase().trim();
+
+    return float1 === float2 && suffix1 === suffix2;
+}
+
 export async function syncSeriesMetadata(metadataId: string, folderPath: string, metadataSource: string = 'COMICVINE') {
     const series = await prisma.series.findFirst({ 
         where: { metadataId, metadataSource } 
@@ -23,47 +38,49 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             const metron = new MetronProvider();
             const details = await metron.getSeriesDetails(metadataId);
             
-            // 1. Establish our fallback cover first
-            let fallbackCoverUrl = details.coverUrl;
-            if (folderPath && fs.existsSync(folderPath)) {
+            if (!details) {
+                Logger.log(`[Metadata] Details could not be fetched for ${series.name}. Skipping issue sync.`, 'warn');
+                return { success: false, count: 0, skipped: true };
+            }
+
+            let metronFallbackCover = details.coverUrl || series.coverUrl;
+            
+            // --- FIX: Ensure folder exists so we can save the series cover locally ---
+            if (folderPath && folderPath.trim() !== '') {
+                if (!fs.existsSync(folderPath)) {
+                    fs.mkdirSync(folderPath, { recursive: true });
+                }
                 const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
                 for (const pc of possibleCovers) {
                     if (fs.existsSync(path.join(folderPath, pc))) {
-                        fallbackCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
+                        metronFallbackCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
                         break;
                     }
                 }
             }
 
-            let finalCoverUrl = fallbackCoverUrl;
+            let metronFinalCover = metronFallbackCover;
 
-            // 2. Safely attempt to download and overwrite with the newest cover
             if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
                 try {
                     const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
-                    
                     const contentType = String(imgRes.headers['content-type'] || '').toLowerCase();
                     const byteLength = imgRes.data.byteLength;
                     
-                    // Validate the payload to ensure it is actually an image and not Cloudflare HTML
                     if (contentType.includes('text/html') || byteLength < 1000) {
                         throw new Error(`Invalid image payload. Type: ${contentType}, Size: ${byteLength} bytes.`);
                     }
 
-                    // Determine correct extension based on headers (fallback to .jpg)
                     let ext = '.jpg';
                     if (contentType.includes('image/png')) ext = '.png';
                     if (contentType.includes('image/webp')) ext = '.webp';
 
                     const coverFileName = `cover${ext}`;
-
-                    // If it passes validation, overwrite the cover safely
                     await fs.writeFile(path.join(folderPath, coverFileName), Buffer.from(imgRes.data));
-                    finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, coverFileName))}`;
+                    metronFinalCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, coverFileName))}`;
                     
                 } catch (e: unknown) {
                     Logger.log(`[Metadata] Failed to save new cover, keeping existing fallback: ${getErrorMessage(e)}`, 'warn');
-                    // If the download fails, finalCoverUrl stays as the fallbackCoverUrl
                 }
             }
             
@@ -74,7 +91,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     publisher: details.publisher,
                     year: details.year || series.year,
                     description: details.description,
-                    coverUrl: finalCoverUrl, 
+                    coverUrl: metronFinalCover, 
                     status: details.status
                 }
             });
@@ -82,6 +99,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             const issues = await metron.getSeriesIssues(metadataId);
             let syncedCount = 0;
             
+            const allSeriesIssues = await prisma.issue.findMany({
+                where: { seriesId: series.id }
+            });
+
             for (const issue of issues) {
                 const issueNumStr = issue.issueNumber;
                 
@@ -89,11 +110,8 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     where: { metadataId: issue.sourceId, metadataSource: 'METRON' } 
                 });
 
-                const existingByNum = await prisma.issue.findFirst({
-                    where: { seriesId: series.id, number: issueNumStr }
-                });
+                const existingByNum = allSeriesIssues.find(i => isSameIssue(i.number, issueNumStr));
 
-                // NEW: Check if the record exists and is locked by the Admin
                 const targetRecord = existingByMetaId || existingByNum;
                 const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
 
@@ -105,7 +123,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     writers: JSON.stringify(issue.writers),
                     artists: JSON.stringify(issue.artists),
                     characters: JSON.stringify(issue.characters),
-                    matchState: 'DEEP_SYNCED' 
+                    matchState: 'MATCHED' 
                 };
 
                 if (existingByMetaId) {
@@ -174,47 +192,44 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
     const { genres: volGenres } = parseComicVineCredits(undefined, undefined, volData.concepts || undefined);
     
-    // 1. Establish our fallback cover first
-    let fallbackCoverUrl = imageUrl;
-    if (folderPath && fs.existsSync(folderPath)) {
+    let cvFallbackCover = imageUrl || series.coverUrl;
+    
+    // --- FIX: Ensure folder exists so we can save the series cover locally ---
+    if (folderPath && folderPath.trim() !== '') {
+        if (!fs.existsSync(folderPath)) {
+            fs.mkdirSync(folderPath, { recursive: true });
+        }
         const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
         for (const pc of possibleCovers) {
             if (fs.existsSync(path.join(folderPath, pc))) {
-                fallbackCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
+                cvFallbackCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
                 break;
             }
         }
     }
 
-    let finalCoverUrl = fallbackCoverUrl;
+    let cvFinalCover = cvFallbackCover;
 
-    // 2. Safely attempt to download and overwrite with the newest cover
     if (imageUrl && folderPath && fs.existsSync(folderPath)) {
         try {
             const imgRes = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer' });
-            
             const contentType = String(imgRes.headers['content-type'] || '').toLowerCase();
             const byteLength = imgRes.data.byteLength;
             
-            // Validate the payload to ensure it is actually an image and not Cloudflare HTML
             if (contentType.includes('text/html') || byteLength < 1000) {
                 throw new Error(`Invalid image payload. Type: ${contentType}, Size: ${byteLength} bytes.`);
             }
 
-            // Determine correct extension based on headers (fallback to .jpg)
             let ext = '.jpg';
             if (contentType.includes('image/png')) ext = '.png';
             if (contentType.includes('image/webp')) ext = '.webp';
 
             const coverFileName = `cover${ext}`;
-
-            // If it passes validation, overwrite the cover safely
             await fs.writeFile(path.join(folderPath, coverFileName), Buffer.from(imgRes.data));
-            finalCoverUrl = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, coverFileName))}`;
+            cvFinalCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, coverFileName))}`;
             
         } catch (e: unknown) {
             Logger.log(`[Metadata] Failed to save new cover, keeping existing fallback: ${getErrorMessage(e)}`, 'warn');
-            // If the download fails, finalCoverUrl stays as the fallbackCoverUrl
         }
     }
 
@@ -225,7 +240,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             publisher: volData.publisher?.name || 'Other',
             year: parseInt(volData.start_year || "0") || series.year,
             description: volData.description || volData.deck || null,
-            coverUrl: finalCoverUrl, 
+            coverUrl: cvFinalCover, 
             status: volData.end_year ? 'Ended' : 'Ongoing' 
         }
     });
@@ -263,6 +278,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         
         const cvIssues = data.results || [];
 
+        const allSeriesIssuesForCv = await prisma.issue.findMany({
+            where: { seriesId: series.id }
+        });
+
         for (const cvIssue of cvIssues) {
             const issueNumStr = cvIssue.issue_number?.toString() || "0";
 
@@ -270,20 +289,17 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 where: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE' } 
             });
 
-            const existingByNum = await prisma.issue.findFirst({
-                where: { seriesId: series.id, number: issueNumStr }
-            });
+            const existingByNum = allSeriesIssuesForCv.find(i => isSameIssue(i.number, issueNumStr));
 
-            // NEW: Check if the record exists and is locked by the Admin
             const targetRecord = existingByCvId || existingByNum;
             const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
 
             const issueDataPayload = {
-                // If locked, keep the existing name/date. Otherwise, use CV's data.
                 name: isLocked ? targetRecord!.name : cvIssue.name,
                 releaseDate: isLocked ? targetRecord!.releaseDate : (cvIssue.store_date || cvIssue.cover_date || null),
                 description: cvIssue.description || cvIssue.deck || null,
                 coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
+                matchState: 'MATCHED'
             };
 
             const dynamicPayload: any = { ...issueDataPayload };

@@ -34,9 +34,29 @@ export const LibraryScanner = {
                 }
             }
 
-            const allSeries = await prisma.series.findMany({ select: { id: true, folderPath: true } });
+            // --- FIX: Smarter Ghost Series Detection ---
+            const allSeries = await prisma.series.findMany({ 
+                select: { id: true, folderPath: true, monitored: true, metadataId: true } 
+            });
+            
+            const activeRequests = await prisma.request.findMany({
+                where: { status: { notIn: ['COMPLETED', 'IMPORTED', 'CANCELLED'] } },
+                select: { volumeId: true }
+            });
+            const activeReqVolumeIds = new Set(activeRequests.map(r => r.volumeId));
+
             const badIds: string[] = allSeries
-                .filter(s => !s.folderPath || !fs.existsSync(s.folderPath))
+                .filter(s => {
+                    // If folder physically exists, it's good
+                    if (s.folderPath && fs.existsSync(s.folderPath)) return false; 
+                    // If the series is being monitored for new issues, keep it
+                    if (s.monitored) return false;
+                    // If the series has active/pending requests tied to it, keep it
+                    if (s.metadataId && activeReqVolumeIds.has(s.metadataId)) return false;
+                    
+                    // Otherwise, the folder is gone and no one is looking for it -> Ghost
+                    return true;
+                })
                 .map(s => s.id);
 
             if (badIds.length > 0) {
@@ -133,7 +153,6 @@ export const LibraryScanner = {
                                 }
                             });
 
-                            // --- NEW: Generate issues immediately so count is instantly accurate ---
                             const issuesToCreate = bookFiles.map(file => {
                                 const stdNum = extractIssueNumber(file);
                                 return {

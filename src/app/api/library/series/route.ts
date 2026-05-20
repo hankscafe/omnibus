@@ -23,32 +23,23 @@ function extractIssueNumber(filename: string): string {
     let clean = filename.replace(/\.\w+$/, ''); 
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
     
-    // 1. HIGHEST PRIORITY: Look strictly for Issue or Chapter indicators first
-    // Note: Maintains [a-zA-Z]? to support variant issues like #1A or #02B
     const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
 
-    // 2. SECONDARY PRIORITY: Volume indicators (Max 3 digits to ignore V2024 or Vol 1998)
-    // The (?!\d) ensures we don't accidentally match the first 3 digits of a 4 digit year
     const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
     if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
     
-    // 3. FALLBACK: Grab the last standalone number, safely ignoring "Years" (1900-2099)
     const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) {
         for (let i = matches.length - 1; i >= 0; i--) {
             const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
             const numVal = parseFloat(matchVal);
-            
-            // If the number looks exactly like a year (1900-2099) and has no letters (like 'A' or 'B'),
-            // skip it because it's almost certainly part of the title (e.g., 2000 AD, Spider-Man 2099)
             if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) {
                 continue; 
             }
             return matchVal;
         }
     }
-    
     return "1"; 
 }
 
@@ -62,14 +53,11 @@ export async function GET(request: Request) {
     const session = await getServerSession(authOptions);
     let userId = (session?.user as any)?.id || null;
     
-    // 1. Resolve Auth
     if (!userId && session?.user) {
         const user = await prisma.user.findFirst({ where: { OR: [ ...(session.user.email ? [{ email: session.user.email }] : []), ...(session.user.name ? [{ username: session.user.name }] : []) ] } });
         userId = user?.id || null;
     }
 
-    // 2. Validate Path and Authorization
-    // FIX: Using path.normalize instead of fs.realpathSync to prevent crashing on missing placeholder folders
     const libraries = await prisma.library.findMany();
     const normalizedTarget = path.normalize(folderPath).replace(/\\/g, '/').toLowerCase();
 
@@ -84,7 +72,6 @@ export async function GET(request: Request) {
 
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
 
-    // 3. Series Lookup
     let seriesRecord = await prisma.series.findFirst({ 
         where: { folderPath: folderPath } 
     });
@@ -101,19 +88,18 @@ export async function GET(request: Request) {
 
     if (!seriesRecord) {
         const folderName = path.basename(folderPath);
+        const cleanName = folderName.replace(/\s\(\d{4}\)$/, "").trim();
         seriesRecord = await prisma.series.findFirst({
-            where: { name: folderName }
+            where: { name: cleanName }
         });
     }
 
     const folderExists = fs.existsSync(folderPath);
 
-    // If it is completely unknown and missing physically, abort.
     if (!seriesRecord && !folderExists) {
-        return NextResponse.json({ error: "The physical folder is missing." }, { status: 404 });
+        return NextResponse.json({ error: "The physical folder is missing and the series is not in the database." }, { status: 404 });
     }
 
-    // 4. Load Metadata and Progress
     let isFavorite = false;
     let progressMap: Record<string, { readProgress: number, isRead: boolean }> = {};
     
@@ -162,11 +148,9 @@ export async function GET(request: Request) {
         const activeFilePaths = new Set();
         const creatingNums = new Set();
 
-        // FIX: We only scan the folder for issues if it physically exists.
         if (folderExists) {
             const files = await fs.promises.readdir(folderPath);
 
-            // 1. Group files by their extracted issue number first
             const filesByNum = new Map<string, string[]>();
             for (const file of files) {
                 if (file.toLowerCase().match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) { 
@@ -176,7 +160,6 @@ export async function GET(request: Request) {
                 }
             }
 
-            // 2. Process groups instead of individual files to prevent DB thrashing
             for (const [stdNum, fileList] of filesByNum.entries()) {
                 if (fileList.length > 1) {
                     duplicatesList.push({
@@ -185,7 +168,6 @@ export async function GET(request: Request) {
                     });
                 }
 
-                // Take the first file as the primary DB file
                 const file = fileList[0];
                 const fullPath = path.join(folderPath, file);
                 activeFilePaths.add(fullPath);
@@ -217,7 +199,6 @@ export async function GET(request: Request) {
         if (createsToFire.length > 0) await prisma.issue.createMany({ data: createsToFire });
         if (updateOperations.length > 0) await Promise.all(updateOperations);
 
-        // FIX: Don't delete unmatched entries if the folder just hasn't been created yet
         if (folderExists) {
             await prisma.issue.deleteMany({
                 where: {
@@ -265,10 +246,13 @@ export async function GET(request: Request) {
         ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 
         : seriesRecord?.coverUrl || null;
 
+    // --- NEW: Inject metadataId and metadataSource to fully support Metron routing on the frontend ---
     return NextResponse.json({ 
       id: seriesRecord?.id || null, 
       isFavorite, 
       cvId: (seriesRecord?.metadataId && !seriesRecord.metadataId.startsWith('unmatched_')) ? parseInt(seriesRecord.metadataId) : null,
+      metadataId: seriesRecord?.metadataId || null,
+      metadataSource: seriesRecord?.metadataSource || 'COMICVINE',
       seriesName: seriesRecord?.name?.trim() || path.basename(folderPath).replace(/\s\(\d{4}\)$/, ""),
       publisher: seriesRecord?.publisher || null, 
       year: seriesRecord?.year || null, 

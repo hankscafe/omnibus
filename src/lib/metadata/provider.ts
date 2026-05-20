@@ -20,11 +20,17 @@ export interface MetadataIssue {
     writers: string[];
     artists: string[];
     characters: string[];
+    coverArtists?: string[];
+    colorists?: string[];
+    letterers?: string[];
+    storyArcs?: string[];
+    teams?: string[];
+    locations?: string[];
 }
 
 export interface IMetadataProvider {
     searchSeries(query: string): Promise<MetadataSeries[]>;
-    getSeriesDetails(id: string): Promise<MetadataSeries>;
+    getSeriesDetails(id: string, lastModified?: Date): Promise<MetadataSeries | null>;
     getSeriesIssues(id: string): Promise<MetadataIssue[]>;
     getIssueDetails(id: string): Promise<MetadataIssue>;
 }

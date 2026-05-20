@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
         let isManga = false;
         if (req.volumeId && req.volumeId !== "0") {
             const series = await prisma.series.findFirst({ 
-                where: { metadataId: req.volumeId, metadataSource: 'COMICVINE' } 
+                where: { metadataId: req.volumeId, metadataSource: req.metadataSource || 'COMICVINE' } 
             });
             if (series) {
                 year = series.year.toString();

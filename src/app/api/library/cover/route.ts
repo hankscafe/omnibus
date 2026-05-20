@@ -1,3 +1,4 @@
+// src/app/api/library/cover/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
@@ -57,11 +58,15 @@ export async function GET(request: NextRequest) {
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000); 
+            const timeoutId = setTimeout(() => controller.abort(), 8000); 
 
+            // --- FIX: Mimic a real browser to bypass Cloudflare blocks on Metron/ComicVine image requests
             const imgRes = await fetch(filePath, {
                 signal: controller.signal,
-                headers: { 'User-Agent': 'Omnibus/1.0' }
+                headers: { 
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+                }
             });
             clearTimeout(timeoutId);
 
@@ -82,8 +87,6 @@ export async function GET(request: NextRequest) {
         }
     }
 
-    // 2. PATH TRAVERSAL FIX & ROBUST LOCAL COVER LOOKUP
-    // FIX: Replaced fs.realpathSync with path.normalize to prevent crashes on mapped network drives
     const realTarget = path.normalize(filePath);
     const libraries = await prisma.library.findMany();
     

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     seriesFindFirst: vi.fn(),
     seriesUpdate: vi.fn(),
     issueFindFirst: vi.fn(),
+    issueFindMany: vi.fn(), // <-- ADDED: Mock for the new deduplication check
     issueCreate: vi.fn(),
     issueUpdate: vi.fn(),
     systemSettingFindUnique: vi.fn(),
@@ -20,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         series: { findFirst: mocks.seriesFindFirst, update: mocks.seriesUpdate },
-        issue: { findFirst: mocks.issueFindFirst, create: mocks.issueCreate, update: mocks.issueUpdate },
+        // <-- ADDED: findMany wired to our mock
+        issue: { findFirst: mocks.issueFindFirst, findMany: mocks.issueFindMany, create: mocks.issueCreate, update: mocks.issueUpdate },
         systemSetting: { findUnique: mocks.systemSettingFindUnique }
     }
 }));
@@ -63,6 +65,7 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         });
         mocks.systemSettingFindUnique.mockResolvedValue({ value: 'mock_api_key' });
         mocks.issueFindFirst.mockResolvedValue(null); // Default: assume no issues exist locally
+        mocks.issueFindMany.mockResolvedValue([]);    // <-- ADDED: Default return value for duplicate check
     });
 
     afterEach(() => {

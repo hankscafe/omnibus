@@ -49,11 +49,13 @@ export async function POST(request: Request) {
         if (targetSource === 'METRON') {
             const metron = new MetronProvider();
             const details = await metron.getSeriesDetails(targetMetaId);
-            if (!realPublisher) realPublisher = details.publisher;
-            if (!realName) realName = details.name;
-            if (!realYear) realYear = details.year;
-            imageUrl = details.coverUrl;
-            status = details.status;
+            if (details) {
+                if (!realPublisher) realPublisher = details.publisher;
+                if (!realName) realName = details.name;
+                if (!realYear) realYear = details.year;
+                imageUrl = details.coverUrl;
+                status = details.status;
+            }
         } else {
             const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
             const cvApiKey = cvKeySetting?.value;

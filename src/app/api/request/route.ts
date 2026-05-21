@@ -5,6 +5,7 @@ import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import axios from 'axios';
 import path from 'path';
+import fs from 'fs';
 import { SystemNotifier } from '@/lib/notifications';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
 import { detectManga } from '@/lib/manga-detector'; 
@@ -14,6 +15,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { syncSeriesMetadata } from '@/lib/metadata-fetcher'; 
 import { AuditLogger } from '@/lib/audit-logger';
 import { MetronProvider } from '@/lib/metadata/providers/metron'; 
+import { omnibusQueue } from '@/lib/queue';
 
 export const dynamic = 'force-dynamic';
 
@@ -119,11 +121,9 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     let name = body.name || body.seriesName || body.title;
-    // --- FIX: Extract releaseDate from the incoming payload ---
     const { cvId, type, monitored, directSource, metadataSource = 'COMICVINE', monitorOnly, releaseDate } = body; 
     let { image, publisher, year, description } = body;
 
-    // --- DYNAMIC ID RESOLUTION ---
     let resolvedCvId = cvId;
 
     if (resolvedCvId === undefined || resolvedCvId === null || resolvedCvId === 0 || resolvedCvId === '0') {
@@ -135,7 +135,6 @@ export async function POST(request: NextRequest) {
                     const results = await metron.searchSeries(name);
                     if (results.length > 0) {
                         resolvedCvId = parseInt(results[0].sourceId);
-                        Logger.log(`[Request] Resolved Metron ID dynamically: ${resolvedCvId}`, 'success');
                     }
                 } else {
                     const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -147,7 +146,6 @@ export async function POST(request: NextRequest) {
                         });
                         if (cvRes.data?.results?.length > 0) {
                             resolvedCvId = cvRes.data.results[0].id;
-                            Logger.log(`[Request] Resolved ComicVine ID dynamically: ${resolvedCvId}`, 'success');
                         }
                     }
                 }
@@ -171,12 +169,8 @@ export async function POST(request: NextRequest) {
                 try {
                     details = await metron.getSeriesDetails(resolvedCvId.toString());
                 } catch(e) {
-                    Logger.log(`[Request] Direct Metron ID lookup failed. Attempting cv_id resolution...`, 'info');
                     details = await metron.getSeriesByCvId(resolvedCvId.toString());
-                    if (details) {
-                        resolvedCvId = parseInt(details.sourceId);
-                        Logger.log(`[Request] Successfully resolved ComicVine ID to Metron ID: ${resolvedCvId}`, 'success');
-                    }
+                    if (details) resolvedCvId = parseInt(details.sourceId);
                 }
                 
                 if (details) {
@@ -185,9 +179,7 @@ export async function POST(request: NextRequest) {
                     if (!year) year = details.year.toString();
                     if (!description) description = details.description;
                 }
-            } catch (e) {
-                Logger.log(`[Request] Metron metadata recovery failed for ${resolvedCvId}`, 'warn');
-            }
+            } catch (e) {}
         } else {
             try {
                 const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
@@ -205,9 +197,7 @@ export async function POST(request: NextRequest) {
                         if (!description) description = volData.description || volData.deck;
                     }
                 }
-            } catch (e) {
-                Logger.log(`[Request] CV metadata recovery failed for ${resolvedCvId}`, 'warn');
-            }
+            } catch (e) {}
         }
     }
 
@@ -280,11 +270,7 @@ export async function POST(request: NextRequest) {
           }
       });
 
-      syncSeriesMetadata(resolvedCvId.toString(), series.folderPath, metadataSource).catch(err => {
-          Logger.log(`[Request] Background metadata sync failed: ${err.message}`, 'error');
-      });
-
-      Logger.log(`[Monitoring] ${name} is now actively being monitored.`, 'success');
+      syncSeriesMetadata(resolvedCvId.toString(), series.folderPath, metadataSource).catch(err => {});
 
       if (monitorOnly) {
           return NextResponse.json({ 
@@ -323,9 +309,7 @@ export async function POST(request: NextRequest) {
           
           for (const issue of issues) {
               const parsedIssueNum = parseFloat(issue.issueNumber || (issue as any).issue || "");
-              if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) {
-                  continue; 
-              }
+              if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) continue; 
 
               const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : year;
               let searchName = `${name} #${issue.issueNumber}`;
@@ -369,9 +353,7 @@ export async function POST(request: NextRequest) {
 
           const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
             params: {
-              api_key: cvApiKey,
-              format: 'json',
-              filter: `volume:${resolvedCvId}`,
+              api_key: cvApiKey, format: 'json', filter: `volume:${resolvedCvId}`,
               field_list: 'id,name,issue_number,cover_date,store_date,image' 
             },
             headers: { 'User-Agent': 'Omnibus/1.0' }
@@ -409,12 +391,8 @@ export async function POST(request: NextRequest) {
             if (!existing) {
               const newReq = await prisma.request.create({
                 data: {
-                  userId: userId,
-                  volumeId: resolvedCvId.toString(),
-                  metadataSource: metadataSource,
-                  status: issueStatus,
-                  activeDownloadName: searchName,
-                  imageUrl: issueImage,
+                  userId: userId, volumeId: resolvedCvId.toString(), metadataSource: metadataSource,
+                  status: issueStatus, activeDownloadName: searchName, imageUrl: issueImage,
                   downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null 
                 }
               });
@@ -436,41 +414,28 @@ export async function POST(request: NextRequest) {
 
     } else {
       const searchName = type === 'issue' && body.issueNumber && !name.includes(`#${body.issueNumber}`)
-        ? `${name} #${body.issueNumber}` 
-        : name;
+        ? `${name} #${body.issueNumber}` : name;
 
       if (body.issueNumber && (!image || image.includes('placeholder') || image.includes('default'))) {
          const fallback = await getMetronCover(name, body.issueNumber, metronUserSetting?.value, metronPassSetting?.value);
          if (fallback) image = fallback;
       }
 
-      // --- FIX: Check release date for individual issue requests if provided ---
       let issueStatus = initialStatus;
-      if (releaseDate && !isReleasedYet(releaseDate, releaseDate)) {
-          issueStatus = 'UNRELEASED';
-      }
+      if (releaseDate && !isReleasedYet(releaseDate, releaseDate)) issueStatus = 'UNRELEASED';
 
       const newReq = await prisma.request.create({
         data: {
-          userId: userId,
-          volumeId: resolvedCvId.toString(),
-          metadataSource: metadataSource,
-          status: issueStatus, // <-- Use the newly evaluated status
-          activeDownloadName: searchName,
-          imageUrl: image,
+          userId: userId, volumeId: resolvedCvId.toString(), metadataSource: metadataSource,
+          status: issueStatus, activeDownloadName: searchName, imageUrl: image,
           downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
         }
       });
 
       if (issueStatus === 'PENDING_APPROVAL') {
           SystemNotifier.sendAlert('pending_request', {
-              title: searchName,
-              imageUrl: image,
-              user: token.name as string,
-              description: description,
-              publisher: safePublisher,
-              year: year,
-              date: new Date().toLocaleString()
+              title: searchName, imageUrl: image, user: token.name as string,
+              description: description, publisher: safePublisher, year: year, date: new Date().toLocaleString()
           }).catch(() => {});
       }
 
@@ -517,6 +482,31 @@ export async function PATCH(request: NextRequest) {
     });
 
     await AuditLogger.log('UPDATED_REQUEST_STATUS', { requestId: id, newStatus: status, title: reqRecord.activeDownloadName }, userId);
+    
+    // --- NEW: SKELETON CLEANUP FOR ADMIN DENIALS ---
+    if (status === 'CANCELLED') {
+        if (reqRecord.volumeId && reqRecord.volumeId !== "0") {
+            const series = await prisma.series.findFirst({ 
+                where: { metadataId: reqRecord.volumeId, metadataSource: reqRecord.metadataSource || 'COMICVINE' } 
+            });
+            if (series) {
+                const downloadedIssuesCount = await prisma.issue.count({
+                    where: { seriesId: series.id, filePath: { not: null } }
+                });
+                const otherActiveReqs = await prisma.request.count({
+                    where: { 
+                        volumeId: reqRecord.volumeId, 
+                        id: { not: id },
+                        status: { notIn: ['CANCELLED', 'FAILED', 'ERROR', 'STALLED'] } 
+                    }
+                });
+                if (downloadedIssuesCount === 0 && otherActiveReqs === 0) {
+                    await prisma.issue.deleteMany({ where: { seriesId: series.id } });
+                    await prisma.series.delete({ where: { id: series.id } });
+                }
+            }
+        }
+    }
     
     if (status === 'PENDING') {
       let year = "";
@@ -602,6 +592,7 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
+// Inside src/app/api/request/route.ts
 export async function DELETE(request: NextRequest) {
   const token = await getToken({ req: request });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -619,10 +610,83 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // --- NEW: ABORT ACTIVE DOWNLOAD CLIENT JOBS ---
+    // If the download was handed off to qBittorrent/SABnzbd/etc., hunt it down and delete it
+    if (reqRecord.status === 'DOWNLOADING' && reqRecord.downloadLink && !reqRecord.downloadLink.startsWith('http')) {
+        try {
+            const { DownloadService } = await import('@/lib/download-clients');
+            const activeDownloads = await DownloadService.getAllActiveDownloads();
+            
+            // Match via Hash (or fallback to Name)
+            const activeJob = activeDownloads.find((d: any) => 
+                d.id.toLowerCase() === reqRecord.downloadLink?.toLowerCase() || 
+                d.name === reqRecord.activeDownloadName
+            );
+            
+            if (activeJob) {
+                const clientConfig = await prisma.downloadClient.findFirst({
+                    where: { name: activeJob.clientName }
+                });
+                
+                if (clientConfig) {
+                    await DownloadService.removeDownload(clientConfig, activeJob.id);
+                    Logger.log(`[Request API] Terminated active download and wiped files from ${clientConfig.name} for cancelled request ${id}`, 'info');
+                }
+            }
+        } catch (e) {
+            Logger.log(`[Request API] Non-fatal error attempting to cancel active external download: ${e}`, 'warn');
+        }
+    }
+
+    // 1. CHANGE STATUS TO CANCELLED
     await prisma.request.update({
       where: { id },
       data: { status: 'CANCELLED', notified: false }
     });
+
+    // 2. KILL PENDING BACKGROUND JOBS IN BULLMQ
+    try {
+        const { omnibusQueue } = await import('@/lib/queue');
+        const existingJobs = await omnibusQueue.getJobs(['waiting', 'delayed', 'active', 'paused']);
+        for (const job of existingJobs) {
+            if (job.id === `SEARCH_${id}` || job.data?.requestId === id) {
+                // job.remove() works on waiting jobs. Active jobs will be caught by the status check in automation.ts
+                await job.remove().catch(() => {});
+                Logger.log(`[Request API] Removed pending background job for cancelled request ${id}`, 'info');
+            }
+        }
+    } catch (e) {
+        Logger.log(`[Request API] Error removing job for ${id}: ${e}`, 'warn');
+    }
+
+    // 3. SAFE DB-DRIVEN SERIES CLEANUP
+    if (reqRecord.volumeId && reqRecord.volumeId !== "0") {
+        const series = await prisma.series.findFirst({ 
+            where: { metadataId: reqRecord.volumeId, metadataSource: reqRecord.metadataSource || 'COMICVINE' } 
+        });
+        
+        if (series) {
+            // Check the database to see if we actually own any files for this series
+            const downloadedIssuesCount = await prisma.issue.count({
+                where: { seriesId: series.id, filePath: { not: null } }
+            });
+
+            // Ensure no other active requests exist for this specific volume before we delete it
+            const otherActiveReqs = await prisma.request.count({
+                where: { 
+                    volumeId: reqRecord.volumeId, 
+                    id: { not: id },
+                    status: { notIn: ['CANCELLED', 'FAILED', 'ERROR', 'STALLED'] } 
+                }
+            });
+
+            if (downloadedIssuesCount === 0 && otherActiveReqs === 0) {
+                await prisma.issue.deleteMany({ where: { seriesId: series.id } });
+                await prisma.series.delete({ where: { id: series.id } });
+                Logger.log(`[Request API] Cleaned up empty series placeholder for cancelled volume ${reqRecord.volumeId}`, 'info');
+            }
+        }
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

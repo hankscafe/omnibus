@@ -8,7 +8,12 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Loader2, Search, RefreshCw, Clock, CheckCircle2, Calendar, FileText, ChevronLeft, ChevronRight, Info, List, ImageIcon, Server, XCircle, Library } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { 
+  Loader2, Search, RefreshCw, Clock, CheckCircle2, Calendar, FileText, 
+  ChevronLeft, ChevronRight, Info, List, ImageIcon, Server, XCircle, Library,
+  CheckSquare, Square
+} from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import {
   Select,
@@ -18,11 +23,28 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-function RequestCard({ req, getStatusColor, onCancel }: { req: any, getStatusColor: (status: string) => string, onCancel: (id: string) => void }) {
+function RequestCard({ 
+    req, 
+    getStatusColor, 
+    onCancel, 
+    isSelectionMode, 
+    isSelected, 
+    onToggleSelect 
+}: { 
+    req: any, 
+    getStatusColor: (status: string) => string, 
+    onCancel: (id: string) => void,
+    isSelectionMode: boolean,
+    isSelected: boolean,
+    onToggleSelect: (id: string) => void
+}) {
   const [desc, setDesc] = useState<string | null>(null)
   const [loadingDesc, setLoadingDesc] = useState(false)
   const [showDesc, setShowDesc] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
+
+  // Enforce the rule that users can only cancel pre-processed or active items
+  const isCancellable = ['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'MANUAL_DDL', 'UNRELEASED'].includes(req.status);
 
   const handleShowDesc = async () => {
     if (showDesc) {
@@ -71,7 +93,7 @@ function RequestCard({ req, getStatusColor, onCancel }: { req: any, getStatusCol
   // Parse Provider
   let provider = "Pending Search";
   if (req.indexer) {
-      provider = req.indexer; // <--- 1. Pull directly from the database if available
+      provider = req.indexer;
   } else if (req.downloadLink === 'DIRECT_GETCOMICS') {
       provider = "GetComics";
   } else if (req.downloadLink?.startsWith('http')) {
@@ -106,12 +128,20 @@ function RequestCard({ req, getStatusColor, onCancel }: { req: any, getStatusCol
   }
 
   return (
-    <Card className="shadow-sm hover:border-primary/50 transition-colors overflow-hidden border-border bg-background max-w-4xl mx-auto w-full">
-      <CardContent className="p-4 flex flex-col sm:flex-row gap-6 items-start">
+    <Card 
+        className={`shadow-sm transition-all overflow-hidden bg-background max-w-4xl mx-auto w-full border ${isSelectionMode ? (isCancellable ? 'cursor-pointer hover:border-primary/50' : 'opacity-60 cursor-not-allowed') : 'hover:border-primary/50 border-border'} ${isSelected && isSelectionMode ? 'border-primary ring-2 ring-primary/20 bg-primary/5' : ''}`}
+        onClick={() => { if (isSelectionMode && isCancellable) onToggleSelect(req.id); }}
+    >
+      <CardContent className="p-4 flex flex-col sm:flex-row gap-6 items-start relative">
+        {isSelectionMode && isCancellable && (
+            <div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">
+                {isSelected ? <CheckSquare className="w-5 h-5 text-primary" /> : <Square className="w-5 h-5 text-white/80" />}
+            </div>
+        )}
         
         <div className="w-28 h-40 sm:w-32 sm:h-48 shrink-0 bg-muted rounded-xl overflow-hidden border border-border relative shadow-sm flex items-center justify-center">
             {req.imageUrl && req.imageUrl.trim() !== "" ? (
-                <img src={req.imageUrl} alt={displayName} className="object-cover w-full h-full" />
+                <img src={req.imageUrl} alt={displayName} className={`object-cover w-full h-full ${isSelectionMode ? 'opacity-80' : ''}`} />
             ) : (
                 <ImageIcon className="w-10 h-10 text-muted-foreground/50" />
             )}
@@ -135,7 +165,8 @@ function RequestCard({ req, getStatusColor, onCancel }: { req: any, getStatusCol
                 <Button 
                     variant="ghost" 
                     size="sm" 
-                    onClick={handleShowDesc} 
+                    onClick={(e) => { e.stopPropagation(); handleShowDesc(); }} 
+                    disabled={isSelectionMode}
                     className="h-7 px-2 text-xs font-bold text-primary hover:text-primary/80 hover:bg-primary/10 -ml-2 mb-1"
                 >
                     <Info className="w-3.5 h-3.5 mr-1" /> {showDesc ? "Hide Synopsis" : "Read Synopsis"}
@@ -172,12 +203,12 @@ function RequestCard({ req, getStatusColor, onCancel }: { req: any, getStatusCol
                 {/* Actions */}
                 <div className="flex flex-wrap gap-2 w-full mt-1">
                      {req.seriesPath && (
-                        <Button size="sm" asChild variant="secondary" className="flex-1 font-bold shadow-sm h-9">
-                            <Link href={`/library/series?path=${encodeURIComponent(req.seriesPath)}`}><Library className="w-4 h-4 mr-2" /> Go to Series</Link>
+                        <Button size="sm" asChild variant="secondary" className="flex-1 font-bold shadow-sm h-9" disabled={isSelectionMode}>
+                            <Link onClick={(e) => isSelectionMode && e.preventDefault()} href={`/library/series?path=${encodeURIComponent(req.seriesPath)}`}><Library className="w-4 h-4 mr-2" /> Go to Series</Link>
                         </Button>
                      )}
-                     {['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR', 'MANUAL_DDL'].includes(req.status) && (
-                         <Button size="sm" variant="destructive" className="flex-1 font-bold shadow-sm h-9" onClick={handleCancel} disabled={isCancelling}>
+                     {isCancellable && (
+                         <Button size="sm" variant="destructive" className="flex-1 font-bold shadow-sm h-9" onClick={(e) => { e.stopPropagation(); handleCancel(); }} disabled={isCancelling || isSelectionMode}>
                             {isCancelling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />} Cancel Request
                          </Button>
                      )}
@@ -195,9 +226,15 @@ export default function RequestsPage() {
   const [loading, setLoading] = useState(true)
   
   const [activeTab, setActiveTab] = useState("ALL")
+  const [searchQuery, setSearchQuery] = useState("")
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState("5")
   
+  // Selection / Bulk Actions
+  const [isSelectionMode, setIsSelectionMode] = useState(false)
+  const [selectedRequests, setSelectedRequests] = useState<Set<string>>(new Set())
+  const [isBulkCancelling, setIsBulkCancelling] = useState(false)
+
   const { toast } = useToast()
 
   const fetchRequests = async () => {
@@ -235,6 +272,33 @@ export default function RequestsPage() {
       }
   };
 
+  const handleBulkCancel = async () => {
+      setIsBulkCancelling(true);
+      try {
+          const promises = Array.from(selectedRequests).map(id =>
+              fetch(`/api/request?id=${id}`, { method: 'DELETE' })
+          );
+          await Promise.all(promises);
+          toast({ title: "Requests Cancelled", description: `Successfully cancelled ${selectedRequests.size} requests.` });
+          setRequests(prev => prev.map(r => selectedRequests.has(r.id) ? { ...r, status: 'CANCELLED' } : r));
+          setSelectedRequests(new Set());
+          setIsSelectionMode(false);
+      } catch (e) {
+          toast({ title: "Error cancelling requests", variant: "destructive" });
+      } finally {
+          setIsBulkCancelling(false);
+      }
+  };
+
+  const toggleRequestSelection = (id: string) => {
+      setSelectedRequests(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+      });
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'IMPORTED': case 'COMPLETED': return "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800"
@@ -248,6 +312,9 @@ export default function RequestsPage() {
 
   const filteredRequests = useMemo(() => {
       return requests.filter(req => {
+          const matchesSearch = !searchQuery || (req.activeDownloadName || req.seriesName || "").toLowerCase().includes(searchQuery.toLowerCase());
+          if (!matchesSearch) return false;
+
           if (activeTab === "ALL") return true;
           if (activeTab === "ACTIVE") return ['DOWNLOADING', 'PENDING', 'MANUAL_DDL'].includes(req.status);
           if (activeTab === "PENDING_APPROVAL") return req.status === 'PENDING_APPROVAL';
@@ -257,13 +324,16 @@ export default function RequestsPage() {
           if (activeTab === "CANCELLED") return req.status === 'CANCELLED';
           return true;
       });
-  }, [requests, activeTab]);
+  }, [requests, activeTab, searchQuery]);
 
-  useEffect(() => { setPage(1) }, [activeTab, pageSize]);
+  useEffect(() => { setPage(1) }, [activeTab, pageSize, searchQuery]);
 
   const limit = parseInt(pageSize);
   const totalPages = Math.ceil(filteredRequests.length / limit) || 1;
   const paginatedRequests = filteredRequests.slice((page - 1) * limit, page * limit);
+  
+  // Calculate which of the currently visible requests are eligible for cancellation
+  const cancellableRequests = useMemo(() => paginatedRequests.filter(r => ['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'MANUAL_DDL', 'UNRELEASED'].includes(r.status)), [paginatedRequests]);
 
   return (
     <div className="container mx-auto py-10 px-6 space-y-6 max-w-5xl transition-colors duration-300">
@@ -276,6 +346,14 @@ export default function RequestsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+            <Button 
+                variant={isSelectionMode ? "secondary" : "outline"} 
+                onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedRequests(new Set()); }} 
+                className={`h-10 ${isSelectionMode ? 'bg-primary/20 text-primary hover:bg-primary/30 border-primary/50' : 'border-border hover:bg-muted text-foreground'}`}
+            >
+                {isSelectionMode ? <Square className="w-4 h-4 mr-2" /> : <CheckSquare className="w-4 h-4 mr-2" />}
+                {isSelectionMode ? "Cancel Select" : "Select"}
+            </Button>
             <Button variant="outline" onClick={fetchRequests} disabled={loading} className="h-10 border-border hover:bg-muted text-foreground">
                 {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                 Refresh
@@ -284,6 +362,16 @@ export default function RequestsPage() {
                 <Link href="/"><Search className="w-4 h-4 mr-2" /> Request More</Link>
             </Button>
         </div>
+      </div>
+
+      <div className="relative w-full">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+          <Input 
+              placeholder="Search your requests..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 h-12 bg-background border-border text-base"
+          />
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -300,7 +388,15 @@ export default function RequestsPage() {
 
       <div className="grid grid-cols-1 gap-6 min-h-[400px]">
           {paginatedRequests.map((req) => (
-              <RequestCard key={req.id} req={req} getStatusColor={getStatusColor} onCancel={handleCancelRequest} />
+              <RequestCard 
+                  key={req.id} 
+                  req={req} 
+                  getStatusColor={getStatusColor} 
+                  onCancel={handleCancelRequest} 
+                  isSelectionMode={isSelectionMode}
+                  isSelected={selectedRequests.has(req.id)}
+                  onToggleSelect={toggleRequestSelection}
+              />
           ))}
           
           {paginatedRequests.length === 0 && !loading && (
@@ -311,8 +407,27 @@ export default function RequestsPage() {
           )}
       </div>
 
+      {isSelectionMode && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background text-foreground px-4 sm:px-6 py-3 rounded-full shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] flex items-center gap-3 sm:gap-4 z-50 animate-in slide-in-from-bottom-8 border border-border w-[95%] sm:w-auto overflow-x-auto">
+              <Button variant="ghost" size="sm" className="h-10 sm:h-8 shrink-0 hover:bg-muted text-muted-foreground font-medium" onClick={() => {
+                  if (selectedRequests.size === cancellableRequests.length && cancellableRequests.length > 0) setSelectedRequests(new Set());
+                  else setSelectedRequests(new Set(cancellableRequests.map(r => r.id)));
+              }}>
+                  {selectedRequests.size === cancellableRequests.length && cancellableRequests.length > 0 ? "Deselect All" : "Select All"}
+              </Button>
+              <div className="h-5 w-px bg-border shrink-0" />
+              <span aria-live="polite" className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedRequests.size} Selected</span>
+              
+              <div className="flex gap-2 shrink-0">
+                <Button aria-label="Cancel selected requests" size="sm" variant="destructive" className={`h-10 sm:h-8 shadow-sm font-bold transition-all`} disabled={selectedRequests.size === 0 || isBulkCancelling} onClick={handleBulkCancel}>
+                    {isBulkCancelling ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <XCircle className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Cancel Selected</span>
+                </Button>
+              </div>
+          </div>
+      )}
+
       {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-border pt-6 mt-6">
+          <div className="flex items-center justify-between border-t border-border pt-6 mt-6 pb-20">
               <p className="text-sm text-muted-foreground hidden sm:block">
                   Showing {(page - 1) * limit + 1} to {Math.min(page * limit, filteredRequests.length)} of {filteredRequests.length} requests
               </p>

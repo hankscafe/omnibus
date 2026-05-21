@@ -52,8 +52,8 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       return; 
   }
 
-  // If the request is already being downloaded, completed, or imported, completely abort the background job!
-  if (['DOWNLOADING', 'COMPLETED', 'IMPORTED'].includes(freshReq.status)) {
+  // If the request is already being downloaded, completed, imported, or cancelled, abort!
+  if (['DOWNLOADING', 'COMPLETED', 'IMPORTED', 'CANCELLED'].includes(freshReq.status)) {
       Logger.log(`[Automation] Aborting duplicate execution for ${name}. Request is already in status: ${freshReq.status}`, 'warn');
       return; 
   }

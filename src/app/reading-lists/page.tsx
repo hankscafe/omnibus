@@ -1,7 +1,7 @@
 // src/app/reading-lists/page.tsx
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, Suspense, useMemo } from "react"
 import { useSession } from "next-auth/react"
 import { useSearchParams } from "next/navigation"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
@@ -16,7 +16,8 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
     BookOpen, Trash2, Plus, GripVertical, Loader2, Image as ImageIcon, 
     ArrowLeft, ListOrdered, Calendar, Minus, FolderOpen, CloudDownload,
-    Check, DownloadCloud, Sparkles, Globe, ExternalLink, Share2, Info
+    Check, DownloadCloud, Sparkles, Globe, ExternalLink, Share2, Info,
+    ChevronDown, ChevronUp, LayoutList, List
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -130,6 +131,51 @@ function ReadingListsContent() {
   const [isBulkDownloading, setIsBulkDownloading] = useState(false)
 
   const [isMounted, setIsMounted] = useState(false)
+
+  // --- New State for Grouped View ---
+  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped')
+  const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set())
+
+  // Group sequential items of the same series to preserve reading order
+  const groupedItems = useMemo(() => {
+      const activeList = lists.find(l => l.id === activeListId);
+      if (!activeList) return [];
+      
+      const chunks: { id: string, seriesName: string, items: any[], startIndex: number }[] = [];
+      let currentChunk: any[] = [];
+      let currentSeriesName: string | null = null;
+      let startIndex = 0;
+
+      activeList.items.forEach((item: any, idx: number) => {
+          const seriesName = item.issue?.series?.name || "Missing/Unlinked Issue";
+          
+          if (seriesName !== currentSeriesName) {
+              if (currentChunk.length > 0) {
+                  chunks.push({ id: `chunk-${chunks.length}`, seriesName: currentSeriesName || "Unknown", items: currentChunk, startIndex });
+              }
+              currentChunk = [item];
+              currentSeriesName = seriesName;
+              startIndex = idx;
+          } else {
+              currentChunk.push(item);
+          }
+      });
+
+      if (currentChunk.length > 0) {
+          chunks.push({ id: `chunk-${chunks.length}`, seriesName: currentSeriesName || "Unknown", items: currentChunk, startIndex });
+      }
+
+      return chunks;
+  }, [lists, activeListId]);
+
+  const toggleChunk = (chunkId: string) => {
+      setExpandedChunks(prev => {
+          const next = new Set(prev);
+          if (next.has(chunkId)) next.delete(chunkId);
+          else next.add(chunkId);
+          return next;
+      });
+  };
 
   useEffect(() => {
     setIsMounted(true)
@@ -530,7 +576,7 @@ function ReadingListsContent() {
   const missingItems = activeList ? activeList.items.filter((i: any) => !i.issueId) : [];
 
   return (
-    <div className="container mx-auto py-10 px-6 max-w-6xl space-y-8 transition-colors duration-300">
+    <div className="container mx-auto py-10 px-6 max-w-[1400px] space-y-8 transition-colors duration-300">
       
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -542,7 +588,7 @@ function ReadingListsContent() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-8 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)] gap-8 items-start">
           <div className="space-y-4">
               <div className="flex flex-col gap-2">
                   <Button className="w-full font-bold shadow-md bg-primary hover:bg-primary/90 text-primary-foreground border-0" onClick={() => setAutoBuildModalOpen(true)}>
@@ -615,60 +661,145 @@ function ReadingListsContent() {
           {activeList ? (
               <div className="space-y-6">
                   <Card className="shadow-sm border-primary/20 bg-primary/5">
-                      <CardHeader className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                          <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <CardTitle className="text-2xl font-black text-primary truncate">{activeList.name}</CardTitle>
+                      <CardHeader className="flex flex-col gap-4">
+                          <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-4 w-full">
+                              <div className="flex flex-wrap items-center gap-3 min-w-0 flex-1">
+                                <CardTitle className="text-2xl sm:text-3xl font-black text-primary leading-tight break-words">{activeList.name}</CardTitle>
                                 {activeList.isGlobal && <Badge variant="outline" className="shrink-0 bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800"><Globe className="w-3 h-3 mr-1"/> Global ({activeList.user?.username || 'Unknown'})</Badge>}
                               </div>
-                              {activeList.description && <CardDescription className="mt-2 text-primary/80 max-w-2xl truncate">{activeList.description}</CardDescription>}
-                          </div>
-                          <div className="flex flex-wrap sm:flex-nowrap gap-2 shrink-0 w-full sm:w-auto">
-                              <Button 
-                                  size="sm" 
-                                  variant="outline" 
-                                  className="font-bold border-border"
-                                  onClick={() => {
-                                      if ((activeList as any).shareId) {
-                                          const url = `${window.location.origin}/reading-lists/shared/${(activeList as any).shareId}`;
-                                          navigator.clipboard.writeText(url);
-                                          toast({ title: "Link Copied!" });
-                                      } else {
-                                          handleShareList(activeList.id);
-                                      }
-                                  }}
-                              >
-                                  <Share2 className="w-4 h-4 mr-2" /> {(activeList as any).shareId ? "Copy Link" : "Share"}
-                              </Button>
-
-                              {missingItems.length > 0 && (
+                              
+                              <div className="flex flex-wrap items-center gap-3 shrink-0 w-full xl:w-auto justify-start xl:justify-end">
+                                  {/* --- VIEW MODE TOGGLE --- */}
+                                  <div className="flex items-center gap-1 bg-muted p-1 rounded-md border border-border shadow-inner">
+                                      <Button variant={viewMode === 'grouped' ? 'default' : 'ghost'} size="sm" onClick={() => setViewMode('grouped')} className={`h-8 px-3 text-xs ${viewMode === 'grouped' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`}>
+                                          <LayoutList className="w-3.5 h-3.5 mr-1.5" /> Grouped
+                                      </Button>
+                                      <Button variant={viewMode === 'flat' ? 'default' : 'ghost'} size="sm" onClick={() => setViewMode('flat')} className={`h-8 px-3 text-xs ${viewMode === 'flat' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`}>
+                                          <List className="w-3.5 h-3.5 mr-1.5" /> Flat (Reorder)
+                                      </Button>
+                                  </div>
                                   <Button 
                                       size="sm" 
                                       variant="outline" 
-                                      className="font-bold border-primary/30 text-primary bg-primary/5 hover:bg-primary/10"
-                                      disabled={isBulkDownloading}
-                                      onClick={() => handleDownloadAllMissing(missingItems)}
+                                      className="h-10 sm:h-auto font-bold border-border"
+                                      onClick={() => {
+                                          if ((activeList as any).shareId) {
+                                              const url = `${window.location.origin}/reading-lists/shared/${(activeList as any).shareId}`;
+                                              navigator.clipboard.writeText(url);
+                                              toast({ title: "Link Copied!" });
+                                          } else {
+                                              handleShareList(activeList.id);
+                                          }
+                                      }}
                                   >
-                                      {isBulkDownloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DownloadCloud className="w-4 h-4 mr-2" />}
-                                      Missing ({missingItems.length})
+                                      <Share2 className="w-4 h-4 mr-2" /> {(activeList as any).shareId ? "Copy Link" : "Share"}
                                   </Button>
-                              )}
-                              {(isAdmin || activeList.userId === session?.user?.id) && (
-                                  <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setDeleteModalOpen(true)}>
-                                      <Trash2 className="w-4 h-4" />
-                                  </Button>
-                              )}
+
+                                  {missingItems.length > 0 && (
+                                      <Button 
+                                          size="sm" 
+                                          variant="outline" 
+                                          className="h-10 sm:h-auto font-bold border-primary/30 text-primary bg-primary/5 hover:bg-primary/10"
+                                          disabled={isBulkDownloading}
+                                          onClick={() => handleDownloadAllMissing(missingItems)}
+                                      >
+                                          {isBulkDownloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DownloadCloud className="w-4 h-4 mr-2" />}
+                                          Missing ({missingItems.length})
+                                      </Button>
+                                  )}
+                                  {(isAdmin || activeList.userId === session?.user?.id) && (
+                                      <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-9 sm:w-9 border border-transparent hover:border-red-200 dark:hover:border-red-900/50 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setDeleteModalOpen(true)}>
+                                          <Trash2 className="w-4 h-4" />
+                                      </Button>
+                                  )}
+                              </div>
                           </div>
+                          
+                          {activeList.description && (
+                              <CardDescription className="text-primary/80 leading-relaxed text-sm sm:text-base break-words whitespace-normal w-full mt-2">
+                                  {activeList.description}
+                              </CardDescription>
+                          )}
                       </CardHeader>
                   </Card>
 
                   {activeList.items.length === 0 ? (
-                      <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
-                          <BookOpen className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
-                          <h3 className="text-lg font-bold text-foreground">This list is empty</h3>
-                          <p className="text-sm text-muted-foreground mt-1">Navigate to any series and use the "Add to List" button on an issue.</p>
-                      </div>
-                  ) : (
+                    <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
+                        <BookOpen className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
+                        <h3 className="text-lg font-bold text-foreground">This list is empty</h3>
+                        <p className="text-sm text-muted-foreground mt-1">Navigate to any series and use the "Add to List" button on an issue.</p>
+                    </div>
+                  ) : viewMode === 'grouped' ? (
+                        /* --- NEW GROUPED COLLAPSIBLE VIEW --- */
+                        <div className="space-y-4 pb-20">
+                            {groupedItems.map(chunk => {
+                                const isExpanded = expandedChunks.has(chunk.id);
+                                return (
+                                    <div key={chunk.id} className="border border-border rounded-xl bg-background shadow-sm overflow-hidden transition-all">
+                                        <div 
+                                            className="p-4 bg-muted/30 flex items-center justify-between cursor-pointer hover:bg-muted/60 transition-colors"
+                                            onClick={() => toggleChunk(chunk.id)}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <FolderOpen className="w-5 h-5 text-primary" />
+                                                <span className="font-bold text-foreground text-sm sm:text-base">{chunk.seriesName}</span>
+                                                <Badge variant="secondary" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                                                    {chunk.items.length} Issues
+                                                </Badge>
+                                            </div>
+                                            <div className="bg-background rounded-full p-1 shadow-sm border border-border">
+                                                {isExpanded ? <ChevronUp className="w-4 h-4 text-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+                                            </div>
+                                        </div>
+
+                                        {isExpanded && (
+                                            <div className="p-3 space-y-2 border-t border-border bg-muted/10">
+                                                {chunk.items.map((item, localIdx) => {
+                                                    const index = chunk.startIndex + localIdx;
+                                                    const issue = item.issue;
+                                                    const series = issue?.series;
+                                                    const coverUrl = activeList.coverUrl || issue?.coverUrl || (series?.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '/api/library/cover?path=missing');
+
+                                                return (
+                                                    <div key={item.id} className="flex items-center gap-4 p-3 bg-background border border-border rounded-xl shadow-sm hover:border-primary/50 transition-all">
+                                                        <span className="w-8 text-center font-mono text-xs font-bold text-muted-foreground">{index + 1}</span>
+                                                        <div className="w-10 h-14 shrink-0 rounded overflow-hidden bg-muted border border-border">
+                                                            <img src={coverUrl} className="w-full h-full object-cover" alt="" />
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        {issue ? (
+                                                            <>
+                                                                <h4 className="font-bold text-sm truncate text-foreground">{series.name}</h4>
+                                                                <p className="text-xs text-muted-foreground truncate">Issue #{issue.number} • {issue.name || "Untitled"}</p>
+                                                            </>
+                                                        ) : (
+                                                                <h4 className="font-bold text-sm truncate text-muted-foreground">{item.title} (Missing File)</h4>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 pr-2 shrink-0">
+                                                        {issue && (
+                                                            <Button size="sm" asChild className="h-8 shadow-sm font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
+                                                                <Link href={`/reader?path=${encodeURIComponent(issue.filePath)}&series=${encodeURIComponent(series.folderPath)}`}>
+                                                                    <BookOpen className="w-3.5 h-3.5 sm:mr-2" /> <span className="hidden sm:inline">Read</span>
+                                                                </Link>
+                                                            </Button>
+                                                        )}
+                                                        {(isAdmin || activeList.userId === session?.user?.id) && (
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 hidden sm:flex" onClick={() => handleRemoveItem(issue?.id || item.id)}>
+                                                                <Minus className="w-4 h-4" />
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        )
+                    })}
+                </div>
+            ) : (
                       <DragDropContext onDragEnd={onDragEnd}>
                           <Droppable droppableId="reading-list">
                               {(provided) => (

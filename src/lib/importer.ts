@@ -77,7 +77,8 @@ export const Importer = {
         include: { user: true } 
     });
     
-    if (!req || req.status === 'COMPLETED' || req.status === 'IMPORTED') return false;
+    // Abort if the user cancelled the request while it was downloading
+    if (!req || req.status === 'COMPLETED' || req.status === 'IMPORTED' || req.status === 'CANCELLED') return false;
 
     Logger.log(`[Importer] Starting import for: ${req.activeDownloadName || requestId}`, 'info');
     Logger.log(`[Importer Debug] Resolving physical path for request [${requestId}]...`, 'debug');

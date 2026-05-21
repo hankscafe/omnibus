@@ -22,11 +22,8 @@ async function getNetworkHeaders() {
 export const DownloadService = {
   async addDownload(client: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
     const cleanUrl = client.url.replace(/\/$/, '');
-    
-    // NATIVE DB FIX: Get the primary category (the first one before any commas)
     const categoryString = client.category || 'comics';
     const primaryCategory = categoryString.split(',')[0].trim();
-    
     const networkHeaders = await getNetworkHeaders();
 
     const baseConfig = {
@@ -34,32 +31,25 @@ export const DownloadService = {
       timeout: 30000 
     };
 
-    Logger.log(`[DownloadService Debug] Preparing to send payload to ${client.type.toUpperCase()} client at ${cleanUrl}`, 'debug');
-    Logger.log(`[DownloadService Debug] Payload Details: Title="${title}", Category="${primaryCategory}", SeedLimit=${seedTimeLimit}`, 'debug');
-
     try {
       let fileBuffer: Buffer | null = null;
       if (!downloadUrl.startsWith('magnet:') && !client.type.includes('nzb')) {
         try {
-            Logger.log(`[DownloadService Debug] Fetching physical .torrent file from: ${downloadUrl}`, 'debug');
             const fileRes = await axios.get(downloadUrl, { responseType: 'arraybuffer', ...baseConfig });
             fileBuffer = Buffer.from(fileRes.data);
         } catch (err) { Logger.log(`[Proxy] File fetch failed, using URL instead.`, 'info'); }
       }
 
       if (client.type === 'qbit') {
-        Logger.log(`[DownloadService Debug] Authenticating with qBittorrent...`, 'debug');
         const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
           new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
           { ...baseConfig, headers: { ...baseConfig.headers, 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
         const cookie = loginRes.headers['set-cookie'];
-        Logger.log(`[DownloadService Debug] qBittorrent Auth successful. Received cookie.`, 'debug');
         const form = new FormData();
         if (fileBuffer) form.append('torrents', fileBuffer, 'comic.torrent');
         else form.append('urls', downloadUrl);
         form.append('category', primaryCategory);
-        
         if (seedTimeLimit > 0) form.append('seeding_time_limit', seedTimeLimit.toString());
         if (seedRatio > 0) form.append('ratio_limit', seedRatio.toString()); 
         
@@ -68,36 +58,78 @@ export const DownloadService = {
         });
       }
       else if (client.type === 'deluge') {
-        Logger.log(`[DownloadService Debug] Authenticating with Deluge...`, 'debug');
         const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, baseConfig);
         const cookie = authRes.headers['set-cookie'];
-        Logger.log(`[DownloadService Debug] Sending payload to Deluge RPC API...`, 'debug');
         const options: any = { download_location: primaryCategory };
         if (seedRatio > 0) { options.stop_at_ratio = true; options.stop_ratio = seedRatio; }
         const method = downloadUrl.startsWith('magnet:') ? "core.add_torrent_magents" : "core.add_torrent_url";
         await axios.post(`${cleanUrl}/json`, { method: method, params: [[downloadUrl], options], id: 2 }, { ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie } });
       }
       else if (client.type === 'sab') {
-          Logger.log(`[DownloadService Debug] Sending payload to SABnzbd API...`, 'debug');
           await axios.get(`${cleanUrl}/api`, { params: { mode: 'addurl', name: downloadUrl, nzbname: title, cat: primaryCategory, apikey: client.apiKey, output: 'json' }, ...baseConfig });
       }
       else if (client.type === 'nzbget') {
           const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
-          Logger.log(`[DownloadService Debug] Sending payload to NZBGet API...`, 'debug');
           await axios.post(`${cleanUrl}/jsonrpc`, { method: "append", params: [title, downloadUrl, primaryCategory, 0, false, false, "", 0, "SCORE", []] }, { ...baseConfig, headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } });
       }
 
       Logger.log(`[${client.type.toUpperCase()}] SUCCESS: Added ${title}`, 'success');
       return { success: true };
     } catch (error: unknown) {
-      Logger.log(`[DownloadService Debug] Client API threw an error: ${getErrorMessage(error)}`, 'debug');
       Logger.log(`[Download Service] Failed: ${getErrorMessage(error)}`, 'error');
       throw error;
     }
   },
 
+  // --- NEW: Method to cancel and wipe active downloads ---
+  async removeDownload(client: any, downloadId: string) {
+      const cleanUrl = client.url.replace(/\/$/, '');
+      const networkHeaders = await getNetworkHeaders();
+      const baseConfig = { headers: { 'User-Agent': 'Omnibus/1.0', ...networkHeaders }, timeout: 15000 };
+
+      try {
+          if (client.type === 'qbit') {
+              const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
+                  new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
+                  { ...baseConfig, headers: { ...baseConfig.headers, 'Content-Type': 'application/x-www-form-urlencoded' } }
+              );
+              const cookie = loginRes.headers['set-cookie'];
+              await axios.get(`${cleanUrl}/api/v2/torrents/delete`, {
+                  params: { hashes: downloadId, deleteFiles: true },
+                  headers: { ...baseConfig.headers, Cookie: cookie }
+              });
+          }
+          else if (client.type === 'sab') {
+              await axios.get(`${cleanUrl}/api`, { 
+                  params: { mode: 'queue', name: 'delete', value: downloadId, del_files: 1, apikey: client.apiKey, output: 'json' }, 
+                  ...baseConfig 
+              });
+          }
+          else if (client.type === 'deluge') {
+              const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, baseConfig);
+              const cookie = authRes.headers['set-cookie'];
+              await axios.post(`${cleanUrl}/json`, { 
+                  method: "core.remove_torrent", params: [downloadId, true], id: 2 
+              }, { headers: { ...baseConfig.headers, Cookie: cookie } });
+          }
+          else if (client.type === 'nzbget') {
+              const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
+              // GroupDelete removes the item and associated files
+              await axios.post(`${cleanUrl}/jsonrpc`, { 
+                  method: "editqueue", params: ["GroupDelete", 0, "", [parseInt(downloadId)]] 
+              }, { headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } });
+          }
+
+          Logger.log(`[${client.type.toUpperCase()}] SUCCESS: Removed cancelled download ${downloadId}`, 'success');
+          return true;
+      } catch (error: unknown) {
+          Logger.log(`[Download Service] Failed to remove cancelled download ${downloadId}: ${getErrorMessage(error)}`, 'error');
+          return false;
+      }
+  },
+
   async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string, hoster?: string) {
-      // --- NEW DISK SPACE GUARD ---
+      // (Your existing downloadDirectFile code remains exactly the same here)
       const diskSetting = await prisma.systemSetting.findUnique({ where: { key: 'is_disk_full' } });
       if (diskSetting?.value === 'true') {
           throw new Error("Download aborted: Disk Space is Critically Full (< 2GB).");
@@ -274,7 +306,6 @@ export const DownloadService = {
           } catch (renameErr) {
               const timestampedPath = filePath.replace(`.${ext}`, `_${Date.now()}.${ext}`);
               fs.renameSync(partFilePath, timestampedPath);
-              Logger.log(`[Internal DL] File was locked. Saved safely as: ${path.basename(timestampedPath)}`, 'success');
           }
 
           Logger.log(`[Internal DL] Download complete. Handing off to Importer...`, 'success');
@@ -306,6 +337,7 @@ export const DownloadService = {
   },
 
   async getAllActiveDownloads() {
+    // (Your existing getAllActiveDownloads code remains exactly the same here)
     const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) return [];
     
@@ -360,14 +392,11 @@ export const DownloadService = {
             }
         }
         else if (client.type === 'sab') {
-            // 1. Fetch Active Queue
             const queueRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'queue', apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 15000 });
             if (queueRes.data.queue?.slots) {
                 const validSlots = queueRes.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
                 allDownloads.push(...validSlots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
             }
-            
-            // 2. Fetch Recent History to catch completed downloads
             try {
                 const historyRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'history', limit: 20, apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 15000 });
                 if (historyRes.data.history?.slots) {
@@ -376,19 +405,15 @@ export const DownloadService = {
                         id: s.nzo_id, name: s.name, progress: s.status === 'Completed' ? "100.0" : "0.0", status: s.status, clientName: client.name, size: s.size
                     })));
                 }
-            } catch (e) { Logger.log(`[DownloadService] Failed to fetch SABnzbd history`, 'warn'); }
+            } catch (e) { }
         }
         else if (client.type === 'nzbget') {
             const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
-            
-            // 1. Fetch Active Queue
             const listRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "listgroups", params: [] }, { headers: { ...baseHeaders, Authorization: `Basic ${auth}` }, timeout: 15000 });
             if (Array.isArray(listRes.data.result)) {
                 const validGroups = listRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
                 allDownloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
             }
-            
-            // 2. Fetch Recent History
             try {
                 const historyRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "history", params: [] }, { headers: { ...baseHeaders, Authorization: `Basic ${auth}` }, timeout: 15000 });
                 if (Array.isArray(historyRes.data.result)) {
@@ -397,7 +422,7 @@ export const DownloadService = {
                         id: String(g.NZBID), name: g.Name, progress: g.Status.includes('SUCCESS') ? "100.0" : "0.0", status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB"
                     })));
                 }
-            } catch (e) { Logger.log(`[DownloadService] Failed to fetch NZBGet history`, 'warn'); }
+            } catch (e) { }
         }
       } catch (err) { }
     }

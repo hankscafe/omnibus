@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
@@ -24,8 +25,26 @@ export default function SmartMatchPage() {
     const [manualMatchId, setManualMatchId] = useState("");
     const [manualMatchTarget, setManualMatchTarget] = useState<any>(null);
     const [isManualMatching, setIsManualMatching] = useState(false);
+    
+    // --- NEW: Added the missing states for Provider Selection ---
+    const [searchProvider, setSearchProvider] = useState("COMICVINE");
+    const [metronConfigured, setMetronConfigured] = useState(false);
 
     const { toast } = useToast();
+
+    // --- NEW: Check if Metron is available ---
+    useEffect(() => {
+        fetch('/api/admin/config')
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (data?.settings) {
+                    const mUser = data.settings.find((s: any) => s.key === 'metron_user')?.value;
+                    const mPass = data.settings.find((s: any) => s.key === 'metron_pass')?.value;
+                    if (mUser && mPass) setMetronConfigured(true);
+                }
+            })
+            .catch(() => {});
+    }, []);
 
     useEffect(() => {
         document.title = "Omnibus - Smart Matcher";
@@ -92,6 +111,8 @@ export default function SmartMatchPage() {
                 body: JSON.stringify({
                     oldFolderPath: series.folderPath,
                     cvId: suggestion.id,
+                    metadataId: suggestion.id,
+                    metadataSource: suggestion.metadataSource || 'COMICVINE',
                     name: suggestion.name,
                     year: suggestion.year,
                     publisher: suggestion.publisher
@@ -119,7 +140,7 @@ export default function SmartMatchPage() {
             const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9]/g, '');
             if (!cleanId) throw new Error("Invalid ID format");
 
-            const res = await fetch(`/api/issue-details?id=${cleanId}&type=volume`);
+            const res = await fetch(`/api/issue-details?id=${cleanId}&type=volume&provider=${searchProvider}`);
             const data = await res.json();
 
             if (res.ok && data && !data.error) {
@@ -131,7 +152,8 @@ export default function SmartMatchPage() {
                         year: data.year,
                         publisher: data.publisher,
                         image: data.image,
-                        count: "?", 
+                        count: "?",
+                        metadataSource: searchProvider // <-- Ensures the accepted match saves the proper source
                     }
                 }));
                 setManualMatchOpen(false);
@@ -210,7 +232,7 @@ export default function SmartMatchPage() {
 
                                 {/* COMICVINE SUGGESTION */}
                                 <div className="flex-1 min-w-[250px] w-full md:w-auto bg-muted/50 p-3 rounded-xl border border-border">
-                                    <div className="text-xs font-bold text-primary uppercase tracking-wider mb-2">ComicVine Suggestion</div>
+                                    <div className="text-xs font-bold text-primary uppercase tracking-wider mb-2">{suggestion?.metadataSource === 'METRON' ? 'Metron Suggestion' : 'ComicVine Suggestion'}</div>
                                     
                                     {!suggestion && isScanning && (
                                         <div className="flex items-center gap-3 text-muted-foreground animate-pulse py-2">
@@ -279,12 +301,27 @@ export default function SmartMatchPage() {
                     <DialogHeader>
                         <DialogTitle>Manual Match</DialogTitle>
                         <DialogDescription>
-                            Enter the exact ComicVine Volume ID for <strong>{manualMatchTarget?.name}</strong>.
+                            Enter the exact ID for <strong>{manualMatchTarget?.name}</strong>.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="py-4 space-y-4">
+                        {/* --- NEW: Provider Select --- */}
+                        {metronConfigured && (
+                            <div className="space-y-2">
+                                <Label>Metadata Source</Label>
+                                <Select value={searchProvider} onValueChange={setSearchProvider}>
+                                    <SelectTrigger className="bg-background border-border">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="COMICVINE">ComicVine</SelectItem>
+                                        <SelectItem value="METRON">Metron.Cloud</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
                         <div className="space-y-2">
-                            <Label>ComicVine Volume ID</Label>
+                            <Label>{searchProvider === 'METRON' ? 'Metron Series ID' : 'ComicVine Volume ID'}</Label>
                             <Input 
                                 value={manualMatchId} 
                                 onChange={(e) => setManualMatchId(e.target.value)} 

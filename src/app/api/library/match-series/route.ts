@@ -27,8 +27,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    Logger.log(`[Match Series Debug] Starting manual match. ID: ${targetMetaId} | Source: ${targetSource} | Path: ${oldFolderPath}`, 'debug');
+
     const libraries = await prisma.library.findMany();
-    // Allow access to the unmatched directory in addition to standard libraries
     const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     authorizedRoots.push(path.normalize(unmatchedDir).toLowerCase());
@@ -47,42 +48,54 @@ export async function POST(request: Request) {
     
     try {
         if (targetSource === 'METRON') {
+            Logger.log(`[Match Series Debug] Routing API request to Metron.Cloud for Series ID: ${targetMetaId}...`, 'debug');
             const metron = new MetronProvider();
             const details = await metron.getSeriesDetails(targetMetaId);
             if (details) {
+                Logger.log(`[Match Series Debug] Metron Fetch Success: Found "${details.name}" (${details.year})`, 'debug');
                 if (!realPublisher) realPublisher = details.publisher;
                 if (!realName) realName = details.name;
                 if (!realYear) realYear = details.year;
                 imageUrl = details.coverUrl;
                 status = details.status;
+            } else {
+                Logger.log(`[Match Series Debug] Metron Fetch Failed: Series ID ${targetMetaId} returned null.`, 'warn');
             }
         } else {
+            Logger.log(`[Match Series Debug] Routing API request to ComicVine for Volume ID: ${targetMetaId}...`, 'debug');
             const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
             const cvApiKey = cvKeySetting?.value;
             if (cvApiKey) {
                 const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${targetMetaId}/`, {
                     params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image,end_year' },
                     headers: { 'User-Agent': 'Omnibus/1.0' },
-                    timeout: 2000 
+                    timeout: 4000 
                 });
                 if (cvVolRes.data?.results) {
                     const vol = cvVolRes.data.results;
+                    Logger.log(`[Match Series Debug] ComicVine Fetch Success: Found "${vol.name}" (${vol.start_year})`, 'debug');
                     if (!realPublisher && vol.publisher?.name) realPublisher = vol.publisher.name;
                     if (!realName && vol.name) realName = vol.name;
                     if (!realYear && vol.start_year) realYear = parseInt(vol.start_year) || 0;
                     imageUrl = vol.image?.medium_url || vol.image?.super_url;
                     if (vol.end_year) status = 'Ended'; 
+                } else {
+                    Logger.log(`[Match Series Debug] ComicVine Fetch Failed: No results returned for ID ${targetMetaId}.`, 'warn');
                 }
+            } else {
+                Logger.log(`[Match Series Debug] Skipped ComicVine fetch due to missing API key.`, 'warn');
             }
         }
-    } catch(e: unknown) { }
+    } catch(e: unknown) {
+        Logger.log(`[Match Series Debug] Metadata Fetch Exception: ${getErrorMessage(e)}`, 'error');
+    }
 
     if (!realName) realName = path.basename(oldFolderPath).replace(/\s\(\d{4}\)$/, "").trim(); 
     if (!realPublisher) realPublisher = 'Other';
 
     const safePublisher = realPublisher.replace(/[<>:"/\\|?*]/g, '').trim();
     const safeName = realName.replace(/[<>:"/\\|?*]/g, '').trim();
-    const safeYear = realYear > 0 ? realYear.toString() : ''; // Raw year string
+    const safeYear = realYear > 0 ? realYear.toString() : ''; 
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
     
@@ -93,7 +106,6 @@ export async function POST(request: Request) {
     if (!targetLib) targetLib = libraries[0];
     if (!targetLib) return NextResponse.json({ error: "No libraries configured." }, { status: 400 });
 
-    // --- FIX: Fetch Settings and apply Custom Folder Naming Pattern ---
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
@@ -114,7 +126,6 @@ export async function POST(request: Request) {
     const pubDir = path.dirname(newFolderPath);
     if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
 
-    // --- REBUILT MERGE AND UPDATE LOGIC ---
     let existingRecord = await prisma.series.findUnique({
         where: { 
             metadataSource_metadataId: { 
@@ -169,13 +180,11 @@ export async function POST(request: Request) {
         title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 
     }).catch(() => {});
 
-    // --- NEW: RAW FILE VS FOLDER LOGIC ---
     const oldStat = await fs.promises.stat(oldFolderPath);
     const isFile = oldStat.isFile();
 
     let activeFolderPath = oldFolderPath;
     if (isFile) {
-        // It's a raw file coming from the "unmatched" drop folder
         if (!fs.existsSync(newFolderPath)) {
             await fs.promises.mkdir(newFolderPath, { recursive: true });
         }
@@ -183,7 +192,6 @@ export async function POST(request: Request) {
         const targetFilePath = path.join(newFolderPath, path.basename(oldFolderPath));
         await fs.promises.rename(oldFolderPath, targetFilePath);
     } else if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
-        // It's a directory (standard DB unmatched series)
         if (fs.existsSync(newFolderPath)) {
             const files = await fs.promises.readdir(oldFolderPath);
             for (const file of files) {
@@ -208,13 +216,11 @@ export async function POST(request: Request) {
                 
                 Logger.log(`[Match Series Debug] Evaluating file for rename: "${file}"`, 'debug');
                 
-                // --- FIX: Priority Waterfall Extraction (Prevents V2023 bug) ---
                 const explicitMatch = oldName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
                 if (explicitMatch) {
                     issueNumStr = explicitMatch[1];
                     Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via explicit #/Issue match.`, 'debug');
                 } else {
-                    // Note the (?!\d) lookahead to ensure it's not grabbing a 4-digit year if it's less than 4 digits
                     const volMatch = oldName.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
                     if (volMatch) {
                         issueNumStr = volMatch[1];
@@ -313,7 +319,6 @@ export async function POST(request: Request) {
         }
     } catch (e) {}
     
-    // --- Trigger Library Scan and Metadata Sync via BullMQ ---
     try {
         if (isFile) {
             await omnibusQueue.add('LIBRARY_SCAN', { type: 'LIBRARY_SCAN' }, { jobId: `LIBRARY_SCAN_${Date.now()}` });

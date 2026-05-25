@@ -24,11 +24,14 @@ Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omni
 
 ## Core Features
 
-  * **All-In-One Pipeline:** Discover new releases via ComicVine, request missing issues, send them to your download clients (qBittorrent, SABnzbd, etc.), and read them—all from one interface.
+  * **Dual Metadata Engines:** Choose between ComicVine (default) or Metron.Cloud as your primary source to automatically pull high-res covers, synopses, and creator credits. 
+  * **All-In-One Pipeline:** Discover new releases, request missing issues, send them to your download clients (qBittorrent, SABnzbd, etc.), and read them—all from one interface.
   * **Native Web Reader:** Blazing fast, zero-friction browser reading for `.cbz`, `.cbr` (auto-converts to cbz), and `.epub` archives with LTR, RTL (Manga), and Webtoon scroll support.
-  * **Automated Organization:** Auto-extracts, renames, and moves downloaded files to your mapped library directories.
+  * **Automated Organization & Smart Matcher:** Auto-extracts, renames, and routes downloaded files to your mapped library directories. Unmatched loose files can be instantly organized using the AI-assisted Smart Matcher with support for both ComicVine and Metron IDs.
+  * **Smart Reading Lists:** Instantly auto-build reading orders by pasting a ComicVine or Metron Event ID. Easily import external lists from CBL files, CSVs (League of Comic Geeks), AniList, or MyAnimeList.
+  * **Release Calendar & Discovery:** Track upcoming global comic releases and maintain a personalized pull list (powered by Metron), complete with color-coded library badges to instantly spot missing or unreleased issues.
   * **Multi-User & Secure:** NextAuth integration with OpenID Connect (SSO), 2FA, and distinct reading progress tracking for friends and family.
-  * **Smart Reading Lists:** Paste a ComicVine Event ID (e.g., *Marvel Civil War*) and Omnibus will automatically generate the official reading order and map your existing files to it.
+  * **External Reading (OPDS & KOReader):** Native OPDS 1.2 server with Page Streaming Extension (PSE) for apps like Panels and Mihon, plus native e-ink sync for KOReader devices.
 
 -----
 

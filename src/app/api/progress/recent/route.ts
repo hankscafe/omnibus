@@ -66,7 +66,8 @@ export async function GET(request: Request) {
             currentPage: p.currentPage,
             totalPages: p.totalPages,
             percentage: percentage,
-            seriesCvId: (p.issue.series.metadataSource === 'COMICVINE' && p.issue.series.metadataId) ? parseInt(p.issue.series.metadataId) : null,
+            metadataId: p.issue.series.metadataId || null,
+            metadataSource: p.issue.series.metadataSource || 'COMICVINE',
             seriesCoverUrl: seriesCoverUrl
         };
     });

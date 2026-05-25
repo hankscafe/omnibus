@@ -5,12 +5,10 @@ import { Logger } from './logger';
 // In-memory cache to prevent API bans during mass scans
 const volumeResolutionCache = new Map<string, { cvId: number, timestamp: number }>();
 
-// NEW: Cleanup function to be called by the background job
 export function cleanupMetadataExtractorCache() {
     const now = Date.now();
     let deletedCount = 0;
     for (const [key, data] of volumeResolutionCache.entries()) {
-        // Clear items older than 24 hours (86400000 ms)
         if (now - data.timestamp > 24 * 60 * 60 * 1000) {
             volumeResolutionCache.delete(key);
             deletedCount++;
@@ -43,15 +41,31 @@ export async function parseComicInfo(filePath: string) {
         let cvId = info.ComicVineVolumeId ? parseInt(info.ComicVineVolumeId) : null;
         let cvIssueId = info.ComicVineIssueId ? parseInt(info.ComicVineIssueId) : null;
         
-        // 2. Fallback to parsing the Web URL if standard tags are missing
+        // --- NEW: Look for custom Metron tags injected by external tools (ComicTagger, etc.) ---
+        let metronId = info.MetronId ? parseInt(info.MetronId) : null;
+        let metronIssueId = info.MetronIssueId ? parseInt(info.MetronIssueId) : null;
+
+        // 2. Fallback to parsing the Web URL if standard tags are missing (Supports CV AND Metron)
         if (info.Web && typeof info.Web === 'string') {
+            const webUrl = info.Web;
             if (!cvId) {
-                const volMatch = info.Web.match(/(?:comicvine\.gamespot\.com|comicvine\.com)\/.*\/4050-(\d+)/i);
+                const volMatch = webUrl.match(/(?:comicvine\.gamespot\.com|comicvine\.com)\/.*\/4050-(\d+)/i);
                 if (volMatch) cvId = parseInt(volMatch[1]);
             }
             if (!cvIssueId) {
-                const issMatch = info.Web.match(/(?:comicvine\.gamespot\.com|comicvine\.com)\/.*\/4000-(\d+)/i);
+                const issMatch = webUrl.match(/(?:comicvine\.gamespot\.com|comicvine\.com)\/.*\/4000-(\d+)/i);
                 if (issMatch) cvIssueId = parseInt(issMatch[1]);
+            }
+            
+            // Look for Metron tags specifically (Requires numeric ID in URL)
+            if (!metronId) {
+                const metronVolMatch = webUrl.match(/metron\.cloud\/series\/(\d+)/i);
+                if (metronVolMatch) metronId = parseInt(metronVolMatch[1]);
+            }
+            
+            if (!metronIssueId) {
+                const metronIssMatch = webUrl.match(/metron\.cloud\/issue\/(\d+)/i);
+                if (metronIssMatch) metronIssueId = parseInt(metronIssMatch[1]);
             }
         }
 
@@ -63,14 +77,13 @@ export async function parseComicInfo(filePath: string) {
 
         Logger.log(`[Metadata Extractor Debug] Parsed values from ComicInfo.xml -> Series: "${seriesName}", Number: "${info.Number}", Volume/Year: "${parsedYear}", Manga: "${info.Manga}"`, 'debug');
 
-        // 4. Safely resolve Volume ID from Issue URL using a Composite Key
+        // 4. Safely resolve Volume ID from Issue URL using a Composite Key (For CV Only)
         const cacheKey = `${seriesName}_${parsedYear || 'unknown'}`;
 
-        if (!cvId && cvIssueId) {
-            // Check the cache using the Name + Year
+        if (!cvId && cvIssueId && !metronId && !metronIssueId) {
             if (seriesName && volumeResolutionCache.has(cacheKey)) {
                 Logger.log(`[Metadata Extractor Debug] Cache HIT for composite key: ${cacheKey}`, 'debug');
-                cvId = volumeResolutionCache.get(cacheKey)!.cvId; // <-- UPDATED: Read the cvId property
+                cvId = volumeResolutionCache.get(cacheKey)!.cvId; 
             } else {
                 try {
                     const { prisma } = await import('@/lib/db');
@@ -84,10 +97,8 @@ export async function parseComicInfo(filePath: string) {
                         if (cvRes.data?.results?.volume?.id) {
                             cvId = parseInt(cvRes.data.results.volume.id);
                             Logger.log(`[Metadata] Resolved Volume ID ${cvId} from Issue URL.`, 'info');
-                            
-                            // Cache the result using the composite key with a timestamp
                             if (seriesName) {
-                                volumeResolutionCache.set(cacheKey, { cvId, timestamp: Date.now() }); // <-- UPDATED: Save as object
+                                volumeResolutionCache.set(cacheKey, { cvId, timestamp: Date.now() }); 
                             }
                         }
                     }
@@ -98,6 +109,11 @@ export async function parseComicInfo(filePath: string) {
         }
         
         const splitList = (str: any) => str ? String(str).split(',').map(s => s.trim()).filter(Boolean) : [];
+
+        // Finalize the generic Metadata IDs
+        const resolvedMetaSource = (metronId || metronIssueId) ? 'METRON' : ((cvId || cvIssueId) ? 'COMICVINE' : 'LOCAL');
+        const resolvedMetaId = metronId || cvId || null;
+        const resolvedMetaIssueId = metronIssueId || cvIssueId || null;
 
         return {
             series: seriesName,
@@ -112,7 +128,11 @@ export async function parseComicInfo(filePath: string) {
             isManga: (info.Manga === 'Yes' || info.Manga === 'YesAndRightToLeft'),
             mangaTag: info.Manga ? String(info.Manga).trim() : null,
             cvId: cvId,
-            cvIssueId: cvIssueId
+            cvIssueId: cvIssueId,
+            metronId: metronId,
+            metadataId: resolvedMetaId,
+            metadataSource: resolvedMetaSource,
+            metadataIssueId: resolvedMetaIssueId
         };
     } catch (error) {
         Logger.log(`[Metadata] Failed to parse ComicInfo in ${filePath}`, 'error');

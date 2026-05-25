@@ -1,3 +1,4 @@
+// __tests__/lib/metadata-extractor.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parseComicInfo } from '@/lib/metadata-extractor';
 
@@ -43,7 +44,7 @@ describe('Core Logic: ComicInfo.xml Extractor', () => {
         expect(result).toBeNull();
     });
 
-    it('should perfectly parse standard ComicInfo.xml data', async () => {
+    it('should perfectly parse standard ComicInfo.xml data with ComicVine IDs', async () => {
         const fakeXml = `
             <?xml version="1.0"?>
             <ComicInfo>
@@ -58,10 +59,7 @@ describe('Core Logic: ComicInfo.xml Extractor', () => {
         `;
 
         mocks.getEntries.mockReturnValue([
-            {
-                entryName: 'ComicInfo.xml',
-                getData: () => Buffer.from(fakeXml, 'utf8')
-            }
+            { entryName: 'ComicInfo.xml', getData: () => Buffer.from(fakeXml, 'utf8') }
         ]);
 
         const result = await parseComicInfo('/library/comic.cbz');
@@ -73,7 +71,32 @@ describe('Core Logic: ComicInfo.xml Extractor', () => {
         expect(result?.year).toBe(2016);
         expect(result?.writers).toEqual(['Tom King']);
         expect(result?.isManga).toBe(false);
-        expect(result?.cvId).toBe(12345);
+        expect(result?.metadataId).toBe(12345);
+        expect(result?.metadataSource).toBe('COMICVINE');
+    });
+
+    it('should perfectly parse custom ComicInfo.xml data with Metron IDs', async () => {
+        const fakeXml = `
+            <?xml version="1.0"?>
+            <ComicInfo>
+                <Series>Venom</Series>
+                <MetronId>987</MetronId>
+                <MetronIssueId>654</MetronIssueId>
+            </ComicInfo>
+        `;
+
+        mocks.getEntries.mockReturnValue([
+            { entryName: 'ComicInfo.xml', getData: () => Buffer.from(fakeXml, 'utf8') }
+        ]);
+
+        const result = await parseComicInfo('/library/comic.cbz');
+        
+        expect(result).not.toBeNull();
+        expect(result?.series).toBe('Venom');
+        expect(result?.metronId).toBe(987);
+        expect(result?.metadataId).toBe(987);
+        expect(result?.metadataIssueId).toBe(654);
+        expect(result?.metadataSource).toBe('METRON'); // Verifies Source flag is mapped correctly
     });
 
     it('should fallback to parsing the <Web> URL tag if <ComicVineVolumeId> is missing', async () => {
@@ -86,14 +109,33 @@ describe('Core Logic: ComicInfo.xml Extractor', () => {
         `;
 
         mocks.getEntries.mockReturnValue([
-            {
-                entryName: 'ComicInfo.xml',
-                getData: () => Buffer.from(fakeXml, 'utf8')
-            }
+            { entryName: 'ComicInfo.xml', getData: () => Buffer.from(fakeXml, 'utf8') }
         ]);
 
         const result = await parseComicInfo('/library/comic.cbz');
         
         expect(result?.cvId).toBe(98765);
+        expect(result?.metadataId).toBe(98765);
+        expect(result?.metadataSource).toBe('COMICVINE');
+    });
+
+    it('should fallback to parsing the <Web> URL tag for Metron Links', async () => {
+        const fakeXml = `
+            <?xml version="1.0"?>
+            <ComicInfo>
+                <Series>Spider-Man</Series>
+                <Web>https://metron.cloud/series/10101/</Web>
+            </ComicInfo>
+        `;
+
+        mocks.getEntries.mockReturnValue([
+            { entryName: 'ComicInfo.xml', getData: () => Buffer.from(fakeXml, 'utf8') }
+        ]);
+
+        const result = await parseComicInfo('/library/comic.cbz');
+        
+        expect(result?.metronId).toBe(10101);
+        expect(result?.metadataId).toBe(10101);
+        expect(result?.metadataSource).toBe('METRON');
     });
 });

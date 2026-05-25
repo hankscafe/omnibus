@@ -29,22 +29,21 @@ export async function GET(request: Request) {
         });
 
         let requiresRefresh = false;
-        const missingCvIssueIds: number[] = [];
+        const missingItemsMeta: { id: string, source: string }[] = [];
 
-        // Auto-link logic: Find items that were imported from a CSV or Auto-builder that have a ComicVine ID but no local database linkage yet
+        // Auto-link logic: Find items that were imported from a CSV or Auto-builder that have a Metadata ID but no local database linkage yet
         for (const list of lists) {
             for (const item of list.items) {
                 if (!item.issueId && item.cvIssueId) {
-                    missingCvIssueIds.push(item.cvIssueId);
+                    missingItemsMeta.push({ id: item.cvIssueId.toString(), source: item.metadataSource || 'COMICVINE' });
                 }
             }
         }
 
-        if (missingCvIssueIds.length > 0) {
+        if (missingItemsMeta.length > 0) {
             const potentialIssues = await prisma.issue.findMany({
                 where: { 
-                    metadataId: { in: missingCvIssueIds.map(String) },
-                    metadataSource: 'COMICVINE'
+                    OR: missingItemsMeta.map(m => ({ metadataId: m.id, metadataSource: m.source }))
                 }
             });
             
@@ -53,7 +52,7 @@ export async function GET(request: Request) {
             for (const list of lists) {
                 for (const item of list.items) {
                     if (!item.issueId && item.cvIssueId) {
-                        const validIssue = potentialIssues.find(i => i.metadataId === item.cvIssueId!.toString());
+                        const validIssue = potentialIssues.find(i => i.metadataId === item.cvIssueId!.toString() && i.metadataSource === (item.metadataSource || 'COMICVINE'));
                         
                         if (validIssue) {
                             linkUpdates.push(

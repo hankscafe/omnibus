@@ -71,6 +71,8 @@ export async function POST(request: Request) {
                 const romajiTitle = entry.media?.title?.romaji ? normalize(entry.media.title.romaji) : "";
                 const displayTitle = entry.media?.title?.english || entry.media?.title?.romaji;
 
+                Logger.log(`[AniList Import Debug] Evaluating AniList entry: "${displayTitle}" (Normalized Eng: "${engTitle}", Romaji: "${romajiTitle}")`, 'debug');
+
                 const match = localManga.find(m => {
                     const localTitle = normalize(m.name);
                     return (engTitle && localTitle === engTitle) || 
@@ -80,8 +82,10 @@ export async function POST(request: Request) {
                 });
 
                 if (match) {
+                    Logger.log(`[AniList Import Debug] SUCCESS -> Matched AniList "${displayTitle}" to local database series [ID: ${match.id}] ("${match.name}")`, 'debug');
                     matchedSeriesIds.add(match.id);
                 } else if (requestMissing && displayTitle) {
+                    Logger.log(`[AniList Import Debug] FAILED -> No local match found for "${displayTitle}". Auto-requesting...`, 'debug');
                     const existingReq = await prisma.request.findFirst({
                         where: { activeDownloadName: displayTitle, userId: userId }
                     });

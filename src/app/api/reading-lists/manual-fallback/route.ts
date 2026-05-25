@@ -13,13 +13,14 @@ export async function POST(request: Request) {
         
         const userId = (session.user as any).id;
 
-        const { cvId, name, image, searchLink } = await request.json();
+        const { cvId, name, image, searchLink, metadataSource } = await request.json();
 
         // No more guessing! Every field here is confirmed by the Prisma logs.
         const newRequest = await prisma.request.create({
             data: {
                 userId, 
-                volumeId: cvId ? cvId.toString() : "0", 
+                volumeId: cvId ? cvId.toString() : "0",
+                metadataSource: metadataSource || 'COMICVINE', 
                 status: 'MANUAL_DDL', 
                 imageUrl: image,
                 downloadLink: searchLink,

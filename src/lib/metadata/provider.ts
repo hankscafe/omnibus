@@ -8,6 +8,7 @@ export interface MetadataSeries {
     description: string | null;
     coverUrl: string | null;
     status: 'Ongoing' | 'Ended';
+    issueCount?: number;
 }
 
 export interface MetadataIssue {
@@ -26,10 +27,14 @@ export interface MetadataIssue {
     storyArcs?: string[];
     teams?: string[];
     locations?: string[];
+    seriesId?: number | null;
+    seriesName?: string | null;
+    publisher?: string | null;
 }
 
 export interface IMetadataProvider {
-    searchSeries(query: string): Promise<MetadataSeries[]>;
+    // --- FIX: Added optional page parameter ---
+    searchSeries(query: string, page?: number): Promise<MetadataSeries[]>;
     getSeriesDetails(id: string, lastModified?: Date): Promise<MetadataSeries | null>;
     getSeriesIssues(id: string): Promise<MetadataIssue[]>;
     getIssueDetails(id: string): Promise<MetadataIssue>;

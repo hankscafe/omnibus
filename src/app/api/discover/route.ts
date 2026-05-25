@@ -36,7 +36,7 @@ export async function GET(request: Request) {
           const slice = allResults.slice(offset, offset + limit);
 
           // --- FIX: Cross-reference with Library and Requests ---
-          const volumeIds = slice.map((r: any) => r.cvId?.toString()).filter(Boolean);
+          const volumeIds = slice.map((r: any) => (r.volumeId || r.cvId)?.toString()).filter(Boolean);
           
           const existingRequests = await prisma.request.findMany({
               where: { volumeId: { in: volumeIds } },
@@ -50,11 +50,13 @@ export async function GET(request: Request) {
 
           const results = slice.map((r: any) => {
               const issueName = `${r.title} #${r.issueNumber}`;
+              const targetVolId = (r.volumeId || r.cvId)?.toString();
+              
               const request = existingRequests.find(req => 
-                  req.volumeId === r.cvId?.toString() && req.activeDownloadName === issueName
+                  req.volumeId === targetVolId && req.activeDownloadName === issueName
               );
               const inLibrary = existingIssues.some(iss => 
-                  iss.series.metadataId === r.cvId?.toString() && iss.number === r.issueNumber
+                  iss.series.metadataId === targetVolId && iss.number === r.issueNumber
               );
 
               return {

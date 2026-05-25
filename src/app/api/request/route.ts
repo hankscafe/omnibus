@@ -80,7 +80,8 @@ export async function GET(request: NextRequest) {
       return {
         id: req.id,
         userId: req.userId,
-        volumeId: req.volumeId, 
+        volumeId: req.volumeId,
+        metadataSource: req.metadataSource || 'COMICVINE', 
         seriesPath: series?.folderPath || null,
         seriesName: req.activeDownloadName || (series ? `${series.name}${issueNumberStr} (${series.year})` : `Volume ${req.volumeId}`), 
         activeDownloadName: req.activeDownloadName,

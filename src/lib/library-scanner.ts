@@ -138,16 +138,22 @@ export const LibraryScanner = {
                             
                             Logger.log(`[Scanner Debug] Extracted from folder/XML -> Name: "${cleanedName}", Year: ${year}, Publisher: "${embeddedMeta?.publisher || 'None'}"`, 'debug');
 
+                            // --- NEW: Add fallbacks for older cache/mock objects ---
+                            const resolvedSeriesMetaId = embeddedMeta?.metadataId?.toString() || embeddedMeta?.cvId?.toString() || `unmatched_${Math.random()}`;
+                            const resolvedSeriesMetaSource = embeddedMeta?.metadataSource || (embeddedMeta?.cvId ? 'COMICVINE' : 'LOCAL');
+                            const resolvedSeriesMatchState = (embeddedMeta?.metadataId || embeddedMeta?.cvId) ? 'MATCHED' : 'UNMATCHED';
+
                             const createdSeries = await prisma.series.create({
                                 data: {
                                     folderPath: dir.replace(/\\/g, '/'),
                                     name: cleanedName,
                                     year: year,
                                     publisher: embeddedMeta?.publisher || "Other",
-                                    metadataId: embeddedMeta?.cvId?.toString() || `unmatched_${Math.random()}`,
-                                    metadataSource: embeddedMeta?.cvId ? 'COMICVINE' : 'LOCAL',
-                                    matchState: embeddedMeta?.cvId ? 'MATCHED' : 'UNMATCHED',
+                                    metadataId: resolvedSeriesMetaId,
+                                    metadataSource: resolvedSeriesMetaSource,
+                                    matchState: resolvedSeriesMatchState,
                                     cvId: embeddedMeta?.cvId || null,
+                                    metronId: embeddedMeta?.metronId || null,
                                     isManga: embeddedMeta?.isManga || libIsManga || await detectManga({ name: cleanedName }, firstArchive),
                                     libraryId: libId
                                 }
@@ -155,11 +161,16 @@ export const LibraryScanner = {
 
                             const issuesToCreate = bookFiles.map(file => {
                                 const stdNum = extractIssueNumber(file);
+                                
+                                const resolvedIssueMetaId = embeddedMeta?.metadataIssueId?.toString() || embeddedMeta?.cvIssueId?.toString() || `unmatched_${Math.random()}`;
+                                const resolvedIssueMetaSource = embeddedMeta?.metadataSource || (embeddedMeta?.cvIssueId ? 'COMICVINE' : 'LOCAL');
+                                const resolvedIssueMatchState = (embeddedMeta?.metadataIssueId || embeddedMeta?.cvIssueId) ? 'MATCHED' : 'UNMATCHED';
+
                                 return {
                                     seriesId: createdSeries.id,
-                                    metadataId: `unmatched_${Math.random()}`,
-                                    metadataSource: 'LOCAL',
-                                    matchState: 'UNMATCHED',
+                                    metadataId: resolvedIssueMetaId,
+                                    metadataSource: resolvedIssueMetaSource,
+                                    matchState: resolvedIssueMatchState,
                                     number: stdNum,
                                     status: 'DOWNLOADED',
                                     filePath: path.join(dir, file).replace(/\\/g, '/')

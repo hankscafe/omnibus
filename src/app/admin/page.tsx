@@ -1170,7 +1170,8 @@ const mappedRequests = requests.map(req => {
             year: "2024",
             publisher: "Unknown",
             image: interactiveSearchReq.imageUrl || "",
-            type: "issue"
+            type: "issue",
+            metadataSource: interactiveSearchReq.metadataSource || 'COMICVINE' // <-- FIX THIS
           }}
           requestId={interactiveSearchReq.id}
         />

@@ -46,7 +46,8 @@ export async function GET(request: Request) {
       return {
         id: req.id,
         userId: req.userId,
-        // FIX: Prefer the exact stored activeDownloadName over reconstructing it
+        volumeId: req.volumeId,
+        metadataSource: req.metadataSource || 'COMICVINE',
         seriesName: req.activeDownloadName || (series ? `${series.name}${issueNumberStr} (${series.year})` : `Volume ${req.volumeId}`), 
         activeDownloadName: req.activeDownloadName,
         seriesPath: series?.folderPath || null,
@@ -95,7 +96,14 @@ export async function DELETE(request: Request) {
         for (const id of ids) {
             const req = await prisma.request.findUnique({ where: { id } });
             if (req && req.volumeId !== "0") {
-                const series = await prisma.series.findFirst({ where: { metadataId: req.volumeId, metadataSource: 'COMICVINE' } });
+                // --- FIX: Respect the exact metadata source of the request to clean up ghost Metron series ---
+                const series = await prisma.series.findFirst({ 
+                    where: { 
+                        metadataId: req.volumeId, 
+                        metadataSource: req.metadataSource || 'COMICVINE' 
+                    } 
+                });
+                
                 if (series?.folderPath && fs.existsSync(series.folderPath)) {
                     const files = await fs.promises.readdir(series.folderPath);
                     const hasFiles = files.some(f => f.toLowerCase().match(/\.(cbz|cbr)$/));

@@ -43,7 +43,6 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Could not find a 'Series' or 'Title' column in the CSV." }, { status: 400 });
         }
 
-        // --- ADDED: Fetch coverUrl and folderPath ---
         const allSeries = await prisma.series.findMany({ select: { id: true, name: true, coverUrl: true, folderPath: true } });
         const allIssues = await prisma.issue.findMany({ select: { id: true, seriesId: true, number: true } });
 
@@ -51,7 +50,9 @@ export async function POST(request: Request) {
 
         const itemsToLink: { issueId: string | null, title: string }[] = [];
         let missingCount = 0;
-        let listCoverUrl: string | null = null; // <-- NEW: Hold the list cover
+        let listCoverUrl: string | null = null; 
+
+        Logger.log(`[CSV Import Debug] Processing ${rows.length - 1} data rows from CSV...`, 'debug');
 
         for (let i = 1; i < rows.length; i++) {
             if (!rows[i].trim()) continue;
@@ -65,11 +66,12 @@ export async function POST(request: Request) {
             const normalizedSearchSeries = normalize(seriesName);
             const parsedTargetNum = parseFloat(issueNum.replace(/[^0-9.]/g, ''));
 
+            Logger.log(`[CSV Import Debug] Evaluating CSV entry: "${seriesName} #${issueNum}" (Normalized: "${normalizedSearchSeries}")`, 'debug');
+
             const matchedSeries = allSeries.find(s => normalize(s.name) === normalizedSearchSeries || normalize(s.name).includes(normalizedSearchSeries));
             let matchedIssueId = null;
 
             if (matchedSeries) {
-                // --- NEW: Grab the cover of the first matched series for the List ---
                 if (!listCoverUrl) {
                     if (matchedSeries.coverUrl) {
                         listCoverUrl = matchedSeries.coverUrl;
@@ -77,7 +79,6 @@ export async function POST(request: Request) {
                         listCoverUrl = `/api/library/cover?path=${encodeURIComponent(matchedSeries.folderPath)}`;
                     }
                 }
-                // ------------------------------------------------------------------
 
                 const matchedIssue = allIssues.find(iss => 
                     iss.seriesId === matchedSeries.id && 
@@ -86,14 +87,16 @@ export async function POST(request: Request) {
 
                 if (matchedIssue) {
                     matchedIssueId = matchedIssue.id;
+                    Logger.log(`[CSV Import Debug] SUCCESS -> Linked to local issue [ID: ${matchedIssueId}]`, 'debug');
                 } else {
                     missingCount++;
+                    Logger.log(`[CSV Import Debug] FAILED -> Matched series "${matchedSeries.name}", but issue #${issueNum} is missing locally.`, 'debug');
                 }
             } else {
                 missingCount++;
+                Logger.log(`[CSV Import Debug] FAILED -> No local series matched "${seriesName}".`, 'debug');
             }
 
-            // ADD TO LIST EVEN IF MISSING LOCALLY
             itemsToLink.push({
                 issueId: matchedIssueId,
                 title: `${seriesName} #${issueNum}`
@@ -119,7 +122,7 @@ export async function POST(request: Request) {
         let orderCount = 0;
         const itemsData = itemsToLink.map(item => ({
             listId: newList.id,
-            issueId: item.issueId, // This will be null for missing items!
+            issueId: item.issueId, 
             title: item.title,
             order: orderCount++
         }));

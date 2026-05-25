@@ -178,10 +178,7 @@ export const Importer = {
         });
     }
 
-    // --- NEW: MAGIC NUMBER / FAKE EXTENSION FIXER ---
-    // Uploaders often rename .cbr files to .cbz without actually converting the archive.
-    // This physically reads the first 4 bytes of the file to determine its true format
-    // and fixes the extension before the rest of Omnibus processes it.
+    // --- MAGIC NUMBER / FAKE EXTENSION FIXER ---
     if (fs.existsSync(sourcePath) && !fs.statSync(sourcePath).isDirectory()) {
         try {
             const buffer = Buffer.alloc(4);
@@ -221,7 +218,7 @@ export const Importer = {
     let isBatchFolder = false;
     let isBatchArchive = false;
     let batchFiles: string[] = [];
-    let nestedArchiveCount = 0; // NEW: Track nested items
+    let nestedArchiveCount = 0; 
 
     if (fs.statSync(sourcePath).isDirectory()) {
         async function getComicFilesInDir(dir: string) {
@@ -369,11 +366,12 @@ export const Importer = {
         return true;
     }
 
-
+    // --- DUAL PROVIDER METADATA FETCHING ---
     let series = await prisma.series.findFirst({ 
         where: { metadataId: req.volumeId, metadataSource: req.metadataSource || 'COMICVINE' } 
     });
     
+    // Fetch missing Series record from ComicVine
     if (!series && cvApiKey && req.volumeId !== "0" && req.metadataSource !== 'METRON') {
         try {
             Logger.log(`[Importer] Fetching missing metadata for Volume ID: ${req.volumeId}`, 'info');
@@ -400,6 +398,7 @@ export const Importer = {
         }
     }
 
+    // Fetch missing Series record from Metron
     if (!series && req.volumeId !== "0" && req.metadataSource === 'METRON') {
         try {
             Logger.log(`[Importer] Fetching missing metadata for Metron Series ID: ${req.volumeId}`, 'info');
@@ -630,9 +629,9 @@ export const Importer = {
              where: { seriesId: series.id }
          });
          const existingIssue = allSeriesIssues.find(i => isSameIssue(i.number, issueNum));
-         const targetMetaId = xmlMeta?.cvIssueId ? xmlMeta.cvIssueId.toString() : `unmatched_${Math.random()}`;
-         const targetMetaSource = xmlMeta?.cvIssueId ? 'COMICVINE' : 'LOCAL';
-         const matchState = xmlMeta?.cvIssueId ? 'MATCHED' : 'UNMATCHED';
+         const targetMetaId = xmlMeta?.metadataIssueId ? xmlMeta.metadataIssueId.toString() : `unmatched_${Math.random()}`;
+         const targetMetaSource = xmlMeta?.metadataIssueId ? xmlMeta.metadataSource : 'LOCAL';
+         const matchState = xmlMeta?.metadataIssueId ? 'MATCHED' : 'UNMATCHED';
 
          if (existingIssue) {
              await prisma.issue.update({
@@ -749,6 +748,7 @@ export const Importer = {
       }
 
       if (shouldNotify) {
+          // --- UPDATED: USING UNIFIED SYSTEM NOTIFIER ---
           await SystemNotifier.sendAlert('comic_available', {
               title: notificationTitle,
               imageUrl: req.imageUrl,
@@ -767,13 +767,22 @@ export const Importer = {
     } catch (e: any) {
       Logger.log(`[Importer] Import Failed: ${e.message}`, "error");
       if (req) {
+          // --- FIX: Safely route the failed Series metadata mapping ---
+          const failedSeries = req.volumeId !== "0" ? await prisma.series.findFirst({ 
+              where: { 
+                  metadataId: req.volumeId, 
+                  metadataSource: req.metadataSource || 'COMICVINE' 
+              } 
+          }) : null;
+
+          // --- UPDATED: USING UNIFIED SYSTEM NOTIFIER ---
           await SystemNotifier.sendAlert('download_failed', {
-              title: req.activeDownloadName || series?.name || "Unknown Comic",
+              title: req.activeDownloadName || failedSeries?.name || "Unknown Comic",
               imageUrl: req.imageUrl,
               user: req.user?.username,
-              description: series?.description,
-              publisher: series?.publisher,
-              year: series?.year?.toString()
+              description: failedSeries?.description,
+              publisher: failedSeries?.publisher,
+              year: failedSeries?.year?.toString()
           });
       }
       return false;

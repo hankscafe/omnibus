@@ -58,7 +58,6 @@ export async function POST(request: Request) {
         let rawBooks = parsed.ReadingList.Books.Book;
         if (!Array.isArray(rawBooks)) rawBooks = [rawBooks];
 
-        // --- ADDED: Fetch coverUrl and folderPath ---
         const allSeries = await prisma.series.findMany({ select: { id: true, name: true, coverUrl: true, folderPath: true } });
         const allIssues = await prisma.issue.findMany({ select: { id: true, seriesId: true, number: true } });
 
@@ -66,13 +65,17 @@ export async function POST(request: Request) {
 
         const itemsToLink: { issueId: string | null, title: string }[] = [];
         let missingCount = 0;
-        let listCoverUrl: string | null = null; // <-- NEW: Hold the list cover
+        let listCoverUrl: string | null = null; 
+
+        Logger.log(`[CBL Import Debug] Processing ${rawBooks.length} items from CBL...`, 'debug');
 
         for (const book of rawBooks) {
             const seriesName = book.Series || book.series;
             const issueNum = book.Number || book.number || "1";
 
             if (!seriesName) continue;
+            
+            Logger.log(`[CBL Import Debug] Evaluating CBL entry: "${seriesName} #${issueNum}"`, 'debug');
 
             const normalizedSearchSeries = normalize(seriesName);
             const parsedTargetNum = parseFloat(issueNum.replace(/[^0-9.]/g, ''));
@@ -81,7 +84,6 @@ export async function POST(request: Request) {
             let matchedIssueId = null;
 
             if (matchedSeries) {
-                // --- NEW: Grab the cover of the first matched series for the List ---
                 if (!listCoverUrl) {
                     if (matchedSeries.coverUrl) {
                         listCoverUrl = matchedSeries.coverUrl;
@@ -89,7 +91,6 @@ export async function POST(request: Request) {
                         listCoverUrl = `/api/library/cover?path=${encodeURIComponent(matchedSeries.folderPath)}`;
                     }
                 }
-                // ------------------------------------------------------------------
 
                 const matchedIssue = allIssues.find(iss => 
                     iss.seriesId === matchedSeries.id && 
@@ -98,11 +99,14 @@ export async function POST(request: Request) {
 
                 if (matchedIssue) {
                     matchedIssueId = matchedIssue.id;
+                    Logger.log(`[CBL Import Debug] SUCCESS -> Linked to local issue [ID: ${matchedIssueId}]`, 'debug');
                 } else {
                     missingCount++;
+                    Logger.log(`[CBL Import Debug] FAILED -> Matched series "${matchedSeries.name}", but issue #${issueNum} is missing.`, 'debug');
                 }
             } else {
                 missingCount++;
+                Logger.log(`[CBL Import Debug] FAILED -> No local series matched "${seriesName}".`, 'debug');
             }
 
             itemsToLink.push({

@@ -168,6 +168,7 @@ export default function SettingsPage() {
   const { toast } = useToast()
   
   const [config, setConfig] = useState<any>({
+    primary_metadata_source: "COMICVINE",
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030", download_path: "", cv_api_key: "",
     metron_user: "", metron_pass: "",
     export_series_json: "false", 
@@ -204,6 +205,28 @@ export default function SettingsPage() {
   });
 
   const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
+
+  // Function to determine if a metadata source is selectable
+  const isSourceAvailable = (source: string) => {
+    if (source === "COMICVINE") {
+      return !!config.cv_api_key && config.cv_api_key.trim() !== "";
+    } else if (source === "METRON") {
+      return !!config.metron_user && config.metron_user.trim() !== "" && !!config.metron_pass && config.metron_pass.trim() !== "";
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    // If the currently selected primary source becomes unavailable, try to fallback
+    if (isDataLoaded && !isSourceAvailable(config.primary_metadata_source)) {
+      if (config.primary_metadata_source === "METRON" && isSourceAvailable("COMICVINE")) {
+        setConfig({...config, primary_metadata_source: "COMICVINE"});
+      } else if (config.primary_metadata_source === "COMICVINE" && isSourceAvailable("METRON")) {
+        setConfig({...config, primary_metadata_source: "METRON", show_popular_issues: "false"});
+      }
+      // If neither is available, it stays as is but the dropdown will be disabled
+    }
+  }, [config.cv_api_key, config.metron_user, config.metron_pass, isDataLoaded]);
 
   useEffect(() => {
       if (isDataLoaded && initialStateHash === "") {
@@ -792,6 +815,51 @@ export default function SettingsPage() {
                 </CardHeader>
                 <CardContent className="space-y-8">
                     
+                    {/* --- NEW: Moved Primary Metadata Source into the Card --- */}
+                    <div className="space-y-4 pb-6 border-b border-border">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+                                    <Database className="w-4 h-4 text-primary" /> Primary Metadata Source
+                                </h3>
+                                <p className="text-[0.8rem] text-muted-foreground mt-1 max-w-2xl">
+                                    Select the default provider for interactive searches and Discover page population. 
+                                    <strong> You must configure the corresponding provider's credentials below before you can select it.</strong> 
+                                    If you select Metron, the "Popular Issues" section on the Discover page will be disabled.
+                                </p>
+                            </div>
+                            <Badge variant="outline" className="hidden sm:inline-flex text-[10px] uppercase font-bold border-orange-500 text-orange-600 bg-orange-50 dark:bg-orange-900/20">
+                                Experimental
+                            </Badge>
+                        </div>
+                        <Select 
+                            value={config.primary_metadata_source || "COMICVINE"} 
+                            onValueChange={(v) => {
+                                if (v === "METRON") {
+                                    setConfig({...config, primary_metadata_source: v, show_popular_issues: "false"});
+                                } else {
+                                    setConfig({...config, primary_metadata_source: v});
+                                }
+                            }}
+                            disabled={!isSourceAvailable("COMICVINE") && !isSourceAvailable("METRON")}
+                        >
+                            <SelectTrigger className="w-full sm:w-[300px] h-12 sm:h-10 bg-muted/50 border-border text-foreground font-bold">
+                                <SelectValue placeholder="Select a Provider" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="COMICVINE" disabled={!isSourceAvailable("COMICVINE")}>
+                                    ComicVine (Default) {!isSourceAvailable("COMICVINE") && "(Needs API Key)"}
+                                </SelectItem>
+                                <SelectItem value="METRON" disabled={!isSourceAvailable("METRON")}>
+                                    Metron.Cloud {!isSourceAvailable("METRON") && "(Needs Credentials)"}
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                        {(!isSourceAvailable("COMICVINE") && !isSourceAvailable("METRON")) && (
+                            <p className="text-xs text-red-500 font-medium">Please configure at least one provider below to enable this selection.</p>
+                        )}
+                    </div>
+
                     <div className="space-y-4">
                         <h3 className="text-lg font-bold text-foreground flex items-center gap-2 border-b border-border pb-2"><Key className="w-4 h-4 text-primary" /> ComicVine Integration</h3>
                         <div className="grid gap-2">
@@ -1576,10 +1644,18 @@ export default function SettingsPage() {
                             <div className="flex items-center space-x-2">
                                 <Switch 
                                     id="popular-toggle"
-                                    checked={config.show_popular_issues !== "false"} 
+                                    checked={config.show_popular_issues === "true" && config.primary_metadata_source !== "METRON"} 
                                     onCheckedChange={(c) => setConfig({...config, show_popular_issues: c ? "true" : "false"})} 
+                                    disabled={config.primary_metadata_source === "METRON"}
                                 />
-                                <Label htmlFor="popular-toggle" className="cursor-pointer font-bold text-sm text-foreground">Show Popular Issues</Label>
+                                <div className="grid gap-0.5">
+                                    <Label htmlFor="popular-toggle" className={`cursor-pointer font-bold text-sm ${config.primary_metadata_source === "METRON" ? 'text-muted-foreground' : 'text-foreground'}`}>
+                                        Show Popular Issues
+                                    </Label>    
+                                    {config.primary_metadata_source === "METRON" && (
+                                        <p className="text-[10px] text-muted-foreground">Unavailable when Metron is the primary source.</p>
+                                    )}
+                                </div>
                             </div>
                             <div className="flex items-center space-x-2">
                                 <Switch 

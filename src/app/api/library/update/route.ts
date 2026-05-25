@@ -74,6 +74,10 @@ export async function POST(request: Request) {
     });
 
     if (existingRecord) {
+        const newMetadataId = parsedCvId !== null ? parsedCvId.toString() : existingRecord.metadataId;
+        const isCv = existingRecord.metadataSource === 'COMICVINE';
+        const isMetron = existingRecord.metadataSource === 'METRON';
+
         await prisma.series.update({
             where: { id: existingRecord.id },
             data: {
@@ -83,8 +87,10 @@ export async function POST(request: Request) {
                 folderPath: activePath,
                 monitored: parsedMonitored,
                 isManga: parsedIsManga, 
-                metadataId: parsedCvId !== null ? parsedCvId.toString() : existingRecord.metadataId,
-                metadataSource: 'COMICVINE',
+                metadataId: newMetadataId,
+                cvId: parsedCvId !== null && isCv ? parsedCvId : existingRecord.cvId,
+                metronId: parsedCvId !== null && isMetron ? parsedCvId : existingRecord.metronId,
+                metadataSource: existingRecord.metadataSource || 'COMICVINE',
                 libraryId: targetLib.id
             }
         });

@@ -75,8 +75,8 @@ describe('Component: ComicGrid', () => {
 
         // Use waitFor here because status badges are rendered AFTER the second fetch (ids) resolves
         await waitFor(() => {
-            expect(screen.getByTitle('In Library')).toBeInTheDocument();
-            expect(screen.getByTitle('Requested')).toBeInTheDocument();
+            expect(screen.getAllByTitle('In Library')[0]).toBeInTheDocument();
+            expect(screen.getAllByTitle('Requested')[0]).toBeInTheDocument();
         });
     });
 

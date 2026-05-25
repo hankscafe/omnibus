@@ -1,3 +1,4 @@
+// src/components/admin-request-management.tsx
 "use client"
 
 import { useState, useEffect, useMemo, useRef } from "react"
@@ -158,8 +159,8 @@ export function AdminRequestManagement() {
       if (issueMatch) {
         const targetIssueNum = parseFloat(issueMatch[1]);
         const [volRes, issuesRes] = await Promise.all([
-          fetch(`/api/issue-details?id=${req.volumeId}&type=volume`),
-          fetch(`/api/series-issues?volumeId=${req.volumeId}`)
+          fetch(`/api/issue-details?id=${req.volumeId}&type=volume&provider=${req.metadataSource || 'COMICVINE'}`),
+          fetch(`/api/series-issues?volumeId=${req.volumeId}&provider=${req.metadataSource || 'COMICVINE'}`)
         ]);
         const volData = await volRes.json();
         const issuesData = await issuesRes.json();
@@ -173,7 +174,7 @@ export function AdminRequestManagement() {
           year: volData.year
         });
       } else {
-        const res = await fetch(`/api/issue-details?id=${req.volumeId}&type=volume`);
+        const res = await fetch(`/api/issue-details?id=${req.volumeId}&type=volume&provider=${req.metadataSource || 'COMICVINE'}`);
         const data = await res.json();
         setSelectedComicDetails({ 
           ...data, 
@@ -387,7 +388,7 @@ export function AdminRequestManagement() {
                           <Info className="w-4 h-4" />
                         </Button>
                         <Button variant="ghost" size="icon" asChild className="h-8 w-8 hover:bg-muted text-foreground">
-                          <a href={`https://comicvine.gamespot.com/volume/4050-${req.volumeId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4" /></a>
+                          <a href={req.metadataSource === 'METRON' ? `https://metron.cloud/series/${req.volumeId}/` : `https://comicvine.gamespot.com/volume/4050-${req.volumeId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4" /></a>
                         </Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/30 text-red-500" onClick={() => initiateDelete([req.id])}>
                           <Trash2 className="w-4 h-4" />
@@ -473,7 +474,7 @@ export function AdminRequestManagement() {
                       <Info className="w-5 h-5 sm:w-4 sm:h-4" />
                     </Button>
                     <Button variant="outline" size="sm" asChild className="h-10 w-10 sm:h-9 sm:w-9 border-border hover:bg-muted text-foreground">
-                      <a href={`https://comicvine.gamespot.com/volume/4050-${req.volumeId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-5 h-5 sm:w-4 sm:h-4" /></a>
+                      <a href={req.metadataSource === 'METRON' ? `https://metron.cloud/series/${req.volumeId}/` : `https://comicvine.gamespot.com/volume/4050-${req.volumeId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-5 h-5 sm:w-4 sm:h-4" /></a>
                     </Button>
                     <Button variant="outline" size="sm" className="h-10 w-10 sm:h-9 sm:w-9 text-red-500 hover:bg-red-50 border-red-200 dark:border-red-900/50 dark:hover:bg-red-900/30" onClick={() => initiateDelete([req.id])}>
                       <Trash2 className="w-5 h-5 sm:w-4 sm:h-4" />
@@ -561,7 +562,8 @@ export function AdminRequestManagement() {
             year: "2024", // Ignored on manual overrides since series already exists
             publisher: "Unknown", 
             image: interactiveSearchReq.imageUrl || "",
-            type: "issue"
+            type: "issue",
+            metadataSource: interactiveSearchReq.metadataSource || 'COMICVINE'
           }}
           requestId={interactiveSearchReq.id}
         />

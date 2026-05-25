@@ -19,6 +19,7 @@ interface Props {
     publisher: string;
     image: string;
     type: 'volume' | 'issue';
+    metadataSource?: string;
   };
   requestId?: string;
 }
@@ -118,6 +119,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...comicData,
+          metadataSource: comicData.metadataSource || 'COMICVINE',
           // Preserve the original full complex name for the UI / Database
           name: initialQuery, 
           searchResult,

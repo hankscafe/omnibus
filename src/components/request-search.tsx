@@ -1,3 +1,4 @@
+// src/components/request-search.tsx
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
@@ -32,6 +33,7 @@ interface SearchResult {
   storyArcs?: string[];
   teams?: string[];
   locations?: string[];
+  metadataSource?: string;
 }
 
 interface Issue {
@@ -54,7 +56,7 @@ interface Issue {
   isReleased?: boolean;
 }
 
-type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
+type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | 'UNRELEASED' | null;
 
 export function RequestSearch() {
   const { data: session } = useSession()
@@ -63,12 +65,11 @@ export function RequestSearch() {
   const [searchSort, setSearchSort] = useState("relevance")
   const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
   
-  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string } | null>(null);
+  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, metadataSource?: string } | null>(null);
   
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
   
-  // Pagination State
   const [searchPage, setSearchPage] = useState(1);
   const [hasMoreSearch, setHasMoreSearch] = useState(false);
   const [isSearchingMore, setIsSearchingMore] = useState(false);
@@ -77,53 +78,111 @@ export function RequestSearch() {
   const [volumeIssues, setVolumeIssues] = useState<Issue[]>([])
   
   const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
-  const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set())
+  const [requestedVolumes, setRequestedVolumes] = useState<Set<string>>(new Set())
   const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
   
-  const [ownedSeries, setOwnedSeries] = useState<Set<number>>(new Set())
-  const [monitoredSeries, setMonitoredSeries] = useState<Set<number>>(new Set())
-  const [ownedIssues, setOwnedIssues] = useState<Set<number>>(new Set())
+  const [ownedSeries, setOwnedSeries] = useState<Set<string>>(new Set())
+  const [monitoredSeries, setMonitoredSeries] = useState<Set<string>>(new Set())
+  const [ownedIssues, setOwnedIssues] = useState<Set<string>>(new Set())
+  
+  // --- FIX: Add State for Cross-Provider Name Fallbacks ---
+  const [ownedSeriesNames, setOwnedSeriesNames] = useState<Set<string>>(new Set())
+  const [monitoredSeriesNames, setMonitoredSeriesNames] = useState<Set<string>>(new Set())
+  const [ownedIssueNames, setOwnedIssueNames] = useState<Set<string>>(new Set())
+
   const [activeRequests, setActiveRequests] = useState<any[]>([])
 
   const { toast } = useToast()
 
   useEffect(() => {
-    fetch('/api/library/ids') 
-      .then(res => res.json())
-      .then(data => { 
-          if (data) {
-              setOwnedSeries(new Set(data.series || []));
-              setMonitoredSeries(new Set(data.monitored || []));
-              setOwnedIssues(new Set(data.issues || []));
-              setActiveRequests(data.requests || []);
-          }
-      })
-      .catch(() => {});
-  }, [open]);
+        fetch('/api/library/ids')
+            .then(res => res.json())
+            .then(data => {
+                if (data) {
+                    setOwnedSeries(new Set((data.series || []).map(String)));
+                    setMonitoredSeries(new Set((data.monitored || []).map(String)));
+                    setOwnedIssues(new Set((data.issues || []).map(String)));
+                    
+                    // Map normalized names for the fallback mechanism
+                    setOwnedSeriesNames(new Set((data.seriesNames || []).map((n: string) => n.toLowerCase().trim())));
+                    setMonitoredSeriesNames(new Set((data.monitoredNames || []).map((n: string) => n.toLowerCase().trim())));
+                    setOwnedIssueNames(new Set((data.issueNames || []).map((n: string) => n.toLowerCase().trim())));
 
-  const getVolumeStatus = (volumeId: number, name: string): StatusType => {
-      if (ownedSeries.has(volumeId)) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
-      if (requestedVolumes.has(volumeId)) return 'REQUESTED';
+                    setActiveRequests(data.requests || []);
+                }
+            })
+            .catch(() => {});
+    }, []);
+
+  const getVolumeStatus = (volumeId: number | string, name: string): StatusType => {
+      const idStr = String(volumeId);
+      const cleanName = name.toLowerCase().trim();
       
-      const activeReqs = activeRequests.filter(r => r.volumeId === volumeId.toString());
+      let isOwned = ownedSeries.has(idStr) || ownedSeriesNames.has(cleanName);
+      let isMonitored = monitoredSeries.has(idStr) || monitoredSeriesNames.has(cleanName);
+
+      // --- FIX: Year Strip Fallback ---
+      if (!isOwned) {
+          const noYear = cleanName.replace(/\s*\(\d{4}\)/g, '').trim();
+          for (const ownedName of ownedSeriesNames) {
+              if (ownedName.replace(/\s*\(\d{4}\)/g, '').trim() === noYear) {
+                  isOwned = true;
+                  if (monitoredSeriesNames.has(ownedName)) isMonitored = true;
+                  break;
+              }
+          }
+      }
+
+      if (isOwned) return isMonitored ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
+      if (requestedVolumes.has(idStr)) return 'REQUESTED';
+      
+      const activeReqs = activeRequests.filter(r => 
+          String(r.volumeId) === idStr || 
+          (r.activeDownloadName && r.activeDownloadName.toLowerCase().startsWith(cleanName)) ||
+          (r.name && r.name.toLowerCase().startsWith(cleanName))
+      );
+      
       if (activeReqs.length > 0) {
           const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
-          if (allCompleted) return monitoredSeries.has(volumeId) ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
+          if (allCompleted) return isMonitored ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
           if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
+          return 'REQUESTED';
       }
       return null;
   }
 
-  const getIssueStatus = (issueId: number | string, volumeId: number | string, issueName: string): StatusType => {
-      if (ownedIssues.has(Number(issueId))) return 'ISSUE_OWNED';
-      if (requestedIssues.has(issueName)) return 'REQUESTED';
+  // --- FIX: Smart string matching properly strips subtitles and forces numbers to align ---
+  const getIssueStatus = (issueId: number | string, volumeId: number | string, issueName: string, isReleased?: boolean, issueNumber?: string, seriesName?: string): StatusType => {
+      const idStr = String(issueId);
+      const volStr = String(volumeId);
+      const cleanName = issueName.toLowerCase().trim();
 
-      const req = activeRequests.find(r => String(r.volumeId) === String(volumeId) && r.name === issueName);
+      let coreName = cleanName;
+      if (seriesName && issueNumber) {
+          const parsedNum = parseFloat(issueNumber);
+          const numToUse = isNaN(parsedNum) ? issueNumber : parsedNum;
+          coreName = `${seriesName} #${numToUse}`.toLowerCase().trim();
+      }
+
+      const isOwned = ownedIssues.has(idStr) || ownedIssueNames.has(cleanName) || ownedIssueNames.has(coreName);
+
+      if (isOwned) return 'ISSUE_OWNED';
+      if (requestedIssues.has(issueName) || requestedIssues.has(coreName)) return 'REQUESTED';
+
+      const req = activeRequests.find(r => 
+          (String(r.volumeId) === volStr && (r.name === issueName || r.name === coreName)) ||
+          (r.name && (r.name.toLowerCase() === cleanName || r.name.toLowerCase() === coreName)) ||
+          (r.activeDownloadName && (r.activeDownloadName.toLowerCase() === cleanName || r.activeDownloadName.toLowerCase() === coreName))
+      );
+      
       if (req) {
           if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
           if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
+          if (req.status === 'UNRELEASED' || isReleased === false) return 'UNRELEASED';
           return 'REQUESTED';
       }
+      
+      if (isReleased === false) return 'UNRELEASED';
       return null;
   }
 
@@ -174,7 +233,7 @@ export function RequestSearch() {
   const handleSelectSearchResult = async (item: SearchResult) => {
       setLoading(true);
       try {
-          const res = await fetch(`/api/series-issues?volumeId=${item.id}&_t=${Date.now()}`);
+          const res = await fetch(`/api/series-issues?volumeId=${item.id}&provider=${item.metadataSource || 'COMICVINE'}&_t=${Date.now()}`);
           const data = await res.json();
           const issues = data.results || [];
           
@@ -188,14 +247,15 @@ export function RequestSearch() {
                   ...firstIssue,
                   volumeId: item.id,
                   publisher: item.publisher,
+                  metadataSource: item.metadataSource || 'COMICVINE',
                   isVolume: false 
               });
           } else {
-              setSelectedItem({ ...item, volumeId: item.id, isVolume: true });
+              setSelectedItem({ ...item, volumeId: item.id, metadataSource: item.metadataSource || 'COMICVINE', isVolume: true });
           }
       } catch (e) {
           setVolumeIssues([]);
-          setSelectedItem({ ...item, volumeId: item.id, isVolume: true });
+          setSelectedItem({ ...item, volumeId: item.id, metadataSource: item.metadataSource || 'COMICVINE', isVolume: true });
       } finally {
           setLoading(false);
       }
@@ -205,12 +265,12 @@ export function RequestSearch() {
     if (!selectedItem?.id) return;
     const itemType = selectedItem.isVolume ? 'volume' : 'issue';
     
-    fetch(`/api/issue-details?id=${selectedItem.id}&type=${itemType}&volId=${selectedItem.volumeId || ''}&_t=${Date.now()}`)
+    fetch(`/api/issue-details?id=${selectedItem.id}&type=${itemType}&volId=${selectedItem.volumeId || ''}&provider=${selectedItem.metadataSource || 'COMICVINE'}&_t=${Date.now()}`)
       .then(res => res.json())
       .then(data => {
         if (data && !data.error) {
           setSelectedItem((prev: any) => {
-            if (prev?.id !== data.id) return prev; 
+            if (String(prev?.id) !== String(data.id)) return prev; 
             return {
                 ...prev,
                 ...data,
@@ -225,7 +285,7 @@ export function RequestSearch() {
       });
   }, [selectedItem?.id, selectedItem?.isVolume]);
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, monitorOnly: boolean = false) => {
+  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, monitorOnly: boolean = false, metadataSource: string = 'COMICVINE') => {
     if (!name || name === "Unknown" || name === "undefined") {
         toast({ title: "Request Failed", description: "Missing valid series name. Try interactive search.", variant: "destructive" });
         return;
@@ -248,7 +308,8 @@ export function RequestSearch() {
             type, 
             monitored,
             issueNumber: issueNumber || (type === 'issue' ? "1" : undefined),
-            monitorOnly
+            monitorOnly,
+            metadataSource
         })
       });
 
@@ -257,9 +318,9 @@ export function RequestSearch() {
         toast({ title: "Success", description: data.message || `${exactIssueName} added to queue.` })
         if (type === 'volume') {
             if (monitorOnly) {
-                setMonitoredSeries(prev => new Set(prev).add(id)); // Instantly update UI
+                setMonitoredSeries(prev => new Set(prev).add(String(id))); 
             } else {
-                setRequestedVolumes(prev => new Set(prev).add(id));
+                setRequestedVolumes(prev => new Set(prev).add(String(id))); 
                 setOpen(false); 
             }
         } else {
@@ -357,13 +418,18 @@ export function RequestSearch() {
                     const volStatus = getVolumeStatus(item.id, item.name);
                     return (
                     <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleSelectSearchResult(item)}>
+                      
                       <div className="relative aspect-[2/3] w-full rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
-                        <img src={item.image} alt={item.name} className="absolute inset-0 w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" />
+                        {item.image ? (
+                            <img src={item.image} alt={item.name} className="absolute inset-0 w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" />
+                        ) : (
+                            <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30 transition-transform duration-300 group-hover:scale-105">
+                                <ImageIcon className="w-10 h-10 mb-2" />
+                            </div>
+                        )}
                         
                         {volStatus === 'LIBRARY_MONITORED' && (<div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 z-10 shadow-md" title="Monitored"><Activity className="w-4 h-4" /></div>)}
                         {volStatus === 'LIBRARY_UNMONITORED' && (<div className="absolute top-2 right-2 bg-blue-500 text-white rounded-full p-1 z-10 shadow-md" title="In Library"><Library className="w-4 h-4" /></div>)}
-                        {volStatus === 'ISSUE_OWNED' && (<div className="absolute top-2 right-2 bg-emerald-500 text-white rounded-full p-1 z-10 shadow-md" title="In Library"><FileCheck className="w-4 h-4" /></div>)}
-
                         {volStatus === 'REQUESTED' && (<div className="absolute top-2 right-2 bg-orange-500 text-white rounded-full p-1 z-10 shadow-md" title="Requested"><Clock className="w-4 h-4" /></div>)}
                         {volStatus === 'PENDING_APPROVAL' && (<div className="absolute top-2 right-2 bg-yellow-500 text-white rounded-full p-1 z-10 shadow-md" title="Pending Admin Approval"><Clock className="w-4 h-4" /></div>)}
                         
@@ -411,23 +477,28 @@ export function RequestSearch() {
                   <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 mb-8">
                       <div className="space-y-5 flex flex-col items-center md:items-stretch">
                           <div className="relative aspect-[2/3] w-[200px] md:w-[240px] mx-auto rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
-                              <img src={selectedItem.image} alt={selectedItem.name} className="absolute inset-0 w-full h-full object-contain" />
+                              {selectedItem.image ? (
+                                  <img src={selectedItem.image} alt={selectedItem.name} className="absolute inset-0 w-full h-full object-contain" />
+                              ) : (
+                                  <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30 transition-transform duration-300">
+                                      <ImageIcon className="w-12 h-12 mb-2" />
+                                  </div>
+                              )}
                           </div>
                           
                           {(() => {
                               const issueTargetName = selectedItem.isVolume ? `${seriesBaseName} #${selectedItem.issueNumber || "1"}` : selectedItem.name;
     
                               const volStatus = getVolumeStatus(selectedItem.volumeId, seriesBaseName);
-                              const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, issueTargetName);
+                              const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, issueTargetName, selectedItem.isReleased, selectedItem.issueNumber, seriesBaseName);
                               
                               const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';
                               const isIssueOwned = issueStatus === 'ISSUE_OWNED';
                               const overallStatus = selectedItem.isVolume ? volStatus : issueStatus;
 
-                              // NEW CODE: Calculate if all available issues are owned
                               const missingAvailableIssues = volumeIssues.filter(issue => {
-                                  const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, issue.name);
-                                  const isReleased = issue.isReleased !== false; // Fallback to true if undefined
+                                  const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, issue.name, issue.isReleased, issue.issueNumber, seriesBaseName);
+                                  const isReleased = issue.isReleased !== false; 
                                   return isReleased && relIssueStatus !== 'ISSUE_OWNED';
                               });
                               const isAllAvailableOwned = isVolOwned && volumeIssues.length > 0 && missingAvailableIssues.length === 0;
@@ -452,7 +523,7 @@ export function RequestSearch() {
                                         <Button 
                                             className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white whitespace-normal" 
                                             variant="default" 
-                                            onClick={() => handleRequest(selectedItem.volumeId, seriesBaseName, selectedItem.image, selectedItem.year, 'volume', selectedItem.publisher || 'Unknown', true, undefined, true)} 
+                                            onClick={() => handleRequest(selectedItem.volumeId, seriesBaseName, selectedItem.image, selectedItem.year, 'volume', selectedItem.publisher || 'Unknown', true, undefined, true, selectedItem.metadataSource || 'COMICVINE')} 
                                             disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
                                         >
                                             {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
@@ -463,7 +534,7 @@ export function RequestSearch() {
                                         <Button 
                                             className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
                                             variant="default" 
-                                            onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: seriesBaseName, image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown' })} 
+                                            onClick={() => setMonitorPrompt({ id: selectedItem.volumeId, name: seriesBaseName, image: selectedItem.image, year: selectedItem.year, publisher: selectedItem.publisher || 'Unknown', metadataSource: selectedItem.metadataSource || 'COMICVINE' })} 
                                             disabled={requestingTarget === `vol-${selectedItem.volumeId}`}
                                         >
                                             {requestingTarget === `vol-${selectedItem.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
@@ -473,17 +544,22 @@ export function RequestSearch() {
                                     )}
                                     
                                     {/* ISSUE BUTTONS */}
-                                    {issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || isIssueOwned ? (
+                                    {(isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') ? (
+                                        <Button className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal`} variant="outline" disabled>
+                                            <FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">Up to Date</span>
+                                        </Button>
+                                    ) : issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || issueStatus === 'UNRELEASED' || isIssueOwned ? (
                                         <Button className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal`} variant="outline" disabled>
                                             {isIssueOwned && <><FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">In Library</span></>}
                                             {issueStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>}
                                             {issueStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
+                                            {issueStatus === 'UNRELEASED' && <><Clock className="w-4 h-4 text-purple-500 shrink-0" /> <span className="leading-tight">Unreleased (Queued)</span></>}
                                         </Button>
                                     ) : (
                                         <Button 
                                             className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
                                             variant="outline" 
-                                            onClick={() => handleRequest(selectedItem.volumeId, selectedItem.isVolume ? seriesBaseName : selectedItem.name, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, selectedItem.issueNumber || "1")} 
+                                            onClick={() => handleRequest(selectedItem.volumeId, selectedItem.isVolume ? seriesBaseName : selectedItem.name, selectedItem.image, selectedItem.year, 'issue', selectedItem.publisher, false, selectedItem.issueNumber, false, selectedItem.metadataSource || 'COMICVINE')} 
                                             disabled={requestingTarget === `iss-${issueTargetName}`}
                                         >
                                             {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
@@ -494,9 +570,11 @@ export function RequestSearch() {
                                       variant="outline" 
                                       className="w-full gap-1.5 border-dashed shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" 
                                       onClick={() => setInteractiveQuery({ query: selectedItem.isVolume ? seriesBaseName : selectedItem.name, type: selectedItem.isVolume ? 'issue' : 'volume' })}
-                                      disabled={(!selectedItem.isVolume && isIssueOwned) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
+                                      disabled={(isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') || (!selectedItem.isVolume && isIssueOwned) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                     >
-                                        {overallStatus === 'PENDING_APPROVAL' ? (
+                                        {(isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') ? (
+                                            <><FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">Up to Date</span></>
+                                        ) : overallStatus === 'PENDING_APPROVAL' ? (
                                             <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>
                                         ) : overallStatus === 'REQUESTED' ? (
                                             <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>
@@ -593,7 +671,7 @@ export function RequestSearch() {
                                   <div className="flex w-max gap-4 px-1">
                                       {volumeIssues.map(issue => {
                                           const relIssueTargetName = issue.name;
-                                          const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, relIssueTargetName);
+                                          const relIssueStatus = getIssueStatus(issue.id, selectedItem.volumeId, relIssueTargetName, issue.isReleased, issue.issueNumber, seriesBaseName);
                                           
                                           return (
                                           <div 
@@ -608,12 +686,20 @@ export function RequestSearch() {
                                                       description: undefined,
                                                       writers: undefined,
                                                       artists: undefined,
-                                                      characters: undefined
+                                                      characters: undefined,
+                                                      metadataSource: selectedItem.metadataSource || 'COMICVINE'
                                                   });
                                               }}
                                             >
                                               <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
-                                                  <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
+                                                  {/* --- FIX: Image Fallbacks --- */}
+                                                  {issue.image ? (
+                                                      <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
+                                                  ) : (
+                                                      <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30">
+                                                          <ImageIcon className="w-6 h-6" />
+                                                      </div>
+                                                  )}
                                                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none" />
                                                   
                                                   <div className="absolute top-1 right-1 bg-black/80 text-white rounded-md px-1.5 py-0.5 text-[10px] font-bold z-20 shadow-sm border border-white/20">#{issue.issueNumber}</div>
@@ -627,7 +713,7 @@ export function RequestSearch() {
                                                               onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
-                                                                handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue', selectedItem.publisher, false, issue.issueNumber);
+                                                                handleRequest(selectedItem.volumeId, issue.name, issue.image, issue.year, 'issue', selectedItem.publisher, false, issue.issueNumber, false, selectedItem.metadataSource || 'COMICVINE');
                                                               }}
                                                               title="Request Issue"
                                                               tabIndex={-1}
@@ -637,9 +723,12 @@ export function RequestSearch() {
                                                       </div>
                                                   )}
 
+                                                  {/* --- FIX: Map the UNRELEASED badging to the sub-cards --- */}
                                                   {relIssueStatus === 'REQUESTED' && (<div className="absolute top-1 left-1 bg-orange-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">REQUESTED</div>)}
                                                   {relIssueStatus === 'PENDING_APPROVAL' && (<div className="absolute top-1 left-1 bg-yellow-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20" title="Pending Admin Approval">PENDING</div>)}
                                                   {relIssueStatus === 'ISSUE_OWNED' && (<div className="absolute top-1 left-1 bg-emerald-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">IN LIBRARY</div>)}
+                                                  {relIssueStatus === 'UNRELEASED' && (<div className="absolute top-1 left-1 bg-purple-500 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">UNRELEASED</div>)}
+                                                  {(!relIssueStatus && issue.isReleased === false) && (<div className="absolute top-1 left-1 bg-purple-500/80 text-white rounded-md px-1 py-0.5 text-[8px] font-bold z-20">UNRELEASED</div>)}
                                               </div>
                                           </div>
                                       )})}
@@ -654,7 +743,7 @@ export function RequestSearch() {
           </div>
           {selectedItem && (
             <div className="p-4 bg-background border-t border-border flex justify-between shrink-0 z-10 transition-colors duration-300">
-                <Button variant="secondary" asChild><Link href={selectedItem.siteUrl || `https://comicvine.gamespot.com/volume/4050-${selectedItem.volumeId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> View Details</Link></Button>
+                <Button variant="secondary" asChild className="h-12 sm:h-10 sm:mr-auto bg-background shadow-sm font-bold hover:bg-muted text-foreground border-border"><Link href={selectedItem.siteUrl || `https://comicvine.gamespot.com/volume/4050-${selectedItem.volumeId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" />View on {selectedItem.siteUrl?.includes('metron') ? 'Metron' : 'ComicVine'}</Link></Button>
                 <Button variant="outline" className="text-foreground" onClick={() => setOpen(false)}>Close</Button>
             </div>
           )}
@@ -670,7 +759,8 @@ export function RequestSearch() {
             year: selectedItem.year,
             publisher: selectedItem.publisher || 'Unknown',
             image: selectedItem.image,
-            type: interactiveQuery.type
+            type: interactiveQuery.type,
+            metadataSource: selectedItem.metadataSource || 'COMICVINE'
           }}
         />
       )}
@@ -684,13 +774,13 @@ export function RequestSearch() {
           </DialogHeader>
           <div className="flex flex-col gap-3 mt-4 sm:mt-6">
             <Button className="w-full h-12 sm:h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true);
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, true, undefined, false, monitorPrompt.metadataSource || 'COMICVINE');
                 setMonitorPrompt(null);
             }}>
                 Yes, Request & Monitor
             </Button>
             <Button variant="outline" className="w-full h-12 sm:h-10 font-bold border-primary/30 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => {
-                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false);
+                if (monitorPrompt) handleRequest(monitorPrompt.id, monitorPrompt.name, monitorPrompt.image, monitorPrompt.year, 'volume', monitorPrompt.publisher, false, undefined, false, monitorPrompt.metadataSource || 'COMICVINE');
                 setMonitorPrompt(null);
             }}>
                 No, Just Request Current Issues

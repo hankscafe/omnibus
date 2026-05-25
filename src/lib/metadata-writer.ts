@@ -1,4 +1,3 @@
-// src/lib/metadata-writer.ts
 import fs from 'fs-extra';
 import path from 'path';
 import AdmZip from 'adm-zip';
@@ -52,11 +51,15 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         }
 
         const isCvSeries = issue.series.metadataSource === 'COMICVINE';
+        const isMetronSeries = issue.series.metadataSource === 'METRON';
         const isCvIssue = issue.metadataSource === 'COMICVINE';
+        const isMetronIssue = issue.metadataSource === 'METRON';
 
-        const cvUrl = (isCvSeries && issue.series.metadataId) 
-            ? `https://comicvine.gamespot.com/volume/4050-${issue.series.metadataId}/` 
-            : '';
+        let webUrl = '';
+        if (isMetronIssue && issue.metadataId) webUrl = `https://metron.cloud/issue/${issue.metadataId}/`;
+        else if (isMetronSeries && issue.series.metadataId) webUrl = `https://metron.cloud/series/${issue.series.metadataId}/`;
+        else if (isCvIssue && issue.metadataId) webUrl = `https://comicvine.gamespot.com/issue/4000-${issue.metadataId}/`;
+        else if (isCvSeries && issue.series.metadataId) webUrl = `https://comicvine.gamespot.com/volume/4050-${issue.series.metadataId}/`;
 
         const cleanDesc = (issue.description || '').replace(/<[^>]*>?/gm, '').trim();
 
@@ -76,10 +79,12 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
   <Writer>${escapeXml(writers)}</Writer>
   <Penciller>${escapeXml(artists)}</Penciller>
   <Characters>${escapeXml(characters)}</Characters>
-  <Web>${escapeXml(cvUrl)}</Web>
+  <Web>${escapeXml(webUrl)}</Web>
   <Manga>${issue.series.isManga ? 'YesAndRightToLeft' : 'No'}</Manga>
   <ComicVineVolumeId>${(isCvSeries && issue.series.metadataId) ? issue.series.metadataId : ''}</ComicVineVolumeId>
   <ComicVineIssueId>${(isCvIssue && issue.metadataId) ? issue.metadataId : ''}</ComicVineIssueId>
+  <MetronId>${(isMetronSeries && issue.series.metadataId) ? issue.series.metadataId : ''}</MetronId>
+  <MetronIssueId>${(isMetronIssue && issue.metadataId) ? issue.metadataId : ''}</MetronIssueId>
 </ComicInfo>`;
 
         Logger.log(`[Metadata Writer Debug] Generated XML content for issue ${issueId}`, 'debug');
@@ -120,7 +125,6 @@ function escapeXml(unsafe: string | null) {
 
 export async function writeSeriesJson(seriesId: string): Promise<boolean> {
     try {
-        // 1. Check if the feature is enabled in Settings
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'export_series_json' } });
         if (setting?.value !== 'true') return false;
 
@@ -133,7 +137,6 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
             return false;
         }
 
-        // 2. Aggregate genres/concepts from all issues in the series
         const allGenres = new Set<string>();
         for (const issue of series.issues) {
             if ((issue as any).genres) {
@@ -146,12 +149,11 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
             }
         }
 
-        // 3. Build the Komga/Kavita compatible JSON structure
-        const cvUrl = (series.metadataSource === 'COMICVINE' && series.metadataId) 
-            ? `https://comicvine.gamespot.com/volume/4050-${series.metadataId}/` 
-            : '';
+        let webUrl = '';
+        if (series.metadataSource === 'METRON' && series.metadataId) webUrl = `https://metron.cloud/series/${series.metadataId}/`;
+        else if (series.metadataSource === 'COMICVINE' && series.metadataId) webUrl = `https://comicvine.gamespot.com/volume/4050-${series.metadataId}/`;
 
-        const links = cvUrl ? [{ label: "ComicVine", url: cvUrl }] : [];
+        const links = webUrl ? [{ label: series.metadataSource === 'METRON' ? "Metron.Cloud" : "ComicVine", url: webUrl }] : [];
 
         const komgaMetadata = {
             metadata: {
@@ -166,13 +168,10 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
                 genres: Array.from(allGenres),
                 tags: [],
                 totalBookCount: series.issues.length,
-                links: links // <-- NEW: Injects the ComicVine URL
+                links: links 
             }
         };
 
-        Logger.log(`[Metadata Writer Debug] Generated series.json for series ${seriesId}:\n${JSON.stringify(komgaMetadata)}`, 'debug');
-
-        // 4. Write it to disk
         const jsonPath = path.join(series.folderPath, 'series.json');
         await fs.writeFile(jsonPath, JSON.stringify(komgaMetadata, null, 2), 'utf-8');
 

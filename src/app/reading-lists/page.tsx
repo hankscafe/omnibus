@@ -447,9 +447,13 @@ function ReadingListsContent() {
           let volumeId = 0;
           let year = new Date().getFullYear().toString();
           
+          // FIX: Natively pull the provider from the list item
+          const provider = item.metadataSource || item.issue?.metadataSource || 'COMICVINE';
+          
           if (item.cvIssueId) {
               try {
-                  const lookupRes = await fetch(`/api/reading-lists/lookup-volume?issueId=${item.cvIssueId}`);
+                  // FIX: Pass provider to lookup-volume API
+                  const lookupRes = await fetch(`/api/reading-lists/lookup-volume?issueId=${item.cvIssueId}&provider=${provider}`);
                   if (lookupRes.ok) {
                       const data = await lookupRes.json();
                       if (data.volumeId) volumeId = data.volumeId;
@@ -474,7 +478,8 @@ function ReadingListsContent() {
                   year: year,
                   publisher: "Unknown",
                   image: coverUrl,
-                  issueNumber: extractedIssueNumber 
+                  issueNumber: extractedIssueNumber,
+                  metadataSource: provider // <-- FIX: Pass down provider
               })
           });
 
@@ -490,7 +495,8 @@ function ReadingListsContent() {
                       cvId: volumeId,
                       name: item.title,
                       image: coverUrl,
-                      searchLink: searchLink
+                      searchLink: searchLink,
+                      metadataSource: provider // <-- FIX: Pass down provider
                   })
               });
 

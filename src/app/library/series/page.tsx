@@ -113,8 +113,8 @@ function SeriesContent() {
   const [isLinking, setIsLinking] = useState<string | null>(null);
   
   // Calculate unmatched issues
-  const unmatchedIssues = downloadedIssues.filter(i => i.cvId === null);
-  const matchedDownloadedIssues = downloadedIssues.filter(i => i.cvId !== null);
+  const unmatchedIssues = downloadedIssues.filter(i => i.matchState === 'UNMATCHED' || i.metadataId?.startsWith('unmatched'));
+  const matchedDownloadedIssues = downloadedIssues.filter(i => i.matchState !== 'UNMATCHED' && !i.metadataId?.startsWith('unmatched'));
 
   const [reviews, setReviews] = useState<any[]>([]);
   const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });
@@ -261,7 +261,7 @@ function SeriesContent() {
                 name: data.seriesName || data.name || "",
                 publisher: data.publisher || "", 
                 year: data.year ? data.year.toString() : "",
-                cvId: data.cvId ? data.cvId.toString() : "",
+                cvId: data.metadataId ? data.metadataId.toString() : (data.cvId ? data.cvId.toString() : ""),
                 monitored: data.monitored || false,
                 isManga: data.isManga || false
             });
@@ -450,12 +450,13 @@ function SeriesContent() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     type: 'issue',
-                    cvId: seriesInfo.cvId, 
+                    cvId: seriesInfo.metadataId || seriesInfo.cvId, 
                     name: compositeName, 
                   year: seriesInfo.year || new Date().getFullYear().toString(),
                   publisher: seriesInfo.publisher || "Unknown",
                   image: issue.coverUrl || seriesInfo.cover,
-                  issueNumber: issue.parsedNum?.toString()
+                  issueNumber: issue.parsedNum?.toString(),
+                  metadataSource: seriesInfo.metadataSource
               })
           });
           if (res.ok) {
@@ -583,7 +584,7 @@ function SeriesContent() {
                   name: editForm.name,
                   year: editForm.year,
                   publisher: editForm.publisher,
-                  cvId: parseInt(editForm.cvId) || 0,
+                  cvId: editForm.cvId || "",
                   monitored: editForm.monitored,
                   isManga: editForm.isManga
               })
@@ -824,9 +825,17 @@ function SeriesContent() {
           if (res.ok) {
               toast({ title: "Defaults Restored", description: "Fetching official names from provider in the background." });
               // Trigger a background refresh so the names update immediately
-              if (seriesInfo.cvId) {
-                  fetch('/api/library/refresh-metadata', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cvId: seriesInfo.cvId, folderPath }) });
-              }
+              if (seriesInfo.metadataId || seriesInfo.cvId) {
+                    fetch('/api/library/refresh-metadata', { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ 
+                            metadataId: seriesInfo.metadataId || seriesInfo.cvId, 
+                            metadataSource: seriesInfo.metadataSource || 'COMICVINE',
+                            folderPath 
+                        }) 
+                    });
+                }
               setBulkEditModalOpen(false);
               setSelectedIssues(new Set());
               setIsSelectionMode(false);
@@ -960,8 +969,8 @@ function SeriesContent() {
                   )}
 
                   {isAdmin && (
-                      <Button variant={seriesInfo.cvId ? "outline" : "default"} className={`w-full font-bold ${seriesInfo.cvId ? 'border-border hover:bg-muted text-foreground' : ''}`} onClick={() => { setSearchQuery(seriesInfo.name); setMatchModalOpen(true); }}>
-                          <Search className="w-4 h-4 mr-2" /> {seriesInfo.cvId ? "Fix Match" : "Match Series"}
+                      <Button variant={seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? "outline" : "default"} className={`w-full font-bold ${seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? 'border-border hover:bg-muted text-foreground' : ''}`} onClick={() => { setSearchQuery(seriesInfo.name); setMatchModalOpen(true); }}>
+                          <Search className="w-4 h-4 mr-2" /> {seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? "Fix Match" : "Match Series"}
                       </Button>
                   )}
 
@@ -987,9 +996,20 @@ function SeriesContent() {
                       </Button>
                   )}
                   
-                  {seriesInfo.cvId && (
-                      <>
-                        <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" asChild><Link href={`https://comicvine.gamespot.com/volume/4050-${seriesInfo.cvId}/`} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-4 h-4 mr-2" /> ComicVine</Link></Button>
+                  {seriesInfo.metadataId && (
+    <>
+      <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" asChild>
+        <Link 
+          href={seriesInfo.metadataSource === 'METRON' 
+              ? `https://metron.cloud/series/${seriesInfo.metadataId}/` 
+              : `https://comicvine.gamespot.com/volume/4050-${seriesInfo.cvId}/`} 
+          target="_blank" 
+          rel="noopener noreferrer"
+        >
+          <ExternalLink className="w-4 h-4 mr-2" /> 
+          View on {seriesInfo.metadataSource === 'METRON' ? 'Metron' : 'ComicVine'}
+        </Link>
+      </Button>
                         
                         {isAdmin && (
                             <Button 
@@ -1752,7 +1772,18 @@ function SeriesContent() {
               <DialogHeader><DialogTitle>Edit Series Info</DialogTitle></DialogHeader>
               <div className="grid gap-4 py-4">
                   <div className="grid gap-2"><Label>Source Folder Path</Label><div className="flex gap-2"><Input readOnly value={seriesInfo.path || folderPath!} className="bg-muted border-border text-xs truncate text-muted-foreground" /><Button variant="secondary" size="icon" onClick={copyToClipboard} className="border border-border hover:bg-muted">{copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}</Button></div></div>
-                  <div className="grid gap-2"><Label>ComicVine ID</Label><Input type="number" value={editForm.cvId} onChange={(e) => setEditForm({...editForm, cvId: e.target.value})} className="bg-background border-border" /></div>
+                  <div className="grid gap-2">
+    <Label htmlFor="cvId">
+        {seriesInfo.metadataSource === 'METRON' ? 'Metron ID' : 'ComicVine ID'}
+    </Label>
+    <Input 
+        id="cvId" 
+        type="text" // Changed from number in case of string IDs
+        value={editForm.cvId || ""} 
+        onChange={e => setEditForm({...editForm, cvId: e.target.value})} 
+        className="bg-background border-border h-12 sm:h-10 text-lg" 
+    />
+</div>
                   <div className="grid gap-2"><Label>Publisher</Label><Input value={editForm.publisher} onChange={(e) => setEditForm({...editForm, publisher: e.target.value})} className="bg-background border-border" /></div>
                   <div className="grid gap-2"><Label>Series Name</Label><Input value={editForm.name} onChange={(e) => setEditForm({...editForm, name: e.target.value})} className="bg-background border-border" /></div>
                   <div className="grid gap-2"><Label>Year</Label><Input value={editForm.year} onChange={(e) => setEditForm({...editForm, year: e.target.value})} className="bg-background border-border" /></div>

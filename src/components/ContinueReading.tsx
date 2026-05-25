@@ -8,12 +8,12 @@ import Link from "next/link";
 import { Logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/utils/error";
 
-function DynamicCover({ seriesCvId, issueNumber, fallbackUrl, altName }: { seriesCvId: number | null, issueNumber: string, fallbackUrl: string, altName: string }) {
+function DynamicCover({ metadataId, metadataSource, issueNumber, fallbackUrl, altName }: { metadataId: string | null, metadataSource: string, issueNumber: string, fallbackUrl: string, altName: string }) {
     const [cover, setCover] = useState<string | null>(fallbackUrl);
     
     useEffect(() => {
-        if (!seriesCvId) return;
-        const cacheKey = `cv-vol-${seriesCvId}`;
+        if (!metadataId) return;
+        const cacheKey = `meta-vol-${metadataSource}-${metadataId}`;
         const cached = sessionStorage.getItem(cacheKey);
         
         const extractCover = (issues: any[]) => {
@@ -27,7 +27,7 @@ function DynamicCover({ seriesCvId, issueNumber, fallbackUrl, altName }: { serie
         if (cached) {
             extractCover(JSON.parse(cached));
         } else {
-            fetch(`/api/series-issues?volumeId=${seriesCvId}`)
+            fetch(`/api/series-issues?volumeId=${metadataId}&provider=${metadataSource}`)
                 .then(async (res) => {
                     if (!res.ok) throw new Error(`API returned ${res.status}`);
                     return res.json();
@@ -39,9 +39,9 @@ function DynamicCover({ seriesCvId, issueNumber, fallbackUrl, altName }: { serie
                         extractCover(issuesArray);
                     }
                 })
-                .catch((err) => Logger.log(`Fetch failed for CV ID ${seriesCvId}: ${getErrorMessage(err)}`, 'error'));
+                .catch((err) => Logger.log(`Fetch failed for Metadata ID ${metadataId}: ${getErrorMessage(err)}`, 'error'));
         }
-    }, [seriesCvId, issueNumber]);
+    }, [metadataId, metadataSource, issueNumber]);
 
     return cover ? (
         <img src={cover} alt={altName} className="object-cover w-full h-full" onError={(e) => (e.currentTarget.src = fallbackUrl)} />
@@ -103,7 +103,8 @@ export function ContinueReading() {
               onClick={() => router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`)}
             >
               <DynamicCover 
-                  seriesCvId={item.seriesCvId} 
+                  metadataId={item.metadataId || (item.seriesCvId ? item.seriesCvId.toString() : null)} 
+                  metadataSource={item.metadataSource || 'COMICVINE'}
                   issueNumber={item.issueNumber} 
                   fallbackUrl={item.seriesCoverUrl} 
                   altName={item.seriesName}

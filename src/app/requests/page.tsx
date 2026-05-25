@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { 
   Loader2, Search, RefreshCw, Clock, CheckCircle2, Calendar, FileText, 
   ChevronLeft, ChevronRight, Info, List, ImageIcon, Server, XCircle, Library,
-  CheckSquare, Square
+  CheckSquare, Square, ExternalLink
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import {
@@ -60,8 +60,8 @@ function RequestCard({
             if (issueMatch) {
                 const targetIssueNum = parseFloat(issueMatch[1]);
                 const [volRes, issuesRes] = await Promise.all([
-                    fetch(`/api/issue-details?id=${req.volumeId}&type=volume`),
-                    fetch(`/api/series-issues?volumeId=${req.volumeId}`)
+                    fetch(`/api/issue-details?id=${req.volumeId}&type=volume&provider=${req.metadataSource || 'COMICVINE'}`),
+                    fetch(`/api/series-issues?volumeId=${req.volumeId}&provider=${req.metadataSource || 'COMICVINE'}`)
                 ]);
                 const volData = await volRes.json();
                 const issuesData = await issuesRes.json();
@@ -69,7 +69,7 @@ function RequestCard({
                 const finalDesc = specificIssue?.description || volData.description;
                 setDesc(finalDesc ? finalDesc.trim() : "No synopsis available.");
             } else {
-                const res = await fetch(`/api/issue-details?id=${req.volumeId}&type=volume`);
+                const res = await fetch(`/api/issue-details?id=${req.volumeId}&type=volume&provider=${req.metadataSource || 'COMICVINE'}`);
                 const data = await res.json();
                 setDesc(data.description ? data.description.trim() : "No synopsis available.");
             }
@@ -207,6 +207,16 @@ function RequestCard({
                             <Link onClick={(e) => isSelectionMode && e.preventDefault()} href={`/library/series?path=${encodeURIComponent(req.seriesPath)}`}><Library className="w-4 h-4 mr-2" /> Go to Series</Link>
                         </Button>
                      )}
+                     
+                     {/* ADD THIS NEW BUTTON: */}
+                     {req.volumeId && req.volumeId !== "0" && (
+                         <Button size="sm" variant="outline" asChild className="flex-1 font-bold shadow-sm h-9 border-border hover:bg-muted text-foreground" disabled={isSelectionMode}>
+                            <a href={req.metadataSource === 'METRON' ? `https://metron.cloud/series/${req.volumeId}/` : `https://comicvine.gamespot.com/volume/4050-${req.volumeId}/`} target="_blank" rel="noopener noreferrer">
+                               <ExternalLink className="w-4 h-4 mr-2" /> View on {req.metadataSource === 'METRON' ? 'Metron' : 'ComicVine'}
+                            </a>
+                         </Button>
+                     )}
+                     
                      {isCancellable && (
                          <Button size="sm" variant="destructive" className="flex-1 font-bold shadow-sm h-9" onClick={(e) => { e.stopPropagation(); handleCancel(); }} disabled={isCancelling || isSelectionMode}>
                             {isCancelling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />} Cancel Request

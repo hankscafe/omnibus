@@ -1,3 +1,4 @@
+// src/app/api/series-issues/route.ts
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -8,6 +9,7 @@ import { ComicVineIssue } from '@/types';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { logApiUsage } from '@/lib/utils/system-flags';
+import { MetronProvider } from '@/lib/metadata/providers/metron';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -25,9 +27,9 @@ interface MappedIssueResult {
     writers: string[];
     artists: string[];
     coverArtists: string[];
+    metadataSource?: string;
 }
 
-// --- NEW: Helper to securely fetch from Metron ---
 const getMetronCover = async (seriesName: string, issueNumber: string, user?: string, pass?: string) => {
     if (!user || !pass) return null;
     try {
@@ -46,11 +48,42 @@ const getMetronCover = async (seriesName: string, issueNumber: string, user?: st
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const volumeId = searchParams.get('volumeId');
+  const provider = searchParams.get('provider') || 'COMICVINE';
 
-  if (!volumeId) {
-    return NextResponse.json({ error: 'Volume ID required' }, { status: 400 });
+  if (!volumeId || volumeId === '0' || volumeId === 'undefined' || volumeId === 'null') {
+    return NextResponse.json({ results: [] });
   }
-  
+
+  if (provider === 'METRON') {
+      try {
+          const metron = new MetronProvider();
+          const issues = await metron.getSeriesIssues(volumeId);
+          
+          const mapped = issues.map(item => ({
+              id: parseInt(item.sourceId),
+              volumeId: parseInt(volumeId),
+              name: item.name || `Issue #${item.issueNumber}`,
+              issueNumber: item.issueNumber,
+              issue_number: item.issueNumber, 
+              year: item.releaseDate ? item.releaseDate.split('-')[0] : '????',
+              isReleased: isReleasedYet(item.releaseDate, item.releaseDate),
+              publisher: null, 
+              image: item.coverUrl ? `/api/library/cover?path=${encodeURIComponent(item.coverUrl)}` : null,
+              description: item.description || "No description available.",
+              siteUrl: `https://metron.cloud/issue/${item.sourceId}/`,
+              writers: item.writers.slice(0, 3),
+              artists: item.artists.slice(0, 3),
+              coverArtists: (item.coverArtists || []).slice(0, 3),
+              metadataSource: 'METRON'
+          }));
+          
+          return NextResponse.json({ results: mapped });
+      } catch (error) {
+          Logger.log(`Series Issues API Error (Metron): ${getErrorMessage(error)}`, 'error');
+          return NextResponse.json({ results: [] }); 
+      }
+  }
+
   const setting = await prisma.systemSetting.findUnique({
     where: { key: 'cv_api_key' }
   });
@@ -60,7 +93,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Missing API Key' }, { status: 500 });
   }
 
-  // Grab Metron credentials for fallback lookups
   const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
   const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
 
@@ -88,7 +120,6 @@ export async function GET(request: Request) {
       const data = response.data;
       if (offset === 0) totalResults = data.number_of_total_results || 0;
 
-      // --- FIXED: Async mapping to allow Metron fallback ---
       const pageResults: MappedIssueResult[] = await Promise.all((data.results || []).map(async (item: ComicVineIssue) => {
         let desc = item.deck;
         if (!desc && item.description) {
@@ -104,8 +135,6 @@ export async function GET(request: Request) {
         
         let rawImage = item.image?.medium_url || item.image?.small_url || item.image?.super_url || null;
 
-        // --- NEW: Metron Fallback Logic ---
-        // If the issue is unreleased AND ComicVine returned a generic placeholder, check Metron
         if (!isReleased && (!rawImage || rawImage.includes('placeholder') || rawImage.includes('default'))) {
             const fallback = await getMetronCover(item.volume.name, item.issue_number, metronUserSetting?.value, metronPassSetting?.value);
             if (fallback) rawImage = fallback;
@@ -133,6 +162,7 @@ export async function GET(request: Request) {
           writers: writers.slice(0, 3), 
           artists: artists.slice(0, 3),
           coverArtists: coverArtists.slice(0, 3),
+          metadataSource: 'COMICVINE'
         };
       }));
 

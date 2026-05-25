@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { cvId, name, year, publisher, image, type, searchResult, source, monitored, requestId } = body;
+    const { cvId, name, year, publisher, image, type, searchResult, source, monitored, requestId, metadataSource } = body;
+    const targetMetadataSource = metadataSource || 'COMICVINE';
 
     // Use strict check since cvId might be 0 during an interactive search override
     if (cvId === undefined || cvId === null || !name) return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
@@ -93,11 +94,11 @@ export async function POST(request: NextRequest) {
             const folderPath = path.join(basePath, ...folderParts).replace(/\\/g, '/');
 
             await prisma.series.upsert({
-                where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvId.toString() } },
+                where: { metadataSource_metadataId: { metadataSource: targetMetadataSource, metadataId: cvId.toString() } },
                 update: { monitored: true, coverUrl: image },
                 create: { 
                     metadataId: cvId.toString(), 
-                    metadataSource: 'COMICVINE',
+                    metadataSource: targetMetadataSource,
                     name, 
                     year: parseInt(year) || new Date().getFullYear(), 
                     publisher: safePublisher, 
@@ -124,7 +125,8 @@ export async function POST(request: NextRequest) {
             status: initialStatus,
             activeDownloadName: searchResult?.title || searchName,
             imageUrl: image,
-            downloadLink: skipIndexers && initialStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
+            downloadLink: skipIndexers && initialStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null,
+            metadataSource: targetMetadataSource // <-- ADD THIS TO PRESERVE THE SOURCE!
           }
         });
         targetReqId = newReq.id;

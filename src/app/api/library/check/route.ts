@@ -8,16 +8,17 @@ import { getErrorMessage } from '@/lib/utils/error';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const cvIdParam = searchParams.get('cvId');
+  const provider = searchParams.get('provider') || 'COMICVINE'; // <-- ADD THIS
 
   if (!cvIdParam) return NextResponse.json({ owned: false });
 
   try {
     const [seriesMatch, issueMatch] = await Promise.all([
       prisma.series.findUnique({ 
-          where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: cvIdParam } } 
+          where: { metadataSource_metadataId: { metadataSource: provider, metadataId: cvIdParam } } // <-- USE IT
       }),
       prisma.issue.findFirst({ 
-          where: { metadataId: cvIdParam, metadataSource: 'COMICVINE' } 
+          where: { metadataId: cvIdParam, metadataSource: provider } // <-- USE IT
       })
     ]);
 

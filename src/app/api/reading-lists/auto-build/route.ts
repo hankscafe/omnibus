@@ -194,7 +194,8 @@ export async function POST(request: Request) {
             issuesToCreate.push({
                 listId: newList.id,
                 issueId: existingIssue ? existingIssue.id : null,
-                cvIssueId: eventSource === 'COMICVINE' ? targetId : null,
+                cvIssueId: targetId,
+                metadataSource: eventSource,
                 title: issueTitle,
                 order: orderCounter++
             });

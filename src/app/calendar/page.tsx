@@ -11,6 +11,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { Loader2, Calendar as CalendarIcon, Clock, ChevronLeft, ChevronRight, Image as ImageIcon, BookOpen, Download, Plus, Activity, Check, ExternalLink } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useSession } from "next-auth/react"
 
 interface UpcomingIssue {
     id: string | number;
@@ -29,7 +30,11 @@ interface UpcomingIssue {
 }
 
 export default function CalendarPage() {
+    const { data: session, status } = useSession();
+    const isAdmin = session?.user?.role === 'ADMIN';
+
     const [activeTab, setActiveTab] = useState("my-pulls");
+    const [metronConfigured, setMetronConfigured] = useState<boolean | null>(null);
     
     // Local Tracked State
     const [localIssues, setLocalIssues] = useState<UpcomingIssue[]>([]);
@@ -52,8 +57,40 @@ export default function CalendarPage() {
     const router = useRouter();
     const { toast } = useToast();
 
+    // 0. Check if Metron is configured
+    useEffect(() => {
+        if (status === "loading") return;
+
+        if (isAdmin) {
+            fetch('/api/admin/config')
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                    if (data?.settings) {
+                        const mUser = data.settings.find((s: any) => s.key === 'metron_user')?.value;
+                        const mPass = data.settings.find((s: any) => s.key === 'metron_pass')?.value;
+                        setMetronConfigured(!!(mUser && mPass));
+                    } else {
+                        setMetronConfigured(true);
+                    }
+                })
+                .catch(() => setMetronConfigured(true));
+        } else {
+            fetch('/api/calendar/global?weekOffset=0')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error && data.error.includes("Metron credentials missing")) {
+                        setMetronConfigured(false);
+                    } else {
+                        setMetronConfigured(true);
+                    }
+                })
+                .catch(() => setMetronConfigured(true));
+        }
+    }, [isAdmin, status]);
+
     // 1. Fetch Local Calendar
     useEffect(() => {
+        if (metronConfigured !== true) return;
         if (activeTab !== "my-pulls") return;
         setLoadingLocal(true);
         document.title = "Omnibus - Release Calendar";
@@ -69,10 +106,11 @@ export default function CalendarPage() {
             })
             .catch(() => {})
             .finally(() => setLoadingLocal(false));
-    }, [activeTab, localWeekOffset]);
+    }, [activeTab, localWeekOffset, metronConfigured]);
 
     // 2. Fetch Global Pull List (Metron)
     useEffect(() => {
+        if (metronConfigured !== true) return;
         if (activeTab !== "global-pulls") return;
         setLoadingGlobal(true);
         fetch(`/api/calendar/global?weekOffset=${weekOffset}`)
@@ -87,7 +125,7 @@ export default function CalendarPage() {
             })
             .catch(() => {})
             .finally(() => setLoadingGlobal(false));
-    }, [activeTab, weekOffset]);
+    }, [activeTab, weekOffset, metronConfigured]);
 
     // Parse dates for grouping
     const parseDateGroup = (issuesToGroup: UpcomingIssue[]) => {
@@ -155,6 +193,39 @@ export default function CalendarPage() {
             setMonitorPrompt(null);
         }
     };
+
+    if (metronConfigured === null) {
+        return (
+            <div className="container mx-auto py-20 px-6 max-w-6xl transition-colors duration-300">
+                <div className="flex justify-center py-20">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                </div>
+            </div>
+        );
+    }
+
+    if (metronConfigured === false) {
+        return (
+            <div className="container mx-auto py-20 px-6 max-w-4xl transition-colors duration-300">
+                <Card className="shadow-sm border-border bg-background text-center py-16 px-6">
+                    <CalendarIcon className="w-16 h-16 mx-auto text-muted-foreground/30 mb-6" />
+                    <h2 className="text-2xl sm:text-3xl font-bold text-foreground mb-3">Integration Required</h2>
+                    <p className="text-muted-foreground max-w-lg mx-auto mb-8">
+                        To use the Release Calendar, the Metron.Cloud integration must be configured. Omnibus uses Metron to accurately track upcoming weekly comic release dates.
+                    </p>
+                    {isAdmin ? (
+                        <Button asChild className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-8 h-12">
+                            <Link href="/admin/settings">Configure Metron.Cloud</Link>
+                        </Button>
+                    ) : (
+                        <p className="text-sm font-bold text-primary bg-primary/10 py-3 px-6 rounded-lg inline-block">
+                            Please ask your server administrator to configure this integration in Settings.
+                        </p>
+                    )}
+                </Card>
+            </div>
+        );
+    }
 
     return (
         <div className="container mx-auto py-10 px-6 max-w-6xl transition-colors duration-300">

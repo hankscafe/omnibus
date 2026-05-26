@@ -823,7 +823,7 @@ export default function SettingsPage() {
                                     <Database className="w-4 h-4 text-primary" /> Primary Metadata Source
                                 </h3>
                                 <p className="text-[0.8rem] text-muted-foreground mt-1 max-w-2xl">
-                                    Select the default provider for interactive searches and Discover page population. 
+                                    Select the default provider for all automated metadata fetching, Smart Match auto-scanning, interactive searches, and Discover page population. 
                                     <strong> You must configure the corresponding provider's credentials below before you can select it.</strong> 
                                     If you select Metron, the "Popular Issues" section on the Discover page will be disabled.
                                 </p>
@@ -876,7 +876,7 @@ export default function SettingsPage() {
 
                     <div className="space-y-4 pt-4">
                         <h3 className="text-lg font-bold text-foreground flex items-center gap-2 border-b border-border pb-2"><Database className="w-4 h-4 text-primary" /> Metron.Cloud Integration (Optional)</h3>
-                        <p className="text-[0.8rem] text-muted-foreground">Metron is an open-source alternative to ComicVine.</p>
+                        <p className="text-[0.8rem] text-muted-foreground">Metron is an open-source alternative to ComicVine.  Metron integration is required to populate the Release Calendar.</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="grid gap-2">
                                 <Label className="text-foreground font-semibold">Metron Username</Label>

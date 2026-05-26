@@ -40,7 +40,9 @@ export default function SmartMatchPage() {
                 if (data?.settings) {
                     const mUser = data.settings.find((s: any) => s.key === 'metron_user')?.value;
                     const mPass = data.settings.find((s: any) => s.key === 'metron_pass')?.value;
+                    const primary = data.settings.find((s: any) => s.key === 'primary_metadata_source')?.value;
                     if (mUser && mPass) setMetronConfigured(true);
+                    if (primary) setSearchProvider(primary);
                 }
             })
             .catch(() => {});
@@ -82,7 +84,10 @@ export default function SmartMatchPage() {
 
             try {
                 const query = `${series.name} ${series.year > 0 ? series.year : ''}`.trim();
-                const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+                
+                Logger.log(`[Smart Match Debug] Auto-scanning for "${query}" using provider: ${searchProvider}`, 'debug');
+
+                const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&provider=${searchProvider}`);
                 const data = await res.json();
 
                 if (data.results && data.results.length > 0) {
@@ -105,6 +110,9 @@ export default function SmartMatchPage() {
     const handleAcceptMatch = async (series: any, suggestion: any) => {
         setProcessingId(series.id);
         try {
+            
+            Logger.log(`[Smart Match Debug] Accepting match for "${series.name}". Linking to ${suggestion.metadataSource || 'COMICVINE'} ID: ${suggestion.id}`, 'debug');
+            
             const res = await fetch('/api/library/match-series', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -140,6 +148,8 @@ export default function SmartMatchPage() {
             const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9]/g, '');
             if (!cleanId) throw new Error("Invalid ID format");
 
+            Logger.log(`[Smart Match Debug] Manual lookup initiated for ID: ${cleanId} via ${searchProvider}`, 'debug');
+            
             const res = await fetch(`/api/issue-details?id=${cleanId}&type=volume&provider=${searchProvider}`);
             const data = await res.json();
 
@@ -192,9 +202,23 @@ export default function SmartMatchPage() {
                     </div>
                 </div>
                 
-                <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 px-6 shadow-lg border-0">
-                    {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Scanning...</> : <><FolderSearch className="w-5 h-5 mr-2" /> Start Auto-Scan</>}
-                </Button>
+                {/* --- NEW: Wrapped button in a flex container and added the Select dropdown --- */}
+                <div className="flex gap-2 w-full md:w-auto">
+                    {metronConfigured && (
+                        <Select value={searchProvider} onValueChange={setSearchProvider}>
+                            <SelectTrigger className="w-[140px] bg-background border-border h-12 shadow-sm font-bold text-foreground">
+                                <SelectValue placeholder="Source" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="COMICVINE">ComicVine</SelectItem>
+                                <SelectItem value="METRON">Metron.Cloud</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    )}
+                    <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="w-full md:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 px-6 shadow-lg border-0">
+                        {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Scanning...</> : <><FolderSearch className="w-5 h-5 mr-2" /> Start Auto-Scan</>}
+                    </Button>
+                </div>
             </div>
 
             {unmatched.length === 0 ? (
@@ -208,6 +232,7 @@ export default function SmartMatchPage() {
                     {unmatched.map((series) => {
                         const suggestion = suggestions[series.id];
                         const isProcessing = processingId === series.id;
+                        const providerLabel = suggestion?.metadataSource === 'METRON' ? 'Metron' : (suggestion?.metadataSource === 'COMICVINE' ? 'ComicVine' : (searchProvider === 'METRON' ? 'Metron' : 'ComicVine'));
 
                         return (
                             <Card key={series.id} className={`p-4 flex flex-col md:flex-row items-center gap-6 transition-all border-border bg-background ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -221,18 +246,18 @@ export default function SmartMatchPage() {
                                         <div className="p-3 bg-muted rounded-lg shrink-0">
                                             {series.isRawFile ? <FileText className="w-6 h-6 text-muted-foreground" /> : <FolderSearch className="w-6 h-6 text-muted-foreground" />}
                                         </div>
-                                        <div className="overflow-hidden">
-                                            <h3 className="font-bold text-foreground truncate" title={series.name}>{series.name}</h3>
-                                            <p className="text-sm text-muted-foreground truncate mt-0.5" title={series.folderPath}>{series.folderPath}</p>
+                                        <div className="min-w-0 flex-1">
+                                            <h3 className="font-bold text-foreground break-words whitespace-normal leading-tight">{series.name}</h3>
+                                            <p className="text-sm text-muted-foreground break-all whitespace-normal mt-1">{series.folderPath}</p>
                                         </div>
                                     </div>
                                 </div>
 
                                 <ArrowRight className="hidden md:block w-6 h-6 text-muted-foreground/30 shrink-0" />
 
-                                {/* COMICVINE SUGGESTION */}
+                                {/* COMICVINE/METRON SUGGESTION */}
                                 <div className="flex-1 min-w-[250px] w-full md:w-auto bg-muted/50 p-3 rounded-xl border border-border">
-                                    <div className="text-xs font-bold text-primary uppercase tracking-wider mb-2">{suggestion?.metadataSource === 'METRON' ? 'Metron Suggestion' : 'ComicVine Suggestion'}</div>
+                                    <div className="text-xs font-bold text-primary uppercase tracking-wider mb-2">{providerLabel} Suggestion</div>
                                     
                                     {!suggestion && isScanning && (
                                         <div className="flex items-center gap-3 text-muted-foreground animate-pulse py-2">
@@ -253,9 +278,9 @@ export default function SmartMatchPage() {
                                             <div className="w-12 h-16 shrink-0 rounded bg-muted border border-border overflow-hidden">
                                                 {suggestion.image ? <img src={suggestion.image} className="w-full h-full object-cover" alt="Suggestion" /> : <ImageIcon className="w-4 h-4 m-auto mt-6 text-muted-foreground/50" />}
                                             </div>
-                                            <div className="overflow-hidden">
-                                                <h4 className="font-bold text-foreground truncate text-sm" title={suggestion.name}>{suggestion.name}</h4>
-                                                <p className="text-xs text-muted-foreground truncate mt-0.5">{suggestion.publisher || 'Unknown'} • {suggestion.year || '????'}</p>
+                                            <div className="min-w-0 flex-1">
+                                                <h4 className="font-bold text-foreground break-words whitespace-normal text-sm leading-tight">{suggestion.name}</h4>
+                                                <p className="text-xs text-muted-foreground break-words whitespace-normal mt-1">{suggestion.publisher || 'Unknown'} • {suggestion.year || '????'}</p>
                                                 <p className="text-[10px] text-muted-foreground/80 mt-1">{suggestion.count} Issues</p>
                                             </div>
                                         </div>

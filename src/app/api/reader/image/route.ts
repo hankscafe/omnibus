@@ -13,10 +13,6 @@ import { getErrorMessage } from '@/lib/utils/error';
 const baseCacheDir = process.env.OMNIBUS_CACHE_DIR || '/cache';
 const CACHE_DIR = path.join(baseCacheDir, 'reader_images');
 
-if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-}
-
 // Disk Cache Cleanup (Runs every hour)
 // Prevents the disk from filling up by deleting pages unaccessed for 24 hours.
 setInterval(() => {
@@ -37,19 +33,32 @@ setInterval(() => {
 }, 60 * 60 * 1000); 
 
 const zipCache = new Map<string, { zip: AdmZip, lastAccessed: number }>();
-const MAX_CACHE_SIZE = 6; 
+const MAX_CACHE_SIZE = 6; // Optimized for high-RAM (64GB+) environments
 
+// Aggressive cache cleanup (runs every 30 seconds)
 setInterval(() => {
     const now = Date.now();
     for (const [key, data] of zipCache.entries()) {
-        if (now - data.lastAccessed > 5 * 60 * 1000) {
+        // Reduced TTL: Drop cache if untouched for 60 seconds
+        if (now - data.lastAccessed > 60 * 1000) {
             zipCache.delete(key);
         }
     }
-}, 60000); 
+}, 30000); 
 
 function getZipInstance(filePath: string) {
     const now = Date.now();
+    
+    // Size-based bypass: Since the host has ample RAM, we can safely increase this bypass limit to 1GB.
+    // Files over 1GB will bypass the cache to prevent extreme spikes.
+    const stats = fs.statSync(filePath);
+    const isMassiveFile = stats.size > 1024 * 1024 * 1024; // 1GB
+
+    if (isMassiveFile) {
+        Logger.log(`[Reader] Bypassing cache for massive file (>1GB): ${filePath}`, 'debug');
+        return new AdmZip(filePath);
+    }
+
     let cached = zipCache.get(filePath);
     
     if (!cached) {
@@ -73,6 +82,11 @@ function getZipInstance(filePath: string) {
 }
 
 export async function GET(request: Request) {
+  // Ensure the cache directory exists lazily at runtime, skipping the build phase
+  if (!fs.existsSync(CACHE_DIR)) {
+      try { fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (e) {}
+  }
+
   const { searchParams } = new URL(request.url);
   const filePath = searchParams.get('path');
   const pageName = searchParams.get('page');

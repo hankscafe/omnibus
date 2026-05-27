@@ -65,7 +65,12 @@ export class MetronProvider implements IMetadataProvider {
 
                 if (response.status === 429) {
                     const retryAfter = parseInt(response.headers.get('retry-after') || '60', 10);
-                    if (retryAfter > 3) throw new Error("RATE_LIMIT");
+                    
+                    // --- NEW: Circuit Breaker for Severe Bans ---
+                    if (retryAfter > 60) {
+                        Logger.log(`[Metron] FATAL Rate Limit Hit. IP blocked for ${retryAfter}s.`, 'error');
+                        throw new Error("FATAL_RATE_LIMIT");
+                    }
                     
                     Logger.log(`[Metron] Rate Limit Hit. Waiting ${retryAfter}s before retrying...`, 'warn');
                     await new Promise(resolve => setTimeout(resolve, (retryAfter + 1) * 1000));
@@ -182,12 +187,26 @@ export class MetronProvider implements IMetadataProvider {
         const headers: any = { ...this.requestHeaders };
         if (lastModified) headers['If-Modified-Since'] = lastModified.toUTCString();
 
-        const res = await this.fetchWithBackoff(`${this.baseUrl}/series/${id}/`, { headers, auth, timeout: 10000 });
+        let targetEndpoint = `${this.baseUrl}/series/${id}/`;
+        
+        // FIX: If the ID is a slug (Not a Number), we MUST use the query endpoint to resolve it
+        if (isNaN(Number(id))) {
+            targetEndpoint = `${this.baseUrl}/series/?name=${encodeURIComponent(id)}`;
+        }
+
+        const res = await this.fetchWithBackoff(targetEndpoint, { headers, auth, timeout: 10000 });
         if (res.status === 304) return null;
         if (res.status === 404) throw new Error(`Series ${id} not found on Metron.`);
 
-        await logApiUsage('metron', `/series/${id}`);
-        const series = res.data;
+        let series = res.data;
+        
+        // If we queried by slug, extract the first exact result
+        if (isNaN(Number(id)) && res.data?.results) {
+            if (res.data.results.length === 0) throw new Error(`Series slug ${id} returned 0 results on Metron.`);
+            series = res.data.results[0];
+        }
+
+        await logApiUsage('metron', `/series/${series.id}`);
         Logger.log(`[Metron Debug] Raw Series Details Payload: ${JSON.stringify(series).substring(0, 150)}...`, 'debug');
 
         let coverUrl = null;

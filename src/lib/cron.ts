@@ -14,8 +14,14 @@ async function acquireLock(lockId: string, timeoutMs: number): Promise<boolean> 
     try {
         const existing = await prisma.jobLock.findUnique({ where: { id: lockId } });
         if (!existing) {
-            await prisma.jobLock.create({ data: { id: lockId, lockedAt: new Date() } });
-            return true;
+            try {
+                await prisma.jobLock.create({ data: { id: lockId, lockedAt: new Date() } });
+                return true;
+            } catch (e: any) {
+                // P2002: Unique constraint failed. Another instance created the lock milliseconds before us.
+                if (e.code === 'P2002') return false;
+                throw e;
+            }
         }
 
         const result = await prisma.jobLock.updateMany({

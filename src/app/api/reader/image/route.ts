@@ -3,12 +3,41 @@ import fs from 'fs';
 import path from 'path';
 import AdmZip from 'adm-zip';
 import sharp from 'sharp';
+import crypto from 'crypto';
+import os from 'os';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
+// Respect the Omnibus system cache directory mapping
+const baseCacheDir = process.env.OMNIBUS_CACHE_DIR || '/cache';
+const CACHE_DIR = path.join(baseCacheDir, 'reader_images');
+
+if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+// Disk Cache Cleanup (Runs every hour)
+// Prevents the disk from filling up by deleting pages unaccessed for 24 hours.
+setInterval(() => {
+    try {
+        if (!fs.existsSync(CACHE_DIR)) return;
+        const files = fs.readdirSync(CACHE_DIR);
+        const now = Date.now();
+        for (const file of files) {
+            const filePath = path.join(CACHE_DIR, file);
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtimeMs > 24 * 60 * 60 * 1000) {
+                fs.unlinkSync(filePath);
+            }
+        }
+    } catch (e) {
+        // Silently ignore cleanup errors
+    }
+}, 60 * 60 * 1000); 
+
 const zipCache = new Map<string, { zip: AdmZip, lastAccessed: number }>();
-const MAX_CACHE_SIZE = 10; 
+const MAX_CACHE_SIZE = 6; 
 
 setInterval(() => {
     const now = Date.now();
@@ -71,6 +100,31 @@ export async function GET(request: Request) {
     const isZip = filePath.toLowerCase().match(/\.(cbz|epub|zip)$/);
     if (!isZip) return new NextResponse("Format Not Supported (Likely awaiting CBZ conversion)", { status: 400 });
 
+    // --- DISK CACHE CHECK ---
+    // Grab the physical file's modified time to prevent serving stale cache if the file is replaced
+    const fileStats = fs.statSync(filePath);
+    const fileMtime = fileStats.mtimeMs;
+
+    const cacheKey = crypto.createHash('md5').update(`${filePath}-${pageName}-${shouldCrop}-${fileMtime}`).digest('hex') + '.webp';
+    const cacheFilePath = path.join(CACHE_DIR, cacheKey);
+
+    if (fs.existsSync(cacheFilePath)) {
+        try {
+            const cachedBuffer = fs.readFileSync(cacheFilePath);
+            // Touch the file to update its modified time (keeps it alive in the cache)
+            fs.utimesSync(cacheFilePath, new Date(), new Date()); 
+            
+            return new NextResponse(cachedBuffer as unknown as BodyInit, {
+                headers: {
+                    'Content-Type': 'image/webp',
+                    'Cache-Control': 'public, max-age=86400', 
+                },
+            });
+        } catch (e) {
+            Logger.log(`[Reader] Failed to read image cache: ${getErrorMessage(e)}`, 'warn');
+        }
+    }
+
     const zipInstance = getZipInstance(filePath);
     
     let zipEntry = zipInstance.getEntry(pageName) || zipInstance.getEntry(pageName.replace(/\//g, '\\'));
@@ -101,6 +155,20 @@ export async function GET(request: Request) {
             .toBuffer();
             
         contentType = 'image/webp';
+
+        // --- SAVE TO DISK CACHE (ATOMIC WRITE) ---
+        // Write to a temporary randomized file first, then rename it. 
+        // This prevents corrupted images if two requests try to write the same page simultaneously.
+        const tempFilePath = `${cacheFilePath}.${Date.now()}.${Math.random().toString(36).substring(7)}.tmp`;
+        
+        fs.promises.writeFile(tempFilePath, finalBuffer)
+            .then(() => fs.promises.rename(tempFilePath, cacheFilePath))
+            .catch((err: any) => {
+                Logger.log(`[Reader] Failed to write image cache: ${err.message}`, 'warn');
+                // Attempt to clean up the orphaned temp file
+                fs.promises.unlink(tempFilePath).catch(() => {});
+            });
+
     } catch (imgErr) {
         if (pageName.toLowerCase().endsWith('.png')) contentType = 'image/png';
         if (pageName.toLowerCase().endsWith('.webp')) contentType = 'image/webp';

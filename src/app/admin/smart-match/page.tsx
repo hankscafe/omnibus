@@ -1,4 +1,3 @@
-// src/app/admin/smart-match/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -83,11 +82,25 @@ export default function SmartMatchPage() {
             if (suggestions[series.id]) continue; 
 
             try {
-                const query = `${series.name} ${series.year > 0 ? series.year : ''}`.trim();
+                // FIX: Strip Omnibus/TPB tags, but gracefully fallback to the original name if the regex erased the entire title
+                let cleanName = series.name.replace(/(omnibus|tpb|compendium|vol\.|volume)\s*\d*/i, '').trim();
+                
+                // Safety catch for comics literally named "The Omnibus"
+                if (cleanName.length < 2) {
+                    cleanName = series.name.trim();
+                }
+
+                const query = `${cleanName} ${series.year > 0 ? series.year : ''}`.trim();
                 
                 Logger.log(`[Smart Match Debug] Auto-scanning for "${query}" using provider: ${searchProvider}`, 'debug');
 
                 const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&provider=${searchProvider}`);
+                
+                // --- NEW: Detect HTTP 429 Too Many Requests from the API ---
+                if (res.status === 429) {
+                    throw new Error("FATAL_RATE_LIMIT");
+                }
+
                 const data = await res.json();
 
                 if (data.results && data.results.length > 0) {
@@ -96,8 +109,18 @@ export default function SmartMatchPage() {
                 } else {
                     setSuggestions(prev => ({ ...prev, [series.id]: 'NOT_FOUND' }));
                 }
-            } catch (e) {
+            } catch (e: any) {
                 setSuggestions(prev => ({ ...prev, [series.id]: 'ERROR' }));
+
+                // --- UPDATED: Softer, more accurate messaging ---
+                if (e.message === "FATAL_RATE_LIMIT" || e.message?.includes("429")) {
+                    toast({ 
+                        title: "Rate Limit Exceeded", 
+                        description: "Omnibus has hit the Metron API limits. Pausing the smart scan to protect your connection. Please attempt the scan again later to continue.", 
+                        variant: "destructive" 
+                    });
+                    break;
+                }
             }
 
             await new Promise(r => setTimeout(r, 1500));
@@ -145,7 +168,7 @@ export default function SmartMatchPage() {
         setIsManualMatching(true);
         try {
             // Strip out the "4050-" prefix if they pasted the whole URL/ID format
-            const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9]/g, '');
+            const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9a-zA-Z-]/g, '');
             if (!cleanId) throw new Error("Invalid ID format");
 
             Logger.log(`[Smart Match Debug] Manual lookup initiated for ID: ${cleanId} via ${searchProvider}`, 'debug');
@@ -202,7 +225,6 @@ export default function SmartMatchPage() {
                     </div>
                 </div>
                 
-                {/* --- NEW: Wrapped button in a flex container and added the Select dropdown --- */}
                 <div className="flex gap-2 w-full md:w-auto">
                     {metronConfigured && (
                         <Select value={searchProvider} onValueChange={setSearchProvider}>
@@ -330,7 +352,6 @@ export default function SmartMatchPage() {
                         </DialogDescription>
                     </DialogHeader>
                     <div className="py-4 space-y-4">
-                        {/* --- NEW: Provider Select --- */}
                         {metronConfigured && (
                             <div className="space-y-2">
                                 <Label>Metadata Source</Label>
@@ -346,11 +367,11 @@ export default function SmartMatchPage() {
                             </div>
                         )}
                         <div className="space-y-2">
-                            <Label>{searchProvider === 'METRON' ? 'Metron Series ID' : 'ComicVine Volume ID'}</Label>
+                            <Label>{searchProvider === 'METRON' ? 'Metron Series ID (or Slug)' : 'ComicVine Volume ID'}</Label>
                             <Input 
                                 value={manualMatchId} 
                                 onChange={(e) => setManualMatchId(e.target.value)} 
-                                placeholder="e.g. 4050-12345"
+                                placeholder="e.g. 4050-12345 or black-cat-2025"
                                 className="bg-background border-border"
                             />
                         </div>

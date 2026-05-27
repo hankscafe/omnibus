@@ -1,3 +1,4 @@
+// src/lib/metadata-writer.ts
 import fs from 'fs-extra';
 import path from 'path';
 import AdmZip from 'adm-zip';
@@ -6,8 +7,11 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
 export async function writeComicInfo(issueId: string): Promise<boolean> {
+    // Declare 'issue' outside the try block so it can be accessed in the catch block for logging
+    let issue: any = null; 
+
     try {
-        const issue = await prisma.issue.findUnique({
+        issue = await prisma.issue.findUnique({
             where: { id: issueId },
             include: { series: true }
         });
@@ -35,7 +39,7 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         if ((issue as any).storyArcs) {
             try { 
                 const parsed = JSON.parse((issue as any).storyArcs);
-                if (Array.isArray(parsed)) storyArcsList.push(...parsed.filter(a => a !== "NONE"));
+                if (Array.isArray(parsed)) storyArcsList.push(...parsed.filter((a: string) => a !== "NONE"));
             } catch(e) {}
         }
         const storyArcs = storyArcsList.join(', ');
@@ -87,7 +91,7 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
   <MetronIssueId>${(isMetronIssue && issue.metadataId) ? issue.metadataId : ''}</MetronIssueId>
 </ComicInfo>`;
 
-        Logger.log(`[Metadata Writer Debug] Generated XML content for issue ${issueId}`, 'debug');
+        Logger.log(`[Metadata Writer Debug] Generated XML content for: ${issue.series.name} #${issue.number}`, 'debug');
         const zip = new AdmZip(issue.filePath);
         
         const existingEntry = zip.getEntries().find(e => e.entryName.toLowerCase() === 'comicinfo.xml');
@@ -104,7 +108,9 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         Logger.log(`[Metadata Writer Debug] Successfully wrote ComicInfo.xml to ${issue.filePath}`, 'debug');
         return true;
     } catch (error) {
-        Logger.log(`[Writer] Failed to write XML for ${issueId}: ${getErrorMessage(error)}`, 'error');
+        // We optionally use a fallback to issueId just in case the issue lookup failed entirely
+        const issueIdentifier = issue ? `${issue.series.name} #${issue.number}` : issueId;
+        Logger.log(`[Writer] Failed to write XML for ${issueIdentifier}: ${getErrorMessage(error)}`, 'error');
         return false;
     }
 }
@@ -143,7 +149,7 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
                 try {
                     const parsed = JSON.parse((issue as any).genres);
                     if (Array.isArray(parsed)) {
-                        parsed.forEach(g => { if (g !== 'NONE') allGenres.add(g); });
+                        parsed.forEach((g: string) => { if (g !== 'NONE') allGenres.add(g); });
                     }
                 } catch(e) {}
             }

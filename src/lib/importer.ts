@@ -70,6 +70,36 @@ function extractIssueNumber(filename: string): string {
     return "1"; 
 }
 
+function fixMagicNumberSync(filePath: string): string {
+    try {
+        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return filePath;
+        const buffer = Buffer.alloc(4);
+        const fd = fs.openSync(filePath, 'r');
+        fs.readSync(fd, buffer, 0, 4, 0);
+        fs.closeSync(fd);
+        const hex = buffer.toString('hex').toLowerCase();
+        
+        const currentExt = path.extname(filePath).toLowerCase();
+        let trueExt = currentExt;
+
+        if (hex === '52617221') {
+            trueExt = '.cbr';
+        } else if (hex === '504b0304') {
+            trueExt = '.cbz';
+        }
+
+        if (trueExt !== currentExt && ((currentExt === '.cbz' || currentExt === '.zip') && trueExt === '.cbr' || (currentExt === '.cbr' || currentExt === '.rar') && trueExt === '.cbz')) {
+            Logger.log(`[Importer] Detected fake extension (${currentExt} -> ${trueExt}) on destination file! Renaming to match true signature...`, 'info');
+            const correctedPath = filePath.replace(/\.[^/.]+$/, trueExt);
+            fs.renameSync(filePath, correctedPath);
+            return correctedPath;
+        }
+    } catch (e: any) {
+        Logger.log(`[Importer Debug] Failed to verify file signature for ${filePath}: ${e.message}`, 'warn');
+    }
+    return filePath;
+}
+
 export const Importer = {
   async importRequest(requestId: string) {
     const req = await prisma.request.findUnique({ 
@@ -178,7 +208,11 @@ export const Importer = {
         });
     }
 
-    // --- MAGIC NUMBER / FAKE EXTENSION FIXER ---
+    // --- MAGIC NUMBER / FAKE EXTENSION FIXER (IN-MEMORY ONLY) ---
+    // We only detect the true extension here to aid batch processing detection.
+    // The actual file renaming is deferred until after the file has been copied/moved 
+    // to its final destination to prevent breaking active torrent seeding.
+    let inMemoryTrueExt = path.extname(sourcePath).toLowerCase();
     if (fs.existsSync(sourcePath) && !fs.statSync(sourcePath).isDirectory()) {
         try {
             const buffer = Buffer.alloc(4);
@@ -187,29 +221,13 @@ export const Importer = {
             fs.closeSync(fd);
             const hex = buffer.toString('hex').toLowerCase();
             
-            const currentExt = path.extname(sourcePath).toLowerCase();
-            let trueExt = currentExt;
-
-            // 52617221 is RAR, 504b0304 is ZIP
             if (hex === '52617221') {
-                trueExt = '.cbr';
+                inMemoryTrueExt = '.cbr';
             } else if (hex === '504b0304') {
-                trueExt = '.cbz';
-            }
-
-            if ((currentExt === '.cbz' || currentExt === '.zip') && trueExt === '.cbr') {
-                Logger.log(`[Importer] Detected fake CBZ! File is actually a RAR. Renaming to .cbr for conversion...`, 'info');
-                const correctedPath = sourcePath.replace(/\.[^/.]+$/, trueExt);
-                fs.renameSync(sourcePath, correctedPath);
-                sourcePath = correctedPath;
-            } else if ((currentExt === '.cbr' || currentExt === '.rar') && trueExt === '.cbz') {
-                Logger.log(`[Importer] Detected fake CBR! File is actually a ZIP. Renaming to .cbz...`, 'info');
-                const correctedPath = sourcePath.replace(/\.[^/.]+$/, trueExt);
-                fs.renameSync(sourcePath, correctedPath);
-                sourcePath = correctedPath;
+                inMemoryTrueExt = '.cbz';
             }
         } catch (e: any) {
-            Logger.log(`[Importer Debug] Failed to verify file signature: ${e.message}`, 'warn');
+            Logger.log(`[Importer Debug] Failed to verify file signature for in-memory check: ${e.message}`, 'warn');
         }
     }
 
@@ -248,8 +266,7 @@ export const Importer = {
             return false;
         }
     } else {
-        const ext = path.extname(sourcePath).toLowerCase();
-        if (ext === '.zip' || ext === '.cbz') {
+        if (inMemoryTrueExt === '.zip' || inMemoryTrueExt === '.cbz') {
             try {
                 const zip = new AdmZip(sourcePath);
                 const entries = zip.getEntries();
@@ -289,6 +306,9 @@ export const Importer = {
                     } else {
                         await fs.move(file, finalDest, { overwrite: true });
                     }
+                    
+                    finalDest = fixMagicNumberSync(finalDest);
+
                     moveSuccessCount++;
                 } catch(err: any) {
                     Logger.log(`[Importer Debug] Failed to route ${path.basename(file)} to Watched folder: ${err.message}`, 'warn');
@@ -310,6 +330,9 @@ export const Importer = {
                             finalDest = path.join(watchedDir, `${Date.now()}_${fileName}`);
                         }
                         fs.writeFileSync(finalDest, entry.getData());
+                        
+                        finalDest = fixMagicNumberSync(finalDest);
+
                         moveSuccessCount++;
                     }
                 }
@@ -526,7 +549,9 @@ export const Importer = {
     let pageCount = 0;
     let xmlMeta: any = null;
 
-    if (actualSourceFile.toLowerCase().match(/\.(cbz|zip|epub)$/i)) {
+    const isActualZip = inMemoryTrueExt === '.cbz' || inMemoryTrueExt === '.zip' || actualSourceFile.toLowerCase().match(/\.(cbz|zip|epub)$/i);
+
+    if (isActualZip) {
         try {
             const zip = new AdmZip(actualSourceFile);
             pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp|gif)$/i)).length;
@@ -606,6 +631,9 @@ export const Importer = {
       }
 
       if (!moveSuccess) throw new Error("Failed to move file after multiple attempts due to network locks.");
+
+      finalPath = fixMagicNumberSync(finalPath);
+      fileName = path.basename(finalPath);
 
       if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar')) {
           Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');

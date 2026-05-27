@@ -223,12 +223,42 @@ export async function POST(request: Request) {
 
         if (action === 'delete-orphans') {
             const { paths } = payload;
+            
+            // SECURITY FIX: Path Traversal & Root Deletion Prevention
+            const libraries = await prisma.library.findMany();
+            const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+            
+            // Resolve to absolute paths and ensure they end with a trailing slash
+            // (e.g., "/data/comics" becomes "/data/comics/")
+            const authorizedRoots = [
+                ...libraries.map(l => path.resolve(l.path).toLowerCase()),
+                path.resolve(unmatchedDir).toLowerCase()
+            ].map(root => root.endsWith(path.sep) ? root : root + path.sep);
+
+            const deletedPaths = [];
+
             for (const p of paths) {
-                if (fs.existsSync(p)) await fs.remove(p);
+                // Flatten the target path to destroy `../` traversal attempts
+                const resolvedTarget = path.resolve(p).toLowerCase();
+                
+                // Ensure the target starts with the authorized root directory, 
+                // but IS NOT the root directory itself.
+                const isAuthorizedChild = authorizedRoots.some(root => 
+                    resolvedTarget.startsWith(root) && resolvedTarget.length > root.length
+                );
+
+                if (isAuthorizedChild) {
+                    if (fs.existsSync(p)) {
+                        await fs.remove(p); // fs.remove handles the actual deletion safely
+                        deletedPaths.push(p);
+                    }
+                } else {
+                    Logger.log(`[Diagnostics API] Blocked unauthorized path deletion: ${p}`, 'warn');
+                }
             }
 
             // --- AUDIT LOG ---
-            await AuditLogger.log('DELETE_ORPHANED_FILES', { filesDeleted: paths }, userId);
+            await AuditLogger.log('DELETE_ORPHANED_FILES', { filesDeleted: deletedPaths }, userId);
 
             Logger.log(`Deleted physical orphaned files from disk.`, "success");
             return NextResponse.json({ success: true });

@@ -1,4 +1,3 @@
-// src/lib/queue.ts
 import { Queue, Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { prisma } from './db';
@@ -268,7 +267,6 @@ export function initWorker() {
                     
                     let dbDeletedCount = 0;
                     try {
-                        // --- FIX: Safely hunt down BOTH legacy cv_details keys and modern meta_details keys ---
                         const oldCacheSettings = await prisma.systemSetting.findMany({
                             where: { 
                                 OR: [
@@ -897,6 +895,13 @@ export function initWorker() {
                                 where: { id: series.id }, 
                                 data: { updatedAt: new Date() } 
                             });
+
+                            // --- NEW: Catch the fatal limit and stop the job ---
+                            if (e.message === 'FATAL_RATE_LIMIT' || e.message.includes('429')) {
+                                details += `\n[HALTED] API rate limit exhausted. Pausing background job to prevent IP ban.\n`;
+                                Logger.log(`[Metadata Sync] Halted batch due to rate limits to protect IP.`, 'warn');
+                                break; 
+                            }
                             
                             await new Promise(r => setTimeout(r, 4000));
                         }

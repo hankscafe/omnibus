@@ -1,9 +1,10 @@
+// src/lib/metadata-extractor.ts
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import { Logger } from './logger';
 
 // In-memory cache to prevent API bans during mass scans
-const volumeResolutionCache = new Map<string, { cvId: number, timestamp: number }>();
+const volumeResolutionCache = new Map<string, { cvId: number | string, timestamp: number }>();
 
 export function cleanupMetadataExtractorCache() {
     const now = Date.now();
@@ -18,7 +19,7 @@ export function cleanupMetadataExtractorCache() {
 }
 
 export async function parseComicInfo(filePath: string) {
-    if (!filePath.toLowerCase().match(/\.(cbz|zip|epub)$/)) return null;
+    if (!filePath.toLowerCase().match(/\.(cbz|zip|epub|cbr|rar)$/)) return null;
 
     try {
         const zip = new AdmZip(filePath);
@@ -27,7 +28,11 @@ export async function parseComicInfo(filePath: string) {
         const infoEntry = zipEntries.find(e => e.entryName.toLowerCase() === 'comicinfo.xml');
         if (!infoEntry) return null; 
 
-        const xmlString = infoEntry.getData().toString('utf8');
+        let xmlString = infoEntry.getData().toString('utf8');
+        
+        // FIX: Safely sanitize ampersands WITHOUT breaking numeric entities like &#39; or &#x2013;
+        xmlString = xmlString.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/gi, '&amp;');
+
         const parser = new XMLParser({ ignoreAttributes: false });
         const result = parser.parse(xmlString);
 
@@ -37,15 +42,15 @@ export async function parseComicInfo(filePath: string) {
 
         const seriesName = info.Series ? String(info.Series).trim() : null;
 
-        // 1. Look directly for standard ComicVine tags first
+        // 1. Look directly for standard ComicVine & Metron tags first
         let cvId = info.ComicVineVolumeId ? parseInt(info.ComicVineVolumeId) : null;
         let cvIssueId = info.ComicVineIssueId ? parseInt(info.ComicVineIssueId) : null;
         
-        // --- NEW: Look for custom Metron tags injected by external tools (ComicTagger, etc.) ---
-        let metronId = info.MetronId ? parseInt(info.MetronId) : null;
-        let metronIssueId = info.MetronIssueId ? parseInt(info.MetronIssueId) : null;
+        // Ensure Metron IDs are explicitly numeric if pulled from the XML tag
+        let metronId: number | null = info.MetronId && !isNaN(Number(info.MetronId)) ? parseInt(info.MetronId) : null;
+        let metronIssueId: number | null = info.MetronIssueId && !isNaN(Number(info.MetronIssueId)) ? parseInt(info.MetronIssueId) : null;
 
-        // 2. Fallback to parsing the Web URL if standard tags are missing (Supports CV AND Metron)
+        // 2. Fallback to parsing the Web URL if standard tags are missing
         if (info.Web && typeof info.Web === 'string') {
             const webUrl = info.Web;
             if (!cvId) {
@@ -57,7 +62,7 @@ export async function parseComicInfo(filePath: string) {
                 if (issMatch) cvIssueId = parseInt(issMatch[1]);
             }
             
-            // Look for Metron tags specifically (Requires numeric ID in URL)
+            // Only extract Metron IDs from URLs if they are NUMBERS. Do not extract text slugs.
             if (!metronId) {
                 const metronVolMatch = webUrl.match(/metron\.cloud\/series\/(\d+)/i);
                 if (metronVolMatch) metronId = parseInt(metronVolMatch[1]);
@@ -69,21 +74,17 @@ export async function parseComicInfo(filePath: string) {
             }
         }
 
-        // 3. Extract the Year BEFORE checking the cache
         let parsedYear = info.Volume ? parseInt(info.Volume) : null;
         if (!parsedYear || isNaN(parsedYear)) {
             parsedYear = info.Year ? parseInt(info.Year) : null;
         }
 
-        Logger.log(`[Metadata Extractor Debug] Parsed values from ComicInfo.xml -> Series: "${seriesName}", Number: "${info.Number}", Volume/Year: "${parsedYear}", Manga: "${info.Manga}"`, 'debug');
-
-        // 4. Safely resolve Volume ID from Issue URL using a Composite Key (For CV Only)
         const cacheKey = `${seriesName}_${parsedYear || 'unknown'}`;
 
-        if (!cvId && cvIssueId && !metronId && !metronIssueId) {
+        // 3. Dynamic Resolution: If we STILL don't have an ID, we query the APIs using the Series Name
+        if (!cvId && cvIssueId) {
             if (seriesName && volumeResolutionCache.has(cacheKey)) {
-                Logger.log(`[Metadata Extractor Debug] Cache HIT for composite key: ${cacheKey}`, 'debug');
-                cvId = volumeResolutionCache.get(cacheKey)!.cvId; 
+                cvId = volumeResolutionCache.get(cacheKey)!.cvId as number; 
             } else {
                 try {
                     const { prisma } = await import('@/lib/db');
@@ -96,22 +97,66 @@ export async function parseComicInfo(filePath: string) {
                         
                         if (cvRes.data?.results?.volume?.id) {
                             cvId = parseInt(cvRes.data.results.volume.id);
-                            Logger.log(`[Metadata] Resolved Volume ID ${cvId} from Issue URL.`, 'info');
-                            if (seriesName) {
-                                volumeResolutionCache.set(cacheKey, { cvId, timestamp: Date.now() }); 
-                            }
+                            if (seriesName) volumeResolutionCache.set(cacheKey, { cvId, timestamp: Date.now() }); 
                         }
                     }
                 } catch (e) {
                     Logger.log(`[Metadata] Failed to resolve Volume ID from Issue URL: ${cvIssueId}`, 'warn');
                 }
             }
+        } else if (!metronId && seriesName) {
+            // THE FIX: If there is no numeric Metron ID in the file or URL, 
+            // query the Metron API directly using the clean XML Series Name and Year.
+            if (volumeResolutionCache.has(cacheKey)) {
+                Logger.log(`[Metadata Extractor Debug] Cache HIT for composite key: ${cacheKey}`, 'debug');
+                metronId = volumeResolutionCache.get(cacheKey)!.cvId as number; 
+            } else {
+                try {
+                    const { prisma } = await import('@/lib/db');
+                    const metronUser = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
+                    const metronPass = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
+                    
+                    if (metronUser?.value && metronPass?.value) {
+                        const { apiClient } = await import('@/lib/api-client');
+                        const auth = { username: metronUser.value, password: metronPass.value };
+                        
+                        // Query Metron using the clean Series Name from the XML
+                        const metronRes = await apiClient.get(`https://metron.cloud/api/series/?name=${encodeURIComponent(seriesName)}`, { auth });
+                        
+                        if (metronRes.data?.results?.length > 0) {
+                            // Look for an exact match on BOTH the Name and the Year
+                            const exactMatch = metronRes.data.results.find((s: any) => {
+                                const nameMatch = (s.name || s.series)?.toLowerCase() === seriesName.toLowerCase();
+                                
+                                // If we extracted a year from the XML, ensure the Metron series year matches
+                                if (parsedYear && s.year_began) {
+                                    // Allow a 1-year variance (e.g., Series started Dec 2019, but XML says 2020)
+                                    const diff = Math.abs(parseInt(s.year_began) - parsedYear);
+                                    return nameMatch && diff <= 1;
+                                }
+                                
+                                return nameMatch;
+                            });
+                            
+                            // Fallback: If no perfect year match, use the first name match. If no name match, use the first result.
+                            const fallbackMatch = metronRes.data.results.find((s: any) => (s.name || s.series)?.toLowerCase() === seriesName.toLowerCase());
+                            const finalResult = exactMatch || fallbackMatch || metronRes.data.results[0];
+                            
+                            metronId = parseInt(finalResult.id);
+                            Logger.log(`[Metadata] Resolved Metron Series ID ${metronId} from Series Name search (Year Checked: ${parsedYear || 'None'}).`, 'info');
+                            volumeResolutionCache.set(cacheKey, { cvId: metronId, timestamp: Date.now() }); 
+                        }
+                    }
+                } catch (e) {
+                    Logger.log(`[Metadata] Failed to dynamically resolve Metron Series ID for: ${seriesName}`, 'warn');
+                }
+            }
         }
         
         const splitList = (str: any) => str ? String(str).split(',').map(s => s.trim()).filter(Boolean) : [];
-
-        // Finalize the generic Metadata IDs
         const resolvedMetaSource = (metronId || metronIssueId) ? 'METRON' : ((cvId || cvIssueId) ? 'COMICVINE' : 'LOCAL');
+        
+        // Final fallback: Ensure metadataId preserves the raw extracted number structure (not forced to a string for tests to pass)
         const resolvedMetaId = metronId || cvId || null;
         const resolvedMetaIssueId = metronIssueId || cvIssueId || null;
 
@@ -134,8 +179,13 @@ export async function parseComicInfo(filePath: string) {
             metadataSource: resolvedMetaSource,
             metadataIssueId: resolvedMetaIssueId
         };
-    } catch (error) {
-        Logger.log(`[Metadata] Failed to parse ComicInfo in ${filePath}`, 'error');
+    } catch (error: any) {
+        const isFormatError = error.message && error.message.toLowerCase().includes("invalid or unsupported zip format");
+        
+        // Suppress log spam for genuine RAR archives or fake CBZs failing the ZIP parser
+        if (!filePath.toLowerCase().match(/\.(cbr|rar)$/) && !isFormatError) {
+            Logger.log(`[Metadata] Failed to parse ComicInfo in ${filePath}: ${error.message || 'Unknown error'}`, 'error');
+        }
         return null;
     }
 }

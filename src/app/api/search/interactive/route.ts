@@ -10,11 +10,12 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const q = searchParams.get('q');
+    const year = searchParams.get('year') || undefined;
     
     if (!q) return NextResponse.json({ error: 'Query required' }, { status: 400 });
 
     try {
-        Logger.log(`[Interactive Search] Fetching live results for: ${q}`, 'info');
+        Logger.log(`[Interactive Search] Fetching live results for: ${q} (Year: ${year || 'Any'})`, 'info');
         Logger.log(`[Interactive Search Debug] Initializing interactive search for query: "${q}"`, 'debug');
         
         // 1. Fetch hoster settings to check if ANY are enabled
@@ -32,12 +33,13 @@ export async function GET(req: Request) {
         }
 
         const promises = [
-            ProwlarrService.searchComics(q, true, false).catch(() => [])
+            ProwlarrService.searchComics(q, true, false, year).catch(() => [])
         ];
 
         // 2. Only query GetComics if the user has at least one file hoster enabled
         if (hasEnabledHosters) {
-            promises.push(GetComicsService.search(q, true, false).catch(() => []));
+            // Param order: query, isInteractive, isManga, originalName, seriesYear
+            promises.push(GetComicsService.search(q, true, false, undefined, year).catch(() => []));
         }
 
         const results = await Promise.all(promises);

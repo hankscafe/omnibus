@@ -102,6 +102,14 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         secondaryQueries.add(expanded);
     }
 
+    // NEW: Generate a "Series Only" fallback query to catch Bulk Packs/Collections
+    const seriesOnlyName = broadClean.replace(/\s\d+(?:\.\d+)?$/, '').trim();
+    if (seriesOnlyName !== broadClean && seriesOnlyName.length > 2) {
+        secondaryQueries.add(seriesOnlyName);
+        secondaryQueries.add(`${seriesOnlyName} collection`);
+        secondaryQueries.add(`${seriesOnlyName} story arc`);
+    }
+
     return [...Array.from(primaryQueries), ...Array.from(secondaryQueries)];
 }
 
@@ -164,7 +172,9 @@ export const SearchEngine = {
 
             await DownloadService.addDownload(client, downloadLink, bestMatch.title, bestMatch._seedTime || 0, 0);
 
-            return { success: true, release: bestMatch.title, indexer: bestMatch.indexer };
+            const trackingHash = bestMatch.infoHash || bestMatch.guid || downloadLink;
+
+            return { success: true, release: bestMatch.title, indexer: bestMatch.indexer, downloadLink: trackingHash };
 
         } catch (e: any) {
             return { success: false, message: `Download client error: ${getErrorMessage(e)}` };

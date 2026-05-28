@@ -166,12 +166,32 @@ export async function POST(request: NextRequest) {
 
             if (client) {
                 Logger.log(`[Manual Request Debug] Routing download "${searchResult.title}" to client "${client.name}" (Protocol: ${protocol})`, 'debug');
+                
+                const trackingHash = searchResult.infoHash || searchResult.guid || null;
+                
+                if (trackingHash) {
+                    const duplicateDownload = await prisma.request.findFirst({
+                        where: {
+                            downloadLink: trackingHash,
+                            status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
+                            id: { not: targetReqId }
+                        }
+                    });
+
+                    if (duplicateDownload) {
+                         Logger.log(`[Manual Request] Batch torrent already downloading (${trackingHash}). Queuing for batch extraction.`, 'info');
+                         await prisma.request.update({
+                             where: { id: targetReqId },
+                             data: { status: 'DOWNLOADING', activeDownloadName: searchResult.title, downloadLink: trackingHash, indexer: searchResult.indexer }
+                         });
+                         return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                    }
+                }
+
                 await DownloadService.addDownload(client, searchResult.downloadUrl, searchResult.title, searchResult.seedTime || 0, searchResult.seedRatio || 0);
                 await prisma.request.update({
                   where: { id: targetReqId },
-                  data: { downloadLink: searchResult.infoHash || searchResult.guid || null,
-                    indexer: searchResult.indexer
-                   }
+                  data: { downloadLink: trackingHash, indexer: searchResult.indexer }
                 });
             }
         } 
@@ -201,9 +221,26 @@ export async function POST(request: NextRequest) {
                     const settings = await prisma.systemSetting.findMany();
                     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
                     
+                    const duplicateDownload = await prisma.request.findFirst({
+                        where: {
+                            downloadLink: url,
+                            status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
+                            id: { not: targetReqId }
+                        }
+                    });
+
+                    if (duplicateDownload) {
+                         Logger.log(`[Manual Request] Batch pack already downloading (${url}). Queuing for batch extraction.`, 'info');
+                         await prisma.request.update({
+                             where: { id: targetReqId },
+                             data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
+                         });
+                         return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                    }
+
                     await prisma.request.update({
                       where: { id: targetReqId },
-                      data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
+                      data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
                     });
 
                     DownloadService.downloadDirectFile(url, safeTitle, config.download_path, targetReqId, hoster)

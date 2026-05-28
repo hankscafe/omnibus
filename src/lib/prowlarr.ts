@@ -7,7 +7,7 @@ import { getErrorMessage } from './utils/error';
 import { ProwlarrSearchResult } from '@/types';
 
 export const ProwlarrService = {
-  async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false): Promise<ProwlarrSearchResult[]> {
+  async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string): Promise<ProwlarrSearchResult[]> {
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
@@ -39,6 +39,7 @@ export const ProwlarrService = {
     // --- SMART CATEGORY FILTERING ---
     const categoriesStr = config.prowlarr_categories || '7030';
     let categories = categoriesStr.split(',').map(c => c.trim()).filter(Boolean);
+    const allowBulkPacks = config.allow_bulk_packs === 'true';
 
     if (!isManga) {
         categories = categories.filter(cat => cat !== '8030');
@@ -91,17 +92,26 @@ export const ProwlarrService = {
             if (isInteractive) return true;
             const titleLower = (String(item.title || "")).toLowerCase();
             
+            // Define isPack immediately so all downstream filters can use it
+            const packTerms = ['story arc', 'pack', 'complete', 'collection', 'bundle', 'run', 'chronological'];
+            const isPack = allowBulkPacks && packTerms.some(term => titleLower.includes(term));
+
             // 1. PERSISTENT YEAR ANCHOR
-            const originalReqYear = query.match(/\b(19|20)\d{2}\b/)?.[0] || reqYear;
+            const originalReqYear = query.match(/\b(19|20)\d{2}\b/)?.[0] || reqYear || seriesYear;
             const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
             const torYear = torYearMatch ? torYearMatch[0].replace(/[\[\]\(\)]/g, '') : null;
 
             if (originalReqYear) {
-                if (torYear && originalReqYear !== torYear) {
-                    Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to year mismatch (${originalReqYear} vs ${torYear})`, 'debug');
+                if (torYear) {
+                    // Allow a 1-year variance for discrepancies between ComicVine and uploaders
+                    const yearDiff = Math.abs(parseInt(originalReqYear) - parseInt(torYear));
+                    if (yearDiff > 1) {
+                        Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to year mismatch (${originalReqYear} vs ${torYear})`, 'debug');
+                        return false; 
+                    }
+                } else if (!titleLower.includes(originalReqYear)) {
                     return false; 
                 }
-                if (!torYear && !titleLower.includes(originalReqYear)) return false; 
             }
 
             // 2. MANDATORY WORD INTERSECTION
@@ -113,7 +123,9 @@ export const ProwlarrService = {
             const resultWords = titleLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
                 .filter(w => !stopWords.includes(w) && w.length > 2 && w !== torYear);
             const extraWords = resultWords.filter(w => !significantQueryWords.includes(w));
-            if (extraWords.length > 1) {
+            
+            // Bypass the extra words limit if this is an approved bulk pack!
+            if (extraWords.length > 1 && !isPack) {
                 Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to extra unwanted words: ${JSON.stringify(extraWords)}`, 'debug');
                 return false;
             }
@@ -124,7 +136,7 @@ export const ProwlarrService = {
 
             const isLookingForOmnibus = tpbTerms.some(term => cleanQuery.toLowerCase().includes(term));
             
-            if (reqNum !== null && !isLookingForOmnibus) {
+            if (reqNum !== null && !isLookingForOmnibus && !isPack) {
                 const unexpectedTpbTerms = tpbTerms.filter(term => !cleanQuery.toLowerCase().includes(term));
                 if (unexpectedTpbTerms.some(term => titleLower.includes(term))) {
                     return false;
@@ -154,7 +166,7 @@ export const ProwlarrService = {
                 }
             }
 
-            if (reqNum !== null) {
+            if (reqNum !== null && !isLookingForOmnibus && !isPack) {
                 if (torNum !== null && torNum !== reqNum) return false;
                 if (torNum === null) return false; 
             }

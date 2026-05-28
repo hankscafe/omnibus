@@ -345,10 +345,18 @@ export const Importer = {
             }
         }
 
-        await prisma.request.update({
-            where: { id: requestId },
-            data: { status: 'COMPLETED', progress: 100, notified: false }
-        });
+        // Safely clear the queue for anything sharing the link (Except missing match placeholders)
+        if (req.downloadLink && req.downloadLink !== "PENDING_MATCH") {
+            await prisma.request.updateMany({
+                where: { downloadLink: req.downloadLink, status: 'DOWNLOADING' },
+                data: { status: 'COMPLETED', progress: 100, notified: false }
+            });
+        } else {
+            await prisma.request.update({
+                where: { id: requestId },
+                data: { status: 'COMPLETED', progress: 100, notified: false }
+            });
+        }
 
         try {
             const { omnibusQueue } = await import('./queue');
@@ -368,6 +376,7 @@ export const Importer = {
             date: new Date().toLocaleString()
         });
 
+        // CRITICAL: Only add trackingHash (Torrents) to the ignore list so DDLs can be re-downloaded later if needed!
         if (trackingHash) {
             try {
                 const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });
@@ -715,11 +724,20 @@ export const Importer = {
           Logger.log(`[Importer] Metadata sync failed: ${syncErr.message}`, "warn");
       }
 
-      await prisma.request.update({
-        where: { id: requestId },
-        data: { status: 'COMPLETED', progress: 100, notified: false }
-      });
+      // Safely clear the queue for anything sharing the link (Except missing match placeholders)
+        if (req.downloadLink && req.downloadLink !== "PENDING_MATCH") {
+            await prisma.request.updateMany({
+                where: { downloadLink: req.downloadLink, status: 'DOWNLOADING' },
+                data: { status: 'COMPLETED', progress: 100, notified: false }
+            });
+        } else {
+            await prisma.request.update({
+                where: { id: requestId },
+                data: { status: 'COMPLETED', progress: 100, notified: false }
+            });
+        }
 
+      // CRITICAL: Only add trackingHash (Torrents) to the ignore list so DDLs can be re-downloaded later if needed!
       if (trackingHash) {
           try {
               const ignoredSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_downloads' } });

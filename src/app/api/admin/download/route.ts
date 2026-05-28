@@ -30,10 +30,29 @@ export async function POST(req: Request) {
     // Try to match the client by protocol (torrent vs usenet), otherwise fallback to the first available client
     const client = clients.find(c => c.protocol.toLowerCase() === protocol.toLowerCase()) || clients[0];
 
+    const downloadHash = infoHash || guid;
+
+    if (downloadHash) {
+        const duplicateDownload = await prisma.request.findFirst({
+            where: {
+                downloadLink: downloadHash,
+                status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
+                id: { not: requestId }
+            }
+        });
+
+        if (duplicateDownload) {
+             Logger.log(`[Admin Download] Batch torrent already downloading (${downloadHash}). Queuing for batch extraction.`, 'info');
+             await prisma.request.update({
+                 where: { id: requestId },
+                 data: { status: 'DOWNLOADING', downloadLink: downloadHash, progress: 0 }
+             });
+             return NextResponse.json({ success: true });
+        }
+    }
+
     // Send the link to the unified DownloadService
     await DownloadService.addDownload(client, urlToDownload, title, 0, 0);
-
-    const downloadHash = infoHash || guid;
 
     await prisma.request.update({
       where: { id: requestId },

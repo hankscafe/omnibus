@@ -8,17 +8,18 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
+  const year = searchParams.get('year') || undefined;
 
   if (!query) {
     return NextResponse.json({ error: "Search query required" }, { status: 400 });
   }
 
   try {
-    Logger.log(`[Manual Search] Searching Prowlarr for: ${query}`, 'info');
+    Logger.log(`[Manual Search] Searching Prowlarr for: ${query} (Year: ${year || 'Any'})`, 'info');
     
     // --- THE FIX: Pass `true` so the engine knows it's an Interactive search
     // and doesn't aggressively filter out results with messy titles.
-    const results = await ProwlarrService.searchComics(query, true, false);
+    const results = await ProwlarrService.searchComics(query, true, false, year);
     
     return NextResponse.json({ results });
   } catch (error: unknown) {

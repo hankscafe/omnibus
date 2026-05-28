@@ -51,7 +51,7 @@ async function fetchGetComicsHtml(url: string) {
 
 export const GetComicsService = {
   // Add originalName as an optional 4th parameter
-async search(query: string, isInteractive: boolean = false, isManga: boolean = false, originalName?: string) {
+async search(query: string, isInteractive: boolean = false, isManga: boolean = false, originalName?: string, seriesYear?: string) {
         let uniqueSearches = [query];
 
         if (isInteractive) {
@@ -74,7 +74,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
                 try {
                     Logger.log(`[GetComics] Searching for: "${q}"`, 'info');
                     // THE FIX: Pass originalName (if provided) so the TPB validation has the true full title!
-                    const results = await this.performSearch(q, originalName || query, isInteractive, isManga);
+                    const results = await this.performSearch(q, originalName || query, isInteractive, isManga, seriesYear);
                 
                 if (results.length > 0) {
                     if (!isInteractive) return [results[0]];
@@ -92,42 +92,31 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
     return [];
 },
 
-  async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false) {
-    const url = `https://getcomics.org/?s=${encodeURIComponent(safeQuery)}`;
-    Logger.log(`[GetComics Debug] Performing search with URL: ${url}`, 'debug');
-    
-    // Increase throttle to 4 seconds for maximum Cloudflare safety on background tasks
-    const delayTime = isInteractive ? 2500 : 4000;
-    Logger.log(`[GetComics] Rate-limit throttle: Delaying search for ${delayTime/1000}s...`, 'info');
-    await new Promise(resolve => setTimeout(resolve, delayTime));
-
-    const data = await fetchGetComicsHtml(url);
-    const $ = cheerio.load(data);
+  async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string) {
     const results: any[] = [];
     
     // Generate both word arrays for TPB vs Single Issue validation
     const cleanOriginal = originalQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
-    const originalQueryWords = cleanOriginal.toLowerCase().split(' ').filter(w => w.trim().length > 0);
-    const safeQueryWords = safeQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase().split(' ').filter(w => w.trim().length > 0);
+    
+    // --- RESTORED MISSING VARIABLES ---
+    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
+    const safeQueryWords = safeQuery.toLowerCase().split(' ').filter(w => w.length > 0 && !stopWords.includes(w));
+    const originalQueryWords = cleanOriginal.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 0 && !stopWords.includes(w));
 
-    // Added foreign languages to exclusion list
-    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut', 'spa', 'spanish', 'ita', 'italian', 'fre', 'french', 'ger', 'german', 'pol', 'portuguese'];
+    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut'];
     const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
     const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanOriginal.toLowerCase().includes(k));
+    // ----------------------------------
 
-    // Tier 1: Explicit
     const reqIssueMatch = cleanOriginal.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     let reqNum = reqIssueMatch ? parseFloat(reqIssueMatch[1]) : null;
 
     if (reqNum === null) {
-        // Tier 2: Volume
         const volMatch = cleanOriginal.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
         if (volMatch) {
             reqNum = parseFloat(volMatch[1]);
         } else {
-            // Tier 3: Standalone with Year Trap
-            let noYearQuery = cleanOriginal.replace(/\b(19|20)\d{2}\b/g, '');
-            const fallbacks = [...noYearQuery.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
+            const fallbacks = [...cleanOriginal.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
             if (fallbacks.length > 0) {
                 for (let i = fallbacks.length - 1; i >= 0; i--) {
                     const numVal = parseFloat(fallbacks[i][1]);
@@ -139,10 +128,43 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
         }
     }
 
-    const reqYearMatch = cleanOriginal.match(/\b(19|20)\d{2}\b/);
-    const reqYear = reqYearMatch ? reqYearMatch[1] : null;
+    const reqYearMatch = cleanOriginal.match(/\b(19\d{2}|20\d{2})\b/);
+    const reqYear = reqYearMatch ? reqYearMatch[1] : (seriesYear || null);
 
-    $('article, .post').each((i, el) => {
+    const bulkSetting = await prisma.systemSetting.findUnique({ where: { key: 'allow_bulk_packs' } });
+    const allowBulkPacks = bulkSetting?.value === 'true';
+
+    // Limit interactive searches to 2 pages (to keep the UI fast), let background automation dig up to 5 pages deep
+    const maxPages = isInteractive ? 2 : 5; 
+
+    for (let page = 1; page <= maxPages; page++) {
+        const pagePath = page === 1 ? '/' : `/page/${page}/`;
+        const url = `https://getcomics.org${pagePath}?s=${encodeURIComponent(safeQuery)}`;
+        Logger.log(`[GetComics Debug] Performing search with URL: ${url} (Page ${page}/${maxPages})`, 'debug');
+        
+        // Apply delay to respect rate limits
+        const delayTime = isInteractive ? 2500 : 4000;
+        Logger.log(`[GetComics] Rate-limit throttle: Delaying search for ${delayTime/1000}s...`, 'info');
+        await new Promise(resolve => setTimeout(resolve, delayTime));
+
+        let data;
+        try {
+            data = await fetchGetComicsHtml(url);
+        } catch (err: any) {
+            // If GetComics throws a 404, we've hit the end of the search results
+            if (err.response?.status === 404) {
+                Logger.log(`[GetComics Debug] Reached end of pagination at page ${page}.`, 'debug');
+                break;
+            }
+            throw err;
+        }
+
+        const $ = cheerio.load(data);
+        const posts = $('article, .post');
+
+        if (posts.length === 0) break;
+
+        posts.each((i, el) => {
       const titleEl = $(el).find('h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a').first();
       const title = titleEl.text().trim();
       const link = titleEl.attr('href');
@@ -156,9 +178,12 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           const tpbTerms = ['omnibus', 'tpb', 'compendium', 'collection', 'hc', 'hardcover', 'trade paperback'];
           if (!isManga) tpbTerms.push('vol ', 'volume ', 'book ');
 
+          const packTerms = ['story arc', 'pack', 'complete', 'collection', 'bundle', 'run', 'chronological'];
+          const isPack = allowBulkPacks && packTerms.some(term => titleLower.includes(term));
+
           const isLookingForOmnibus = tpbTerms.some(term => cleanOriginal.toLowerCase().includes(term));
           
-          if (reqNum !== null && !isLookingForOmnibus) {
+          if (reqNum !== null && !isLookingForOmnibus && !isPack) {
               const unexpectedTpbTerms = tpbTerms.filter(term => !cleanOriginal.toLowerCase().includes(term));
               if (unexpectedTpbTerms.some(term => titleLower.includes(term))) {
                   isRelevant = false;
@@ -208,7 +233,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
                   }
               }
 
-              if (reqNum !== null) {
+              if (reqNum !== null && !isLookingForOmnibus && !isPack) {
                   if (torNum !== null && torNum !== reqNum) isRelevant = false;
                   if (torNum === null) {
                       isRelevant = false; 
@@ -217,11 +242,15 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           }
 
           if (isRelevant) {
-              const torYearMatch = titleLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+              const torYearMatch = titleLower.match(/[\(\[]?(19\d{2}|20\d{2})[\)\]]?/);
               const torYear = torYearMatch ? torYearMatch[1] : null;
 
-              if (reqYear && torYear && reqYear !== torYear) {
-                  isRelevant = false;
+              if (reqYear && torYear) {
+                  // Allow a 1-year variance for discrepancies between ComicVine and uploaders
+                  const yearDiff = Math.abs(parseInt(reqYear) - parseInt(torYear));
+                  if (yearDiff > 1) {
+                      isRelevant = false;
+                  }
               }
           }
 
@@ -259,11 +288,19 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
       }
 
       if (isRelevant) {
-        results.push({
-          title, downloadUrl: link, size: 'Unknown', age: 'N/A', indexer: 'GetComics', protocol: 'ddl'
-        });
+          results.push({
+            title, downloadUrl: link, size: 'Unknown', age: 'N/A', indexer: 'GetComics', protocol: 'ddl'
+          });
+        }
+      });
+
+      // OPTIMIZATION: If any results survived our brutal validation filters, we have found exactly what we need. 
+      // Stop scraping pages to save rate-limit time!
+      if (results.length > 0) {
+          Logger.log(`[GetComics Debug] Found ${results.length} valid matches on Page ${page}. Halting pagination.`, 'debug');
+          break;
       }
-    });
+    }
 
     // Smarter Sorting Logic to bypass lazy uploaders who omitted the year
     return results.sort((a, b) => {

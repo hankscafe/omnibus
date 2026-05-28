@@ -101,6 +101,37 @@ export function initCronJobs() {
         }
       }
 
+      // --- NEW: Sync Progress across batch DDL downloads ---
+      const activeDbRequests = await prisma.request.findMany({
+          where: { 
+              status: 'DOWNLOADING', 
+              downloadLink: { not: null },
+              NOT: [
+                  { downloadLink: "" },
+                  { downloadLink: "PENDING_MATCH" }
+              ]
+          }
+      });
+
+      const linkProgressMap = new Map<string, number>();
+      for (const r of activeDbRequests) {
+          const currentMax = linkProgressMap.get(r.downloadLink!) || 0;
+          if (r.progress && r.progress > currentMax) {
+              linkProgressMap.set(r.downloadLink!, r.progress);
+          }
+      }
+
+      for (const r of activeDbRequests) {
+          const maxProgress = linkProgressMap.get(r.downloadLink!);
+          if (maxProgress !== undefined && maxProgress > (r.progress || 0)) {
+              await prisma.request.update({
+                  where: { id: r.id },
+                  data: { progress: maxProgress }
+              });
+          }
+      }
+      // -----------------------------------------------
+
       const activeDownloads = await DownloadService.getAllActiveDownloads();
 
       if (activeDownloads.length > 0) {

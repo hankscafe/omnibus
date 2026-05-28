@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
             let results: any[] = [];
             
             for (const q of queries) {
-                results = await GetComicsService.search(q, false, isManga); 
+                results = await GetComicsService.search(q, false, isManga, req.activeDownloadName || "", year); 
                 if (results.length > 0) break;
             }
             
@@ -146,6 +146,23 @@ export async function POST(request: NextRequest) {
                 // AIRTIGHT CHECK: Strictly check against enabledHosters
                 if (enabledHosters.includes(hoster)) {
                     const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+
+                    const duplicateDownload = await prisma.request.findFirst({
+                        where: {
+                            downloadLink: url,
+                            status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
+                            id: { not: id }
+                        }
+                    });
+            
+                    if (duplicateDownload) {
+                         Logger.log(`[Retry] Batch pack already downloading or downloaded (${url}). Queuing for batch extraction.`, 'info');
+                         await prisma.request.update({
+                             where: { id },
+                             data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeSearchTitle, downloadLink: url }
+                         });
+                         return NextResponse.json({ success: true, message: `Link recovered via ${hoster === 'getcomics' ? 'Direct' : hoster} and queued for batch extraction.` });
+                    }
 
                     await prisma.request.update({
                         where: { id },

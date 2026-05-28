@@ -113,7 +113,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       for (const query of queries) {
         Logger.log(`[Automation Debug] Evaluating GetComics search phrase: "${query}"`, 'debug');
           // THE FIX: Pass `name` as the 4th parameter so GetComics knows the true title
-          getComicsResults = await GetComicsService.search(query, false, isManga, name);
+          getComicsResults = await GetComicsService.search(query, false, isManga, name, year);
           if (getComicsResults.length > 0) break;
       }
       
@@ -166,9 +166,26 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
           const settings = await prisma.systemSetting.findMany();
           const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
+          const duplicateDownload = await prisma.request.findFirst({
+              where: {
+                  downloadLink: url,
+                  status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
+                  id: { not: requestId }
+              }
+          });
+
+          if (duplicateDownload) {
+               Logger.log(`[Automation] Batch pack already downloading or downloaded (${url}). Queuing ${name} for batch extraction.`, 'info');
+               await prisma.request.update({
+                   where: { id: requestId },
+                   data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
+               });
+               return;
+          }
+
           await prisma.request.update({
             where: { id: requestId },
-            data: { status: 'DOWNLOADING', activeDownloadName: safeTitle }
+            data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
           });
 
           DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
@@ -202,7 +219,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       for (const query of queries) {
           Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
           Logger.log(`[Automation Debug] Searching Prowlarr: "${query}"`, 'debug');
-          const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga);
+          const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga, year);
           Logger.log(`[Automation Debug] Prowlarr Raw Results Count: ${prowlarrResults.length}. Healthy Results (Seeders > 0): ${healthyResults.length}`, 'debug');
           healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
           
@@ -220,11 +237,30 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
         
         const config = await getDownloadClient(best.protocol);
         if (config) {
+          const trackingHash = best.infoHash || best.guid || null;
+          
+          if (trackingHash) {
+              const duplicateDownload = await prisma.request.findFirst({
+                  where: {
+                      downloadLink: trackingHash,
+                      status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
+                      id: { not: requestId }
+                  }
+              });
+
+              if (duplicateDownload) {
+                   Logger.log(`[Automation] Batch torrent already downloading (${trackingHash}). Queuing for batch extraction.`, 'info');
+                   await prisma.request.update({
+                       where: { id: requestId },
+                       data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash, indexer: best.indexer }
+                   });
+                   return;
+              }
+          }
+
           Logger.log(`[Automation] Sending to Client: ${config.name} for ${best.title}`, 'info');
           Logger.log(`[Automation Debug] Matched client "${config.name}" (Protocol: ${config.protocol}) for result with protocol: ${best.protocol}`, 'debug');
           await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
-          
-          const trackingHash = best.infoHash || best.guid || null;
           
           await prisma.request.update({
             where: { id: requestId },

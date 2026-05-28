@@ -37,7 +37,11 @@ export async function POST(request: Request) {
     if (result.success) {
         await prisma.request.update({
             where: { id: requestId },
-            data: { status: 'DOWNLOADING' }
+            data: { 
+                status: 'DOWNLOADING',
+                downloadLink: result.downloadLink,
+                activeDownloadName: result.release
+            }
         });
         
         if (userId) {

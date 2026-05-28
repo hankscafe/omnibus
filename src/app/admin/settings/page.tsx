@@ -187,7 +187,8 @@ export default function SettingsPage() {
     discord_enabled: "true",
     pushover_enabled: "false", pushover_token: "", pushover_user: "", pushover_events: "[]",
     telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
-    apprise_enabled: "false", apprise_url: "", apprise_events: "[]"
+    apprise_enabled: "false", apprise_url: "", apprise_events: "[]",
+    allow_bulk_packs: "false"
   })
 
   // --- NEW: Custom Prowlarr Categories State ---
@@ -344,6 +345,7 @@ export default function SettingsPage() {
         if (!newConfig.download_retry_delay) newConfig.download_retry_delay = "5";
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030";
         if (newConfig.discord_enabled === undefined) newConfig.discord_enabled = "true";
+        if (newConfig.allow_bulk_packs === undefined) newConfig.allow_bulk_packs = "false";
         if (newConfig.oidc_force_sso === undefined) newConfig.oidc_force_sso = "false";
         if (newConfig.oidc_auto_approve === undefined) newConfig.oidc_auto_approve = "false";
         
@@ -1250,6 +1252,23 @@ export default function SettingsPage() {
                             )}
                         </div>
                     </div>
+
+                    <div className="space-y-4 pt-6 border-t border-border">
+                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Advanced Download Rules</h3>
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-4">
+                            <Switch 
+                                id="bulk-pack-toggle"
+                                checked={config.allow_bulk_packs === "true"} 
+                                onCheckedChange={(c) => setConfig({...config, allow_bulk_packs: c ? "true" : "false"})} 
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="bulk-pack-toggle" className="cursor-pointer font-bold text-base text-foreground">Allow Bulk Collections & Packs</Label>
+                                <p className="text-[11px] text-muted-foreground">If enabled, when requesting a single issue, Omnibus is allowed to download full "Story Arc" or "Chronological" zip packs from direct download sites if an exact single-issue file cannot be found.</p>
+                            </div>
+                        </div>
+                    </div>
+
                 </CardContent>
             </Card>
         </TabsContent>

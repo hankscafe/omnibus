@@ -9,9 +9,10 @@ import { SystemNotifier } from '@/lib/notifications';
 const mocks = vi.hoisted(() => ({
     findManyClients: vi.fn(),
     findManySettings: vi.fn(),
-    findUniqueSetting: vi.fn(), // <-- ADDED: Needed for the new hoster check
+    findUniqueSetting: vi.fn(), 
     updateRequest: vi.fn(),
     findUniqueRequest: vi.fn(),
+    findFirstRequest: vi.fn().mockResolvedValue(null), // <-- ADDED: Mock for Traffic Cop duplicate check
     log: vi.fn()
 }));
 
@@ -21,9 +22,13 @@ vi.mock('@/lib/db', () => ({
         downloadClient: { findMany: mocks.findManyClients },
         systemSetting: { 
             findMany: mocks.findManySettings,
-            findUnique: mocks.findUniqueSetting // <-- ADDED
+            findUnique: mocks.findUniqueSetting 
         },
-        request: { update: mocks.updateRequest, findUnique: mocks.findUniqueRequest }
+        request: { 
+            update: mocks.updateRequest, 
+            findUnique: mocks.findUniqueRequest,
+            findFirst: mocks.findFirstRequest // <-- ADDED: Wire up the mock
+        }
     }
 }));
 

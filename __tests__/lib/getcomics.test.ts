@@ -21,8 +21,12 @@ describe('Download Pipeline: GetComics Scraper', () => {
     });
 
     it('should successfully bypass Cloudflare using FlareSolverr if a 403 occurs', async () => {
-        // Simulate FlareSolverr being configured in the database
-        mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'http://flaresolverr:8191' });
+        // THE FIX: Provide specific responses based on which setting the parser is requesting
+        mocks.findUniqueSetting.mockImplementation((args: any) => {
+            if (args.where.key === 'flaresolverr_url') return Promise.resolve({ value: 'http://flaresolverr:8191' });
+            if (args.where.key === 'allow_bulk_packs') return Promise.resolve({ value: 'false' });
+            return Promise.resolve(null);
+        });
         
         // First call throws 403 Forbidden (Cloudflare block)
         vi.mocked(axios.get).mockRejectedValueOnce({ response: { status: 403 } });
@@ -45,7 +49,8 @@ describe('Download Pipeline: GetComics Scraper', () => {
     });
 
     it('should reject TPB/Omnibus/Vol results when searching for a single issue', async () => {
-        mocks.findUniqueSetting.mockResolvedValueOnce(null);
+        // Use a generic mock response for all other settings
+        mocks.findUniqueSetting.mockResolvedValue(null);
 
         // Mock a successful HTML response with a TPB and a single issue
         const fakeHtml = `

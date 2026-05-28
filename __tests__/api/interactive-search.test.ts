@@ -46,8 +46,8 @@ describe('API Route: Interactive Search (/api/search/interactive)', () => {
         const data = await res.json();
 
         expect(res.status).toBe(200);
-        expect(ProwlarrService.searchComics).toHaveBeenCalledWith('Batman', true, false);
-        expect(GetComicsService.search).toHaveBeenCalledWith('Batman', true, false);
+        expect(ProwlarrService.searchComics).toHaveBeenCalledWith('Batman', true, false, undefined);
+        expect(GetComicsService.search).toHaveBeenCalledWith('Batman', true, false, undefined, undefined);
 
         expect(data.prowlarr).toHaveLength(1);
         expect(data.getcomics).toHaveLength(1);
@@ -63,7 +63,7 @@ describe('API Route: Interactive Search (/api/search/interactive)', () => {
         const data = await res.json();
 
         expect(res.status).toBe(200);
-        expect(ProwlarrService.searchComics).toHaveBeenCalledWith('Batman', true, false);
+        expect(ProwlarrService.searchComics).toHaveBeenCalledWith('Batman', true, false, undefined);
         
         // GetComics should NEVER be called
         expect(GetComicsService.search).not.toHaveBeenCalled();

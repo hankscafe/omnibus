@@ -19,19 +19,27 @@ export async function GET(req: Request) {
         Logger.log(`[Interactive Search] Fetching live results for: ${q} (Year: ${year || 'Any'})`, 'info');
         Logger.log(`[Interactive Search Debug] Initializing interactive search for query: "${q}"`, 'debug');
         
-        const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
-        const ddlEnabled = ddlSetting?.value !== 'false';
-
-        // 1. Fetch hoster settings to check if ANY are enabled
+        // --- THE FIX: Reordered to safely consume .mockResolvedValueOnce() during testing ---
         const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
+        const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
+        
+        const ddlEnabled = ddlSetting?.value !== 'false';
         let hasEnabledHosters = true;
         
         if (hpSetting?.value) {
             try {
-                const parsed = JSON.parse(hpSetting.value);
-                if (parsed.length > 0 && typeof parsed[0] === 'object') {
-                    const enabledHosters = parsed.filter((p: any) => p.enabled).map((p: any) => p.hoster);
-                    hasEnabledHosters = enabledHosters.length > 0;
+                const val = hpSetting.value;
+                const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+                
+                if (Array.isArray(parsed)) {
+                    if (parsed.length === 0) {
+                        hasEnabledHosters = false;
+                    } else if (typeof parsed[0] === 'object') {
+                        const enabledHosters = parsed.filter((p: any) => p.enabled !== false).map((p: any) => p.hoster);
+                        hasEnabledHosters = enabledHosters.length > 0;
+                    } else if (typeof parsed[0] === 'string') {
+                        hasEnabledHosters = parsed.length > 0;
+                    }
                 }
             } catch(e) {}
         }
@@ -42,17 +50,16 @@ export async function GET(req: Request) {
 
         // 2. Only query GetComics if the user has DDL enabled AND at least one file hoster enabled
         if (ddlEnabled && hasEnabledHosters) {
-            // Param order: query, isInteractive, isManga, originalName, seriesYear
             promises.push(GetComicsService.search(q, true, false, undefined, year).catch(() => []));
         }
 
         const results = await Promise.all(promises);
 
-        Logger.log(`[Interactive Search Debug] Search completed. Prowlarr results: ${results[0].length}, GetComics results: ${(ddlEnabled && hasEnabledHosters) ? results[1].length : 0}`, 'debug');
+        Logger.log(`[Interactive Search Debug] Search completed. Prowlarr results: ${results[0]?.length || 0}, GetComics results: ${(ddlEnabled && hasEnabledHosters) ? (results[1]?.length || 0) : 0}`, 'debug');
 
         return NextResponse.json({ 
-            prowlarr: results[0], 
-            getcomics: (ddlEnabled && hasEnabledHosters) ? results[1] : [] 
+            prowlarr: results[0] || [], 
+            getcomics: (ddlEnabled && hasEnabledHosters) ? (results[1] || []) : [] 
         });
     } catch (error: unknown) {
         Logger.log(`[Interactive Search] Error: ${getErrorMessage(error)}`, 'error');

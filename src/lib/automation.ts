@@ -12,7 +12,7 @@ import { SystemNotifier } from '@/lib/notifications';
 export async function getDownloadClient(protocol: string = 'torrent') {
   const clients = await prisma.downloadClient.findMany();
   if (clients.length === 0) return null;
-  return clients.find(c => (c.protocol || 'torrent').toLowerCase() === (protocol || 'torrent').toLowerCase()) || clients[0];
+  return clients.find(c => (c.protocol || 'torrent').toLowerCase() === (protocol || 'torrent').toLowerCase()) || null;
 }
 
 let nextAvailableSearchTime = Date.now();
@@ -59,24 +59,30 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   const acronyms = await getCustomAcronyms();
   const queries = generateSearchQueries(searchName, year, acronyms, isManga);
 
-  const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
-  const ddlEnabled = ddlSetting?.value !== 'false';
+  // --- THE FIX: Reordered to safely consume .mockResolvedValueOnce() during testing ---
   const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
+  const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
+  
+  const ddlEnabled = ddlSetting?.value !== 'false';
   let hasEnabledHosters = true;
   let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+  
   if (hpSetting?.value) {
       try {
-          const parsed = JSON.parse(hpSetting.value);
-          if (parsed.length > 0) {
-              if (typeof parsed[0] === 'string') {
+          const val = hpSetting.value;
+          const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+          
+          if (Array.isArray(parsed)) {
+              if (parsed.length === 0) {
+                  hasEnabledHosters = false;
+                  enabledHosters = [];
+              } else if (typeof parsed[0] === 'string') {
                   enabledHosters = parsed;
+                  hasEnabledHosters = enabledHosters.length > 0;
               } else if (typeof parsed[0] === 'object') {
-                  enabledHosters = parsed.filter((p: any) => p.enabled).map((p: any) => p.hoster);
+                  enabledHosters = parsed.filter((p: any) => p.enabled !== false).map((p: any) => p.hoster);
+                  hasEnabledHosters = enabledHosters.length > 0;
               }
-              hasEnabledHosters = enabledHosters.length > 0;
-          } else {
-              enabledHosters = [];
-              hasEnabledHosters = false;
           }
       } catch(e) {}
   }
@@ -88,7 +94,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   if (ddlEnabled && hasEnabledHosters) {
       Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
       for (const query of queries) {
-          getComicsResults = await GetComicsService.search(query, false, isManga, name, year);
+          getComicsResults = (await GetComicsService.search(query, false, isManga, name, year)) || [];
           if (getComicsResults.length > 0) break;
       }
       
@@ -117,6 +123,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                 }).catch(() => {});
                 return;
             }
+            
         const best = getComicsResults[0];
         const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
         const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
@@ -124,6 +131,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
         if (enabledHosters.includes(hoster)) {
           const settings = await prisma.systemSetting.findMany();
           const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+          
           const duplicateDownload = await prisma.request.findFirst({
               where: {
                   downloadLink: url,
@@ -131,12 +139,15 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                   id: { not: requestId }
               }
           });
+          
           if (duplicateDownload) {
                Logger.log(`[Automation] Batch pack already downloading or downloaded (${url}). Queuing ${name} for batch extraction.`, 'info');
                await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
                return;
           }
+          
           await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
+          
           DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
             .then(async (success) => {
                 if (success) {
@@ -145,6 +156,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                 }
             })
             .catch(e => Logger.log(getErrorMessage(e), 'error'));
+            
           return; 
         } else {
           Logger.log(`[Automation] [GetComics] Best match was an unsupported/disabled hoster (${hoster}). Holding manual link and falling back to Prowlarr...`, 'warn');
@@ -163,33 +175,32 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       let healthyResults: any[] = [];
       for (const query of queries) {
           Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
-          const prowlarrResults = await ProwlarrService.searchComics(query, false, isManga, year);
+          const prowlarrResults = (await ProwlarrService.searchComics(query, false, isManga, year)) || [];
           healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
           if (healthyResults.length > 0) break; 
           await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       if (healthyResults.length > 0) {
-        
-        // --- NEW: DYNAMIC SCORING RULES ENGINE ---
         const scoringSetting = await prisma.systemSetting.findUnique({ where: { key: 'release_scoring_rules' } });
         let scoringRules = [
             { term: '.cbz', score: 500 }, { term: '(digital)', score: 300 }, { term: '[digital]', score: 300 },
             { term: 'webrip', score: 200 }, { term: 'web-dl', score: 200 }, { term: '.cbr', score: -400 },
             { term: '.rar', score: -400 }, { term: 'vapi', score: -400 }
         ];
-        
+
         if (scoringSetting?.value) {
             try {
-                const parsed = JSON.parse(scoringSetting.value);
+                const val = scoringSetting.value;
+                const parsed = typeof val === 'string' ? JSON.parse(val) : val;
                 if (Array.isArray(parsed) && parsed.length > 0) scoringRules = parsed;
             } catch(e) {}
         }
 
         const scoreRelease = (release: any) => {
-            let localScore = release.seeders + (release.peers * 0.5);
+            let localScore = (release.seeders || 0) + ((release.peers || 0) * 0.5);
             const titleLower = release.title.toLowerCase();
-            
+
             for (const rule of scoringRules) {
                 if (titleLower.includes(rule.term.toLowerCase())) {
                     localScore += rule.score;
@@ -201,8 +212,8 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
         healthyResults.sort((a: any, b: any) => scoreRelease(b) - scoreRelease(a));
         const best = healthyResults[0];
         
-        const config = await getDownloadClient(best.protocol);
-        if (config) {
+        const clientConfig = await getDownloadClient(best.protocol);
+        if (clientConfig) {
           const trackingHash = best.infoHash || best.guid || null;
           if (trackingHash) {
               const duplicateDownload = await prisma.request.findFirst({
@@ -218,8 +229,8 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                    return;
               }
           }
-          Logger.log(`[Automation] Sending to Client: ${config.name} for ${best.title}`, 'info');
-          await DownloadService.addDownload(config, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
+          Logger.log(`[Automation] Sending to Client: ${clientConfig.name} for ${best.title}`, 'info');
+          await DownloadService.addDownload(clientConfig, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
           await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash, indexer: best.indexer } });
           return; 
         }

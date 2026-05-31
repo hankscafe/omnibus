@@ -1,3 +1,4 @@
+// src/app/api/search/interactive/route.ts
 import { NextResponse } from 'next/server';
 import { ProwlarrService } from '@/lib/prowlarr';
 import { GetComicsService } from '@/lib/getcomics';
@@ -18,6 +19,9 @@ export async function GET(req: Request) {
         Logger.log(`[Interactive Search] Fetching live results for: ${q} (Year: ${year || 'Any'})`, 'info');
         Logger.log(`[Interactive Search Debug] Initializing interactive search for query: "${q}"`, 'debug');
         
+        const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
+        const ddlEnabled = ddlSetting?.value !== 'false';
+
         // 1. Fetch hoster settings to check if ANY are enabled
         const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
         let hasEnabledHosters = true;
@@ -36,19 +40,19 @@ export async function GET(req: Request) {
             ProwlarrService.searchComics(q, true, false, year).catch(() => [])
         ];
 
-        // 2. Only query GetComics if the user has at least one file hoster enabled
-        if (hasEnabledHosters) {
+        // 2. Only query GetComics if the user has DDL enabled AND at least one file hoster enabled
+        if (ddlEnabled && hasEnabledHosters) {
             // Param order: query, isInteractive, isManga, originalName, seriesYear
             promises.push(GetComicsService.search(q, true, false, undefined, year).catch(() => []));
         }
 
         const results = await Promise.all(promises);
 
-        Logger.log(`[Interactive Search Debug] Search completed. Prowlarr results: ${results[0].length}, GetComics results: ${hasEnabledHosters ? results[1].length : 0}`, 'debug');
+        Logger.log(`[Interactive Search Debug] Search completed. Prowlarr results: ${results[0].length}, GetComics results: ${(ddlEnabled && hasEnabledHosters) ? results[1].length : 0}`, 'debug');
 
         return NextResponse.json({ 
             prowlarr: results[0], 
-            getcomics: hasEnabledHosters ? results[1] : [] 
+            getcomics: (ddlEnabled && hasEnabledHosters) ? results[1] : [] 
         });
     } catch (error: unknown) {
         Logger.log(`[Interactive Search] Error: ${getErrorMessage(error)}`, 'error');

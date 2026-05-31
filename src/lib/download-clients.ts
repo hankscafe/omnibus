@@ -33,7 +33,10 @@ export const DownloadService = {
 
     try {
       let fileBuffer: Buffer | null = null;
-      if (!downloadUrl.startsWith('magnet:') && !client.type.includes('nzb')) {
+      
+      // --- THE FIX: Let Omnibus fetch the file into memory for ALL clients except magnets.
+      // This protects NZBGet and Deluge from Cloudflare blocks by utilizing Omnibus's FlareSolverr config!
+      if (!downloadUrl.startsWith('magnet:')) {
         try {
             const fileRes = await axios.get(downloadUrl, { responseType: 'arraybuffer', ...baseConfig });
             fileBuffer = Buffer.from(fileRes.data);
@@ -66,11 +69,42 @@ export const DownloadService = {
         await axios.post(`${cleanUrl}/json`, { method: method, params: [[downloadUrl], options], id: 2 }, { ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie } });
       }
       else if (client.type === 'sab') {
-          await axios.get(`${cleanUrl}/api`, { params: { mode: 'addurl', name: downloadUrl, nzbname: title, cat: primaryCategory, apikey: client.apiKey, output: 'json' }, ...baseConfig });
+          if (fileBuffer) {
+              const safeName = (title || "download").replace(/[\\/:*?"<>|]/g, "_").slice(0, 200);
+              const form = new FormData();
+              form.append("apikey", client.apiKey || "");
+              form.append("mode", "addfile");
+              form.append("cat", primaryCategory);
+              form.append("nzbname", safeName);
+              form.append("output", "json");
+              form.append("name", fileBuffer, { filename: `${safeName}.nzb`, contentType: 'application/x-nzb' });
+
+              try {
+                  await axios.post(`${cleanUrl}/api`, form, {
+                      ...baseConfig,
+                      headers: { ...baseConfig.headers, ...form.getHeaders() }
+                  });
+              } catch (e) {
+                  Logger.log(`[SABnzbd] addfile failed, falling back to addurl...`, 'warn');
+                  await axios.get(`${cleanUrl}/api`, { params: { mode: 'addurl', name: downloadUrl, nzbname: title, cat: primaryCategory, apikey: client.apiKey, output: 'json' }, ...baseConfig });
+              }
+          } else {
+              await axios.get(`${cleanUrl}/api`, { params: { mode: 'addurl', name: downloadUrl, nzbname: title, cat: primaryCategory, apikey: client.apiKey, output: 'json' }, ...baseConfig });
+          }
       }
       else if (client.type === 'nzbget') {
           const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
-          await axios.post(`${cleanUrl}/jsonrpc`, { method: "append", params: [title, downloadUrl, primaryCategory, 0, false, false, "", 0, "SCORE", []] }, { ...baseConfig, headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } });
+          
+          // --- THE FIX: Convert the Omnibus buffer to Base64 so NZBGet receives the raw file data
+          const nzbContent = fileBuffer ? fileBuffer.toString('base64') : downloadUrl;
+          
+          await axios.post(`${cleanUrl}/jsonrpc`, { 
+              method: "append", 
+              params: [title, nzbContent, primaryCategory, 0, false, false, "", 0, "SCORE", []] 
+          }, { 
+              ...baseConfig, 
+              headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } 
+          });
       }
 
       Logger.log(`[${client.type.toUpperCase()}] SUCCESS: Added ${title}`, 'success');
@@ -81,7 +115,7 @@ export const DownloadService = {
     }
   },
 
-  // --- NEW: Method to cancel and wipe active downloads ---
+  // --- Method to cancel and wipe active downloads ---
   async removeDownload(client: any, downloadId: string) {
       const cleanUrl = client.url.replace(/\/$/, '');
       const networkHeaders = await getNetworkHeaders();
@@ -129,7 +163,6 @@ export const DownloadService = {
   },
 
   async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string, hoster?: string) {
-      // (Your existing downloadDirectFile code remains exactly the same here)
       const diskSetting = await prisma.systemSetting.findUnique({ where: { key: 'is_disk_full' } });
       if (diskSetting?.value === 'true') {
           throw new Error("Download aborted: Disk Space is Critically Full (< 2GB).");
@@ -337,7 +370,6 @@ export const DownloadService = {
   },
 
   async getAllActiveDownloads() {
-    // (Your existing getAllActiveDownloads code remains exactly the same here)
     const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) return [];
     

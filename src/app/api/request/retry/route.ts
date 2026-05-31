@@ -7,7 +7,7 @@ import { Logger } from '@/lib/logger';
 import { GetComicsService } from '@/lib/getcomics';
 import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
 import { Importer } from '@/lib/importer';
-import { omnibusQueue } from '@/lib/queue'; // <-- IMPORT BULLMQ
+import { omnibusQueue } from '@/lib/queue';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,6 +59,9 @@ export async function POST(request: NextRequest) {
                 isManga = series.isManga;
             }
         }
+
+        const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
+        const ddlEnabled = ddlSetting?.value !== 'false';
 
         // Dynamically load enabled hosters from settings
         let hasEnabledHosters = true;
@@ -127,7 +130,7 @@ export async function POST(request: NextRequest) {
         } 
         
         // 3. Recovery Fuzzy Search
-        if (hasEnabledHosters) {
+        if (ddlEnabled && hasEnabledHosters) {
             Logger.log(`[Retry] No direct link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
             
             const acronyms = await getCustomAcronyms();
@@ -183,7 +186,7 @@ export async function POST(request: NextRequest) {
                 }
             }
         } else {
-            Logger.log(`[Retry] All file hosters disabled in settings. Skipping recovery fuzzy search.`, 'info');
+            Logger.log(`[Retry] Direct Downloads disabled in settings. Skipping recovery fuzzy search.`, 'info');
         }
 
         return NextResponse.json({ error: "Direct download link lost or hosters disabled. Please delete and re-request this comic." }, { status: 400 });

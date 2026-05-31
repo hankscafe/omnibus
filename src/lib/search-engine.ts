@@ -129,7 +129,12 @@ export const SearchEngine = {
         Logger.log(`[SearchEngine Debug] Hitting Prowlarr endpoint: ${cleanUrl}/api/v1/search with query: ${query}`, 'debug');
 
         const res = await axios.get(`${cleanUrl}/api/v1/search`, {
-            params: { query, type: 'search' }, 
+            params: { 
+                query, 
+                type: 'search',
+                limit: 100, // Explicitly set the limit to fix Usenet indexers
+                offset: 0
+            }, 
             headers: { 
                 'X-Api-Key': config.prowlarr_key,
                 ...customHeaders 

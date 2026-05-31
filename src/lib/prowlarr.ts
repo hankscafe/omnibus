@@ -87,6 +87,19 @@ export const ProwlarrService = {
 
       const significantQueryWords = queryWords.filter(w => !stopWords.includes(w.toLowerCase()) && w.length > 2 && w !== reqYear);
 
+      // Grab custom admin filter settings or fall back to defaults
+      const junkWords = (config.filter_junk_words || "preview, sample, ashcan, cropped, scanned, fixed, incomplete, damaged, partial, promo, teaser")
+          .split(',')
+          .map(w => w.trim().toLowerCase())
+          .filter(Boolean);
+          
+      const excludeGroups = (config.filter_exclude_groups || "")
+          .split(',')
+          .map(g => g.trim().toLowerCase())
+          .filter(Boolean);
+          
+      const matchRatioConfig = parseFloat(config.filter_match_ratio || "60") / 100;
+
       return data
         .filter((item) => {
             if (isInteractive) return true;
@@ -95,6 +108,18 @@ export const ProwlarrService = {
             // Define isPack immediately so all downstream filters can use it
             const packTerms = ['story arc', 'pack', 'complete', 'collection', 'bundle', 'run', 'chronological'];
             const isPack = allowBulkPacks && packTerms.some(term => titleLower.includes(term));
+
+            // --- ADMIN FILTER: Block Junk Words ---
+            if (junkWords.some(junk => titleLower.includes(junk))) {
+                Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to junk keyword.`, 'debug');
+                return false;
+            }
+
+            // --- ADMIN FILTER: Block Excluded Release Groups ---
+            if (excludeGroups.some(group => titleLower.includes(group))) {
+                Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to blocked release group.`, 'debug');
+                return false;
+            }
 
             // 1. PERSISTENT YEAR ANCHOR
             const originalReqYear = query.match(/\b(19|20)\d{2}\b/)?.[0] || reqYear || seriesYear;
@@ -119,15 +144,26 @@ export const ProwlarrService = {
                 if (!titleLower.includes(word.toLowerCase())) return false;
             }
 
-            // 3. REVERSE VALIDATION (Extra Word Check)
-            const resultWords = titleLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+            // 3. REVERSE VALIDATION & RATIO CHECK
+            // Strip brackets and parentheses to evaluate the "core" title without Usenet/release group tags
+            const cleanTitleForRatio = titleLower.replace(/\[.*?\]/g, '').replace(/\(.*?\)/g, '');
+            
+            const resultWords = cleanTitleForRatio.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
                 .filter(w => !stopWords.includes(w) && w.length > 2 && w !== torYear);
+                
             const extraWords = resultWords.filter(w => !significantQueryWords.includes(w));
             
-            // Bypass the extra words limit if this is an approved bulk pack!
-            if (extraWords.length > 1 && !isPack) {
-                Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to extra unwanted words: ${JSON.stringify(extraWords)}`, 'debug');
-                return false;
+            // Bypass the strict ratio and extra words limits if this is an approved bulk pack!
+            if (!isPack) {
+                const matches = significantQueryWords.filter(w => resultWords.includes(w)).length;
+                const maxLength = Math.max(significantQueryWords.length, resultWords.length);
+                const matchRatio = maxLength > 0 ? (matches / maxLength) : 0;
+
+                // If the core title ratio is lower than the admin configured setting AND there are more than 2 extra words, reject it
+                if (matchRatio < matchRatioConfig && extraWords.length > 2) {
+                    Logger.log(`[Prowlarr Debug] Filtered out "${item.title}" due to low core match ratio (${(matchRatio * 100).toFixed(0)}% < ${config.filter_match_ratio}%). Extra words: ${JSON.stringify(extraWords)}`, 'debug');
+                    return false;
+                }
             }
 
             // 4. TPB/Omnibus Filter

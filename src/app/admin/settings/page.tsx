@@ -16,7 +16,8 @@ import {
   Smartphone,
   Globe,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  Target
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -34,6 +35,7 @@ interface LibraryConfig { id: string; name: string; path: string; isManga: boole
 interface IndexerConfig { id: number; name: string; priority: number; seedTime: number; seedRatio: number; rss: boolean; protocol: string; }
 interface CustomHeader { id?: string; key: string; value: string; }
 interface AcronymConfig { id?: string; key: string; value: string; }
+interface ScoringRule { id: string; term: string; score: number; }
 interface ClientConfig { 
     id: string; 
     name: string; 
@@ -108,7 +110,6 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState<string | null>(null)
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null)
   
-  // Start on the consolidated Metadata tab
   const [activeTab, setActiveTab] = useState("metadata")
   
   const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean, text: string } | null }>({
@@ -127,6 +128,7 @@ export default function SettingsPage() {
   const [configuredWebhooks, setConfiguredWebhooks] = useState<WebhookConfig[]>([])
   const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([])
   const [customAcronyms, setCustomAcronyms] = useState<AcronymConfig[]>([]) 
+  const [scoringRules, setScoringRules] = useState<ScoringRule[]>([])
   const [envPaths, setEnvPaths] = useState<any>({})
   
   // Hoster States
@@ -175,6 +177,7 @@ export default function SettingsPage() {
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     filter_foreign_publishers: "",
+    filter_junk_words: "", filter_match_ratio: "60", filter_exclude_groups: "",
     show_popular_issues: "true", show_new_releases: "true", 
     manga_publishers: "", western_publishers: "",
     discover_manga_filter_mode: "SHOW_ALL", discover_manga_allowed_publishers: "",
@@ -188,13 +191,12 @@ export default function SettingsPage() {
     pushover_enabled: "false", pushover_token: "", pushover_user: "", pushover_events: "[]",
     telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
     apprise_enabled: "false", apprise_url: "", apprise_events: "[]",
-    allow_bulk_packs: "false"
+    allow_bulk_packs: "false",
+    ddl_enabled: "true"
   })
 
-  // --- NEW: Custom Prowlarr Categories State ---
   const [customProwlarrCategories, setCustomProwlarrCategories] = useState("")
 
-  // --- UNSAVED CHANGES STATES ---
   const [isDataLoaded, setIsDataLoaded] = useState(false)
   const [initialStateHash, setInitialStateHash] = useState("")
   const [unsavedModalOpen, setUnsavedModalOpen] = useState(false)
@@ -202,12 +204,11 @@ export default function SettingsPage() {
 
   const currentStateString = JSON.stringify({
       config, configuredLibraries, configuredIndexers, configuredClients,
-      configuredHosters, configuredWebhooks, customHeaders, customAcronyms, hosterPriority
+      configuredHosters, configuredWebhooks, customHeaders, customAcronyms, hosterPriority, scoringRules
   });
 
   const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
 
-  // Function to determine if a metadata source is selectable
   const isSourceAvailable = (source: string) => {
     if (source === "COMICVINE") {
       return !!config.cv_api_key && config.cv_api_key.trim() !== "";
@@ -218,14 +219,12 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    // If the currently selected primary source becomes unavailable, try to fallback
     if (isDataLoaded && !isSourceAvailable(config.primary_metadata_source)) {
       if (config.primary_metadata_source === "METRON" && isSourceAvailable("COMICVINE")) {
         setConfig({...config, primary_metadata_source: "COMICVINE"});
       } else if (config.primary_metadata_source === "COMICVINE" && isSourceAvailable("METRON")) {
         setConfig({...config, primary_metadata_source: "METRON", show_popular_issues: "false"});
       }
-      // If neither is available, it stays as is but the dropdown will be disabled
     }
   }, [config.cv_api_key, config.metron_user, config.metron_pass, isDataLoaded]);
 
@@ -304,10 +303,30 @@ export default function SettingsPage() {
         const newConfig: any = { ...config };
         if (Array.isArray(data.settings)) {
             data.settings.forEach((item: any) => { 
-                if (item.key !== 'omnibus_api_key' && item.key !== 'hoster_priority') {
+                if (item.key !== 'omnibus_api_key' && item.key !== 'hoster_priority' && item.key !== 'release_scoring_rules') {
                     newConfig[item.key] = item.value;
                 }
             });
+
+            const scoringSetting = data.settings.find((s: any) => s.key === 'release_scoring_rules');
+            if (scoringSetting?.value) {
+                try {
+                    setScoringRules(JSON.parse(scoringSetting.value));
+                } catch(e) {
+                    setScoringRules([]);
+                }
+            } else {
+                setScoringRules([
+                    { id: 's1', term: '.cbz', score: 500 },
+                    { id: 's2', term: '(digital)', score: 300 },
+                    { id: 's3', term: '[digital]', score: 300 },
+                    { id: 's4', term: 'webrip', score: 200 },
+                    { id: 's5', term: 'web-dl', score: 200 },
+                    { id: 's6', term: '.cbr', score: -400 },
+                    { id: 's7', term: '.rar', score: -400 },
+                    { id: 's8', term: 'vapi', score: -400 }
+                ]);
+            }
 
             const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
             const defaultHosters = [
@@ -348,8 +367,12 @@ export default function SettingsPage() {
         if (newConfig.allow_bulk_packs === undefined) newConfig.allow_bulk_packs = "false";
         if (newConfig.oidc_force_sso === undefined) newConfig.oidc_force_sso = "false";
         if (newConfig.oidc_auto_approve === undefined) newConfig.oidc_auto_approve = "false";
+        if (newConfig.ddl_enabled === undefined) newConfig.ddl_enabled = "true";
         
-        // Populate custom categories input
+        if (!newConfig.filter_junk_words) newConfig.filter_junk_words = "preview, sample, ashcan, cropped, scanned, fixed, incomplete, damaged, partial, promo, teaser";
+        if (!newConfig.filter_match_ratio) newConfig.filter_match_ratio = "60";
+        if (newConfig.filter_exclude_groups === undefined) newConfig.filter_exclude_groups = "";
+        
         const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
         const currentCats = (newConfig.prowlarr_categories).split(',').map((c:string) => c.trim()).filter(Boolean);
         setCustomProwlarrCategories(currentCats.filter((c:string) => !predefinedIds.includes(c)).join(', '));
@@ -387,7 +410,8 @@ export default function SettingsPage() {
     const payload = { 
         settings: {
             ...config,
-            hoster_priority: JSON.stringify(hosterPriority)
+            hoster_priority: JSON.stringify(hosterPriority),
+            release_scoring_rules: JSON.stringify(scoringRules) 
         },
         libraries: configuredLibraries,
         indexers: configuredIndexers, 
@@ -408,7 +432,6 @@ export default function SettingsPage() {
         if (res.ok) {
             setInitialStateHash(currentStateString);
             
-            // --- NEW: Only trigger Discover Sync if saving from the Filters tab ---
             if (activeTab === 'filters') {
                 toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
                 fetch('/api/admin/jobs/trigger', {
@@ -425,25 +448,21 @@ export default function SettingsPage() {
     }
   }
 
-  // --- NEW: Category Update Helper ---
   const updateProwlarrCategories = (toggledId?: string, isChecked?: boolean, newCustom?: string) => {
       const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
       let current = (config.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
       let activePredefined = current.filter((c: string) => predefinedIds.includes(c));
       
-      // Update toggles
       if (toggledId) {
           if (isChecked && !activePredefined.includes(toggledId)) activePredefined.push(toggledId);
           if (!isChecked) activePredefined = activePredefined.filter((c: string) => c !== toggledId);
       }
 
-      // Update custom input
       const customVal = newCustom !== undefined ? newCustom : customProwlarrCategories;
       if (newCustom !== undefined) {
           setCustomProwlarrCategories(newCustom);
       }
 
-      // Merge and remove duplicates
       const customList = customVal.split(',').map((c: string) => c.trim()).filter(Boolean);
       const finalCategories = Array.from(new Set([...activePredefined, ...customList])).join(', ');
       
@@ -798,6 +817,7 @@ export default function SettingsPage() {
         <TabsList className="flex w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] h-auto bg-muted border border-border gap-1 p-1 justify-start lg:justify-center">
           <TabsTrigger value="metadata" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Metadata</TabsTrigger>
           <TabsTrigger value="indexers" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Indexers</TabsTrigger>
+          <TabsTrigger value="scoring" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Scoring</TabsTrigger>
           <TabsTrigger value="clients" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Clients</TabsTrigger>
           <TabsTrigger value="hosters" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">File Hosters</TabsTrigger>
           <TabsTrigger value="paths" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Paths</TabsTrigger>
@@ -817,7 +837,6 @@ export default function SettingsPage() {
                 </CardHeader>
                 <CardContent className="space-y-8">
                     
-                    {/* --- NEW: Moved Primary Metadata Source into the Card --- */}
                     <div className="space-y-4 pb-6 border-b border-border">
                         <div className="flex items-center justify-between">
                             <div>
@@ -969,24 +988,80 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* 2. INDEXERS */}
-        <TabsContent value="indexers">
+        <TabsContent value="indexers" className="space-y-6">
+
+            {/* --- INDEXER CONFIGURATION CARD --- */}
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-foreground"><Cloud className="w-5 h-5 text-primary" /> Indexer Configuration</CardTitle>
-                    <CardDescription className="text-muted-foreground">Configure your Prowlarr connection and manage which indexers to use with priority and seeding time.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Cloud className="w-5 h-5 text-primary" /> Indexer & Prowlarr Configuration</CardTitle>
+                    <CardDescription className="text-muted-foreground">Configure your Prowlarr connection, search strictness, and manage which indexers to use.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
+                    
+                    {/* --- PROWLARR CONNECTION --- */}
                     <div className="grid gap-2"><Label className="text-foreground font-semibold">Prowlarr URL</Label><Input value={config.prowlarr_url} onChange={(e) => setConfig({...config, prowlarr_url: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" /></div>
                     <div className="grid gap-2">
                         <Label className="text-foreground font-semibold">API Key</Label>
                         <Input type="password" value={config.prowlarr_key} onChange={(e) => setConfig({...config, prowlarr_key: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
                         <p className="text-[0.8rem] text-muted-foreground">Found in Prowlarr Settings → General → Security → API Key</p>
                     </div>
-                    
-                    {/* --- THE FIX: NEW DYNAMIC CATEGORIES UI --- */}
-                    <div className="space-y-3 pt-2">
+                    <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('prowlarr')} disabled={!!testing}>
+                        {testing === 'prowlarr' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : "Test Connection"}
+                    </Button>
+                    <StatusBox result={testResults.prowlarr} />
+
+                    {/* --- ADVANCED SEARCH FILTERING --- */}
+                    <div className="space-y-4 pt-6 border-t border-border">
                         <div>
-                            <Label className="text-foreground font-semibold">Search Categories (Torznab IDs)</Label>
+                            <h3 className="text-lg font-bold text-foreground">Advanced Search Filtering</h3>
+                            <p className="text-[11px] text-muted-foreground mt-1">Configure strictness and blocklists to prevent downloading junk Usenet/Torrent releases.</p>
+                        </div>
+                        
+                        <div className="grid gap-4 bg-muted/30 p-4 rounded-lg border border-border">
+                            <div className="grid gap-2">
+                                <div className="flex items-center justify-between">
+                                    <Label className="text-foreground font-semibold">Match Accuracy Ratio (%)</Label>
+                                    <span className="text-xs font-mono text-muted-foreground">{config.filter_match_ratio || "60"}%</span>
+                                </div>
+                                <input 
+                                    type="range" min="10" max="100" step="5" 
+                                    value={config.filter_match_ratio || "60"} 
+                                    onChange={(e) => setConfig({...config, filter_match_ratio: e.target.value})} 
+                                    className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                                />
+                                <p className="text-[10px] text-muted-foreground">The percentage of words in your request that must match the release title (ignoring release group tags). Lowering this finds more results but increases false positives.</p>
+                            </div>
+
+                            <div className="grid gap-2 mt-2">
+                                <Label className="text-foreground font-semibold">Junk Words (Comma Separated)</Label>
+                                <textarea 
+                                    rows={2}
+                                    value={config.filter_junk_words || ""} 
+                                    onChange={e => setConfig({...config, filter_junk_words: e.target.value})} 
+                                    placeholder="e.g. preview, sample, ashcan" 
+                                    className="flex min-h-[60px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary text-foreground border-border"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Releases containing these words will be instantly rejected during auto-search.</p>
+                            </div>
+
+                            <div className="grid gap-2 mt-2">
+                                <Label className="text-foreground font-semibold">Blocked Release Groups (Comma Separated)</Label>
+                                <textarea 
+                                    rows={2}
+                                    value={config.filter_exclude_groups || ""} 
+                                    onChange={e => setConfig({...config, filter_exclude_groups: e.target.value})} 
+                                    placeholder="e.g. Empire, Minutemen, dcp" 
+                                    className="flex min-h-[60px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary text-foreground border-border"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Releases containing these groups/tags will be rejected.</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* --- CATEGORIES --- */}
+                    <div className="space-y-4 pt-6 border-t border-border">
+                        <div>
+                            <h3 className="text-lg font-bold text-foreground">Search Categories (Torznab IDs)</h3>
                             <p className="text-[11px] text-muted-foreground mt-1">Select the categories Prowlarr should use when searching. <strong>7030</strong> is required for standard comic indexers.</p>
                         </div>
                         
@@ -1041,56 +1116,116 @@ export default function SettingsPage() {
                         </div>
                     </div>
 
-                    <div className="border-t border-border my-4" />
-                    <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('prowlarr')} disabled={!!testing}>Test Connection</Button>
-                    <StatusBox result={testResults.prowlarr} />
-                    <div className="border-t border-border my-4" />
-                    
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                        <h3 className="text-lg font-bold text-foreground">Available Indexers</h3>
-                        <Button variant="secondary" size="sm" onClick={refreshIndexers} disabled={refreshing} className="w-full sm:w-auto h-12 sm:h-9 font-bold bg-muted hover:bg-muted/80 text-foreground transition-colors">
-                            {refreshing ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Refresh List
+                    {/* --- INDEXERS LIST --- */}
+                    <div className="space-y-4 pt-6 border-t border-border mt-4">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                            <h3 className="text-lg font-bold text-foreground">Available Indexers</h3>
+                            <Button variant="secondary" size="sm" onClick={refreshIndexers} disabled={refreshing} className="w-full sm:w-auto h-12 sm:h-9 font-bold bg-muted hover:bg-muted/80 text-foreground transition-colors">
+                                {refreshing ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <RefreshCw className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Refresh List
+                            </Button>
+                        </div>
+
+                        {!hasRefreshed && availableIndexers.length === 0 ? (
+                            <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">Click "Refresh List" to load available indexers from Prowlarr.</div>
+                        ) : (
+                            <div className="grid gap-3 max-h-[300px] overflow-y-auto pr-2 border border-border rounded-lg p-3 sm:p-4 bg-muted/30">
+                                {availableIndexers.map(idx => (
+                                    <div key={idx.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border border-border rounded-lg bg-background shadow-sm gap-3">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <span className="font-bold text-foreground truncate">{idx.name}</span>
+                                            <Badge variant="outline" className="text-[10px] capitalize border-primary/30 text-primary shrink-0">{idx.protocol}</Badge>
+                                        </div>
+                                        {configuredIndexers.some(c => c.id === idx.id) ? (
+                                            <Badge variant="secondary" className="bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800/50 h-10 sm:h-auto flex items-center justify-center">Already Added</Badge>
+                                        ) : (
+                                            <Button size="sm" onClick={() => openIndexerModal(idx)} className="h-10 sm:h-8 hover:scale-105 transition-transform bg-primary hover:bg-primary/90 text-primary-foreground"><Plus className="w-4 h-4 sm:w-3 sm:h-3 mr-1"/> Add</Button>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <h3 className="text-lg font-bold pt-6 text-primary flex items-center gap-2">
+                            <Zap className="w-5 h-5"/> Configured Indexers
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {configuredIndexers.map(idx => (
+                                <Card key={idx.id} className="p-4 border-primary/20 bg-primary/5 shadow-sm">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div className="min-w-0 flex-1 pr-2">
+                                            <p className="font-bold text-sm truncate text-foreground">{idx.name}</p>
+                                            <Badge variant="secondary" className="text-[9px] uppercase tracking-wider bg-primary/10 text-primary mt-1">{idx.protocol || "torrent"}</Badge>
+                                        </div>
+                                        <div className="flex gap-1 shrink-0">
+                                            <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-primary/10 text-primary" onClick={() => openIndexerModal(idx, true)}><Settings className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
+                                            <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteIndexer(idx.id)}><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
+                                        </div>
+                                    </div>
+                                    <div className="text-[10px] text-muted-foreground border-t border-border pt-2 uppercase tracking-tight">Priority: {idx.priority} • RSS: {idx.rss ? "Enabled" : "Disabled"}</div>
+                                </Card>
+                            ))}
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        </TabsContent>
+
+        {/* 2.5 SCORING */}
+        <TabsContent value="scoring">
+            <Card className="shadow-sm border-border bg-background">
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Target className="w-5 h-5 text-primary" /> Release Scoring & Custom Formats</CardTitle>
+                    <CardDescription className="text-muted-foreground">Assign point values to specific terms to prioritize or penalize releases during auto-search.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    <div className="bg-primary/5 border border-primary/20 p-4 rounded-lg flex flex-col gap-2">
+                        <p className="text-sm font-bold text-foreground">How Scoring Works:</p>
+                        <ul className="text-[11px] text-muted-foreground list-disc list-inside ml-4 space-y-1">
+                            <li>All releases start with a base score equal to their <strong className="text-foreground">Seeders</strong>.</li>
+                            <li>If a release title contains a term defined below, the points are added (or subtracted) from that base score.</li>
+                            <li>Omnibus automatically downloads the release with the highest final score.</li>
+                            <li>Negative scores act as penalties, but will not strictly block a release if it is the only option (use the Junk Filter to strictly block releases).</li>
+                        </ul>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <Label className="text-base font-bold text-foreground">Custom Scoring Rules</Label>
+                        <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => setScoringRules([{ id: `tmp_${Math.random()}`, term: "", score: 100 }, ...scoringRules])} 
+                            className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground"
+                        >
+                            <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-1 text-primary"/> Add Rule
                         </Button>
                     </div>
 
-                    {!hasRefreshed && availableIndexers.length === 0 ? (
-                        <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">Click "Refresh List" to load available indexers from Prowlarr.</div>
-                    ) : (
-                        <div className="grid gap-3 max-h-[300px] overflow-y-auto pr-2 border border-border rounded-lg p-3 sm:p-4 bg-muted/30">
-                            {availableIndexers.map(idx => (
-                                <div key={idx.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border border-border rounded-lg bg-background shadow-sm gap-3">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <span className="font-bold text-foreground truncate">{idx.name}</span>
-                                        <Badge variant="outline" className="text-[10px] capitalize border-primary/30 text-primary shrink-0">{idx.protocol}</Badge>
-                                    </div>
-                                    {configuredIndexers.some(c => c.id === idx.id) ? (
-                                        <Badge variant="secondary" className="bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800/50 h-10 sm:h-auto flex items-center justify-center">Already Added</Badge>
-                                    ) : (
-                                        <Button size="sm" onClick={() => openIndexerModal(idx)} className="h-10 sm:h-8 hover:scale-105 transition-transform bg-primary hover:bg-primary/90 text-primary-foreground"><Plus className="w-4 h-4 sm:w-3 sm:h-3 mr-1"/> Add</Button>
-                                    )}
+                    <div className="space-y-3">
+                        {scoringRules.length === 0 && <p className="text-sm text-muted-foreground italic bg-muted/20 p-4 rounded-md border border-border">No scoring rules defined. Releases will be sorted entirely by seeder count.</p>}
+                        {scoringRules.map((rule, i) => (
+                            <div key={rule.id} className="flex flex-col sm:flex-row gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/30 p-2 rounded-md sm:bg-transparent sm:p-0 sm:rounded-none sm:border-0 border border-border">
+                                <Input 
+                                    placeholder="Match Term (e.g. empire, .cbz, webrip)" 
+                                    value={rule.term} 
+                                    onChange={e => { const r = [...scoringRules]; r[i].term = e.target.value; setScoringRules(r); }} 
+                                    className="h-12 sm:h-10 w-full sm:w-1/2 bg-background border-border font-mono text-sm text-foreground" 
+                                />
+                                <div className="flex gap-2 w-full sm:w-1/2">
+                                  <div className="relative flex-1">
+                                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs font-bold font-mono">Pts:</span>
+                                      <Input 
+                                          type="number"
+                                          placeholder="100" 
+                                          value={rule.score} 
+                                          onChange={e => { const r = [...scoringRules]; r[i].score = parseInt(e.target.value) || 0; setScoringRules(r); }} 
+                                          className="h-12 sm:h-10 w-full bg-background border-border font-mono text-sm text-foreground pl-10" 
+                                      />
+                                  </div>
+                                  <Button variant="ghost" size="icon" onClick={() => setScoringRules(scoringRules.filter(r => r.id !== rule.id))} className="h-12 w-12 sm:h-10 sm:w-10 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200">
+                                      <Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/>
+                                  </Button>
                                 </div>
-                            ))}
-                        </div>
-                    )}
-
-                    <h3 className="text-lg font-bold pt-6 text-primary flex items-center gap-2">
-                        <Zap className="w-5 h-5"/> Configured Indexers
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {configuredIndexers.map(idx => (
-                            <Card key={idx.id} className="p-4 border-primary/20 bg-primary/5 shadow-sm">
-                                <div className="flex justify-between items-start mb-2">
-                                    <div className="min-w-0 flex-1 pr-2">
-                                        <p className="font-bold text-sm truncate text-foreground">{idx.name}</p>
-                                        <Badge variant="secondary" className="text-[9px] uppercase tracking-wider bg-primary/10 text-primary mt-1">{idx.protocol || "torrent"}</Badge>
-                                    </div>
-                                    <div className="flex gap-1 shrink-0">
-                                        <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:bg-primary/10 text-primary" onClick={() => openIndexerModal(idx, true)}><Settings className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
-                                        <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => deleteIndexer(idx.id)}><Trash2 className="h-5 h-5 sm:h-4 sm:w-4"/></Button>
-                                    </div>
-                                </div>
-                                <div className="text-[10px] text-muted-foreground border-t border-border pt-2 uppercase tracking-tight">Priority: {idx.priority} • RSS: {idx.rss ? "Enabled" : "Disabled"}</div>
-                            </Card>
+                            </div>
                         ))}
                     </div>
                 </CardContent>
@@ -1169,11 +1304,25 @@ export default function SettingsPage() {
         <TabsContent value="hosters">
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-foreground"><Server className="w-5 h-5 text-primary" /> Third-Party File Hosters</CardTitle>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Server className="w-5 h-5 text-primary" /> Direct Downloads & File Hosters</CardTitle>
                     <CardDescription className="text-muted-foreground">Manage priority and add premium credentials for third-party file hosters (like MediaFire or Mega).</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-10">
                     
+                    <div className="flex items-center space-x-4 bg-muted/30 p-4 rounded-lg border border-border">
+                        <Switch 
+                            id="ddl-toggle"
+                            checked={config.ddl_enabled !== "false"} 
+                            onCheckedChange={(c) => setConfig({...config, ddl_enabled: c ? "true" : "false"})} 
+                            className="scale-110 sm:scale-100"
+                        />
+                        <div className="grid gap-1">
+                            <Label htmlFor="ddl-toggle" className="cursor-pointer font-bold text-base text-foreground">Enable Direct Downloads</Label>
+                            <p className="text-[11px] text-muted-foreground">When enabled, Omnibus will search GetComics for direct download links before falling back to your Torrent/Usenet clients. Disable this if you only want to use Prowlarr.</p>
+                        </div>
+                    </div>
+
+                    <div className={`space-y-8 transition-opacity duration-300 ${config.ddl_enabled === "false" ? "opacity-50 pointer-events-none" : ""}`}>
                     {/* Priority List */}
                     <div className="space-y-4">
                         <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Hoster Priority</h3>
@@ -1268,7 +1417,7 @@ export default function SettingsPage() {
                             </div>
                         </div>
                     </div>
-
+                    </div>
                 </CardContent>
             </Card>
         </TabsContent>
@@ -1768,7 +1917,6 @@ export default function SettingsPage() {
                                     className="flex min-h-[80px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 text-foreground border-border"
                                 />
                             </div>
-                            {/* --- NEW FOREIGN BLOCKLIST TEXTAREA --- */}
                             <div className="grid gap-2 mt-4 pt-4 border-t border-border">
                                 <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex flex-col sm:flex-row justify-between items-center gap-4 mb-2">
                                     <div className="text-sm text-foreground/80">
@@ -1792,7 +1940,7 @@ export default function SettingsPage() {
                     </div>
 
                     {/* Acronym Customization */}
-                    <div className="space-y-4 pt-6 border-t border-border">
+                    <div className="space-y-4 pt-6 border-t border-border mt-6">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                             <div>
                                 <Label className="text-base font-bold text-foreground">Search Acronym Expansion</Label>
@@ -2151,7 +2299,7 @@ export default function SettingsPage() {
                                     </div>
                                 </div>
                                 
-                                {/* --- NEW: BLANKET AUTO-APPROVE WARNING --- */}
+                                {/* --- BLANKET AUTO-APPROVE WARNING --- */}
                                 {config.oidc_auto_approve === 'true' && !config.oidc_admin_group && !config.oidc_user_group && (
                                     <Alert className="bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50 mt-6">
                                         <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />

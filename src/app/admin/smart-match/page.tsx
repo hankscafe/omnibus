@@ -1,3 +1,4 @@
+// src/app/admin/smart-match/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
@@ -8,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -25,13 +26,17 @@ export default function SmartMatchPage() {
     const [manualMatchTarget, setManualMatchTarget] = useState<any>(null);
     const [isManualMatching, setIsManualMatching] = useState(false);
     
-    // --- NEW: Added the missing states for Provider Selection ---
+    // --- NEW: Multi-Select & Bulk Processing State ---
+    const [isSelectionMode, setIsSelectionMode] = useState(false);
+    const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+    const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+    const [isBulkManualMatch, setIsBulkManualMatch] = useState(false);
+
     const [searchProvider, setSearchProvider] = useState("COMICVINE");
     const [metronConfigured, setMetronConfigured] = useState(false);
 
     const { toast } = useToast();
 
-    // --- NEW: Check if Metron is available ---
     useEffect(() => {
         fetch('/api/admin/config')
             .then(res => res.ok ? res.json() : null)
@@ -82,10 +87,8 @@ export default function SmartMatchPage() {
             if (suggestions[series.id]) continue; 
 
             try {
-                // FIX: Strip Omnibus/TPB tags, but gracefully fallback to the original name if the regex erased the entire title
                 let cleanName = series.name.replace(/(omnibus|tpb|compendium|vol\.|volume)\s*\d*/i, '').trim();
                 
-                // Safety catch for comics literally named "The Omnibus"
                 if (cleanName.length < 2) {
                     cleanName = series.name.trim();
                 }
@@ -96,7 +99,6 @@ export default function SmartMatchPage() {
 
                 const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&provider=${searchProvider}`);
                 
-                // --- NEW: Detect HTTP 429 Too Many Requests from the API ---
                 if (res.status === 429) {
                     throw new Error("FATAL_RATE_LIMIT");
                 }
@@ -112,11 +114,10 @@ export default function SmartMatchPage() {
             } catch (e: any) {
                 setSuggestions(prev => ({ ...prev, [series.id]: 'ERROR' }));
 
-                // --- UPDATED: Softer, more accurate messaging ---
                 if (e.message === "FATAL_RATE_LIMIT" || e.message?.includes("429")) {
                     toast({ 
                         title: "Rate Limit Exceeded", 
-                        description: "Omnibus has hit the Metron API limits. Pausing the smart scan to protect your connection. Please attempt the scan again later to continue.", 
+                        description: "Omnibus has hit the API limits. Pausing the smart scan to protect your connection. Please attempt the scan again later to continue.", 
                         variant: "destructive" 
                     });
                     break;
@@ -133,7 +134,6 @@ export default function SmartMatchPage() {
     const handleAcceptMatch = async (series: any, suggestion: any) => {
         setProcessingId(series.id);
         try {
-            
             Logger.log(`[Smart Match Debug] Accepting match for "${series.name}". Linking to ${suggestion.metadataSource || 'COMICVINE'} ID: ${suggestion.id}`, 'debug');
             
             const res = await fetch('/api/library/match-series', {
@@ -153,21 +153,56 @@ export default function SmartMatchPage() {
             if (res.ok) {
                 toast({ title: "Matched Successfully!", description: `${suggestion.name} has been linked and organized.` });
                 setUnmatched(prev => prev.filter(s => s.id !== series.id));
+                return true;
             } else {
                 const err = await res.json();
                 toast({ title: "Match Failed", description: err.error, variant: "destructive" });
+                return false;
             }
         } catch (e) {
             toast({ title: "Error", variant: "destructive" });
+            return false;
         } finally {
             setProcessingId(null);
+        }
+    };
+
+    // --- NEW: Bulk Acceptance Handler ---
+    const handleBulkAccept = async () => {
+        setIsBulkProcessing(true);
+        let successCount = 0;
+        const failedItems = [];
+
+        for (const id of Array.from(selectedItems)) {
+            const series = unmatched.find(s => s.id === id);
+            const suggestion = suggestions[id];
+            
+            if (series && suggestion && suggestion !== 'NOT_FOUND' && suggestion !== 'ERROR') {
+                const success = await handleAcceptMatch(series, suggestion);
+                if (success) {
+                    successCount++;
+                } else {
+                    failedItems.push(series.name);
+                }
+                // Short delay to avoid DB locking / race conditions on folder creation for multiple files
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+
+        setIsBulkProcessing(false);
+        
+        if (failedItems.length > 0) {
+            toast({ title: "Bulk Match Completed with Errors", description: `Matched ${successCount}. Failed: ${failedItems.length}`, variant: "destructive" });
+        } else if (successCount > 0) {
+            toast({ title: "Bulk Match Complete", description: `Successfully matched ${successCount} items.` });
+            setSelectedItems(new Set());
+            setIsSelectionMode(false);
         }
     };
 
     const handleManualLookup = async () => {
         setIsManualMatching(true);
         try {
-            // Strip out the "4050-" prefix if they pasted the whole URL/ID format
             const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9a-zA-Z-]/g, '');
             if (!cleanId) throw new Error("Invalid ID format");
 
@@ -177,20 +212,35 @@ export default function SmartMatchPage() {
             const data = await res.json();
 
             if (res.ok && data && !data.error) {
-                setSuggestions(prev => ({
-                    ...prev,
-                    [manualMatchTarget.id]: {
-                        id: data.id || data.volumeId,
-                        name: data.name,
-                        year: data.year,
-                        publisher: data.publisher,
-                        image: data.image,
-                        count: "?",
-                        metadataSource: searchProvider // <-- Ensures the accepted match saves the proper source
-                    }
-                }));
+                const suggestionData = {
+                    id: data.id || data.volumeId,
+                    name: data.name,
+                    year: data.year,
+                    publisher: data.publisher,
+                    image: data.image,
+                    count: "?",
+                    metadataSource: searchProvider
+                };
+
+                // --- NEW: Apply the suggestion to all selected items if in bulk mode ---
+                if (isBulkManualMatch) {
+                    setSuggestions(prev => {
+                        const next = { ...prev };
+                        selectedItems.forEach(id => {
+                            next[id] = suggestionData;
+                        });
+                        return next;
+                    });
+                    toast({ title: "Custom ID Applied", description: "Matches set for selected items. Click 'Accept Selected' to confirm and save." });
+                } else {
+                    setSuggestions(prev => ({
+                        ...prev,
+                        [manualMatchTarget.id]: suggestionData
+                    }));
+                    toast({ title: "Match Found", description: "You can now accept the manual match." });
+                }
+                
                 setManualMatchOpen(false);
-                toast({ title: "Match Found", description: "You can now accept the manual match." });
             } else {
                 throw new Error(data.error || "Volume not found");
             }
@@ -198,6 +248,7 @@ export default function SmartMatchPage() {
             toast({ title: "Lookup Failed", description: e.message, variant: "destructive" });
         } finally {
             setIsManualMatching(false);
+            setIsBulkManualMatch(false);
         }
     };
 
@@ -205,40 +256,61 @@ export default function SmartMatchPage() {
         setUnmatched(prev => prev.filter(s => s.id !== id));
     };
 
+    const toggleSelection = (id: string) => {
+        setSelectedItems(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
     if (loading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
 
     return (
         <div className="container mx-auto max-w-5xl py-10 px-6 transition-colors duration-300">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-                <div className="flex items-start gap-4">
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6">
+                <div className="flex items-start gap-4 flex-1">
                     <Button variant="ghost" size="icon" className="shrink-0 mt-1 text-muted-foreground hover:bg-muted hover:text-foreground" asChild>
                         <Link href="/admin"><ArrowLeft className="w-5 h-5" /></Link>
                     </Button>
                     <div>
                         <h1 className="text-3xl font-extrabold flex items-center gap-3 text-foreground">
-                            <Sparkles className="w-8 h-8 text-primary" />
+                            <Sparkles className="w-8 h-8 text-primary shrink-0" />
                             Smart Matcher
                         </h1>
-                        <p className="text-muted-foreground mt-1">
+                        <p className="text-muted-foreground mt-1 leading-relaxed">
                             You have {unmatched.length} unmatched files/folders. Let AI find the metadata for you.
                         </p>
                     </div>
                 </div>
                 
-                <div className="flex gap-2 w-full md:w-auto">
+                <div className="flex flex-col sm:flex-row flex-wrap gap-3 w-full lg:w-auto shrink-0 items-stretch sm:items-center">
+                    <Button 
+                        variant={isSelectionMode ? "secondary" : "outline"} 
+                        onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedItems(new Set()); }} 
+                        className={`h-12 w-full sm:w-auto font-bold flex-1 sm:flex-none ${isSelectionMode ? "bg-primary/20 text-primary hover:bg-primary/30 border-primary/50" : "border-border"}`}
+                    >
+                        {isSelectionMode ? <Square className="w-4 h-4 mr-2 shrink-0" /> : <CheckSquare className="w-4 h-4 mr-2 shrink-0" />}
+                        <span className="whitespace-nowrap">{isSelectionMode ? "Cancel Select" : "Select"}</span>
+                    </Button>
+
                     {metronConfigured && (
-                        <Select value={searchProvider} onValueChange={setSearchProvider}>
-                            <SelectTrigger className="w-[140px] bg-background border-border h-12 shadow-sm font-bold text-foreground">
-                                <SelectValue placeholder="Source" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="COMICVINE">ComicVine</SelectItem>
-                                <SelectItem value="METRON">Metron.Cloud</SelectItem>
-                            </SelectContent>
-                        </Select>
+                        <div className="w-full sm:w-[150px] flex-1 sm:flex-none">
+                            <Select value={searchProvider} onValueChange={setSearchProvider}>
+                                <SelectTrigger className="w-full bg-background border-border h-12 shadow-sm font-bold text-foreground">
+                                    <SelectValue placeholder="Source" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="COMICVINE">ComicVine</SelectItem>
+                                    <SelectItem value="METRON">Metron.Cloud</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
                     )}
-                    <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="w-full md:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 px-6 shadow-lg border-0">
-                        {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Scanning...</> : <><FolderSearch className="w-5 h-5 mr-2" /> Start Auto-Scan</>}
+                    
+                    <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="h-12 w-full sm:w-auto flex-1 sm:flex-none bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-lg border-0">
+                        {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin shrink-0" /> <span className="whitespace-nowrap">Scanning...</span></> : <><FolderSearch className="w-5 h-5 mr-2 shrink-0" /> <span className="whitespace-nowrap">Start Auto-Scan</span></>}
                     </Button>
                 </div>
             </div>
@@ -247,18 +319,31 @@ export default function SmartMatchPage() {
                 <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
                     <Check className="w-12 h-12 mx-auto text-green-500 mb-3" />
                     <h3 className="text-lg font-bold text-foreground">All Caught Up!</h3>
-                    <p className="text-muted-foreground mt-1">Every file in your library has a valid ComicVine ID.</p>
+                    <p className="text-muted-foreground mt-1">Every file in your library has a valid external ID.</p>
                 </div>
             ) : (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-4 pb-20">
                     {unmatched.map((series) => {
                         const suggestion = suggestions[series.id];
                         const isProcessing = processingId === series.id;
+                        const isSelected = selectedItems.has(series.id);
                         const providerLabel = suggestion?.metadataSource === 'METRON' ? 'Metron' : (suggestion?.metadataSource === 'COMICVINE' ? 'ComicVine' : (searchProvider === 'METRON' ? 'Metron' : 'ComicVine'));
 
                         return (
-                            <Card key={series.id} className={`p-4 flex flex-col md:flex-row items-center gap-6 transition-all border-border bg-background ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
-                                
+                            <Card 
+                                key={series.id} 
+                                className={`p-4 flex flex-col md:flex-row items-center gap-6 transition-all border-border bg-background ${isProcessing ? 'opacity-50 pointer-events-none' : ''} ${isSelectionMode && isSelected ? 'ring-2 ring-primary border-primary bg-primary/5' : ''} ${isSelectionMode ? 'cursor-pointer hover:border-primary/50' : ''}`}
+                                onClick={() => isSelectionMode && toggleSelection(series.id)}
+                            >
+                                {/* --- NEW: Checkbox --- */}
+                                {isSelectionMode && (
+                                    <div className="shrink-0 pr-2 md:pr-0">
+                                        <div className="bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none md:bg-transparent md:p-0">
+                                            {isSelected ? <CheckSquare className="w-5 h-5 text-primary" /> : <Square className="w-5 h-5 text-muted-foreground" />}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* LOCAL FOLDER/FILE DATA */}
                                 <div className="flex-1 min-w-[200px] w-full md:w-auto">
                                     <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">
@@ -277,7 +362,7 @@ export default function SmartMatchPage() {
 
                                 <ArrowRight className="hidden md:block w-6 h-6 text-muted-foreground/30 shrink-0" />
 
-                                {/* COMICVINE/METRON SUGGESTION */}
+                                {/* SUGGESTION */}
                                 <div className="flex-1 min-w-[250px] w-full md:w-auto bg-muted/50 p-3 rounded-xl border border-border">
                                     <div className="text-xs font-bold text-primary uppercase tracking-wider mb-2">{providerLabel} Suggestion</div>
                                     
@@ -314,8 +399,8 @@ export default function SmartMatchPage() {
                                     <Button 
                                         size="sm" 
                                         className="flex-1 md:flex-none bg-green-600 hover:bg-green-700 text-white font-bold disabled:opacity-50 border-0"
-                                        disabled={!suggestion || suggestion === 'NOT_FOUND' || suggestion === 'ERROR'}
-                                        onClick={() => handleAcceptMatch(series, suggestion)}
+                                        disabled={!suggestion || suggestion === 'NOT_FOUND' || suggestion === 'ERROR' || isSelectionMode}
+                                        onClick={(e) => { e.stopPropagation(); handleAcceptMatch(series, suggestion); }}
                                     >
                                         <Check className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Accept</span>
                                     </Button>
@@ -323,15 +408,18 @@ export default function SmartMatchPage() {
                                         size="sm" 
                                         variant="outline" 
                                         className="flex-1 md:flex-none font-bold border-primary/30 text-primary hover:bg-primary/10"
-                                        onClick={() => {
+                                        disabled={isSelectionMode}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
                                             setManualMatchTarget(series);
+                                            setIsBulkManualMatch(false);
                                             setManualMatchOpen(true);
                                             setManualMatchId("");
                                         }}
                                     >
                                         <Search className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Custom ID</span>
                                     </Button>
-                                    <Button size="sm" variant="outline" className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={() => handleDismiss(series.id)} title="Hide from Matcher">
+                                    <Button size="sm" variant="outline" disabled={isSelectionMode} className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={(e) => { e.stopPropagation(); handleDismiss(series.id); }} title="Hide from Matcher">
                                         <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Dismiss</span>
                                     </Button>
                                 </div>
@@ -342,13 +430,55 @@ export default function SmartMatchPage() {
                 </div>
             )}
 
+            {/* --- NEW: BULK SELECTION ACTION BAR --- */}
+            {isSelectionMode && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background text-foreground px-4 sm:px-6 py-3 rounded-full shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] flex items-center gap-3 sm:gap-4 z-50 animate-in slide-in-from-bottom-8 border border-border w-[95%] sm:w-auto overflow-x-auto">
+                    <Button variant="ghost" size="sm" className="h-10 sm:h-8 shrink-0 hover:bg-muted text-muted-foreground font-medium" onClick={() => {
+                        if (selectedItems.size === unmatched.length && unmatched.length > 0) setSelectedItems(new Set());
+                        else setSelectedItems(new Set(unmatched.map(s => s.id)));
+                    }}>
+                        {selectedItems.size === unmatched.length && unmatched.length > 0 ? "Deselect All" : "Select All"}
+                    </Button>
+                    <div className="h-5 w-px bg-border shrink-0" />
+                    <span className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedItems.size} Selected</span>
+                    
+                    <div className="flex gap-2 shrink-0">
+                        <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-10 sm:h-8 shadow-sm font-bold transition-all border-primary/50 text-primary hover:bg-muted" 
+                            disabled={selectedItems.size === 0 || isBulkProcessing} 
+                            onClick={() => {
+                                setIsBulkManualMatch(true);
+                                setManualMatchTarget(null);
+                                setManualMatchOpen(true);
+                                setManualMatchId("");
+                            }}
+                        >
+                            <Search className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Set Custom ID</span>
+                        </Button>
+                        <Button 
+                            size="sm" 
+                            className="h-10 sm:h-8 shadow-sm font-bold transition-all bg-green-600 hover:bg-green-700 text-white" 
+                            disabled={selectedItems.size === 0 || isBulkProcessing || Array.from(selectedItems).every(id => !suggestions[id] || suggestions[id] === 'NOT_FOUND' || suggestions[id] === 'ERROR')} 
+                            onClick={handleBulkAccept}
+                        >
+                            {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <Check className="w-4 h-4 sm:mr-2" />} 
+                            <span className="hidden sm:inline">Accept Selected</span>
+                        </Button>
+                    </div>
+                </div>
+            )}
+
             {/* MANUAL MATCH DIALOG */}
             <Dialog open={manualMatchOpen} onOpenChange={setManualMatchOpen}>
                 <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
                     <DialogHeader>
                         <DialogTitle>Manual Match</DialogTitle>
                         <DialogDescription>
-                            Enter the exact ID for <strong>{manualMatchTarget?.name}</strong>.
+                            {isBulkManualMatch 
+                                ? `Enter the exact ID to apply to the ${selectedItems.size} selected items.`
+                                : `Enter the exact ID for ${manualMatchTarget?.name}.`}
                         </DialogDescription>
                     </DialogHeader>
                     <div className="py-4 space-y-4">

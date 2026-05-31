@@ -47,6 +47,7 @@ While I know AI-assisted ("vibe-coded") projects can sometimes be met with skept
   - [Reading Lists](#reading-lists)
   - [Release Calendar](#release-calendar)
   - [User Profile & Preferences](#user-profile--preferences)
+  - [Custom Release Scoring & Formats](#custom-release-scoring--formats)
   - [Settings & Administration](#settings--administration)
   - [Additional Screenshots](#additional-screenshots)
 - [Installation (Docker)](#installation-docker)
@@ -287,6 +288,22 @@ A personalized space for each user on your server to manage their identity, trac
 * **Account Security:** Safely update your password and view or revoke active login sessions across your different devices.
 * **Personal API Keys:** Generate secure, user-specific API tokens to integrate your Omnibus reading progress with third-party trackers (like MyAnimeList, AniList, or custom scripts) without giving out Admin access.
 * **Trophies & Achievements:** Unlock custom trophies and milestones based on your reading habits! Earn achievements for reading a certain number of comics, making requests, or exploring different publishers. Trophies are proudly displayed on your profile.
+
+### Custom Release Scoring & Formats
+Take total control over which releases Omnibus chooses to download. By default, indexers often blindly grab the file with the highest seeders—even if it's a messy `.cbr` scene release. Omnibus's Custom Scoring engine solves this by teaching the automation to "think" like a comic collector, prioritizing file format and image quality over raw torrent swarm statistics.
+
+**How the Scoring Math Works:**
+* **Base Score:** Every release starts with a base score calculated by its swarm health: `Seeders + (Peers * 0.5)`.
+* **Custom Modifiers:** If a release title contains a defined keyword, points are added or subtracted from its base score. Omnibus will always automatically download the release with the highest final score.
+
+**Out-of-the-Box Default Rules:**
+* **+500 points (`.cbz`, `cbz`):** Strongly prefers native, ready-to-read formats to bypass server-side archive conversions entirely.
+* **+300 points (`(Digital)`, `[Digital]`):** Prioritizes pristine, official publisher-grade rips over physical page scans.
+* **+200 points (`webrip`, `web-dl`):** Favors high-quality web scrapes.
+* **-400 points (`.cbr`, `.rar`, `vapi`):** Heavily penalizes messy scene releases that force your server to waste CPU power unpacking, converting, and repacking the archive.
+
+**Fully Customizable:**
+These rules are fully surfaced in the Settings UI, allowing administrators to modify them to suit their exact preferences. Love a specific release group? Add a rule like `Term: "Zone-Empire" | Score: +1000` to make their releases practically unbeatable. Want to avoid translations? Add `Term: "SPANISH" | Score: -5000` to aggressively drop them to the bottom of the priority list.
 
 ### Settings & Administration
 Complete, granular control over your instance, your users, and your underlying automation.

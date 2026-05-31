@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -167,7 +167,6 @@ export default function SmartMatchPage() {
         }
     };
 
-    // --- NEW: Bulk Acceptance Handler ---
     const handleBulkAccept = async () => {
         setIsBulkProcessing(true);
         let successCount = 0;
@@ -184,7 +183,6 @@ export default function SmartMatchPage() {
                 } else {
                     failedItems.push(series.name);
                 }
-                // Short delay to avoid DB locking / race conditions on folder creation for multiple files
                 await new Promise(r => setTimeout(r, 1500));
             }
         }
@@ -222,7 +220,6 @@ export default function SmartMatchPage() {
                     metadataSource: searchProvider
                 };
 
-                // --- NEW: Apply the suggestion to all selected items if in bulk mode ---
                 if (isBulkManualMatch) {
                     setSuggestions(prev => {
                         const next = { ...prev };
@@ -315,6 +312,28 @@ export default function SmartMatchPage() {
                 </div>
             </div>
 
+            {/* METADATA PROVIDER QUICKLINKS */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-3 pt-3 border-t border-border/40 text-xs text-muted-foreground">
+                <span className="font-medium">Need to find an ID? Search providers:</span>
+                <a 
+                    href="https://comicvine.gamespot.com/volumes/" 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="flex items-center gap-1 font-semibold text-primary hover:underline transition-colors"
+                >
+                    ComicVine Volumes <ExternalLink className="w-3 h-3 text-muted-foreground/70" />
+                </a>
+                <span className="text-border">|</span>
+                <a 
+                    href="https://metron.cloud/series/" 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="flex items-center gap-1 font-semibold text-primary hover:underline transition-colors"
+                >
+                    Metron Series <ExternalLink className="w-3 h-3 text-muted-foreground/70" />
+                </a>
+            </div>
+
             {unmatched.length === 0 ? (
                 <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
                     <Check className="w-12 h-12 mx-auto text-green-500 mb-3" />
@@ -322,7 +341,7 @@ export default function SmartMatchPage() {
                     <p className="text-muted-foreground mt-1">Every file in your library has a valid external ID.</p>
                 </div>
             ) : (
-                <div className="flex flex-col gap-4 pb-20">
+                <div className="flex flex-col gap-4 pb-20 mt-6">
                     {unmatched.map((series) => {
                         const suggestion = suggestions[series.id];
                         const isProcessing = processingId === series.id;
@@ -388,7 +407,18 @@ export default function SmartMatchPage() {
                                             <div className="min-w-0 flex-1">
                                                 <h4 className="font-bold text-foreground break-words whitespace-normal text-sm leading-tight">{suggestion.name}</h4>
                                                 <p className="text-xs text-muted-foreground break-words whitespace-normal mt-1">{suggestion.publisher || 'Unknown'} • {suggestion.year || '????'}</p>
-                                                <p className="text-[10px] text-muted-foreground/80 mt-1">{suggestion.count} Issues</p>
+                                                <div className="flex items-center gap-3 mt-1.5">
+                                                    <p className="text-[10px] text-muted-foreground/80">{suggestion.count} Issues</p>
+                                                    <a 
+                                                        href={(suggestion.metadataSource || searchProvider) === 'METRON' ? `https://metron.cloud/series/${suggestion.id}/` : `https://comicvine.gamespot.com/volume/4050-${suggestion.id}/`} 
+                                                        target="_blank" 
+                                                        rel="noopener noreferrer" 
+                                                        className="text-[10px] font-bold text-primary hover:underline flex items-center gap-1"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        <ExternalLink className="w-3 h-3" /> View Details
+                                                    </a>
+                                                </div>
                                             </div>
                                         </div>
                                     )}
@@ -504,6 +534,13 @@ export default function SmartMatchPage() {
                                 placeholder="e.g. 4050-12345 or black-cat-2025"
                                 className="bg-background border-border"
                             />
+                            <p className="text-[11px] text-muted-foreground mt-1.5">
+                                Tip: Search on{" "}
+                                <a href="https://comicvine.gamespot.com/volumes/" target="_blank" rel="noreferrer" className="text-primary underline">ComicVine</a> 
+                                {" "}or{" "}
+                                <a href="https://metron.cloud/series/" target="_blank" rel="noreferrer" className="text-primary underline">Metron</a> 
+                                {" "}to find the correct volume/series ID.
+                            </p>
                         </div>
                     </div>
                     <DialogFooter className="gap-2 sm:gap-0">

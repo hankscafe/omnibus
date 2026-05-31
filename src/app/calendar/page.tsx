@@ -153,7 +153,6 @@ export default function CalendarPage() {
     const groupedLocalIssues = parseDateGroup(localIssues);
     const groupedGlobalIssues = parseDateGroup(globalIssues);
 
-    // --- FIX: Added releaseDate parameter to dynamically map UNRELEASED requests ---
     const handleRequest = async (id: number | string, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, metadataSource: string = 'COMICVINE', monitorOnly: boolean = false, releaseDate?: string) => {
         const exactIssueName = name; 
         const targetKey = type === 'volume' ? `vol-${id}` : `iss-${exactIssueName}`;
@@ -167,7 +166,7 @@ export default function CalendarPage() {
                     cvId: id, name: exactIssueName, year, publisher: publisher || "Unknown", image, type, monitored, metadataSource,
                     issueNumber: issueNumber || (type === 'issue' ? "1" : undefined),
                     monitorOnly,
-                    releaseDate // <-- Passing to API
+                    releaseDate
                 })
             });
 
@@ -288,7 +287,7 @@ export default function CalendarPage() {
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                                     {monthIssues.map((issue) => (
                                         <Link key={issue.id} href={`/library/series?path=${encodeURIComponent(issue.seriesPath || '')}`} className="group block h-full">
-                                            <Card className="shadow-sm border-border bg-background overflow-hidden h-full flex flex-col">
+                                            <Card className="shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors">
                                                 <div className="relative aspect-[2/3] w-full bg-muted border-b border-border overflow-hidden">
                                                     {issue.coverUrl ? (
                                                         <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" />
@@ -298,8 +297,10 @@ export default function CalendarPage() {
                                                     <div className="absolute top-2 right-2 bg-purple-600 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest">
                                                         Unreleased
                                                     </div>
-                                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                                                        <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg">
+                                                    
+                                                    {/* Hidden on mobile to prevent overlay flash issues, visible on desktop hover */}
+                                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex items-center justify-center z-10 pointer-events-none">
+                                                        <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg pointer-events-auto" tabIndex={-1}>
                                                             <BookOpen className="w-4 h-4 mr-2" /> View Series
                                                         </Button>
                                                     </div>
@@ -369,11 +370,12 @@ export default function CalendarPage() {
                                         const volIdKey = issue.volumeId || 0;
 
                                         return (
-                                        <Card key={issue.id} className="group shadow-sm border-border bg-background overflow-hidden h-full flex flex-col">
+                                        <Card key={issue.id} className="group shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors">
                                             <div className="relative aspect-[2/3] w-full bg-muted border-b border-border overflow-hidden">
                                                 {issue.coverUrl ? <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" /> : <ImageIcon className="w-8 h-8 text-muted-foreground/30 m-auto h-full" />}
                                                 
-                                                <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-2 gap-2">
+                                                {/* Desktop Only Hover Overlay */}
+                                                <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex flex-col items-center justify-center z-10 p-2 gap-2">
                                                     {isVolRequested ? (
                                                         <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100">
                                                             <Check className="w-4 h-4 mr-2"/> Subscribed
@@ -406,7 +408,6 @@ export default function CalendarPage() {
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
-                                                                // --- FIX: Pass the precise release date so the backend sets it to UNRELEASED if needed ---
                                                                 handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
                                                             }}
                                                         >
@@ -428,11 +429,64 @@ export default function CalendarPage() {
                                             </div>
                                             <CardContent className="p-3 flex-1 flex flex-col justify-between">
                                                 <div>
-                                                    <p className="font-bold text-xs truncate text-foreground" title={issue.seriesName}>{issue.seriesName}</p>
+                                                    <p className="font-bold text-xs truncate text-foreground group-hover:text-primary transition-colors" title={issue.seriesName}>{issue.seriesName}</p>
                                                     <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mt-0.5">Issue #{issue.issueNumber}</p>
                                                 </div>
                                                 <div className="mt-2 pt-2 border-t border-border">
                                                     <Badge variant="secondary" className="w-full justify-center bg-muted text-muted-foreground border-border text-[10px] font-mono">{issue.parsedDay}</Badge>
+                                                </div>
+
+                                                {/* Mobile Always-Visible Buttons */}
+                                                <div className="flex sm:hidden flex-col gap-1.5 mt-3 pt-3 border-t border-border">
+                                                    {isVolRequested ? (
+                                                        <Button size="sm" variant="secondary" disabled className="w-full text-[10px] font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100 h-8">
+                                                            <Check className="w-3 h-3 mr-1.5"/> Subscribed
+                                                        </Button>
+                                                    ) : (
+                                                        <Button 
+                                                            size="sm" 
+                                                            className="w-full text-[10px] font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-sm h-8"
+                                                            disabled={requestingTarget === `vol-${volIdKey}`}
+                                                            onClick={(e) => {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: (issue as any).metadataSource || 'METRON' })
+                                                            }}
+                                                        >
+                                                            {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Plus className="w-3 h-3 mr-1.5" />} Req Series
+                                                        </Button>
+                                                    )}
+
+                                                    {isIssueRequested ? (
+                                                        <Button size="sm" variant="secondary" disabled className="w-full text-[10px] font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100 h-8">
+                                                            <Check className="w-3 h-3 mr-1.5"/> Requested
+                                                        </Button>
+                                                    ) : (
+                                                        <Button 
+                                                            size="sm" 
+                                                            variant="outline"
+                                                            className="w-full text-[10px] font-bold text-primary border-primary/30 bg-primary/10 hover:bg-primary/20 h-8"
+                                                            disabled={requestingTarget === `iss-${issueTargetName}` || isVolRequested}
+                                                            onClick={(e) => {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
+                                                            }}
+                                                        >
+                                                            {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />} Req Issue
+                                                        </Button>
+                                                    )}
+
+                                                    <Button 
+                                                        size="sm" 
+                                                        variant="ghost"
+                                                        asChild
+                                                        className="w-full text-[10px] font-bold text-muted-foreground hover:text-foreground hover:bg-muted h-8"
+                                                    >
+                                                        <a href={`https://metron.cloud/issue/${issue.id}/`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                                                            <ExternalLink className="w-3 h-3 mr-1.5" /> Details
+                                                        </a>
+                                                    </Button>
                                                 </div>
                                             </CardContent>
                                         </Card>

@@ -66,6 +66,7 @@ export function initCronJobs() {
         for (const req of stalledRequests) {
           if (req.downloadLink && req.downloadLink.startsWith('http')) {
             const timeSinceLastUpdate = Date.now() - req.updatedAt.getTime();
+            Logger.log(`[Cron Debug] Evaluating stalled request ${req.id}. Time since last update: ${Math.round(timeSinceLastUpdate / 60000)}m (Threshold: ${retryDelayMinutes}m)`, 'debug');
             
             if (timeSinceLastUpdate >= retryDelayMinutes * 60 * 1000) {
               const attemptNum = (req.retryCount || 0) + 1;
@@ -124,6 +125,7 @@ export function initCronJobs() {
       for (const r of activeDbRequests) {
           const maxProgress = linkProgressMap.get(r.downloadLink!);
           if (maxProgress !== undefined && maxProgress > (r.progress || 0)) {
+              Logger.log(`[Cron Debug] Syncing batch progress for request ${r.id} to ${maxProgress}%`, 'debug');
               await prisma.request.update({
                   where: { id: r.id },
                   data: { progress: maxProgress }
@@ -157,6 +159,8 @@ export function initCronJobs() {
                       
                       const reqNameLower = r.activeDownloadName.toLowerCase();
                       const torNameLower = torrent.name.toLowerCase();
+                      
+                      Logger.log(`[Cron Debug] Evaluating active torrent "${torrent.name}" against DB Request "${r.activeDownloadName}"`, 'debug');
 
                       const extractNum = (str: string) => {
                           const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
@@ -178,12 +182,21 @@ export function initCronJobs() {
                       const torYearMatch = torNameLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
                       const torYear = torYearMatch ? torYearMatch[1] : null;
 
-                      if (reqYear && torYear && reqYear !== torYear) return false;
+                      if (reqYear && torYear && reqYear !== torYear) {
+                          Logger.log(`[Cron Debug] Match failed: Year mismatch (Req: ${reqYear} vs Tor: ${torYear})`, 'debug');
+                          return false;
+                      }
 
                       if (reqNum !== null && torNum !== null) {
-                          if (reqNum !== torNum) return false; 
+                          if (reqNum !== torNum) {
+                              Logger.log(`[Cron Debug] Match failed: Issue number mismatch (Req: ${reqNum} vs Tor: ${torNum})`, 'debug');
+                              return false; 
+                          }
                       } else if (reqNum !== null && torNum === null) {
-                          if (reqNum !== 1) return false; 
+                          if (reqNum !== 1) {
+                              Logger.log(`[Cron Debug] Match failed: Missing torrent issue number, but request is not #1 (Req: ${reqNum})`, 'debug');
+                              return false; 
+                          }
                       }
 
                       let cleanReqName = reqNameLower.replace(/[0-9]/g, '');
@@ -200,7 +213,15 @@ export function initCronJobs() {
                       reqWords.forEach((w: string) => { if (torWords.includes(w)) matches++; });
                       
                       const maxLength = Math.max(reqWords.length, torWords.length);
-                      return (matches / maxLength) >= 0.7; 
+                      const matchRatio = matches / maxLength;
+                      
+                      if (matchRatio < 0.7) {
+                          Logger.log(`[Cron Debug] Match failed: Text similarity ratio too low (${matchRatio.toFixed(2)} < 0.7)`, 'debug');
+                          return false;
+                      }
+                      
+                      Logger.log(`[Cron Debug] Match SUCCESS! Ratio: ${matchRatio.toFixed(2)}`, 'debug');
+                      return true; 
                   });
               }
               

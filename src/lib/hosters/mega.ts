@@ -5,6 +5,7 @@ import { Logger } from '../logger';
 export async function resolveMega(url: string, account?: any) {
     try {
         Logger.log(`[Mega] Initializing decryption for: ${url}`, 'info');
+        Logger.log(`[Mega Debug] Attempting to load Mega attributes...`, 'debug');
         
         const node = File.fromURL(url);
         await node.loadAttributes();
@@ -13,6 +14,7 @@ export async function resolveMega(url: string, account?: any) {
 
         // If it's a single file, just return its node stream
         if (!node.directory) {
+            Logger.log(`[Mega Debug] Target is a direct file. Proceeding with stream.`, 'debug');
             return { 
                 success: true, 
                 isMegaStream: true,
@@ -32,7 +34,7 @@ export async function resolveMega(url: string, account?: any) {
             
             const ext = child.name?.toLowerCase().split('.').pop();
             if (['cbz', 'cbr', 'zip', 'rar'].includes(ext || '')) {
-                // FIX: Fallback to 0 if the size is undefined to satisfy TypeScript
+                // Fallback to 0 if the size is undefined to satisfy TypeScript
                 const childSize = child.size || 0;
 
                 Logger.log(`[Mega Debug] Evaluated child file: "${child.name}" | Ext: .${ext} | Size: ${Math.round(childSize/1024/1024)}MB`, 'debug');
@@ -46,11 +48,12 @@ export async function resolveMega(url: string, account?: any) {
         }
 
         if (!targetFile) {
-            Logger.log(`[Mega Debug] Failed to find a valid comic archive in the Mega folder.`, 'debug');
+            Logger.log(`[Mega Debug] Failed to find a valid comic archive inside the Mega folder.`, 'debug');
             return { success: false, error: "No comic files (.cbz, .cbr) found inside the Mega folder." };
         }
 
         Logger.log(`[Mega] Found file inside decrypted folder: ${targetFile.name}`, 'info');
+        Logger.log(`[Mega Debug] Selected target file: ${targetFile.name} (${Math.round(largestSize/1024/1024)}MB)`, 'debug');
         
         return { 
             success: true, 
@@ -60,6 +63,8 @@ export async function resolveMega(url: string, account?: any) {
         };
 
     } catch (error: any) {
+        // --- NEW: Added debug trace for decryption crashes ---
+        Logger.log(`[Mega Debug] Uncaught exception during decryption: ${error.message}`, 'debug');
         return { success: false, error: `Mega Error: ${error.message}` };
     }
 }

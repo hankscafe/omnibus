@@ -62,6 +62,7 @@ export async function initDatabase() {
             try {
                 const clients = JSON.parse(clientSetting.value);
                 for (const c of clients) {
+                    Logger.log(`[DB Init Debug] Migrating legacy download client: ${c.name} (${c.type})`, 'debug');
                     await prisma.downloadClient.create({
                         data: {
                             name: c.name, type: c.type, protocol: c.protocol || 'Torrent',
@@ -85,6 +86,7 @@ export async function initDatabase() {
             try {
                 const hooks = JSON.parse(webhookSetting.value);
                 for (const h of hooks) {
+                    Logger.log(`[DB Init Debug] Migrating legacy Discord webhook: ${h.name}`, 'debug');
                     await prisma.discordWebhook.create({
                         data: {
                             name: h.name, url: h.url, isActive: h.isActive ?? true,
@@ -106,6 +108,7 @@ export async function initDatabase() {
             try {
                 const indexers = JSON.parse(indexerSetting.value);
                 for (const idx of indexers) {
+                    Logger.log(`[DB Init Debug] Migrating legacy Prowlarr indexer: ${idx.name} (Priority: ${idx.priority ?? 25})`, 'debug');
                     await prisma.indexer.create({
                         data: {
                             id: idx.id, name: idx.name, protocol: idx.protocol || 'torrent',
@@ -170,6 +173,7 @@ export async function initDatabase() {
         if (seriesToMigrate.length > 0) {
             let migratedCount = 0;
             for (const s of seriesToMigrate) {
+                Logger.log(`[DB Init Debug] Evaluating legacy metadata structure for Series ID: ${s.id} (Current MetadataID: ${s.metadataId})`, 'debug');
                 // If old metadataId is purely numeric, it is a ComicVine ID
                 if (s.metadataId && !isNaN(Number(s.metadataId))) {
                     await prisma.series.update({
@@ -203,6 +207,7 @@ export async function initDatabase() {
         if (issuesToMigrate.length > 0) {
             let issueMigratedCount = 0;
             for (const i of issuesToMigrate) {
+                Logger.log(`[DB Init Debug] Evaluating legacy metadata structure for Issue ID: ${i.id}`, 'debug');
                 if (i.metadataId && !isNaN(Number(i.metadataId))) {
                     await prisma.issue.update({
                         where: { id: i.id },

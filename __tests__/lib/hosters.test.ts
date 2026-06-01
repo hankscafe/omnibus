@@ -20,20 +20,25 @@ describe('Download Pipeline: Hoster Engine', () => {
         vi.clearAllMocks();
     });
 
-    it('should resolve Pixeldrain links and attach Premium API headers if configured', async () => {
-        // Mock the database returning a premium Pixeldrain API key
+    it('should resolve Pixeldrain links, attach Premium API headers, and trace debug logs', async () => {
         mocks.findFirstHoster.mockResolvedValueOnce({ apiKey: 'premium_key_123', isActive: true });
-        
-        // Mock the HEAD check returning 200 OK
         vi.mocked(axios.head).mockResolvedValueOnce({ status: 200 } as any);
 
         const result = await HosterEngine.resolveLink('https://pixeldrain.com/u/FILE123', 'pixeldrain');
 
         expect(result.success).toBe(true);
         expect(result.directUrl).toBe('https://pixeldrain.com/api/file/FILE123');
-        
-        // Assert it generated the proper Basic Auth header for Pixeldrain's premium API
         expect(result.headers?.Authorization).toContain('Basic ');
+
+        // NEW: Assert our new debug logs traced the execution
+        expect(mocks.log).toHaveBeenCalledWith(
+            expect.stringContaining('[Hoster Engine] Attempting to resolve pixeldrain link...'),
+            'info'
+        );
+        expect(mocks.log).toHaveBeenCalledWith(
+            expect.stringContaining('[Pixeldrain Debug] Performing HEAD request to verify file availability'),
+            'debug'
+        );
     });
 
     it('should block Annas Archive automated downloads if no API key is present', async () => {

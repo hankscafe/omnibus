@@ -26,6 +26,8 @@ export const DownloadService = {
     const primaryCategory = categoryString.split(',')[0].trim();
     const networkHeaders = await getNetworkHeaders();
 
+    Logger.log(`[Download Service Debug] Preparing to add download to ${client.name} (${client.type}): Title: "${title}", URL: "${downloadUrl.substring(0, 60)}...", Category: ${primaryCategory}`, 'debug');
+
     const baseConfig = {
       headers: { 'User-Agent': 'Omnibus/1.0', ...networkHeaders },
       timeout: 30000 
@@ -405,6 +407,8 @@ export const DownloadService = {
 
           if (Array.isArray(listRes.data)) {
             const validTorrents = listRes.data.filter((t: any) => isAllowedCategory(t.category));
+            Logger.log(`[Download Service Debug] [qBit] Fetched ${listRes.data.length} total torrents. ${validTorrents.length} matched allowed categories (${allowedCategories.join(', ')}).`, 'debug');
+            
             allDownloads.push(...validTorrents.map((t: any) => ({
               id: t.hash, name: t.name, progress: (t.progress * 100).toFixed(1),
               status: t.state, clientName: client.name, size: (t.size / 1024 / 1024).toFixed(2) + " MB"
@@ -427,12 +431,14 @@ export const DownloadService = {
             const queueRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'queue', apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 15000 });
             if (queueRes.data.queue?.slots) {
                 const validSlots = queueRes.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
+                Logger.log(`[Download Service Debug] [SABnzbd] Fetched ${queueRes.data.queue.slots.length} queue items. ${validSlots.length} matched allowed categories.`, 'debug');
                 allDownloads.push(...validSlots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
             }
             try {
                 const historyRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'history', limit: 20, apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 15000 });
                 if (historyRes.data.history?.slots) {
                     const validHistory = historyRes.data.history.slots.filter((s: any) => isAllowedCategory(s.category));
+                    Logger.log(`[Download Service Debug] [SABnzbd] Fetched ${historyRes.data.history.slots.length} history items. ${validHistory.length} matched allowed categories.`, 'debug');
                     allDownloads.push(...validHistory.map((s: any) => ({
                         id: s.nzo_id, name: s.name, progress: s.status === 'Completed' ? "100.0" : "0.0", status: s.status, clientName: client.name, size: s.size
                     })));

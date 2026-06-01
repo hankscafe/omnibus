@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     downloadDirectFile: vi.fn().mockResolvedValue(true),
     importRequest: vi.fn().mockResolvedValue(true),
     seriesFindMany: vi.fn(),
+    log: vi.fn(),
     cronCb: { current: null as any }
 }));
 
@@ -27,6 +28,10 @@ vi.mock('@/lib/db', () => ({
         jobLog: { create: mocks.jobLogCreate },
         series: { findMany: mocks.seriesFindMany }
     }
+}));
+
+vi.mock('@/lib/logger', () => ({ 
+    Logger: { log: mocks.log } 
 }));
 
 vi.mock('@/lib/download-clients', () => ({
@@ -44,7 +49,7 @@ vi.mock('@/lib/queue', () => ({
     syncSchedules: vi.fn().mockResolvedValue(true)
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
+vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Cron Logic: Automated Download Checker', () => {
     beforeEach(() => {
@@ -130,7 +135,6 @@ describe('Cron Logic: Automated Download Checker', () => {
         initCronJobs();
         await mocks.cronCb.current();
 
-        // Assert the fuzzy logic calculated the similarity correctly and linked them
         expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
             where: { id: 'req_fuzzy' },
             data: expect.objectContaining({ 
@@ -138,8 +142,13 @@ describe('Cron Logic: Automated Download Checker', () => {
                 downloadLink: 'torrent_hash_123' 
             })
         }));
-
-        // Assert that because the progress was 100%, the importer was triggered
         expect(mocks.importRequest).toHaveBeenCalledWith('req_fuzzy');
+
+        // NEW: Assert our new debug log traced the successful match ratio calculation
+        expect(mocks.log).toHaveBeenCalledWith(
+            expect.stringContaining('[Cron Debug] Match SUCCESS! Ratio:'),
+            'debug'
+        );
     });
+
 });

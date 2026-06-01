@@ -36,6 +36,7 @@ export const SystemNotifier = {
             try {
                 const events = JSON.parse(config.pushover_events || '[]');
                 if (events.includes(event)) {
+                    Logger.log(`[Pushover Debug] Dispatching '${event}' alert.`, 'debug');
                     await axios.post('https://api.pushover.net/1/messages.json', {
                         token: config.pushover_token,
                         user: config.pushover_user,
@@ -52,6 +53,7 @@ export const SystemNotifier = {
             try {
                 const events = JSON.parse(config.telegram_events || '[]');
                 if (events.includes(event)) {
+                    Logger.log(`[Telegram Debug] Dispatching '${event}' alert to chat ${config.telegram_chat_id}.`, 'debug');
                     const text = `*${title}*\n${message}`;
                     await axios.post(`https://api.telegram.org/bot${config.telegram_bot_token}/sendMessage`, {
                         chat_id: config.telegram_chat_id,
@@ -67,6 +69,7 @@ export const SystemNotifier = {
              try {
                 const events = JSON.parse(config.apprise_events || '[]');
                 if (events.includes(event)) {
+                    Logger.log(`[Apprise Debug] Dispatching '${event}' alert to ${config.apprise_url}.`, 'debug');
                     await axios.post(config.apprise_url, {
                         title: title,
                         body: message,

@@ -59,6 +59,8 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   const acronyms = await getCustomAcronyms();
   const queries = generateSearchQueries(searchName, year, acronyms, isManga);
 
+  Logger.log(`[Automation Debug] Generated queries for "${name}": ${JSON.stringify(queries)}`, 'debug');
+
   // --- THE FIX: Reordered to safely consume .mockResolvedValueOnce() during testing ---
   const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
   const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
@@ -95,6 +97,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
       for (const query of queries) {
           getComicsResults = (await GetComicsService.search(query, false, isManga, name, year)) || [];
+          Logger.log(`[Automation Debug] GetComics search for "${query}" returned ${getComicsResults.length} results.`, 'debug');
           if (getComicsResults.length > 0) break;
       }
       
@@ -176,7 +179,11 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       for (const query of queries) {
           Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
           const prowlarrResults = (await ProwlarrService.searchComics(query, false, isManga, year)) || [];
+          Logger.log(`[Automation Debug] Prowlarr search for "${query}" returned ${prowlarrResults.length} raw results.`, 'debug');
+          
           healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
+          Logger.log(`[Automation Debug] ${healthyResults.length} healthy results remained after filtering 0-seeder torrents.`, 'debug');
+          
           if (healthyResults.length > 0) break; 
           await new Promise(resolve => setTimeout(resolve, 2000));
       }
@@ -200,12 +207,18 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
         const scoreRelease = (release: any) => {
             let localScore = (release.seeders || 0) + ((release.peers || 0) * 0.5);
             const titleLower = release.title.toLowerCase();
+            
+            let appliedRules: string[] = [];
 
             for (const rule of scoringRules) {
                 if (titleLower.includes(rule.term.toLowerCase())) {
                     localScore += rule.score;
+                    appliedRules.push(`${rule.term}(${rule.score > 0 ? '+' : ''}${rule.score})`);
                 }
             }
+            
+            Logger.log(`[Automation Debug] Scored Prowlarr release "${release.title}": Base Seed/Peer Score: ${(release.seeders || 0) + ((release.peers || 0) * 0.5)}, Applied Rules: [${appliedRules.join(', ')}], Final Score: ${localScore}`, 'debug');
+            
             return localScore;
         };
 

@@ -21,7 +21,10 @@ export const Mailer = {
     });
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
-    if (config.smtp_enabled !== 'true' || !config.smtp_host) return null;
+    if (config.smtp_enabled !== 'true' || !config.smtp_host) {
+        Logger.log(`[Mailer Debug] SMTP is disabled or missing host configuration. Skipping email alert.`, 'debug');
+        return null;
+    }
 
     let nodemailer;
     try {
@@ -153,7 +156,12 @@ export const Mailer = {
                  return; 
          }
 
-         if (to.length === 0) return;
+         if (to.length === 0) {
+             Logger.log(`[Mailer Debug] No recipients resolved for event '${event}'. Skipping SMTP dispatch.`, 'debug');
+             return;
+         }
+
+         Logger.log(`[Mailer Debug] Dispatching '${event}' email to ${to.join(', ')} via SMTP...`, 'debug');
 
          await mailConfig.transporter.sendMail({
              from: `"Omnibus" <${mailConfig.from}>`,

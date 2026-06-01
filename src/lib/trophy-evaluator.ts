@@ -15,6 +15,8 @@ export async function evaluateTrophies(userId: string) {
         const unearnedTrophies = allTrophies.filter(t => !earnedIds.has(t.id));
 
         if (unearnedTrophies.length === 0) return; // User has unlocked everything!
+        
+        Logger.log(`[Trophy Debug] Evaluating ${unearnedTrophies.length} unearned trophies for user ${userId}...`, 'debug');
 
         // 3. Gather User Stats
         // READ_COUNT: Number of fully completed issues
@@ -39,21 +41,32 @@ export async function evaluateTrophies(userId: string) {
                 .filter(Boolean)
         );
         const publisherCount = publishers.size;
+        
+        Logger.log(`[Trophy Debug] User Stats - Read: ${readCount}, Requests: ${requestCount}, Publishers: ${publisherCount}`, 'debug');
 
         // 4. Evaluate Unearned Trophies against the gathered stats
         const newlyEarned = [];
         for (const trophy of unearnedTrophies) {
             let achieved = false;
+            let currentValue = 0;
+            
             switch (trophy.actionType) {
                 case 'READ_COUNT':
                     achieved = readCount >= trophy.targetValue;
+                    currentValue = readCount;
                     break;
                 case 'REQUEST_COUNT':
                     achieved = requestCount >= trophy.targetValue;
+                    currentValue = requestCount;
                     break;
                 case 'PUBLISHER_COUNT':
                     achieved = publisherCount >= trophy.targetValue;
+                    currentValue = publisherCount;
                     break;
+            }
+            
+            if (!achieved) {
+                Logger.log(`[Trophy Debug] Failed condition for '${trophy.name}'. (Target: ${trophy.targetValue} ${trophy.actionType} | Current: ${currentValue})`, 'debug');
             }
 
             if (achieved) newlyEarned.push(trophy);
@@ -61,6 +74,8 @@ export async function evaluateTrophies(userId: string) {
 
         // 5. Award Trophies & Send In-App Notifications!
         for (const trophy of newlyEarned) {
+            Logger.log(`[Trophy] Awarding achievement '${trophy.name}' to user ${userId}!`, 'success');
+            
             // Add to UserTrophy link table
             await prisma.userTrophy.create({
                 data: {

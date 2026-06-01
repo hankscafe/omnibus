@@ -487,6 +487,8 @@ export const Importer = {
         }
     }
 
+    Logger.log(`[Importer Debug] Library Resolution -> isManga: ${isManga}, Target Library: "${targetLibrary?.name}", Path: "${targetLibrary?.path}"`, 'debug');
+
     const libraryRoot = targetLibrary?.path;
 
     if (!libraryRoot) {
@@ -505,7 +507,9 @@ export const Importer = {
     const publisherName = (series?.publisher && series.publisher !== "Unknown") ? sanitize(series.publisher) : "Other";
     const seriesYearFromMeta = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
     const seriesNameFromMeta = series?.name || cleanSeriesName;
-    
+         
+    Logger.log(`[Importer Debug] Applying Folder Pattern: "${folderPattern}" | Variables -> Publisher: "${publisherName}", Series: "${seriesNameFromMeta}", Year: "${seriesYearFromMeta}"`, 'debug');
+
     let relFolderPath = folderPattern
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
@@ -555,6 +559,8 @@ export const Importer = {
         destFolder = idealDestFolder;
     }
 
+    Logger.log(`[Importer Debug] Evaluated Folder Pattern: Publisher="${publisherName}", Series="${seriesNameFromMeta}", Year="${seriesYearFromMeta}" -> Result: ${destFolder}`, 'debug');
+
     let pageCount = 0;
     let xmlMeta: any = null;
 
@@ -601,7 +607,8 @@ export const Importer = {
 
     let fileName = `${sanitize(newFileName)}${ext}`;
     let finalPath = path.join(destFolder, fileName);
-
+    
+    Logger.log(`[Importer Debug] Evaluated File Pattern: Issue="${formattedNum}", IssueYear="${issueYearFromMeta}" -> Result: ${fileName}`, 'debug');
     Logger.log(`[Importer Debug] Target move operation: [${actualSourceFile}] -> [${finalPath}]`, 'debug');
 
     try {

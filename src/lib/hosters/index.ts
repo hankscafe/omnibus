@@ -27,26 +27,42 @@ export const HosterEngine = {
             where: { hoster, isActive: true }
         });
 
+        Logger.log(`[Hoster Engine Debug] Account configuration for ${hoster}: ${account ? 'Active (Premium)' : 'None (Anonymous)'}`, 'debug');
+
         try {
+            let result: HosterResolveResult;
+
             switch (hoster) {
                 case 'mediafire':
-                    return await resolveMediaFire(url, account);
+                    result = await resolveMediaFire(url, account);
+                    break;
                 case 'pixeldrain':
-                    return await resolvePixeldrain(url, account);
+                    result = await resolvePixeldrain(url, account);
+                    break;
                 case 'mega':
-                    return await resolveMega(url, account);
+                    result = await resolveMega(url, account);
+                    break;
                 case 'rootz':
-                    return await resolveRootz(url, account);
+                    result = await resolveRootz(url, account);
+                    break;
                 case 'vikingfile':
-                    return await resolveVikingfile(url, account);
+                    result = await resolveVikingfile(url, account);
+                    break;
                 case 'terabox':
-                    return await resolveTerabox(url, account);
+                    result = await resolveTerabox(url, account);
+                    break;
                 case 'annas_archive':
-                    return await resolveAnnasArchive(url, account);
+                    result = await resolveAnnasArchive(url, account);
+                    break;
                 default:
-                    return { success: false, error: `No resolver found for hoster: ${hoster}` };
+                    result = { success: false, error: `No resolver found for hoster: ${hoster}` };
             }
+
+            Logger.log(`[Hoster Engine Debug] Resolution result for ${hoster}: ${result.success ? 'Success' : 'Failed'}`, 'debug');
+            return result;
+
         } catch (error: any) {
+            Logger.log(`[Hoster Engine Debug] Uncaught exception during resolution: ${error.message}`, 'debug');
             Logger.log(`[Hoster Engine] Resolution failed for ${hoster}: ${error.message}`, 'error');
             return { success: false, error: error.message };
         }

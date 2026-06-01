@@ -368,6 +368,7 @@ export function initWorker() {
 
                     let firstTable = true;
                     for (const table of tables) {
+                        Logger.log(`[Backup Debug] Exporting table: ${table.name}`, 'debug');
                         if (!firstTable) cipher.write(',');
                         firstTable = false;
                         cipher.write(`"${table.name}":[`);
@@ -597,6 +598,7 @@ export function initWorker() {
 
                             if (meta && meta.metadataId && meta.series) {
                                 const safePublisher = meta.publisher || "Other";
+                                Logger.log(`[Watched Sync Debug] Parsed ComicInfo for ${file}: Series="${meta.series}", Issue="${meta.number}", Publisher="${safePublisher}"`, 'debug');
                                 
                                 const existingSeries = await prisma.series.findUnique({
                                     where: { 
@@ -749,6 +751,7 @@ export function initWorker() {
 
                                 successCount++;
                             } else {
+                                Logger.log(`[Watched Sync Debug] Failed to parse sufficient metadata for ${file}. Moving to unmatched folder.`, 'debug');
                                 const finalUnmatchedPath = path.join(unmatchedDir, path.basename(filePath));
                                 await fs.move(filePath, finalUnmatchedPath, { overwrite: true });
                                 unmatchedCount++;
@@ -877,6 +880,7 @@ export function initWorker() {
                     for (const series of seriesToSync) {
                         try {
                             if (!series.metadataId) continue;
+                            Logger.log(`[Metadata Sync Debug] Syncing metadata for series: "${series.name}" (${series.metadataSource} ID: ${series.metadataId})`, 'debug');
                             await syncSeriesMetadata(series.metadataId, series.folderPath, series.metadataSource);
                             
                             await prisma.series.update({ 
@@ -1060,6 +1064,7 @@ export function initWorker() {
                                 }
                                 
                                 if (matchedSeries) {
+                                    Logger.log(`[Series Monitor Debug] Upcoming Metron issue "${mIssue.name || mNumStr}" matched to local series "${matchedSeries.name}"`, 'debug');
                                     let issueDate = mIssue.store_date || mIssue.cover_date || null;
                                     const searchName = `${matchedSeries.name} #${mNumStr}`;
                                     const isReleased = isReleasedYet(mIssue.store_date, mIssue.cover_date);
@@ -1095,7 +1100,10 @@ export function initWorker() {
 
                                     if (matchedSeries.monitored) {
                                         const alreadyInLibrary = matchedSeries.issues.some((i: any) => isSameIssue(i.number, mNumStr) && i.filePath && i.filePath.length > 0);
-                                        if (alreadyInLibrary) continue;
+                                        if (alreadyInLibrary) {
+                                            Logger.log(`[Series Monitor Debug] Issue ${mNumStr} is already downloaded in library. Skipping request.`, 'debug');
+                                            continue;
+                                        }
 
                                         const alreadyReq = allRequests.find(r => {
                                             if (r.volumeId !== (matchedSeries.metadataId || matchedSeries.id)) return false;
@@ -1176,7 +1184,7 @@ export function initWorker() {
                                 for (const cvIssue of cvIssues) {
                                     const cvNumStr = cvIssue.issue_number?.toString();
                                     if (!cvNumStr) continue;
-
+                                    Logger.log(`[Series Monitor Debug] Evaluating ComicVine issue #${cvNumStr} for series "${seriesRecord.name}"`, 'debug');
                                     const alreadyInLibrary = seriesRecord.issues.some((i: any) => isSameIssue(i.number, cvNumStr) && i.filePath && i.filePath.length > 0);
                                     const searchName = `${seriesRecord.name} #${cvIssue.issue_number}`;
                                     
@@ -1444,14 +1452,19 @@ export function initWorker() {
                     const mangaPublishersList = config.manga_publishers ? config.manga_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : DEFAULT_MANGA_PUBLISHERS;
 
                     const isValid = (item: any) => {
-                        const pubName = (item.volume?.publisher?.name || '').toLowerCase().trim();
-                        const volName = (item.volume?.name || '').toLowerCase().trim();
-                        const concepts = item.volume?.concepts || [];
-
-                        if (filterEnabled) {
-                            if (blockedPublishers.length > 0 && blockedPublishers.some((bp: string) => pubName.includes(bp))) return false;
-                            if (blockedKeywords.length > 0 && blockedKeywords.some((bk: string) => volName.includes(bk))) return false;
-                        }
+                            const pubName = (item.volume?.publisher?.name || '').toLowerCase().trim();
+                            const volName = (item.volume?.name || '').toLowerCase().trim();
+                            const concepts = item.volume?.concepts || [];
+                            if (filterEnabled) {
+                                if (blockedPublishers.length > 0 && blockedPublishers.some((bp: string) => pubName.includes(bp))) {
+                                    Logger.log(`[Discover Sync Debug] Filtered out "${volName}" due to blocked publisher: ${pubName}`, 'debug');
+                                    return false;
+                                }
+                                if (blockedKeywords.length > 0 && blockedKeywords.some((bk: string) => volName.includes(bk))) {
+                                    Logger.log(`[Discover Sync Debug] Filtered out "${volName}" due to blocked keyword`, 'debug');
+                                    return false;
+                                }
+                            }
 
                         const isMangaPublisher = mangaPublishersList.some((mp: string) => pubName.includes(mp));
                         const hasMangaConcept = concepts.some((c: any) => ['manga', 'shonen', 'seinen', 'shojo', 'josei', 'manhwa', 'manhua', 'webtoon'].includes((c.name || '').toLowerCase()));

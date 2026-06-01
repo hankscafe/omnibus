@@ -179,8 +179,8 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
         };
 
         const jsonPath = path.join(series.folderPath, 'series.json');
+        Logger.log(`[Metadata Writer Debug] Exporting Komga-compatible series.json to: ${jsonPath}`, 'debug');
         await fs.writeFile(jsonPath, JSON.stringify(komgaMetadata, null, 2), 'utf-8');
-
         return true;
     } catch (error) {
         Logger.log(`[Writer] Failed to write series.json for ${seriesId}: ${getErrorMessage(error)}`, 'error');

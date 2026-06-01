@@ -103,8 +103,16 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 where: { seriesId: series.id }
             });
 
+            let latestDateMs = 0;
+            
             for (const issue of issues) {
                 const issueNumStr = issue.issueNumber;
+
+                const issueDate = issue.releaseDate;
+                if (issueDate) {
+                    const ts = new Date(issueDate).getTime();
+                    if (!isNaN(ts) && ts > latestDateMs) latestDateMs = ts;
+                }
                 
                 const existingByMetaId = await prisma.issue.findFirst({ 
                     where: { metadataId: issue.sourceId, metadataSource: 'METRON' } 
@@ -149,6 +157,17 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     });
                 }
                 syncedCount++;
+            }
+
+            if (details.status !== 'Ended' && latestDateMs > 0) {
+                const cutoffMs = Date.now() - (545 * 24 * 60 * 60 * 1000); // 1.5 years
+                if (latestDateMs < cutoffMs) {
+                    await prisma.series.update({
+                        where: { id: series.id },
+                        data: { status: 'Ended' }
+                    });
+                    Logger.log(`[Metadata] Series "${series.name}" marked as Ended due to >1.5 years of inactivity.`, 'info');
+                }
             }
 
             try {
@@ -254,6 +273,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let issuesCallsMade = 0;
 
     Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
+    let latestDateMs = 0;
     while (offset < totalResults && loopCount < 20) {
         Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
         let issueRes;
@@ -284,6 +304,12 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
         for (const cvIssue of cvIssues) {
             const issueNumStr = cvIssue.issue_number?.toString() || "0";
+
+            const issueDate = cvIssue.store_date || cvIssue.cover_date || null;
+            if (issueDate) {
+                const ts = new Date(issueDate).getTime();
+                if (!isNaN(ts) && ts > latestDateMs) latestDateMs = ts;
+            }
 
             const existingByCvId = await prisma.issue.findFirst({ 
                 where: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE' } 
@@ -336,6 +362,21 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         loopCount++;
         
         await new Promise(r => setTimeout(r, 3000));
+    }
+
+    if (!volData.end_year && latestDateMs > 0) {
+        const cutoffMs = Date.now() - (545 * 24 * 60 * 60 * 1000); // 1.5 years
+        if (latestDateMs < cutoffMs) {
+            await prisma.series.update({
+                where: { id: series.id },
+                data: { status: 'Ended' }
+            });
+            Logger.log(`[Metadata] Series "${series.name}" marked as Ended due to >1.5 years of inactivity.`, 'info');
+        }
+    }
+
+    if (issuesCallsMade > 0) {
+        await logApiUsage('comicvine', '/issues', issuesCallsMade);
     }
 
     if (issuesCallsMade > 0) {

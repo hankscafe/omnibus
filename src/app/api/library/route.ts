@@ -238,7 +238,8 @@ export async function GET(request: Request) {
             matchState: s.matchState,
             monitored: s.monitored,
             isManga: s.isManga,
-            isPendingReq: downloadedIssues.length === 0
+            isPendingReq: downloadedIssues.length === 0,
+            status: s.status
         }
     });
 
@@ -321,6 +322,15 @@ export async function POST(request: Request) {
                 data: { isManga }
             });
             await AuditLogger.log('BULK_UPDATE_MANGA', { isManga, seriesCount: seriesIds.length }, userId);
+            return NextResponse.json({ success: true });
+        }
+
+        if (action === 'bulk-status') {
+            await prisma.series.updateMany({
+                where: { id: { in: seriesIds } },
+                data: { status: status } // status will be 'Ongoing' or 'Ended' from the frontend
+            });
+            await AuditLogger.log('BULK_UPDATE_STATUS', { status, seriesCount: seriesIds.length }, userId);
             return NextResponse.json({ success: true });
         }
 

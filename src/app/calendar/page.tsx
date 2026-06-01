@@ -26,7 +26,9 @@ interface UpcomingIssue {
     seriesPath?: string;
     year?: string;
     metadataSource?: string;
-    parsedDay?: string; 
+    parsedDay?: string;
+    monitored?: boolean;
+    inLibrary?: boolean; 
 }
 
 export default function CalendarPage() {
@@ -366,19 +368,35 @@ export default function CalendarPage() {
 
                                         const issueTargetName = compositeName;
                                         const isIssueRequested = requestedIssues.has(issueTargetName);
-                                        const isVolRequested = requestedVolumes.has(issue.volumeId!);
                                         const volIdKey = issue.volumeId || 0;
+                                        const isVolRequested = requestedVolumes.has(Number(volIdKey));
+                                        
+                                        const isMonitored = issue.monitored || isVolRequested;
+                                        const inLibrary = issue.inLibrary || isVolRequested;
 
                                         return (
                                         <Card key={issue.id} className="group shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors">
                                             <div className="relative aspect-[2/3] w-full bg-muted border-b border-border overflow-hidden">
                                                 {issue.coverUrl ? <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" /> : <ImageIcon className="w-8 h-8 text-muted-foreground/30 m-auto h-full" />}
                                                 
+                                                {/* Status Badges */}
+                                                <div className="absolute top-2 left-2 flex flex-col gap-1 z-20 pointer-events-none">
+                                                    {isMonitored ? (
+                                                        <div className="bg-emerald-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest shadow-md">
+                                                            Monitored
+                                                        </div>
+                                                    ) : inLibrary ? (
+                                                        <div className="bg-blue-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest shadow-md">
+                                                            Series in Library
+                                                        </div>
+                                                    ) : null}
+                                                </div>
+
                                                 {/* Desktop Only Hover Overlay */}
                                                 <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex flex-col items-center justify-center z-10 p-2 gap-2">
-                                                    {isVolRequested ? (
+                                                    {isMonitored ? (
                                                         <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100">
-                                                            <Check className="w-4 h-4 mr-2"/> Subscribed
+                                                            <Check className="w-4 h-4 mr-2"/> {inLibrary ? "Monitored" : "Subscribed"}
                                                         </Button>
                                                     ) : (
                                                         <Button 
@@ -404,7 +422,7 @@ export default function CalendarPage() {
                                                             size="sm" 
                                                             variant="outline"
                                                             className="w-full font-bold text-white border-white/30 hover:bg-white/20"
-                                                            disabled={requestingTarget === `iss-${issueTargetName}` || isVolRequested}
+                                                            disabled={requestingTarget === `iss-${issueTargetName}` || isMonitored}
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
@@ -438,9 +456,9 @@ export default function CalendarPage() {
 
                                                 {/* Mobile Always-Visible Buttons */}
                                                 <div className="flex sm:hidden flex-col gap-1.5 mt-3 pt-3 border-t border-border">
-                                                    {isVolRequested ? (
+                                                    {isMonitored ? (
                                                         <Button size="sm" variant="secondary" disabled className="w-full text-[10px] font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100 h-8">
-                                                            <Check className="w-3 h-3 mr-1.5"/> Subscribed
+                                                            <Check className="w-3 h-3 mr-1.5"/> {inLibrary ? "Monitored" : "Subscribed"}
                                                         </Button>
                                                     ) : (
                                                         <Button 
@@ -466,7 +484,7 @@ export default function CalendarPage() {
                                                             size="sm" 
                                                             variant="outline"
                                                             className="w-full text-[10px] font-bold text-primary border-primary/30 bg-primary/10 hover:bg-primary/20 h-8"
-                                                            disabled={requestingTarget === `iss-${issueTargetName}` || isVolRequested}
+                                                            disabled={requestingTarget === `iss-${issueTargetName}` || isMonitored}
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();

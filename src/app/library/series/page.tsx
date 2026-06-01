@@ -263,7 +263,8 @@ function SeriesContent() {
                 year: data.year ? data.year.toString() : "",
                 cvId: data.metadataId ? data.metadataId.toString() : (data.cvId ? data.cvId.toString() : ""),
                 monitored: data.monitored || false,
-                isManga: data.isManga || false
+                isManga: data.isManga || false,
+                status: data.status || 'Ongoing'
             });
 
             // --- FIX: Intelligently fallback to the first missing issue if nothing is downloaded yet ---
@@ -586,7 +587,8 @@ function SeriesContent() {
                   publisher: editForm.publisher,
                   cvId: editForm.cvId || "",
                   monitored: editForm.monitored,
-                  isManga: editForm.isManga
+                  isManga: editForm.isManga,
+                  status: editForm.status
               })
           });
           if (!res.ok) throw new Error("Failed to save info.");
@@ -1787,6 +1789,19 @@ function SeriesContent() {
                   <div className="grid gap-2"><Label>Publisher</Label><Input value={editForm.publisher} onChange={(e) => setEditForm({...editForm, publisher: e.target.value})} className="bg-background border-border" /></div>
                   <div className="grid gap-2"><Label>Series Name</Label><Input value={editForm.name} onChange={(e) => setEditForm({...editForm, name: e.target.value})} className="bg-background border-border" /></div>
                   <div className="grid gap-2"><Label>Year</Label><Input value={editForm.year} onChange={(e) => setEditForm({...editForm, year: e.target.value})} className="bg-background border-border" /></div>
+                  
+                  <div className="grid gap-2">
+                      <Label>Status</Label>
+                      <Select value={editForm.status} onValueChange={(v) => setEditForm({...editForm, status: v})}>
+                          <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                              <SelectValue placeholder="Ongoing" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-popover border-border">
+                              <SelectItem value="Ongoing">Ongoing</SelectItem>
+                              <SelectItem value="Ended">Ended</SelectItem>
+                          </SelectContent>
+                      </Select>
+                  </div>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
                       <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border">

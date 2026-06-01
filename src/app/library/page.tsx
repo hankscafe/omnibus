@@ -43,7 +43,6 @@ interface Comic {
   [key: string]: any;
 }
 
-// --- NEW: Added the missing Metadata fields to the Interface ---
 interface LibrarySeries {
   id: string;
   path: string;
@@ -62,6 +61,7 @@ interface LibrarySeries {
   isManga?: boolean;
   matchState?: string;
   isPendingReq?: boolean;
+  status?: string | null;
 }
 
 interface Collection {
@@ -128,7 +128,6 @@ function LibraryContent() {
   const [randomTrigger, setRandomTrigger] = useState(0)
 
   const [confirmOpen, setConfirmOpen] = useState(false)
-  // --- NEW: Using the new explicit Metadata variables ---
   const [refreshTarget, setRefreshTarget] = useState<{metadataId: string, metadataSource: string, path: string} | null>(null)
   
   const [collections, setCollections] = useState<Collection[]>([])
@@ -572,7 +571,8 @@ function LibraryContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             currentPath: editing.path, name: editing.name, year: editing.year, publisher: editing.publisher, 
-            cvId: editing.cvId ? editing.cvId : null, monitored: editing.monitored, isManga: editing.isManga
+            cvId: editing.cvId ? editing.cvId : null, monitored: editing.monitored, isManga: editing.isManga,
+            status: editing.status || 'Ongoing'
         })
       });
       if (res.ok) {
@@ -586,13 +586,11 @@ function LibraryContent() {
     } catch (e: any) { toastRef.current({ title: "Error", description: e.message, variant: "destructive" }); } finally { setUpdating(false) }
   }
 
-  // --- NEW: Using the new explicit Metadata variables ---
   const initiateRefreshMetadata = (metadataId: string | undefined | null, metadataSource: string, folderPath: string) => {
     if (!metadataId) { toastRef.current({ title: "Missing ID", description: "This folder isn't linked to an external provider ID. Use 'Edit Info' to map it to ComicVine." }); return; }
     setRefreshTarget({ metadataId, metadataSource, path: folderPath }); setConfirmOpen(true);
   }
 
-  // --- NEW: Passes the exact payload to the API ---
   const handleConfirmedRefresh = async () => {
     if (!refreshTarget) return;
     setLoading(true); setConfirmOpen(false);
@@ -651,7 +649,6 @@ function LibraryContent() {
       } catch (e) { toastRef.current({ title: "Error", variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
-  // --- NEW: Adjusted to use the correct Database fields ---
   const handleBulkRefresh = async () => {
       const seriesList = series.filter(s => selectedSeries.has(s.id));
       setIsBulkProcessing(true);
@@ -1228,6 +1225,13 @@ function LibraryContent() {
                               <ArrowRightLeft className="w-4 h-4 mr-2 text-green-500" /> Move to Comics
                           </DropdownMenuItem>
                           <DropdownMenuSeparator className="bg-border" />
+                          <DropdownMenuItem onClick={() => handleBulkAdvanced('bulk-status', 'Ongoing')} className="cursor-pointer font-medium h-10 sm:h-8 hover:bg-muted">
+                              <Check className="w-4 h-4 mr-2 text-green-500" /> Mark as Ongoing
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleBulkAdvanced('bulk-status', 'Ended')} className="cursor-pointer font-medium h-10 sm:h-8 hover:bg-muted">
+                              <EyeOff className="w-4 h-4 mr-2 text-red-500" /> Mark as Ended
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator className="bg-border" />
                           <DropdownMenuItem onClick={() => setRenameModalOpen(true)} className="cursor-pointer font-medium h-10 sm:h-8 hover:bg-muted">
                               <FileEdit className="w-4 h-4 mr-2 text-indigo-500" /> Standardize File Names
                           </DropdownMenuItem>
@@ -1483,6 +1487,20 @@ function LibraryContent() {
                     <div className="grid gap-2"><Label htmlFor="publisher">Publisher</Label><Input id="publisher" value={editing.publisher || ""} onChange={e => setEditing({...editing, publisher: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
                     <div className="grid gap-2"><Label htmlFor="name">Series Name</Label><Input id="name" value={editing.name || ""} onChange={e => setEditing({...editing, name: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
                     <div className="grid gap-2"><Label htmlFor="year">Year</Label><Input id="year" type="number" value={editing.year || ""} onChange={e => setEditing({...editing, year: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
+                    
+                    <div className="grid gap-2">
+                        <Label htmlFor="status">Status</Label>
+                        <Select value={editing.status || "Ongoing"} onValueChange={v => setEditing({...editing, status: v})}>
+                            <SelectTrigger id="status" className="bg-background border-border h-12 sm:h-10">
+                                <SelectValue placeholder="Ongoing" />
+                            </SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                <SelectItem value="Ongoing">Ongoing</SelectItem>
+                                <SelectItem value="Ended">Ended</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
                         <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border"><Switch id="monitor-switch" checked={editing.monitored || false} onCheckedChange={v => setEditing({...editing, monitored: v})} /><Label htmlFor="monitor-switch" className="cursor-pointer">Monitor Series</Label></div>
                         <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border"><Switch id="manga-switch" checked={editing.isManga || false} onCheckedChange={v => setEditing({...editing, isManga: v})} /><Label htmlFor="manga-switch" className="cursor-pointer">Flag as Manga</Label></div>

@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id || 'System';
 
-    const { currentPath, name, year, publisher, cvId, monitored, isManga } = await request.json();
+    const { currentPath, name, year, publisher, cvId, monitored, isManga, status } = await request.json();
 
     const parsedIsManga = isManga === true || isManga === 'true' || isManga === 'on' || isManga === 1;
     const parsedMonitored = monitored === true || monitored === 'true' || monitored === 'on' || monitored === 1;
@@ -91,7 +91,8 @@ export async function POST(request: Request) {
                 cvId: parsedCvId !== null && isCv ? parsedCvId : existingRecord.cvId,
                 metronId: parsedCvId !== null && isMetron ? parsedCvId : existingRecord.metronId,
                 metadataSource: existingRecord.metadataSource || 'COMICVINE',
-                libraryId: targetLib.id
+                libraryId: targetLib.id,
+                status: status || existingRecord.status
             }
         });
 
@@ -128,11 +129,13 @@ export async function POST(request: Request) {
             where: { metadataSource_metadataId: { metadataSource: 'COMICVINE', metadataId: parsedCvId.toString() } },
             update: {
                 name: cleanName, year: parsedYear, publisher: publisher || null,
-                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
+                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
+                status: status || undefined
             },
             create: {
                 metadataId: parsedCvId.toString(), metadataSource: 'COMICVINE', matchState: 'MATCHED', name: cleanName, year: parsedYear, publisher: publisher || null,
-                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id
+                folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
+                status: status || 'Ongoing'
             }
         });
     }

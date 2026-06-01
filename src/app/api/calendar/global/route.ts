@@ -30,8 +30,8 @@ export async function GET(request: Request) {
         const endDateStr = end.toISOString().split('T')[0];
         const todayStr = today.toISOString().split('T')[0];
         
-        // --- BUMP CACHE TO v14 TO DESTROY PREVIOUS BROKEN EMPTY CACHES ---
-        const cacheKey = `calendar_global_v14_${todayStr}_offset_${weekOffset}`;
+        // --- BUMP CACHE TO v15 TO INCLUDE MONITORED/LIBRARY STATUS ---
+        const cacheKey = `calendar_global_v15_${todayStr}_offset_${weekOffset}`;
         
         const cache = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
 
@@ -137,7 +137,9 @@ export async function GET(request: Request) {
                 releaseDate: issue.store_date || issue.cover_date,
                 coverUrl: issue.image || null,
                 description: issue.desc || issue.description || null,
-                year: issue.series?.year_began?.toString() || startDateStr.split('-')[0]
+                year: issue.series?.year_began?.toString() || startDateStr.split('-')[0],
+                monitored: localMatch?.monitored || false,
+                inLibrary: !!localMatch
             };
         });
 
@@ -183,8 +185,13 @@ export async function GET(request: Request) {
         const oldDate = new Date(today);
         oldDate.setUTCDate(today.getUTCDate() - 1);
         const oldDateStr = oldDate.toISOString().split('T')[0];
+        
         await prisma.systemSetting.deleteMany({ 
-            where: { key: { startsWith: `calendar_global_v14_${oldDateStr}` } } 
+            where: { key: { startsWith: `calendar_global_v14_` } } 
+        }).catch(()=>{});
+        
+        await prisma.systemSetting.deleteMany({ 
+            where: { key: { startsWith: `calendar_global_v15_${oldDateStr}` } } 
         }).catch(()=>{});
 
         return NextResponse.json({ startDate: startDateStr, endDate: endDateStr, releases: formattedReleases });

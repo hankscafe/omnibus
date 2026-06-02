@@ -637,12 +637,14 @@ export function initWorker() {
                                 const safeSeries = sanitize(meta.series);
                                 const safeYear = meta.year ? meta.year.toString() : "";
                                 const safePub = sanitize(safePublisher);
+                                const universeName = meta.universe || "";
 
                                 let relFolderPath = folderPattern
                                     .replace(/{Publisher}/gi, safePub)
                                     .replace(/{Series}/gi, safeSeries)
                                     .replace(/{Year}/gi, safeYear)
                                     .replace(/{VolumeYear}/gi, safeYear)
+                                    .replace(/{UniverseName}/gi, sanitize(universeName))
                                     .replace(/\(\s*\)/g, '')
                                     .replace(/\[\s*\]/g, '')
                                     .replace(/\s+/g, ' ')
@@ -657,6 +659,8 @@ export function initWorker() {
                                 const issueYear = meta.year ? meta.year.toString() : safeYear;
                                 const filePatToUse = isManga ? mangaFilePattern : filePattern;
                                 
+                                const issueTitle = meta.title || "";
+
                                 const newFileName = filePatToUse
                                     .replace(/{Publisher}/gi, safePub)
                                     .replace(/{Series}/gi, safeSeries)
@@ -664,8 +668,12 @@ export function initWorker() {
                                     .replace(/{VolumeYear}/gi, safeYear)
                                     .replace(/{IssueYear}/gi, issueYear)
                                     .replace(/{Issue}/gi, formattedNum)
+                                    .replace(/{IssueTitle}/gi, sanitize(issueTitle))
+                                    .replace(/{UniverseName}/gi, sanitize(universeName))
                                     .replace(/\(\s*\)/g, '')
                                     .replace(/\[\s*\]/g, '')
+                                    .replace(/\s*-\s*-/g, ' - ') // Collapses double hyphens (e.g., " -  - " becomes " - ")
+                                    .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // Removes any leading or trailing hyphens
                                     .replace(/\s+/g, ' ')
                                     .trim();
 
@@ -726,7 +734,8 @@ export function initWorker() {
                                         metadataSource: meta.metadataSource,
                                         matchState: 'MATCHED', 
                                         isManga, 
-                                        libraryId: targetLib.id
+                                        libraryId: targetLib.id,
+                                        universe: universeName
                                     }
                                 });
 

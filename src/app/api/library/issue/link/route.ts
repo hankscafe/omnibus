@@ -74,6 +74,14 @@ export async function POST(request: NextRequest) {
             ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
             : (config.file_naming_pattern || "{Series} #{Issue}");
 
+        // --- NEW: Add Issue Title extraction & cleanup ---
+        let cleanIssueName = targetIssue.name || "";
+        if (safeName && cleanIssueName.startsWith(`${safeName} #${targetIssue.number}: `)) {
+            cleanIssueName = cleanIssueName.replace(`${safeName} #${targetIssue.number}: `, '');
+        } else if (safeName && cleanIssueName === `${safeName} #${targetIssue.number}`) {
+            cleanIssueName = "";
+        }
+
         // 4. Generate the new file name (Added {VolumeYear} and {IssueYear} tags)
         const newFileName = filePatternToUse
             .replace(/{Publisher}/gi, safePublisher)
@@ -82,8 +90,12 @@ export async function POST(request: NextRequest) {
             .replace(/{VolumeYear}/gi, safeYear)
             .replace(/{IssueYear}/gi, issueYear)
             .replace(/{Issue}/gi, formattedNum || "")
+            .replace(/{IssueTitle}/gi, cleanIssueName.replace(/[<>:"/\\|?*]/g, '').trim()) // <-- ADD THIS
+            .replace(/{UniverseName}/gi, "") // <-- ADD THIS
             .replace(/\(\s*\)/g, '')
             .replace(/\[\s*\]/g, '')
+            .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS
+            .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // <-- ADD THIS
             .replace(/\s+/g, ' ')
             .trim() + ext;
 

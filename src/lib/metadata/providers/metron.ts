@@ -142,6 +142,7 @@ export class MetronProvider implements IMetadataProvider {
                 name: series.series || series.name || 'Unknown',
                 year: series.year_began || 0,
                 publisher: realPublisher,
+                universe: series.universe?.name || null,
                 description: series.desc || null,
                 coverUrl: coverUrl,
                 status: series.status?.name === 'Ended' ? 'Ended' : 'Ongoing',

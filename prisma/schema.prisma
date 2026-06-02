@@ -110,6 +110,7 @@ model Series {
   year            Int
   publisher       String?
   folderPath      String
+  universe        String?
   monitored       Boolean?
   isManga         Boolean  @default(false)
   size            Float?   @default(0)
@@ -155,6 +156,7 @@ model Issue {
   writers         String?
   artists         String?
   coverArtists    String?  // <-- NEW
+  universe        String?
   colorists       String?  // <-- NEW
   letterers       String?  // <-- NEW
   characters      String?

@@ -507,6 +507,7 @@ export const Importer = {
     const publisherName = (series?.publisher && series.publisher !== "Unknown") ? sanitize(series.publisher) : "Other";
     const seriesYearFromMeta = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
     const seriesNameFromMeta = series?.name || cleanSeriesName;
+    const safeUniverse = (series as any)?.universe ? sanitize((series as any).universe) : "";
          
     Logger.log(`[Importer Debug] Applying Folder Pattern: "${folderPattern}" | Variables -> Publisher: "${publisherName}", Series: "${seriesNameFromMeta}", Year: "${seriesYearFromMeta}"`, 'debug');
 
@@ -515,6 +516,7 @@ export const Importer = {
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
         .replace(/{VolumeYear}/gi, seriesYearFromMeta.toString())
+        .replace(/{UniverseName}/gi, safeUniverse)
         .replace(/\(\s*\)/g, '') 
         .replace(/\[\s*\]/g, '') 
         .replace(/\s+/g, ' ')
@@ -593,6 +595,9 @@ export const Importer = {
     const issueYearFromMeta = xmlMeta?.year ? xmlMeta.year.toString() : seriesYearFromMeta.toString();
     const filePatToUse = isManga ? mangaFilePattern : filePattern;
     
+    const issueTitle = xmlMeta?.title || "";
+    const universeName = xmlMeta?.universe || "";
+    
     let newFileName = filePatToUse
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
@@ -600,8 +605,12 @@ export const Importer = {
         .replace(/{VolumeYear}/gi, seriesYearFromMeta.toString())
         .replace(/{IssueYear}/gi, issueYearFromMeta)
         .replace(/{Issue}/gi, formattedNum)
+        .replace(/{IssueTitle}/gi, sanitize(issueTitle))
+        .replace(/{UniverseName}/gi, sanitize(universeName))
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')
+        .replace(/\s*-\s*-/g, ' - ') // Collapses double hyphens (e.g., " -  - " becomes " - ")
+        .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // Removes any leading or trailing hyphens
         .replace(/\s+/g, ' ')
         .trim();
 

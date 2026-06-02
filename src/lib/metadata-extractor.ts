@@ -163,6 +163,7 @@ export async function parseComicInfo(filePath: string) {
         return {
             series: seriesName,
             title: info.Title ? String(info.Title).trim() : null,
+            universe: info.Universe ? String(info.Universe).trim() : null,
             number: info.Number ? String(info.Number).trim() : null,
             publisher: info.Publisher ? String(info.Publisher).trim() : null,
             year: parsedYear,

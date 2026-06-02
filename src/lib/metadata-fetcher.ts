@@ -90,6 +90,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     name: details.name,
                     publisher: details.publisher,
                     year: details.year || series.year,
+                    universe: details.universe,
                     description: details.description,
                     coverUrl: metronFinalCover, 
                     status: details.status

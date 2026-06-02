@@ -78,6 +78,7 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
   <Month>${month}</Month>
   <Day>${day}</Day>
   <Publisher>${escapeXml(issue.series.publisher)}</Publisher>
+  <Universe>${escapeXml(issue.universe || issue.series.universe || '')}</Universe> <!-- ADD THIS LINE -->
   <Genre>${escapeXml(genres)}</Genre>
   <StoryArc>${escapeXml(storyArcs)}</StoryArc>
   <Writer>${escapeXml(writers)}</Writer>

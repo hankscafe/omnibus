@@ -1490,7 +1490,7 @@ export default function SettingsPage() {
                                 <h3 className="text-lg font-bold text-foreground">Media Naming Conventions</h3>
                                 <p className="text-[11px] text-muted-foreground mt-1">
                                     Customize how Omnibus names your folders and files during imports. 
-                                    Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{VolumeYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>
+                                    Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{VolumeYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueTitle}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{UniverseName}"}</code>
                                 </p>
                             </div>
                             <Button 
@@ -1569,7 +1569,7 @@ export default function SettingsPage() {
                                             .replace(/{Year}/gi, "2022")
                                             .replace(/{VolumeYear}/gi, "2022")
                                             .replace(/{IssueYear}/gi, "2022")
-                                            .replace(/{Issue}/gi, "001")
+                                            .replace(/{Issue}/gi, "01")
                                             .replace(/\(\s*\)/g, '')
                                             .replace(/\[\s*\]/g, '')
                                             .replace(/\s+/g, ' ')
@@ -1585,7 +1585,7 @@ export default function SettingsPage() {
                                             .replace(/{Year}/gi, "2018")
                                             .replace(/{VolumeYear}/gi, "2018")
                                             .replace(/{IssueYear}/gi, "2018")
-                                            .replace(/{Issue}/gi, "001")
+                                            .replace(/{Issue}/gi, "01")
                                             .replace(/\(\s*\)/g, '')
                                             .replace(/\[\s*\]/g, '')
                                             .replace(/\s+/g, ' ')

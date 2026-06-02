@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
             const safePublisher = s.publisher && s.publisher !== "Unknown" ? sanitize(s.publisher) : "Other";
             const safeSeries = sanitize(s.name || "Unknown");
             const safeYear = s.year ? s.year.toString() : "";
+            const safeUniverse = (s as any).universe ? sanitize((s as any).universe) : "";
             
             // FIX: Use activeFolderPattern here
             let relFolderPath = activeFolderPattern
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
                 .replace(/{Series}/gi, safeSeries)
                 .replace(/{Year}/gi, safeYear)
                 .replace(/{VolumeYear}/gi, safeYear)
+                .replace(/{UniverseName}/gi, safeUniverse)
                 .replace(/\(\s*\)/g, '') 
                 .replace(/\[\s*\]/g, '') 
                 .replace(/\s+/g, ' ')
@@ -119,13 +121,30 @@ export async function POST(request: NextRequest) {
             // --- NEW: TRACE ISSUE REPLACEMENT VARIABLES ---
             Logger.log(`[Rename Debug] Issue Formatting Data: Series="${s.name}", Publisher="${s.publisher}", SeriesYear="${s.year}", IssueYear="${issueYear}", IssueNum="${paddedNum}", Ext="${ext}"`, 'debug');
 
+            // --- NEW: Add Issue Title extraction & cleanup ---
+            let cleanIssueName = issue.name || "";
+            if (s.name && cleanIssueName.startsWith(`${s.name} #${issue.number}: `)) {
+                cleanIssueName = cleanIssueName.replace(`${s.name} #${issue.number}: `, '');
+            } else if (s.name && cleanIssueName === `${s.name} #${issue.number}`) {
+                cleanIssueName = "";
+            }
+
+            const safeUniverse = (s as any).universe ? sanitize((s as any).universe) : "";
+            
             let newFileName = patternToUse
                 .replace(/{Publisher}/gi, s.publisher || 'Unknown')
                 .replace(/{Series}/gi, s.name || 'Unknown')
                 .replace(/{Year}/gi, s.year?.toString() || '0000')
                 .replace(/{VolumeYear}/gi, s.year?.toString() || '0000')
                 .replace(/{IssueYear}/gi, issueYear)
-                .replace(/{Issue}/gi, paddedNum);
+                .replace(/{Issue}/gi, paddedNum)
+                .replace(/{IssueTitle}/gi, sanitize(cleanIssueName)) // <-- ADD THIS
+                .replace(/{UniverseName}/gi, safeUniverse)
+                .replace(/\(\s*\)/g, '')
+                .replace(/\[\s*\]/g, '')
+                .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS
+                .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // <-- ADD THIS
+                .replace(/\s+/g, ' ');
             
             newFileName = sanitize(newFileName) + ext;
             const newFilePath = path.join(currentFolder, newFileName);

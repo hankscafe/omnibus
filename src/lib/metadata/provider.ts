@@ -5,6 +5,7 @@ export interface MetadataSeries {
     name: string;
     year: number;
     publisher: string;
+    universe?: string | null;
     description: string | null;
     coverUrl: string | null;
     status: 'Ongoing' | 'Ended';

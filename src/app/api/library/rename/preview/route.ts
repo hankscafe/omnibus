@@ -50,12 +50,14 @@ export async function POST(request: NextRequest) {
             const safePublisher = series.publisher ? series.publisher.replace(/[<>:"/\\|?*]/g, '').trim() : "Other";
             const safeName = series.name ? series.name.replace(/[<>:"/\\|?*]/g, '').trim() : "Unknown Series";
             const safeYear = series.year ? series.year.toString() : "";
+            const safeUniverse = (series as any).universe ? (series as any).universe.replace(/[<>:"/\\|?*]/g, '').trim() : "";
 
             let relFolderPath = folderPattern
                 .replace(/{Publisher}/gi, safePublisher)
                 .replace(/{Series}/gi, safeName)
                 .replace(/{Year}/gi, safeYear)
                 .replace(/{VolumeYear}/gi, safeYear)
+                .replace(/{UniverseName}/gi, safeUniverse)
                 .replace(/\(\s*\)/g, '')
                 .replace(/\[\s*\]/g, '')
                 .replace(/\s+/g, ' ')
@@ -76,6 +78,14 @@ export async function POST(request: NextRequest) {
                     formattedNum = `${parts[0].padStart(3, '0')}.${parts[1]}`;
                 }
 
+                // --- NEW: Add Issue Title extraction & cleanup ---
+                let cleanIssueName = issue.name || "";
+                if (safeName && cleanIssueName.startsWith(`${safeName} #${issue.number}: `)) {
+                    cleanIssueName = cleanIssueName.replace(`${safeName} #${issue.number}: `, '');
+                } else if (safeName && cleanIssueName === `${safeName} #${issue.number}`) {
+                    cleanIssueName = "";
+                }
+
                 const newFileName = filePattern
                     .replace(/{Publisher}/gi, safePublisher)
                     .replace(/{Series}/gi, safeName)
@@ -83,7 +93,14 @@ export async function POST(request: NextRequest) {
                     .replace(/{VolumeYear}/gi, safeYear)
                     .replace(/{IssueYear}/gi, issueYear)
                     .replace(/{Issue}/gi, formattedNum || "")
-                    .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
+                    .replace(/{IssueTitle}/gi, cleanIssueName.replace(/[<>:"/\\|?*]/g, '').trim()) // <-- ADD THIS
+                    .replace(/{UniverseName}/gi, safeUniverse) // <-- ADD THIS
+                    .replace(/\(\s*\)/g, '')
+                    .replace(/\[\s*\]/g, '')
+                    .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS
+                    .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // <-- ADD THIS
+                    .replace(/\s+/g, ' ')
+                    .trim() + ext;
 
                 const targetFilePath = path.join(targetFolderPath, newFileName).replace(/\\/g, '/');
 

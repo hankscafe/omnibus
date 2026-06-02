@@ -192,9 +192,9 @@ export async function syncSchedules() {
             key: {
                 in: [
                     'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule',
-                    'diagnostics_sync_schedule', 'backup_sync_schedule', 'popular_sync_schedule',
-                    'weekly_digest_schedule', 'cbr_conversion_schedule', 'embed_metadata_schedule',
-                    'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule' // <-- Added new keys
+                    'diagnostics_sync_schedule', 'backup_sync_schedule', 'backup_sync_day', 'popular_sync_schedule',
+                    'weekly_digest_schedule', 'weekly_digest_day', 'cbr_conversion_schedule', 'embed_metadata_schedule',
+                    'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule'
                 ]
             }
         }
@@ -207,7 +207,16 @@ export async function syncSchedules() {
         await omnibusQueue.removeRepeatableByKey(job.key);
     }
 
-    const addJob = async (jobType: string, hoursStr: string | undefined) => {
+    const addJob = async (jobType: string, hoursStr: string | undefined, cronPattern?: string) => {
+        // --- ADDED: If a cron string is passed, use that instead of intervals ---
+        if (cronPattern) {
+            await omnibusQueue.add(jobType, { type: jobType }, {
+                repeat: { pattern: cronPattern },
+                jobId: `repeat_${jobType.toLowerCase()}`
+            });
+            return;
+        }
+
         const hours = parseFloat(hoursStr || '0');
         if (hours > 0) {
             await omnibusQueue.add(jobType, { type: jobType }, {
@@ -221,9 +230,29 @@ export async function syncSchedules() {
     await addJob('METADATA_SYNC', config.metadata_sync_schedule);
     await addJob('SERIES_MONITOR', config.monitor_sync_schedule);
     await addJob('DIAGNOSTICS', config.diagnostics_sync_schedule);
-    await addJob('DATABASE_BACKUP', config.backup_sync_schedule);
+    
+    // --- ADDED: Backup Cron Logic ---
+    let backupCron;
+    if (config.backup_sync_schedule === "168" && config.backup_sync_day) {
+        // Runs at 3:00 AM Server Time on the specified day of the week
+        backupCron = `0 3 * * ${config.backup_sync_day}`;
+    }
+    await addJob('DATABASE_BACKUP', config.backup_sync_schedule, backupCron);
+    // --------------------------------
+    
     await addJob('DISCOVER_SYNC', config.popular_sync_schedule);
-    await addJob('WEEKLY_DIGEST', config.weekly_digest_schedule);
+    
+    // --- ADDED: Digest Cron Logic ---
+    let digestCron;
+    // Only use CRON if they selected "Weekly" (168 hours)
+    if (config.weekly_digest_schedule === "168" && config.weekly_digest_day) {
+        // Runs at 08:00 AM Server Time on the specified day of the week
+        digestCron = `0 8 * * ${config.weekly_digest_day}`;
+    }
+    
+    await addJob('WEEKLY_DIGEST', config.weekly_digest_schedule, digestCron);
+    // --------------------------------
+    
     await addJob('CBR_CONVERSION', config.cbr_conversion_schedule);
     await addJob('EMBED_METADATA', config.embed_metadata_schedule);
     await addJob('CACHE_CLEANUP', config.cache_cleanup_schedule);

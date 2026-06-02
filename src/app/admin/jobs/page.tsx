@@ -39,10 +39,12 @@ export default function ScheduledJobsPage() {
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
   const [backupSyncSchedule, setBackupSyncSchedule] = useState("168")
+  const [backupSyncDay, setBackupSyncDay] = useState("1")
   const [cacheCleanupSchedule, setCacheCleanupSchedule] = useState("24") 
   const [popularSyncSchedule, setPopularSyncSchedule] = useState("24")
   const [converterSyncSchedule, setConverterSyncSchedule] = useState("24")
-  const [weeklyDigestSchedule, setWeeklyDigestSchedule] = useState("168") 
+  const [weeklyDigestSchedule, setWeeklyDigestSchedule] = useState("168")
+  const [weeklyDigestDay, setWeeklyDigestDay] = useState("1") 
   
   // --- ADDED: State for new jobs ---
   const [watchedSyncSchedule, setWatchedSyncSchedule] = useState("0.25")
@@ -64,9 +66,9 @@ export default function ScheduledJobsPage() {
 
   const currentStateString = JSON.stringify({
       metadataSyncSchedule, embedMetadataSchedule, librarySyncSchedule,
-      monitorSyncSchedule, diagnosticsSyncSchedule, backupSyncSchedule,
+      monitorSyncSchedule, diagnosticsSyncSchedule, backupSyncSchedule, backupSyncDay,
       cacheCleanupSchedule, popularSyncSchedule, converterSyncSchedule, 
-      weeklyDigestSchedule, watchedSyncSchedule, healthCheckSchedule // <-- Added
+      weeklyDigestSchedule, weeklyDigestDay, watchedSyncSchedule, healthCheckSchedule
   });
 
   const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
@@ -124,10 +126,12 @@ export default function ScheduledJobsPage() {
         const monitorItem = data.settings.find((c: any) => c.key === 'monitor_sync_schedule'); 
         const diagItem = data.settings.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
         const backupItem = data.settings.find((c: any) => c.key === 'backup_sync_schedule');
+        const backupDayItem = data.settings.find((c: any) => c.key === 'backup_sync_day');
         const cacheItem = data.settings.find((c: any) => c.key === 'cache_cleanup_schedule'); 
         const popularItem = data.settings.find((c: any) => c.key === 'popular_sync_schedule'); 
         const converterItem = data.settings.find((c: any) => c.key === 'cbr_conversion_schedule');
-        const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule'); 
+        const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule');
+        const digestDayItem = data.settings.find((c: any) => c.key === 'weekly_digest_day'); 
         
         // --- ADDED: Load saved values ---
         const watchedItem = data.settings.find((c: any) => c.key === 'watched_sync_schedule'); 
@@ -139,10 +143,12 @@ export default function ScheduledJobsPage() {
         if (monitorItem) setMonitorSyncSchedule(monitorItem.value);
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
         if (backupItem) setBackupSyncSchedule(backupItem.value);
+        if (backupDayItem) setBackupSyncDay(backupDayItem.value);
         if (cacheItem) setCacheCleanupSchedule(cacheItem.value);
         if (popularItem) setPopularSyncSchedule(popularItem.value); 
         if (converterItem) setConverterSyncSchedule(converterItem.value);
         if (digestItem) setWeeklyDigestSchedule(digestItem.value);
+        if (digestDayItem) setWeeklyDigestDay(digestDayItem.value);
         if (watchedItem) setWatchedSyncSchedule(watchedItem.value);
         if (healthItem) setHealthCheckSchedule(healthItem.value);
       }
@@ -191,12 +197,14 @@ export default function ScheduledJobsPage() {
                       monitor_sync_schedule: monitorSyncSchedule,
                       diagnostics_sync_schedule: diagnosticsSyncSchedule,
                       backup_sync_schedule: backupSyncSchedule,
+                      backup_sync_day: backupSyncDay,
                       cache_cleanup_schedule: cacheCleanupSchedule,
                       popular_sync_schedule: popularSyncSchedule,
                       cbr_conversion_schedule: converterSyncSchedule,
                       weekly_digest_schedule: weeklyDigestSchedule,
-                      watched_sync_schedule: watchedSyncSchedule,  // <-- Added
-                      health_check_schedule: healthCheckSchedule   // <-- Added
+                      weekly_digest_day: weeklyDigestDay,
+                      watched_sync_schedule: watchedSyncSchedule,
+                      health_check_schedule: healthCheckSchedule
                   }
               }) 
           })
@@ -429,12 +437,32 @@ export default function ScheduledJobsPage() {
                         <CardDescription className="text-muted-foreground">Sends users an email of newly added library items (SMTP required).</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        <Select value={weeklyDigestSchedule} onValueChange={setWeeklyDigestSchedule}>
-                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                            <SelectContent className="bg-popover border-border">
-                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
+                        <div className="flex gap-2">
+                            <Select value={weeklyDigestSchedule} onValueChange={setWeeklyDigestSchedule}>
+                                <SelectTrigger className="bg-background border-border text-foreground flex-1"><SelectValue /></SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                                </SelectContent>
+                            </Select>
+                            
+                            {weeklyDigestSchedule === "168" && (
+                                <Select value={weeklyDigestDay} onValueChange={setWeeklyDigestDay}>
+                                    <SelectTrigger className="bg-background border-border text-foreground w-[140px] shrink-0">
+                                        <SelectValue placeholder="Day" />
+                                    </SelectTrigger>
+                                    <SelectContent className="bg-popover border-border">
+                                        <SelectItem value="0">Sunday</SelectItem>
+                                        <SelectItem value="1">Monday</SelectItem>
+                                        <SelectItem value="2">Tuesday</SelectItem>
+                                        <SelectItem value="3">Wednesday</SelectItem>
+                                        <SelectItem value="4">Thursday</SelectItem>
+                                        <SelectItem value="5">Friday</SelectItem>
+                                        <SelectItem value="6">Saturday</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        </div>
+                        
                         <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('weekly_digest')} disabled={runningJob === 'weekly_digest'}>
                             {runningJob === 'weekly_digest' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
                         </Button>
@@ -476,12 +504,31 @@ export default function ScheduledJobsPage() {
                         <CardDescription className="text-muted-foreground">Exports or restores library and user data to a JSON file.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        <Select value={backupSyncSchedule} onValueChange={setBackupSyncSchedule}>
-                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
-                            <SelectContent className="bg-popover border-border">
-                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
+                        <div className="flex gap-2">
+                            <Select value={backupSyncSchedule} onValueChange={setBackupSyncSchedule}>
+                                <SelectTrigger className="bg-background border-border text-foreground flex-1"><SelectValue /></SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                                </SelectContent>
+                            </Select>
+                            
+                            {backupSyncSchedule === "168" && (
+                                <Select value={backupSyncDay} onValueChange={setBackupSyncDay}>
+                                    <SelectTrigger className="bg-background border-border text-foreground w-[140px] shrink-0">
+                                        <SelectValue placeholder="Day" />
+                                    </SelectTrigger>
+                                    <SelectContent className="bg-popover border-border">
+                                        <SelectItem value="0">Sunday</SelectItem>
+                                        <SelectItem value="1">Monday</SelectItem>
+                                        <SelectItem value="2">Tuesday</SelectItem>
+                                        <SelectItem value="3">Wednesday</SelectItem>
+                                        <SelectItem value="4">Thursday</SelectItem>
+                                        <SelectItem value="5">Friday</SelectItem>
+                                        <SelectItem value="6">Saturday</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        </div>
                         
                         <div className="grid grid-cols-2 gap-2">
                             <Button className="w-full font-bold shadow-sm text-[11px] border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('backup')} disabled={runningJob === 'backup'}>

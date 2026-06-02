@@ -1283,7 +1283,7 @@ function LibraryContent() {
                 ))
             )}
           </div>
-          <DialogFooter className="gap-2 sm:gap-0"><Button onClick={() => setManageListsOpen(false)} variant="outline" className="w-full sm:w-auto h-12 sm:h-10 border-border hover:bg-muted">Close</Button></DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-2"><Button onClick={() => setManageListsOpen(false)} variant="outline" className="w-full sm:w-auto h-12 sm:h-10 border-border hover:bg-muted">Close</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1329,7 +1329,7 @@ function LibraryContent() {
                   </div>
               )}
           </div>
-          <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setBulkListModalOpen(false)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitBulkAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold w-full h-12 sm:h-10">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <ListPlus className="w-5 h-5 mr-2" />} Save to List</Button></DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-2"><Button variant="outline" onClick={() => setBulkListModalOpen(false)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitBulkAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold w-full sm:w-auto h-12 sm:h-10">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <ListPlus className="w-5 h-5 mr-2" />} Save to List</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1445,7 +1445,7 @@ function LibraryContent() {
           <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
               <DialogHeader><DialogTitle className="text-red-600 flex items-center gap-2"><Trash2 className="w-5 h-5"/> Delete {selectedSeries.size} Series?</DialogTitle><DialogDescription className="pt-2">You are about to remove <strong>{selectedSeries.size}</strong> series from your library database.</DialogDescription></DialogHeader>
               <div className="py-4"><div className="flex items-center space-x-2 bg-red-50 dark:bg-red-950/30 p-3 rounded-lg border border-red-200 dark:border-red-900/50"><Switch id="bulk-delete-files" checked={bulkDeleteFiles} onCheckedChange={setBulkDeleteFiles} /><Label htmlFor="bulk-delete-files" className="text-sm font-semibold text-red-800 dark:text-red-400 cursor-pointer">Also delete physical folders and files from disk</Label></div></div>
-              <DialogFooter className="flex gap-2 sm:gap-0"><Button variant="outline" onClick={() => setBulkDeleteModalOpen(false)} disabled={isBulkProcessing} className="h-12 sm:h-10 border-border hover:bg-muted">Cancel</Button><Button variant="destructive" onClick={handleBulkDelete} disabled={isBulkProcessing} className="h-12 sm:h-10">{isBulkProcessing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Trash2 className="w-5 h-5 mr-2" />} Delete All</Button></DialogFooter>
+              <DialogFooter className="flex gap-2 sm:gap-2"><Button variant="outline" onClick={() => setBulkDeleteModalOpen(false)} disabled={isBulkProcessing} className="h-12 sm:h-10 border-border hover:bg-muted">Cancel</Button><Button variant="destructive" onClick={handleBulkDelete} disabled={isBulkProcessing} className="h-12 sm:h-10">{isBulkProcessing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Trash2 className="w-5 h-5 mr-2" />} Delete All</Button></DialogFooter>
           </DialogContent>
       </Dialog>
 
@@ -1467,12 +1467,12 @@ function LibraryContent() {
                   </div>
               )}
           </div>
-          <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setTargetSeries(null)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="h-12 sm:h-10 w-full sm:w-auto font-bold bg-primary hover:bg-primary/90 text-primary-foreground">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save to List</Button></DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-2"><Button variant="outline" onClick={() => setTargetSeries(null)} disabled={addingToList} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={submitAddToCollection} disabled={addingToList || (!selectedCollectionId && !newCollectionName.trim())} className="h-12 sm:h-10 w-full sm:w-auto font-bold bg-primary hover:bg-primary/90 text-primary-foreground">{addingToList ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save to List</Button></DialogFooter>
         </DialogContent>
       </Dialog>
       
       <Dialog open={!!editing} onOpenChange={() => !updating && setEditing(null)}>
-        <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
             <DialogHeader><DialogTitle>Edit Metadata</DialogTitle></DialogHeader>
             {editing && (
                 <div className="grid gap-4 py-4">
@@ -1507,7 +1507,7 @@ function LibraryContent() {
                     </div>
                 </div>
             )}
-            <DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" onClick={() => setEditing(null)} disabled={updating} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={handleUpdateMetadata} disabled={updating} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 sm:h-10 w-full sm:w-auto">{updating ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save Changes</Button></DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-2"><Button variant="outline" onClick={() => setEditing(null)} disabled={updating} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={handleUpdateMetadata} disabled={updating} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 sm:h-10 w-full sm:w-auto">{updating ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save Changes</Button></DialogFooter>
         </DialogContent>
       </Dialog>
       

@@ -46,7 +46,6 @@ export async function POST(request: NextRequest) {
     }
 
     let targetReqId = requestId;
-
     if (requestId) {
         // --- OVERRIDE EXISTING REQUEST ---
         await prisma.request.update({
@@ -55,7 +54,8 @@ export async function POST(request: NextRequest) {
                 status: initialStatus,
                 activeDownloadName: searchResult?.title || name,
                 imageUrl: image || undefined,
-                retryCount: 0 // Reset retry count for fresh search
+                retryCount: 0, // Reset retry count for fresh search
+                failedLinks: "[]" // Reset the blocklist for manual override selections
             }
         });
     } else {

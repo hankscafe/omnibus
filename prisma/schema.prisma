@@ -77,6 +77,7 @@ model Request {
   indexer            String?
   downloadLink       String?
   activeDownloadName String?
+  failedLinks        String? @default("[]")
   imageUrl           String?
   notified           Boolean  @default(false)  
   createdAt          DateTime @default(now())

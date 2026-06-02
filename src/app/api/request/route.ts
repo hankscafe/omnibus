@@ -479,7 +479,12 @@ export async function PATCH(request: NextRequest) {
 
     await prisma.request.update({
       where: { id },
-      data: { status, notified: false }
+      data: { 
+          status, 
+          notified: false,
+          // --- NEW: Reset blocklist and retries if pushing back to the automated queue ---
+          ...(status === 'PENDING' ? { failedLinks: "[]", retryCount: 0 } : {})
+      }
     });
 
     await AuditLogger.log('UPDATED_REQUEST_STATUS', { requestId: id, newStatus: status, title: reqRecord.activeDownloadName }, userId);

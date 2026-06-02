@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
             if (enabledHosters.includes(hoster)) {
                 await prisma.request.update({
                     where: { id },
-                    data: { status: 'DOWNLOADING', retryCount: 0, progress: 0 }
+                    data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, failedLinks: "[]" }
                 });
 
                 DownloadService.downloadDirectFile(url, safeTitle, config.download_path, req.id, hoster)
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
         if (req.downloadLink && req.downloadLink.startsWith('http') && !req.downloadLink.includes('getcomics.org')) {
             await prisma.request.update({
                 where: { id },
-                data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeTitle }
+                data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeTitle, failedLinks: "[]" }
             });
             DownloadService.downloadDirectFile(req.downloadLink, safeTitle, config.download_path, req.id)
                 .then(async (success) => {
@@ -162,14 +162,13 @@ export async function POST(request: NextRequest) {
                          Logger.log(`[Retry] Batch pack already downloading or downloaded (${url}). Queuing for batch extraction.`, 'info');
                          await prisma.request.update({
                              where: { id },
-                             data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeSearchTitle, downloadLink: url }
+                             data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeSearchTitle, downloadLink: url, failedLinks: "[]" }
                          });
                          return NextResponse.json({ success: true, message: `Link recovered via ${hoster === 'getcomics' ? 'Direct' : hoster} and queued for batch extraction.` });
                     }
-
                     await prisma.request.update({
                         where: { id },
-                        data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeSearchTitle }
+                        data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeSearchTitle, failedLinks: "[]" }
                     });
 
                     DownloadService.downloadDirectFile(url, safeSearchTitle, config.download_path, req.id, hoster)

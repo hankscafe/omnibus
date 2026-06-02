@@ -45,6 +45,11 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       Logger.log(`[Automation] Aborting duplicate execution for ${name}. Request is already in status: ${freshReq.status}`, 'warn');
       return; 
   }
+
+  // Parse the blocklist for failed downloads
+  let failedItems: string[] = [];
+  try { failedItems = JSON.parse((freshReq as any).failedLinks || "[]"); } catch(e) {}
+
   await prisma.request.update({
       where: { id: requestId },
       data: { status: 'PENDING' }
@@ -61,7 +66,6 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
 
   Logger.log(`[Automation Debug] Generated queries for "${name}": ${JSON.stringify(queries)}`, 'debug');
 
-  // --- THE FIX: Reordered to safely consume .mockResolvedValueOnce() during testing ---
   const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
   const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
   
@@ -96,8 +100,18 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   if (ddlEnabled && hasEnabledHosters) {
       Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
       for (const query of queries) {
-          getComicsResults = (await GetComicsService.search(query, false, isManga, name, year)) || [];
-          Logger.log(`[Automation Debug] GetComics search for "${query}" returned ${getComicsResults.length} results.`, 'debug');
+          const rawGetComicsResults = (await GetComicsService.search(query, false, isManga, name, year)) || [];
+          
+          // BLOCKLIST CHECK: Filter out releases where the Title or URL has failed before
+          getComicsResults = rawGetComicsResults.filter((r: any) => {
+              const isFailed = failedItems.includes(r.title) || failedItems.includes(r.downloadUrl);
+              if (isFailed) {
+                  Logger.log(`[Automation Debug] Skipping blocklisted GetComics release: "${r.title}"`, 'debug');
+              }
+              return !isFailed;
+          });
+          
+          Logger.log(`[Automation Debug] GetComics search for "${query}" returned ${getComicsResults.length} unblocked results.`, 'debug');
           if (getComicsResults.length > 0) break;
       }
       
@@ -127,46 +141,46 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                 return;
             }
             
-        const best = getComicsResults[0];
-        const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
-        const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-        
-        if (enabledHosters.includes(hoster)) {
-          const settings = await prisma.systemSetting.findMany();
-          const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-          
-          const duplicateDownload = await prisma.request.findFirst({
-              where: {
-                  downloadLink: url,
-                  status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
-                  id: { not: requestId }
-              }
-          });
-          
-          if (duplicateDownload) {
-               Logger.log(`[Automation] Batch pack already downloading or downloaded (${url}). Queuing ${name} for batch extraction.`, 'info');
-               await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
-               return;
-          }
-          
-          await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
-          
-          DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
-            .then(async (success) => {
-                if (success) {
-                    await new Promise(r => setTimeout(r, 2000));
-                    await Importer.importRequest(requestId);
-                }
-            })
-            .catch(e => Logger.log(getErrorMessage(e), 'error'));
+            const best = getComicsResults[0];
+            const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+            const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
             
-          return; 
-        } else {
-          Logger.log(`[Automation] [GetComics] Best match was an unsupported/disabled hoster (${hoster}). Holding manual link and falling back to Prowlarr...`, 'warn');
-          fallbackManualUrl = url; fallbackManualName = safeTitle;
-        }
+            if (enabledHosters.includes(hoster)) {
+              const settings = await prisma.systemSetting.findMany();
+              const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+              
+              const duplicateDownload = await prisma.request.findFirst({
+                  where: {
+                      downloadLink: url,
+                      status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
+                      id: { not: requestId }
+                  }
+              });
+              
+              if (duplicateDownload) {
+                   Logger.log(`[Automation] Batch pack already downloading or downloaded (${url}). Queuing ${name} for batch extraction.`, 'info');
+                   await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
+                   return;
+              }
+              
+              await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
+              
+              DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
+                .then(async (success) => {
+                    if (success) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        await Importer.importRequest(requestId);
+                    }
+                })
+                .catch(e => Logger.log(getErrorMessage(e), 'error'));
+                
+              return; 
+            } else {
+              Logger.log(`[Automation] [GetComics] Best match was an unsupported/disabled hoster (${hoster}). Holding manual link and falling back to Prowlarr...`, 'warn');
+              fallbackManualUrl = url; fallbackManualName = safeTitle;
+            }
       } else {
-        Logger.log(`[Automation] [GetComics] No valid matches found across all variations.`, 'info');
+          Logger.log(`[Automation] [GetComics] No valid matches found across all variations.`, 'info');
       }
   } else {
       Logger.log(`[Automation] Priority Phase Skipped: Direct Downloads or Hosters are disabled.`, 'info');
@@ -177,14 +191,23 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       Logger.log(`[Automation] Fallback Phase: Searching Prowlarr...`, 'info');
       let healthyResults: any[] = [];
       for (const query of queries) {
-          Logger.log(`[Automation] Searching Prowlarr: "${query}"`, 'info');
           const prowlarrResults = (await ProwlarrService.searchComics(query, false, isManga, year)) || [];
-          Logger.log(`[Automation Debug] Prowlarr search for "${query}" returned ${prowlarrResults.length} raw results.`, 'debug');
           
-          healthyResults = prowlarrResults.filter((r: any) => r.seeders > 0 || r.protocol === 'usenet');
-          Logger.log(`[Automation Debug] ${healthyResults.length} healthy results remained after filtering 0-seeder torrents.`, 'debug');
+          healthyResults = prowlarrResults.filter((r: any) => {
+              const isHealthy = r.seeders > 0 || r.protocol === 'usenet';
+              const trackingHash = r.infoHash || r.guid || r.downloadUrl;
+              
+              // BLOCKLIST CHECK: Filter out titles, hashes, or URLs that have failed
+              const isFailed = failedItems.includes(r.title) || failedItems.includes(trackingHash);
+              
+              if (isFailed) {
+                  Logger.log(`[Automation Debug] Skipping blocklisted Prowlarr release: "${r.title}"`, 'debug');
+              }
+              
+              return isHealthy && !isFailed;
+          });
           
-          if (healthyResults.length > 0) break; 
+          if (healthyResults.length > 0) break;
           await new Promise(resolve => setTimeout(resolve, 2000));
       }
 

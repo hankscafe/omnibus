@@ -15,7 +15,10 @@ const SENSITIVE_KEYS = [
     'discord_webhooks', 
     'omnibus_api_key',  
     'smtp_pass',
-    'metron_pass' // <-- ADDED: Securely hide Metron Password
+    'metron_pass',
+    'pushover_token',
+    'telegram_bot_token',
+    'apprise_url' // <-- ADDED: Masks basic auth inside Apprise URLs
 ];
 
 export async function GET(request: Request) {
@@ -53,12 +56,19 @@ export async function GET(request: Request) {
   }));
 
   const indexers = await prisma.indexer.findMany();
-  const headers = await prisma.customHeader.findMany();
+  
+  const rawHeaders = await prisma.customHeader.findMany();
+  const headers = rawHeaders.map(h => ({
+      ...h,
+      value: h.value ? '********' : ''
+  }));
+  
   const acronyms = await prisma.searchAcronym.findMany();
   
   const webhooksRaw = await prisma.discordWebhook.findMany();
   const webhooks = webhooksRaw.map(w => ({
       ...w,
+      url: w.url ? '********' : '', 
       events: typeof w.events === 'string' ? JSON.parse(w.events) : w.events
   }));
 
@@ -118,7 +128,6 @@ export async function POST(request: Request) {
         searchAcronyms
     } = body;
 
-    // --- NEW: SAFETY NET VALIDATION ---
     if (settings?.oidc_force_sso === 'true') {
         const adminWithPassword = await prisma.user.findFirst({
             where: {
@@ -185,7 +194,6 @@ export async function POST(request: Request) {
             }
         };
 
-        // Inside POST, around line 157 (after the transaction completes)
         if (settings?.system_log_level) {
             Logger.setLevel(settings.system_log_level);
         }
@@ -194,14 +202,38 @@ export async function POST(request: Request) {
         if (downloadClients) await syncTable(tx.downloadClient, downloadClients);
         if (hosterAccounts) await syncTable(tx.hosterAccount, hosterAccounts); 
         if (indexers) await syncTable(tx.indexer, indexers);
-        if (customHeaders) await syncTable(tx.customHeader, customHeaders);
+        
+        if (customHeaders) {
+            const existingHeaders = await tx.customHeader.findMany();
+            for (const h of customHeaders) {
+                if (h.value === '********') {
+                    const existing = existingHeaders.find((eh: any) => eh.id === h.id);
+                    if (existing) {
+                        h.value = existing.value;
+                    }
+                }
+            }
+            await syncTable(tx.customHeader, customHeaders);
+        }
+
         if (searchAcronyms) await syncTable(tx.searchAcronym, searchAcronyms, 'key');
 
         if (discordWebhooks) {
-            const parsedHooks = discordWebhooks.map((w: any) => ({
-                ...w,
-                events: JSON.stringify(w.events || [])
-            }));
+            const existingWebhooks = await tx.discordWebhook.findMany();
+            const parsedHooks = discordWebhooks.map((w: any) => {
+                let finalUrl = w.url;
+                if (finalUrl === '********') {
+                    const existing = existingWebhooks.find((ew: any) => ew.id === w.id);
+                    if (existing) {
+                        finalUrl = existing.url;
+                    }
+                }
+                return {
+                    ...w,
+                    url: finalUrl,
+                    events: JSON.stringify(w.events || [])
+                };
+            });
             await syncTable(tx.discordWebhook, parsedHooks);
         }
     });
@@ -218,7 +250,6 @@ export async function POST(request: Request) {
             Logger.log("[Setup] Initial configuration saved successfully. Welcome to Omnibus!", "success");
         }
 
-        // Tell BullMQ to wipe the old schedules and apply the new intervals
         await syncSchedules().catch(e => Logger.log(`Failed to sync BullMQ schedules: ${getErrorMessage(e)}`, 'error'));
     }
 

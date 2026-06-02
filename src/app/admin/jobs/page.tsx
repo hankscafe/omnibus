@@ -12,7 +12,8 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
     ArrowLeft, Calendar, Loader2, Play, Save, Database, ShieldAlert, 
     Activity, RefreshCw, FileText, ExternalLink, Download, 
-    UploadCloud, TrendingUp, FileArchive, FileJson, Mail, Layers, Globe, Settings, Trash2
+    UploadCloud, TrendingUp, FileArchive, FileJson, Mail, Layers, Globe, Settings, Trash2,
+    FolderInput, HeartPulse // <-- ADDED new icons
 } from "lucide-react"
 import { getErrorMessage } from "@/lib/utils/error"
 
@@ -43,6 +44,10 @@ export default function ScheduledJobsPage() {
   const [converterSyncSchedule, setConverterSyncSchedule] = useState("24")
   const [weeklyDigestSchedule, setWeeklyDigestSchedule] = useState("168") 
   
+  // --- ADDED: State for new jobs ---
+  const [watchedSyncSchedule, setWatchedSyncSchedule] = useState("0.25")
+  const [healthCheckSchedule, setHealthCheckSchedule] = useState("0.25")
+  
   const [savingJobs, setSavingJobs] = useState(false)
   const [runningJob, setRunningJob] = useState<string | null>(null) 
   const [loading, setLoading] = useState(true)
@@ -60,8 +65,8 @@ export default function ScheduledJobsPage() {
   const currentStateString = JSON.stringify({
       metadataSyncSchedule, embedMetadataSchedule, librarySyncSchedule,
       monitorSyncSchedule, diagnosticsSyncSchedule, backupSyncSchedule,
-      cacheCleanupSchedule,
-      popularSyncSchedule, converterSyncSchedule, weeklyDigestSchedule
+      cacheCleanupSchedule, popularSyncSchedule, converterSyncSchedule, 
+      weeklyDigestSchedule, watchedSyncSchedule, healthCheckSchedule // <-- Added
   });
 
   const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
@@ -124,6 +129,10 @@ export default function ScheduledJobsPage() {
         const converterItem = data.settings.find((c: any) => c.key === 'cbr_conversion_schedule');
         const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule'); 
         
+        // --- ADDED: Load saved values ---
+        const watchedItem = data.settings.find((c: any) => c.key === 'watched_sync_schedule'); 
+        const healthItem = data.settings.find((c: any) => c.key === 'health_check_schedule'); 
+        
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (embedItem) setEmbedMetadataSchedule(embedItem.value);
         if (libItem) setLibrarySyncSchedule(libItem.value);
@@ -134,6 +143,8 @@ export default function ScheduledJobsPage() {
         if (popularItem) setPopularSyncSchedule(popularItem.value); 
         if (converterItem) setConverterSyncSchedule(converterItem.value);
         if (digestItem) setWeeklyDigestSchedule(digestItem.value);
+        if (watchedItem) setWatchedSyncSchedule(watchedItem.value);
+        if (healthItem) setHealthCheckSchedule(healthItem.value);
       }
     } catch (e) {
       toast({ title: "Error", description: "Failed to load schedules.", variant: "destructive" });
@@ -143,7 +154,8 @@ export default function ScheduledJobsPage() {
     }
   };
 
-  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter' | 'embed_metadata' | 'weekly_digest') => {
+  // --- ADDED: Updated signature payload to accept the two new job triggers ---
+  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter' | 'embed_metadata' | 'weekly_digest' | 'watched_sync' | 'health_check' | 'cache_cleanup') => {
       setRunningJob(job);
       toast({ title: "Job Started", description: `The ${job} process has been triggered in the background.` });
       try {
@@ -182,7 +194,9 @@ export default function ScheduledJobsPage() {
                       cache_cleanup_schedule: cacheCleanupSchedule,
                       popular_sync_schedule: popularSyncSchedule,
                       cbr_conversion_schedule: converterSyncSchedule,
-                      weekly_digest_schedule: weeklyDigestSchedule
+                      weekly_digest_schedule: weeklyDigestSchedule,
+                      watched_sync_schedule: watchedSyncSchedule,  // <-- Added
+                      health_check_schedule: healthCheckSchedule   // <-- Added
                   }
               }) 
           })
@@ -272,6 +286,25 @@ export default function ScheduledJobsPage() {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 
+                {/* --- ADDED: Watched Folder Auto-Import --- */}
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FolderInput className="w-5 h-5 text-primary" /> Watched Folder Import</CardTitle>
+                        <CardDescription className="text-muted-foreground">Automatically imports files dropped into your Watched directory.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={watchedSyncSchedule} onValueChange={setWatchedSyncSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('watched_sync')} disabled={runningJob === 'watched_sync'}>
+                            {runningJob === 'watched_sync' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
+
                 <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
                     <CardHeader className="pb-3">
                         <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Database className="w-5 h-5 text-primary" /> Library Auto-Scan</CardTitle>
@@ -418,6 +451,25 @@ export default function ScheduledJobsPage() {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 
+                {/* --- ADDED: System Health Check --- */}
+                <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><HeartPulse className="w-5 h-5 text-primary" /> System Health Check</CardTitle>
+                        <CardDescription className="text-muted-foreground">Runs diagnostics on disk space, API limits, and system configurations.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={healthCheckSchedule} onValueChange={setHealthCheckSchedule}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('health_check')} disabled={runningJob === 'health_check'}>
+                            {runningJob === 'health_check' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
+
                 <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
                     <CardHeader className="pb-3">
                         <CardTitle className="flex items-center gap-2 text-lg text-foreground"><Save className="w-5 h-5 text-primary" /> Database Backup</CardTitle>

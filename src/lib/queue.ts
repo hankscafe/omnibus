@@ -194,7 +194,7 @@ export async function syncSchedules() {
                     'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule',
                     'diagnostics_sync_schedule', 'backup_sync_schedule', 'popular_sync_schedule',
                     'weekly_digest_schedule', 'cbr_conversion_schedule', 'embed_metadata_schedule',
-                    'cache_cleanup_schedule'
+                    'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule' // <-- Added new keys
                 ]
             }
         }
@@ -228,8 +228,11 @@ export async function syncSchedules() {
     await addJob('EMBED_METADATA', config.embed_metadata_schedule);
     await addJob('CACHE_CLEANUP', config.cache_cleanup_schedule);
 
-    await omnibusQueue.add('WATCHED_FOLDER_SYNC', { type: 'WATCHED_FOLDER_SYNC' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_watched_sync' });
-    await omnibusQueue.add('SYSTEM_HEALTH_CHECK', { type: 'SYSTEM_HEALTH_CHECK' }, { repeat: { every: 15 * 60 * 1000 }, jobId: 'repeat_health_check' });
+    // --- REPLACED: Converted hardcoded 15m intervals to dynamic user variables ---
+    await addJob('WATCHED_FOLDER_SYNC', config.watched_sync_schedule || '0.25'); 
+    await addJob('SYSTEM_HEALTH_CHECK', config.health_check_schedule || '0.25'); 
+
+    // Leave the GitHub update checker at 24 hours
     await omnibusQueue.add('UPDATE_CHECK', { type: 'UPDATE_CHECK' }, { repeat: { every: 24 * 60 * 60 * 1000 }, jobId: 'repeat_update_check' });
 
     Logger.log("[BullMQ] Native schedules synchronized with database settings.", "info");

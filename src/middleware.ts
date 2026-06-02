@@ -22,6 +22,7 @@ export async function middleware(req: NextRequest) {
         '/api/admin/prowlarr/indexers', // Used during setup
         '/api/admin/config',            // Used to save setup (route handles its own auth)
         '/api/admin/restore',           // Used to restore during setup
+        '/api/admin/update-check',     // Used by the frontend to check for updates, but has its own internal key check
         '/api/cron',          // Hit by external uptime monitors
         '/api/v1/stats',      // Validates its own custom x-api-key
         '/api/uploads',       // Serves public avatars and banners

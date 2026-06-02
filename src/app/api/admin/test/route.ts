@@ -34,13 +34,24 @@ export async function POST(request: Request) {
     if (config.custom_headers) {
         try {
             const hData = typeof config.custom_headers === 'string' 
-                ? JSON.parse(config.custom_headers) 
-                : config.custom_headers;
-            
+                 ? JSON.parse(config.custom_headers) 
+                 : config.custom_headers;
+                 
             if (Array.isArray(hData)) {
+                // Fetch the real headers from the DB once to avoid multiple queries
+                const dbHeaders = await prisma.customHeader.findMany();
+                
                 hData.forEach((h: any) => { 
-                    if (h.key && h.value) headers[h.key] = h.value; 
-                });
+                     if (h.key && h.value) {
+                         // If masked, pull the real value using the ID
+                         if (h.value === '********') {
+                             const realHeader = dbHeaders.find(eh => eh.id === h.id);
+                             if (realHeader) headers[h.key] = realHeader.value;
+                         } else {
+                             headers[h.key] = h.value;
+                         }
+                     } 
+                 });
             }
         } catch (e) { }
     }
@@ -55,11 +66,13 @@ export async function POST(request: Request) {
 
     // --- PUSHOVER TEST ---
     if (type === 'pushover') {
-        if (!config.pushover_token || !config.pushover_user) {
+        const realToken = await getRealValue('pushover_token', config.pushover_token);
+
+        if (!realToken || !config.pushover_user) {
             return NextResponse.json({ success: false, message: 'Missing Token or User Key.' });
         }
         const res = await axios.post('https://api.pushover.net/1/messages.json', {
-            token: config.pushover_token,
+            token: realToken, // <-- USE REAL TOKEN
             user: config.pushover_user,
             title: "Omnibus Test",
             message: "✅ Pushover connection successful!"
@@ -69,10 +82,12 @@ export async function POST(request: Request) {
 
     // --- TELEGRAM TEST ---
     if (type === 'telegram') {
-        if (!config.telegram_bot_token || !config.telegram_chat_id) {
+        const realToken = await getRealValue('telegram_bot_token', config.telegram_bot_token);
+
+        if (!realToken || !config.telegram_chat_id) {
             return NextResponse.json({ success: false, message: 'Missing Bot Token or Chat ID.' });
         }
-        const res = await axios.post(`https://api.telegram.org/bot${config.telegram_bot_token}/sendMessage`, {
+        const res = await axios.post(`https://api.telegram.org/bot${realToken}/sendMessage`, { // <-- USE REAL TOKEN
             chat_id: config.telegram_chat_id,
             text: "*Omnibus Test*\n✅ Telegram connection successful!",
             parse_mode: 'Markdown'
@@ -82,14 +97,18 @@ export async function POST(request: Request) {
 
     // --- APPRISE TEST ---
     if (type === 'apprise') {
-        if (!config.apprise_url) {
+        const realAppriseUrl = await getRealValue('apprise_url', config.apprise_url); // <-- ADDED
+        
+        if (!realAppriseUrl) {
             return NextResponse.json({ success: false, message: 'Missing Apprise URL.' });
         }
-        const res = await axios.post(config.apprise_url, {
+        
+        const res = await axios.post(realAppriseUrl, { // <-- UPDATED
             title: "Omnibus Test",
             body: "✅ Apprise connection successful!",
             format: 'markdown'
         });
+        
         return NextResponse.json({ success: res.status === 200, message: "Apprise notification sent successfully." });
     }
 
@@ -250,7 +269,15 @@ export async function POST(request: Request) {
 
     // --- DISCORD WEBHOOK TEST ---
     if (type === 'webhook') {
-      if (!config.url) return NextResponse.json({ success: false, message: 'Missing Webhook URL' });
+      let realUrl = config.url;
+      
+      // Fetch the real URL from the database if masked
+      if (realUrl === '********') {
+          const dbHook = await prisma.discordWebhook.findUnique({ where: { id: config.id } });
+          realUrl = dbHook?.url;
+      }
+
+      if (!realUrl) return NextResponse.json({ success: false, message: 'Missing Webhook URL' });
 
       const payload: any = {
         content: null,
@@ -266,7 +293,8 @@ export async function POST(request: Request) {
       if (config.botUsername) payload.username = config.botUsername;
       if (config.botAvatarUrl) payload.avatar_url = config.botAvatarUrl;
 
-      await axios.post(config.url, payload, { timeout: 10000 });
+      // Make sure we use realUrl here!
+      await axios.post(realUrl, payload, { timeout: 10000 });
 
       return NextResponse.json({ success: true, message: 'Test notification delivered!' });
     }

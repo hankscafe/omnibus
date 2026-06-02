@@ -1322,7 +1322,25 @@ export default function SettingsPage() {
                         </div>
                     </div>
 
-                    <div className={`space-y-8 transition-opacity duration-300 ${config.ddl_enabled === "false" ? "opacity-50 pointer-events-none" : ""}`}>
+                    {/* --- MOVED: Advanced Download Rules --- */}
+                    <div className="space-y-4 mt-4">
+                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Advanced Download Rules</h3>
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-4">
+                            <Switch 
+                                id="bulk-pack-toggle"
+                                checked={config.allow_bulk_packs === "true"} 
+                                onCheckedChange={(c) => setConfig({...config, allow_bulk_packs: c ? "true" : "false"})} 
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="bulk-pack-toggle" className="cursor-pointer font-bold text-base text-foreground">Allow Bulk Collections & Packs</Label>
+                                <p className="text-[11px] text-muted-foreground">If enabled, when requesting a single issue, Omnibus is allowed to download full "Story Arc" or "Chronological" zip packs from direct download sites if an exact single-issue file cannot be found.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className={`space-y-8 transition-opacity duration-300 pt-6 border-t border-border ${config.ddl_enabled === "false" ? "opacity-50 pointer-events-none" : ""}`}>
+                    
                     {/* Priority List */}
                     <div className="space-y-4">
                         <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Hoster Priority</h3>
@@ -1401,22 +1419,7 @@ export default function SettingsPage() {
                             )}
                         </div>
                     </div>
-
-                    <div className="space-y-4 pt-6 border-t border-border">
-                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Advanced Download Rules</h3>
-                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-4">
-                            <Switch 
-                                id="bulk-pack-toggle"
-                                checked={config.allow_bulk_packs === "true"} 
-                                onCheckedChange={(c) => setConfig({...config, allow_bulk_packs: c ? "true" : "false"})} 
-                                className="scale-110 sm:scale-100"
-                            />
-                            <div className="grid gap-1 ml-2">
-                                <Label htmlFor="bulk-pack-toggle" className="cursor-pointer font-bold text-base text-foreground">Allow Bulk Collections & Packs</Label>
-                                <p className="text-[11px] text-muted-foreground">If enabled, when requesting a single issue, Omnibus is allowed to download full "Story Arc" or "Chronological" zip packs from direct download sites if an exact single-issue file cannot be found.</p>
-                            </div>
-                        </div>
-                    </div>
+                    
                     </div>
                 </CardContent>
             </Card>
@@ -2030,9 +2033,6 @@ export default function SettingsPage() {
                                 {hook.isActive ? "Active" : "Disabled"}
                               </Badge>
                             </div>
-                            <p className="text-xs sm:text-[11px] font-mono text-muted-foreground truncate max-w-[300px] sm:max-w-md">
-                              {hook.url.replace(/https:\/\/discord\.com\/api\/webhooks\/[^\/]+\//, "https://.../")}
-                            </p>
                           </div>
                           
                           <div className="flex items-center gap-2 shrink-0 border-t sm:border-0 border-border pt-3 sm:pt-0">
@@ -2088,7 +2088,7 @@ export default function SettingsPage() {
                 {config.pushover_enabled === "true" && (
                 <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-2 border-t border-border pt-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="grid gap-2"><Label>Application Token</Label><Input value={config.pushover_token} onChange={e => setConfig({...config, pushover_token: e.target.value})} placeholder="API Token/Key" className="bg-muted/20 border-border" /></div>
+                        <div className="grid gap-2"><Label>Application Token</Label><Input type="password" value={config.pushover_token} onChange={e => setConfig({...config, pushover_token: e.target.value})} placeholder="API Token/Key" className="bg-muted/20 border-border" /></div>
                         <div className="grid gap-2"><Label>User/Group Key</Label><Input value={config.pushover_user} onChange={e => setConfig({...config, pushover_user: e.target.value})} placeholder="User Key" className="bg-muted/20 border-border" /></div>
                     </div>
                     <div className="space-y-3 pt-2">
@@ -2126,7 +2126,7 @@ export default function SettingsPage() {
                 {config.telegram_enabled === "true" && (
                 <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-2 border-t border-border pt-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="grid gap-2"><Label>Bot Token</Label><Input value={config.telegram_bot_token} onChange={e => setConfig({...config, telegram_bot_token: e.target.value})} placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" className="bg-muted/20 border-border" /></div>
+                        <div className="grid gap-2"><Label>Bot Token</Label><Input type="password" value={config.telegram_bot_token} onChange={e => setConfig({...config, telegram_bot_token: e.target.value})} placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" className="bg-muted/20 border-border" /></div>
                         <div className="grid gap-2"><Label>Chat ID</Label><Input value={config.telegram_chat_id} onChange={e => setConfig({...config, telegram_chat_id: e.target.value})} placeholder="-1001234567890" className="bg-muted/20 border-border" /></div>
                     </div>
                     <div className="space-y-3 pt-2">
@@ -2163,7 +2163,8 @@ export default function SettingsPage() {
                 </CardHeader>
                 {config.apprise_enabled === "true" && (
                 <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-2 border-t border-border pt-6">
-                    <div className="grid gap-2"><Label>Apprise URL</Label><Input value={config.apprise_url} onChange={e => setConfig({...config, apprise_url: e.target.value})} placeholder="http://apprise:8000/notify/apprise" className="bg-muted/20 border-border" /></div>
+                    {/* ADDED: type="password" to the Apprise Input */}
+                    <div className="grid gap-2"><Label>Apprise URL</Label><Input type="password" value={config.apprise_url} onChange={e => setConfig({...config, apprise_url: e.target.value})} placeholder="http://apprise:8000/notify/apprise" className="bg-muted/20 border-border" /></div>
                     <div className="space-y-3 pt-2">
                         <Label className="text-xs font-bold uppercase text-muted-foreground">Trigger Events</Label>
                         <div className="grid sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto bg-muted/20 p-4 border border-border rounded-lg">
@@ -2533,6 +2534,7 @@ export default function SettingsPage() {
                 <Label className="text-xs font-bold uppercase text-muted-foreground">Webhook URL</Label>
                 <div className="flex gap-2">
                   <Input 
+                    type="password" 
                     placeholder="https://discord.com/api/webhooks/..." 
                     value={editingWebhook.url} 
                     onChange={e => setEditingWebhook({ ...editingWebhook, url: e.target.value })}

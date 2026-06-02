@@ -17,7 +17,14 @@ export async function GET() {
 
     try {
         const apiKeys = await prisma.apiKey.findMany({
-            include: {
+            select: {
+                id: true,
+                name: true,
+                prefix: true,
+                lastUsedAt: true,
+                expiresAt: true,
+                createdAt: true,
+                // Nested select replaces include
                 user: { select: { username: true, role: true } },
                 createdBy: { select: { username: true } }
             },
@@ -70,7 +77,11 @@ export async function POST(request: Request) {
         });
 
         await AuditLogger.log('CREATED_ADMIN_API_KEY', { keyName: name, assignedTo: apiKey.user.username }, (session.user as any).id);
-        return NextResponse.json({ success: true, rawKey, apiKey });
+        
+        // Strip keyHash out before sending to the client
+        const { keyHash: _, ...safeKey } = apiKey;
+        
+        return NextResponse.json({ success: true, rawKey, apiKey: safeKey });
     } catch (error) {
         Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

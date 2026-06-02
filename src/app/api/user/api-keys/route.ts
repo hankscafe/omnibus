@@ -21,6 +21,13 @@ export async function GET() {
         // Use the new dedicated table!
         const opdsKeys = await prisma.opdsKey.findMany({
             where: { userId: userId },
+            select: {
+                id: true,
+                name: true,
+                prefix: true,
+                createdAt: true,
+                lastUsedAt: true
+            },
             orderBy: { createdAt: 'desc' }
         });
         
@@ -53,7 +60,10 @@ export async function POST(request: Request) {
         // ADDED: Audit logging for user key generation
         await AuditLogger.log('CREATED_OPDS_KEY', { keyName: name }, userId);
 
-        return NextResponse.json({ success: true, rawKey, apiKey: newKey });
+        // Strip keyHash out before sending to the client
+        const { keyHash: _, ...safeKey } = newKey;
+
+        return NextResponse.json({ success: true, rawKey, apiKey: safeKey });
     } catch (error: unknown) {
         Logger.log(`[User API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

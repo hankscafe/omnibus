@@ -22,9 +22,20 @@ export const AuditLogger = {
                     ipAddress
                 }
             });
+
+            // Retrieve the human-readable username for the text log
+            let displayName = 'System';
+            if (validUserId) {
+                const user = await prisma.user.findUnique({
+                    where: { id: validUserId },
+                    select: { username: true }
+                });
+                // Fall back to ID if the user was somehow deleted
+                displayName = user?.username || validUserId;
+            }
             
             // Also log it to the standard rotating log file for redundancy
-            Logger.log(`[AUDIT] ${action} by User:${userId || 'System'} - ${typeof details === 'string' ? details : JSON.stringify(details)}`, 'warn');
+            Logger.log(`[AUDIT] ${action} by User:${displayName} - ${typeof details === 'string' ? details : JSON.stringify(details)}`, 'warn');
         } catch (error: any) {
             Logger.log(`Failed to write audit log: ${error.message}`, 'error');
         }

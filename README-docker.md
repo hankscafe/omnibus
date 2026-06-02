@@ -67,6 +67,13 @@ services:
       # REQUIRED: Generate a random string for security
       # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key. !!DO NOT LOSE THIS!!
       - NEXTAUTH_SECRET=
+
+      # --- ADVANCED SECURITY SETTINGS ---
+      # By default, Omnibus requires an HTTPS connection to use the "Login As" (Impersonation) feature 
+      # to prevent session tokens from being intercepted over the network.
+      # If you are running Omnibus on a secure, private home network (LAN) without SSL, 
+      # uncomment the line below to bypass this restriction at your own risk.
+      # - ALLOW_INSECURE_IMPERSONATION=true
       
       # REQUIRED: Connection URL for the background job queue
       - OMNIBUS_REDIS_URL=redis://omnibus-redis:6379/0

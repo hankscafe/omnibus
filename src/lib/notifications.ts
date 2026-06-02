@@ -67,16 +67,20 @@ export const SystemNotifier = {
         // APPRISE
         if (config.apprise_enabled === 'true' && config.apprise_url) {
              try {
-                const events = JSON.parse(config.apprise_events || '[]');
-                if (events.includes(event)) {
-                    Logger.log(`[Apprise Debug] Dispatching '${event}' alert to ${config.apprise_url}.`, 'debug');
-                    await axios.post(config.apprise_url, {
-                        title: title,
-                        body: message,
-                        format: 'markdown'
-                    });
-                }
-            } catch(e) { Logger.log(`[Apprise] Error: ${getErrorMessage(e)}`, 'error'); }
+                 const events = JSON.parse(config.apprise_events || '[]');
+                 if (events.includes(event)) {
+                     // Mask credentials (anything between the first colon after the protocol and the @ symbol)
+                     const safeAppriseUrl = config.apprise_url.replace(/:[^/][^:]*@/, ':********@');
+                     
+                     Logger.log(`[Apprise Debug] Dispatching '${event}' alert to ${safeAppriseUrl}.`, 'debug');
+                     
+                     await axios.post(config.apprise_url, { // <-- Remains unmasked for the actual request
+                         title: title,
+                         body: message,
+                         format: 'markdown'
+                     });
+                 }
+             } catch(e) { Logger.log(`[Apprise] Error: ${getErrorMessage(e)}`, 'error'); }
         }
     }
 }

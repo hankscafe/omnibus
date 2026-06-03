@@ -732,12 +732,25 @@ export const Importer = {
       }
 
       try {
-          if (req.volumeId !== "0") {
-              Logger.log("[Importer] Triggering direct internal metadata sync...", "info");
-              await syncSeriesMetadata(req.volumeId, destFolder, series?.metadataSource || req.metadataSource || 'COMICVINE');
+          if (req.volumeId !== "0" && series?.id) {
+              Logger.log("[Importer] Queuing deduplicated metadata sync...", "info");
+              const { omnibusQueue } = await import('./queue');
+              
+              // 1-minute rolling window to prevent the "Active Execution" blindspot
+              const timeWindow = Math.floor(Date.now() / 60000); 
+              
+              await omnibusQueue.add('METADATA_SYNC', { 
+                  type: 'METADATA_SYNC', 
+                  seriesIds: [series.id] 
+              }, {
+                  jobId: `METADATA_SYNC_MATCH_${series.id}_${timeWindow}`,
+                  delay: 60000, 
+                  removeOnComplete: true,
+                  removeOnFail: true
+              });
           }
       } catch (syncErr: any) {
-          Logger.log(`[Importer] Metadata sync failed: ${syncErr.message}`, "warn");
+          Logger.log(`[Importer] Metadata sync queue failed: ${syncErr.message}`, "warn");
       }
 
       // Safely clear the queue for anything sharing the link (Except missing match placeholders)

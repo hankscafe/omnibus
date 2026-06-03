@@ -531,7 +531,7 @@ export default function SmartMatchPage() {
                             <Input 
                                 value={manualMatchId} 
                                 onChange={(e) => setManualMatchId(e.target.value)} 
-                                placeholder="e.g. 4050-12345 or black-cat-2025"
+                                placeholder="e.g. 4050-12345 or 12746"
                                 className="bg-background border-border"
                             />
                             <p className="text-[11px] text-muted-foreground mt-1.5">

@@ -172,8 +172,17 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             }
 
             try {
-                await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: series.id }, {
-                    jobId: `EMBED_META_${series.id}_${Date.now()}`
+                // 15-minute rolling window for heavy disk I/O
+                const ioTimeWindow = Math.floor(Date.now() / 900000); 
+                
+                await omnibusQueue.add('EMBED_METADATA', { 
+                    type: 'EMBED_METADATA', 
+                    seriesId: series.id 
+                }, {
+                    jobId: `EMBED_META_${series.id}_${ioTimeWindow}`,
+                    delay: 300000, // 5-minute delay to let the entire batch finish downloading
+                    removeOnComplete: true,
+                    removeOnFail: true
                 });
                 Logger.log(`[Metadata] Queued XML injection for ${series.name}`, 'info');
             } catch(e) {}
@@ -380,16 +389,21 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         await logApiUsage('comicvine', '/issues', issuesCallsMade);
     }
 
-    if (issuesCallsMade > 0) {
-        await logApiUsage('comicvine', '/issues', issuesCallsMade);
-    }
-
     try {
-        await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: series.id }, {
-            jobId: `EMBED_META_${series.id}_${Date.now()}`
-        });
-        Logger.log(`[Metadata] Queued XML injection for ${series.name}`, 'info');
-    } catch(e) {}
+                // 15-minute rolling window for heavy disk I/O
+                const ioTimeWindow = Math.floor(Date.now() / 900000); 
+                
+                await omnibusQueue.add('EMBED_METADATA', { 
+                    type: 'EMBED_METADATA', 
+                    seriesId: series.id 
+                }, {
+                    jobId: `EMBED_META_${series.id}_${ioTimeWindow}`,
+                    delay: 300000, // 5-minute delay to let the entire batch finish downloading
+                    removeOnComplete: true,
+                    removeOnFail: true
+                });
+                Logger.log(`[Metadata] Queued XML injection for ${series.name}`, 'info');
+            } catch(e) {}
 
     Logger.log(`[Metadata] Successfully synced ${syncedCount} ComicVine issues.`, 'success');
     return { success: true, count: syncedCount };

@@ -9,6 +9,20 @@ import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
 import { SystemNotifier } from '@/lib/notifications';
 
+// Local helper to safely compare issue numbers with formatting discrepancies (e.g., "01" vs "1")
+function looseCompareIssue(num1: string | number, num2: string | number): boolean {
+    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
+    const m1 = String(num1).trim().match(regex);
+    const m2 = String(num2).trim().match(regex);
+         
+    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
+    const float1 = parseFloat(m1[1] || "0");
+    const float2 = parseFloat(m2[1] || "0");
+    const suffix1 = m1[2].toUpperCase().trim();
+    const suffix2 = m2[2].toUpperCase().trim();
+    return float1 === float2 && suffix1 === suffix2;
+}
+
 export async function getDownloadClient(protocol: string = 'torrent') {
   const clients = await prisma.downloadClient.findMany();
   if (clients.length === 0) return null;
@@ -39,22 +53,61 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   const freshReq = await prisma.request.findUnique({ where: { id: requestId } });
   if (!freshReq) {
       Logger.log(`[Automation] Aborting execution for ${name}. Request no longer exists in the database.`, 'warn');
-      return; 
+      return;
   }
+
   if (['DOWNLOADING', 'COMPLETED', 'IMPORTED', 'CANCELLED'].includes(freshReq.status)) {
       Logger.log(`[Automation] Aborting duplicate execution for ${name}. Request is already in status: ${freshReq.status}`, 'warn');
-      return; 
+      return;
   }
+
+  // --- START OF ISSUE YEAR OPTIMIZATION ---
+  let dynamicYear = year; 
+  if (freshReq.volumeId && freshReq.volumeId !== "0") {
+      const cleanReqName = (freshReq.activeDownloadName || name).replace(/\.\w+$/, '');
+      const issueNumMatch = cleanReqName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+      
+      if (issueNumMatch) {
+          const targetIssueNum = issueNumMatch[1];
+          const reqSource = (freshReq as any).metadataSource || 'COMICVINE';
+
+          const localSeries = await prisma.series.findFirst({
+              where: { 
+                  metadataId: freshReq.volumeId,
+                  metadataSource: reqSource
+              }
+          });
+
+          if (localSeries) {
+              // Fetch all issues for the series to prevent strict string mismatch errors
+              const allSeriesIssues = await prisma.issue.findMany({
+                  where: { seriesId: localSeries.id }
+              });
+
+              // Use our clean local loose comparison utility instead of importing
+              const issueSkeleton = allSeriesIssues.find(i => looseCompareIssue(i.number, targetIssueNum));
+
+              if (issueSkeleton && issueSkeleton.releaseDate) {
+                  const parsedIssueYear = issueSkeleton.releaseDate.split('-')[0];
+                  if (parsedIssueYear && parsedIssueYear.match(/^\d{4}$/) && parsedIssueYear !== dynamicYear) {
+                      Logger.log(`[Automation] Overriding series year (${dynamicYear}) with accurate issue release year (${parsedIssueYear}) for ${name}`, 'info');
+                      dynamicYear = parsedIssueYear;
+                  }
+              }
+          }
+      }
+  }
+  // --- END OF ISSUE YEAR OPTIMIZATION ---
 
   // Parse the blocklist for failed downloads
   let failedItems: string[] = [];
   try { failedItems = JSON.parse((freshReq as any).failedLinks || "[]"); } catch(e) {}
-
+  
   await prisma.request.update({
       where: { id: requestId },
       data: { status: 'PENDING' }
   });
-  
+
   let searchName = name;
   const subtitleMatch = name.match(/(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+(?:\.\d+)?)\s*[:\-]\s*.*/i);
   if (subtitleMatch) {
@@ -62,8 +115,8 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   }
 
   const acronyms = await getCustomAcronyms();
-  const queries = generateSearchQueries(searchName, year, acronyms, isManga);
-
+  // Pass dynamicYear here instead of the static year parameter!
+  const queries = generateSearchQueries(searchName, dynamicYear, acronyms, isManga); 
   Logger.log(`[Automation Debug] Generated queries for "${name}": ${JSON.stringify(queries)}`, 'debug');
 
   const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
@@ -100,7 +153,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   if (ddlEnabled && hasEnabledHosters) {
       Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
       for (const query of queries) {
-          const rawGetComicsResults = (await GetComicsService.search(query, false, isManga, name, year)) || [];
+          const rawGetComicsResults = (await GetComicsService.search(query, false, isManga, name, dynamicYear)) || [];
           
           // BLOCKLIST CHECK: Filter out releases where the Title or URL has failed before
           getComicsResults = rawGetComicsResults.filter((r: any) => {
@@ -191,7 +244,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       Logger.log(`[Automation] Fallback Phase: Searching Prowlarr...`, 'info');
       let healthyResults: any[] = [];
       for (const query of queries) {
-          const prowlarrResults = (await ProwlarrService.searchComics(query, false, isManga, year)) || [];
+          const prowlarrResults = (await ProwlarrService.searchComics(query, false, isManga, dynamicYear)) || [];
           
           healthyResults = prowlarrResults.filter((r: any) => {
               const isHealthy = r.seeders > 0 || r.protocol === 'usenet';

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Importer } from '@/lib/importer';
 import fs from 'fs-extra';
+// Import the queue so we can assert against the mock
+import { omnibusQueue } from '@/lib/queue';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -40,6 +42,13 @@ vi.mock('fs-extra', () => ({
         copy: vi.fn().mockResolvedValue(true),
         writeFile: vi.fn().mockResolvedValue(true),
         remove: vi.fn().mockResolvedValue(true)
+    }
+}));
+
+// Mock the queue so the dynamic import intercepts this instead of the real Redis connection
+vi.mock('@/lib/queue', () => ({
+    omnibusQueue: {
+        add: vi.fn().mockResolvedValue(true)
     }
 }));
 
@@ -120,5 +129,15 @@ describe('File System: Importer Engine', () => {
         
         // Assert it sent the "Comic Available" notification
         expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.any(Object));
+
+        // Assert the dynamic BullMQ deduplication logic was triggered correctly
+        expect(omnibusQueue.add).toHaveBeenCalledWith(
+            'METADATA_SYNC',
+            expect.objectContaining({ seriesIds: expect.any(Array) }),
+            expect.objectContaining({
+                jobId: expect.stringContaining('METADATA_SYNC_MATCH_series_1_'),
+                delay: 60000
+            })
+        );
     });
 });

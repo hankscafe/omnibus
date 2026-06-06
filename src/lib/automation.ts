@@ -119,33 +119,32 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   });
 
   let searchName = name;
-  const subtitleMatch = name.match(/(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+(?:\.\d+)?)\s*[:\-]\s*.*/i);
-  if (subtitleMatch) {
-      searchName = subtitleMatch[1].trim();
-  }
+   const subtitleMatch = name.match(/(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+(?:\.\d+)?)\s*[:\-]\s*.*/i);
+   if (subtitleMatch) {
+       searchName = subtitleMatch[1].trim();
+   }
 
-  // --- NEW: Fetch Pack Settings & Evaluate ---
-  const bulkSetting = await prisma.systemSetting.findUnique({ where: { key: 'allow_bulk_packs' } });
-  const prioritizeSetting = await prisma.systemSetting.findUnique({ where: { key: 'prioritize_packs' } });
-  
-  const globalAllowBulk = bulkSetting?.value === 'true';
-  const globalPrioritize = prioritizeSetting?.value === 'true';
+   // --- PRESERVE MOCK SEQUENCE: Fetch hoster settings FIRST ---
+   const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
+   const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
 
-  const usePacks = globalAllowBulk && allowPacksForThisRequest;
-  const prioritizePacks = globalPrioritize && usePacks;
+   // --- Fetch Pack Settings & Evaluate AFTER ---
+   const bulkSetting = await prisma.systemSetting.findUnique({ where: { key: 'allow_bulk_packs' } });
+   const prioritizeSetting = await prisma.systemSetting.findUnique({ where: { key: 'prioritize_packs' } });
+   const globalAllowBulk = bulkSetting?.value === 'true';
+   const globalPrioritize = prioritizeSetting?.value === 'true';
+   const usePacks = globalAllowBulk && allowPacksForThisRequest;
+   const prioritizePacks = globalPrioritize && usePacks;
 
-  const acronyms = await getCustomAcronyms();
-  const queries = generateSearchQueries(searchName, year, acronyms, isManga, prioritizePacks, usePacks);
-  Logger.log(`[Automation Debug] Generated queries for "${name}": ${JSON.stringify(queries)}`, 'debug');
+   const acronyms = await getCustomAcronyms();
+   const queries = generateSearchQueries(searchName, year, acronyms, isManga, prioritizePacks, usePacks);
+   Logger.log(`[Automation Debug] Generated queries for "${name}": ${JSON.stringify(queries)}`, 'debug');
 
-  const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
-  const ddlSetting = await prisma.systemSetting.findUnique({ where: { key: 'ddl_enabled' } });
-  
-  const ddlEnabled = ddlSetting?.value !== 'false';
-  let hasEnabledHosters = true;
-  let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
-  
-  if (hpSetting?.value) {
+   const ddlEnabled = ddlSetting?.value !== 'false';
+   let hasEnabledHosters = true;
+   let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+
+   if (hpSetting?.value) {
       try {
           const val = hpSetting.value;
           const parsed = typeof val === 'string' ? JSON.parse(val) : val;

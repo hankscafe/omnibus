@@ -7,7 +7,7 @@ import { getErrorMessage } from './utils/error';
 import { ProwlarrSearchResult } from '@/types';
 
 export const ProwlarrService = {
-  async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string): Promise<ProwlarrSearchResult[]> {
+  async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string, allowPacksOverride?: boolean): Promise<ProwlarrSearchResult[]> {
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
@@ -39,7 +39,12 @@ export const ProwlarrService = {
     // --- SMART CATEGORY FILTERING ---
     const categoriesStr = config.prowlarr_categories || '7030';
     let categories = categoriesStr.split(',').map(c => c.trim()).filter(Boolean);
-    const allowBulkPacks = config.allow_bulk_packs === 'true';
+    
+    // --- FIX: Apply the override flag so Prowlarr respects isolated issue requests ---
+    let allowBulkPacks = config.allow_bulk_packs === 'true';
+    if (!isInteractive && allowPacksOverride === false) {
+        allowBulkPacks = false;
+    }
 
     if (!isManga) {
         categories = categories.filter(cat => cat !== '8030');

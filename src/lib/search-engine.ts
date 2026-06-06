@@ -15,12 +15,10 @@ export async function getCustomAcronyms(): Promise<Record<string, string>> {
     return acMap;
 }
 
-export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false): string[] {
+export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false, prioritizePacks: boolean = false, usePacks: boolean = true): string[] {
     let searchName = name;
     
     // --- SMART SUBTITLE SLICER ---
-    // If this is a single issue (contains # or Issue), we aggressively strip the publisher's story-arc subtitle.
-    // We do NOT strip subtitles from TPBs or Volumes, because they are often needed (e.g. "Batman: Hush").
     const isSingleIssue = /(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+/i.test(name);
     if (isSingleIssue) {
         const splitMatch = name.match(/^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*(.*)$/i);
@@ -33,8 +31,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     const secondaryQueries = new Set<string>();
 
     const baseName = searchName.replace(/[#]/g, '').trim();
-    Logger.log(`[Search Engine Debug] Generating queries for Base Name: "${baseName}", Year: "${year}"`, 'debug');
-
     const noPossessive = baseName.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
     const broadClean = noPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     
@@ -42,7 +38,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     let subtitle = "";
     let hasSubtitle = false;
 
-    // We only split here if it's a TPB that still has a subtitle, OR if the slicer didn't catch something.
     if (searchName.includes(' - ')) {
         const parts = searchName.split(' - ');
         mainPart = parts[0].trim();
@@ -56,8 +51,6 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     }
 
     if (hasSubtitle) {
-        Logger.log(`[Search Engine Debug] Split detected. Main Part: "${mainPart}", Subtitle: "${subtitle}"`, 'debug');
-
         const mainPartClean = mainPart.replace(/[#]/g, '').trim();
         const mainNoPossessive = mainPartClean.replace(/'s\b/gi, '').replace(/’s\b/gi, '');
         const mainBroadClean = mainNoPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -72,14 +65,12 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
                 mainExpanded = mainExpanded.replace(regex, full);
             }
             if (mainExpanded.toLowerCase() !== mainBroadClean.toLowerCase()) {
-                Logger.log(`[Search Engine Debug] Expanded acronym in Main Part: "${mainBroadClean}" -> "${mainExpanded}"`, 'debug');
                 if (year) primaryQueries.add(`${mainExpanded} ${year}`.trim());
                 primaryQueries.add(mainExpanded);
             }
         }
     }
 
-    // Push full length names
     if (year) secondaryQueries.add(`${baseName} ${year}`.trim());
     secondaryQueries.add(baseName);
     if (year) secondaryQueries.add(`${broadClean} ${year}`.trim());
@@ -97,20 +88,32 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         expanded = expanded.replace(regex, full);
     }
     if (expanded.toLowerCase() !== broadClean.toLowerCase()) {
-        Logger.log(`[Search Engine Debug] Expanded Base Acronym: "${broadClean}" -> "${expanded}"`, 'debug');
         if (year) secondaryQueries.add(`${expanded} ${year}`.trim());
         secondaryQueries.add(expanded);
     }
 
-    // NEW: Generate a "Series Only" fallback query to catch Bulk Packs/Collections
-    const seriesOnlyName = broadClean.replace(/\s\d+(?:\.\d+)?$/, '').trim();
-    if (seriesOnlyName !== broadClean && seriesOnlyName.length > 2) {
-        secondaryQueries.add(seriesOnlyName);
-        secondaryQueries.add(`${seriesOnlyName} collection`);
-        secondaryQueries.add(`${seriesOnlyName} story arc`);
+    // --- PACK GENERATOR ---
+    const packQueries = new Set<string>();
+    
+    if (usePacks) {
+        const seriesOnlyName = broadClean.replace(/\s\d+(?:\.\d+)?$/, '').trim();
+        if (seriesOnlyName !== broadClean && seriesOnlyName.length > 2) {
+            packQueries.add(seriesOnlyName);
+            packQueries.add(`${seriesOnlyName} collection`);
+            packQueries.add(`${seriesOnlyName} story arc`);
+            packQueries.add(`${seriesOnlyName} pack`);
+        } else if (seriesOnlyName.length > 2) {
+            packQueries.add(`${seriesOnlyName} collection`);
+            packQueries.add(`${seriesOnlyName} story arc`);
+            packQueries.add(`${seriesOnlyName} pack`);
+        }
     }
 
-    return [...Array.from(primaryQueries), ...Array.from(secondaryQueries)];
+    if (prioritizePacks && usePacks) {
+        return [...Array.from(packQueries), ...Array.from(primaryQueries), ...Array.from(secondaryQueries)];
+    }
+
+    return [...Array.from(primaryQueries), ...Array.from(secondaryQueries), ...Array.from(packQueries)];
 }
 
 export const SearchEngine = {

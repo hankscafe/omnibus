@@ -196,6 +196,7 @@ export function RequestSearch() {
         setOpen(true); 
         setLoading(true); 
         setSelectedItem(null);
+        setResults([]); // <-- ADD THIS LINE to instantly clear the old results
     } else {
         setIsSearchingMore(true);
     }

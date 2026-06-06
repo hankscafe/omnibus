@@ -192,7 +192,10 @@ export default function SettingsPage() {
     telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
     apprise_enabled: "false", apprise_url: "", apprise_events: "[]",
     allow_bulk_packs: "false",
-    ddl_enabled: "true"
+    prioritize_packs: "false",
+    ddl_enabled: "true",
+    getcomics_interactive_pages: "4",
+    getcomics_automated_pages: "5"
   })
 
   const [customProwlarrCategories, setCustomProwlarrCategories] = useState("")
@@ -365,9 +368,13 @@ export default function SettingsPage() {
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030";
         if (newConfig.discord_enabled === undefined) newConfig.discord_enabled = "true";
         if (newConfig.allow_bulk_packs === undefined) newConfig.allow_bulk_packs = "false";
+        if (newConfig.prioritize_packs === undefined) newConfig.prioritize_packs = "false";
         if (newConfig.oidc_force_sso === undefined) newConfig.oidc_force_sso = "false";
         if (newConfig.oidc_auto_approve === undefined) newConfig.oidc_auto_approve = "false";
         if (newConfig.ddl_enabled === undefined) newConfig.ddl_enabled = "true";
+        
+        if (!newConfig.getcomics_interactive_pages) newConfig.getcomics_interactive_pages = "4";
+        if (!newConfig.getcomics_automated_pages) newConfig.getcomics_automated_pages = "5";
         
         if (!newConfig.filter_junk_words) newConfig.filter_junk_words = "preview, sample, ashcan, cropped, scanned, fixed, incomplete, damaged, partial, promo, teaser";
         if (!newConfig.filter_match_ratio) newConfig.filter_match_ratio = "60";
@@ -1336,6 +1343,55 @@ export default function SettingsPage() {
                                 <Label htmlFor="bulk-pack-toggle" className="cursor-pointer font-bold text-base text-foreground">Allow Bulk Collections & Packs</Label>
                                 <p className="text-[11px] text-muted-foreground">If enabled, when requesting a single issue, Omnibus is allowed to download full "Story Arc" or "Chronological" zip packs from direct download sites if an exact single-issue file cannot be found.</p>
                             </div>
+                        </div>
+
+                        {/* --- NEW: Prioritize Packs Toggle --- */}
+                        <div className={`flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-2 transition-opacity ${config.allow_bulk_packs !== "true" ? "opacity-50 pointer-events-none" : ""}`}>
+                            <Switch 
+                                id="prioritize-packs-toggle"
+                                checked={config.prioritize_packs === "true"} 
+                                onCheckedChange={(c) => setConfig({...config, prioritize_packs: c ? "true" : "false"})} 
+                                className="scale-110 sm:scale-100"
+                                disabled={config.allow_bulk_packs !== "true"}
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="prioritize-packs-toggle" className="cursor-pointer font-bold text-base text-foreground">Prioritize Packs / Collections First</Label>
+                                <p className="text-[11px] text-muted-foreground">If enabled, Omnibus will search for full series packs or collections <strong>before</strong> searching for individual issues. Highly recommended for faster library building.</p>
+                            </div>
+                        </div>
+
+                        {/* GetComics Interactive Search Depth */}
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label htmlFor="getcomics_interactive_pages" className="font-bold text-foreground">Interactive Search Depth (Pages)</Label>
+                            <Input 
+                                id="getcomics_interactive_pages" 
+                                type="number" 
+                                min="1" 
+                                max="15" 
+                                value={config.getcomics_interactive_pages || "4"} 
+                                onChange={(e) => setConfig({ ...config, getcomics_interactive_pages: e.target.value })} 
+                                className="h-12 sm:h-10 bg-background border-border text-foreground w-full sm:w-32"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                The maximum number of pages GetComics will scan during manual UI searches. Higher numbers pull more results but take longer to load. (Default: 4)
+                            </p>
+                        </div>
+
+                        {/* GetComics Automated Search Depth */}
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label htmlFor="getcomics_automated_pages" className="font-bold text-foreground">Automated Search Depth (Pages)</Label>
+                            <Input 
+                                id="getcomics_automated_pages" 
+                                type="number" 
+                                min="1" 
+                                max="15" 
+                                value={config.getcomics_automated_pages || "5"} 
+                                onChange={(e) => setConfig({ ...config, getcomics_automated_pages: e.target.value })} 
+                                className="h-12 sm:h-10 bg-background border-border text-foreground w-full sm:w-32"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                The maximum number of pages GetComics will scan during background download queue tasks. (Default: 5)
+                            </p>
                         </div>
                     </div>
 

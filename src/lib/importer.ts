@@ -10,64 +10,10 @@ import { SystemNotifier } from './notifications';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
+import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
 
 function sanitize(str: string) {
   return str.replace(/[<>:"/\\|?*]/g, '').trim();
-}
-
-function isSameIssue(num1: string | number, num2: string | number): boolean {
-    // Splits the string into [Full Match, Numbers, Letters]
-    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
-    const m1 = String(num1).trim().match(regex);
-    const m2 = String(num2).trim().match(regex);
-    
-    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
-
-    const float1 = parseFloat(m1[1] || "0");
-    const float2 = parseFloat(m2[1] || "0");
-    const suffix1 = m1[2].toUpperCase().trim();
-    const suffix2 = m2[2].toUpperCase().trim();
-
-    return float1 === float2 && suffix1 === suffix2;
-}
-
-function extractIssueNumber(filename: string): string {
-    let clean = filename.replace(/\.\w+$/, ''); 
-    clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-    
-    // 1. HIGHEST PRIORITY
-    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    if (issueMatch) {
-        const num = issueMatch[1].replace(/^0+(?=\d)/, '');
-        Logger.log(`[Issue Extractor Debug] Matched explicit #/Issue rule for "${filename}" -> Result: ${num}`, 'debug');
-        return num;
-    }
-
-    // 2. SECONDARY PRIORITY
-    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
-    if (volMatch) {
-        const num = volMatch[1].replace(/^0+(?=\d)/, '');
-        Logger.log(`[Issue Extractor Debug] Matched Volume/V rule for "${filename}" -> Result: ${num}`, 'debug');
-        return num;
-    }
-    
-    // 3. FALLBACK
-    const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) {
-        for (let i = matches.length - 1; i >= 0; i--) {
-            const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
-            const numVal = parseFloat(matchVal);
-            
-            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) {
-                continue; 
-            }
-            Logger.log(`[Issue Extractor Debug] Matched Fallback end-of-string rule for "${filename}" -> Result: ${matchVal}`, 'debug');
-            return matchVal;
-        }
-    }
-    
-    Logger.log(`[Issue Extractor Debug] Failed to match any extraction rule for "${filename}". Defaulting to "1"`, 'debug');
-    return "1"; 
 }
 
 function fixMagicNumberSync(filePath: string): string {

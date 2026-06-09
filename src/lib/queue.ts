@@ -14,23 +14,9 @@ import { isReleasedYet } from '@/lib/utils';
 import { searchAndDownload } from '@/lib/automation';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
+import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
 
 const execFileAsync = promisify(execFile);
-
-function isSameIssue(num1: string | number, num2: string | number): boolean {
-    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
-    const m1 = String(num1).trim().match(regex);
-    const m2 = String(num2).trim().match(regex);
-    
-    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
-
-    const float1 = parseFloat(m1[1] || "0");
-    const float2 = parseFloat(m2[1] || "0");
-    const suffix1 = m1[2].toUpperCase().trim();
-    const suffix2 = m2[2].toUpperCase().trim();
-
-    return float1 === float2 && suffix1 === suffix2;
-}
 
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
@@ -455,40 +441,46 @@ export function initWorker() {
                 }
 
                 case 'CBR_CONVERSION': {
-                    await prisma.systemSetting.upsert({ 
-                        where: { key: 'last_converter_sync' }, 
-                        update: { value: nowStr }, 
-                        create: { key: 'last_converter_sync', value: nowStr } 
+                    await prisma.systemSetting.upsert({
+                         where: { key: 'last_converter_sync' },
+                         update: { value: nowStr },
+                         create: { key: 'last_converter_sync', value: nowStr }
                     });
-                    
+                                         
                     const { convertCbrToCbz } = await import('@/lib/converter');
-                    const cbrIssues = await prisma.issue.findMany({
-                        where: { 
-                            OR: [ 
-                                { filePath: { endsWith: '.cbr' } }, 
-                                { filePath: { endsWith: '.CBR' } }, 
-                                { filePath: { endsWith: '.rar' } }, 
-                                { filePath: { endsWith: '.RAR' } } 
-                            ] 
-                        }
-                    });
-
-                    if (cbrIssues.length === 0) {
-                        await prisma.jobLog.create({ 
-                            data: { 
-                                jobType: 'CBR_CONVERTER', 
-                                status: 'COMPLETED', 
-                                durationMs: Date.now() - startTime, 
-                                message: "No CBR files found to convert." 
-                            } 
+                    const targetIssueId = job.data?.issueId;
+                    
+                    let cbrIssues = [];
+                    if (targetIssueId) {
+                        const singleIssue = await prisma.issue.findUnique({ where: { id: targetIssueId } });
+                        if (singleIssue) cbrIssues.push(singleIssue);
+                    } else {
+                        cbrIssues = await prisma.issue.findMany({
+                            where: {
+                                 OR: [
+                                     { filePath: { endsWith: '.cbr' } },
+                                     { filePath: { endsWith: '.CBR' } },
+                                     { filePath: { endsWith: '.rar' } },
+                                     { filePath: { endsWith: '.RAR' } }
+                                 ]
+                             }
                         });
-                        break;
                     }
 
+                    if (cbrIssues.length === 0) {
+                        await prisma.jobLog.create({
+                             data: {
+                                 jobType: 'CBR_CONVERTER',
+                                 status: 'COMPLETED',
+                                 durationMs: Date.now() - startTime,
+                                 message: targetIssueId ? `Targeted issue ${targetIssueId} not found or already converted.` : "No CBR files found to convert."
+                             }
+                         });
+                        break;
+                    }
                     let successCount = 0;
                     let failCount = 0;
                     let details = `Found ${cbrIssues.length} CBR files to convert.\n\n`;
-
                     for (const issue of cbrIssues) {
                         if (!issue.filePath) continue;
                         try {
@@ -505,7 +497,6 @@ export function initWorker() {
                             details += `[FAIL] Error converting ${path.basename(issue.filePath)}: ${e.message}\n`;
                         }
                     }
-
                     await prisma.jobLog.create({
                         data: {
                             jobType: 'CBR_CONVERTER',
@@ -514,7 +505,7 @@ export function initWorker() {
                             message: details + `\nSummary: ${successCount} Converted, ${failCount} Failed.`
                         }
                     });
-                    
+                                         
                     SystemNotifier.sendAlert('job_diagnostics', { description: `CBR Conversion Sweep Complete. Converted: ${successCount}, Failed: ${failCount}` }).catch(() => {});
                     break;
                 }
@@ -685,7 +676,7 @@ export function initWorker() {
                                 const destFolder = path.join(targetLib.path, ...relFolderPath.split(/[/\\]/).map(p => p.trim()).filter(Boolean));
                                 await fs.ensureDir(destFolder);
 
-                                const extractedNum = meta.number || "1";
+                                const extractedNum = meta.number || extractIssueNumber(file);
                                 let formattedNum = extractedNum.includes('.') || extractedNum.length > 1 ? extractedNum : `0${extractedNum}`;
                                 
                                 const issueYear = meta.year ? meta.year.toString() : safeYear;
@@ -1316,28 +1307,12 @@ export function initWorker() {
 
                     const unreleasedRequests = allRequests.filter(r => r.status === 'UNRELEASED');
                     for (const req of unreleasedRequests) {
-                        const extractNum = (str: string) => {
-                            const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-                            
-                            const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                            if (issueMatch) return parseFloat(issueMatch[1]);
-                            
-                            const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
-                            if (volMatch) return parseFloat(volMatch[1]);
-                            
-                            const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                            if (fallbacks.length > 0) {
-                                for (let i = fallbacks.length - 1; i >= 0; i--) {
-                                    const numVal = parseFloat(fallbacks[i][1]);
-                                    if (numVal >= 1900 && numVal <= 2099) continue;
-                                    return numVal;
-                                }
-                            }
-                            return null;
-                        };
+                        // Remove the inline `const extractNum = (str: string) => { ... }` block entirely
+                        // and replace the reqNum assignment with the unified utility:
+                        const reqNumString = extractIssueNumber(req.activeDownloadName || "");
+                        const reqNum = parseFloat(reqNumString);
                         
-                        const reqNum = extractNum(req.activeDownloadName || "");
-                        if (reqNum !== null) {
+                        if (!isNaN(reqNum)) {
                             const matchedSeries = localSeriesList.find(s => s.metadataId === req.volumeId || s.id === req.volumeId);
                             if (matchedSeries) {
                                 const skeleton = matchedSeries.issues.find((i: any) => parseFloat(i.number) === reqNum);

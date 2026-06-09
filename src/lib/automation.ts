@@ -8,20 +8,7 @@ import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
 import { SystemNotifier } from '@/lib/notifications';
-
-// Local helper to safely compare issue numbers with formatting discrepancies (e.g., "01" vs "1")
-function looseCompareIssue(num1: string | number, num2: string | number): boolean {
-    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
-    const m1 = String(num1).trim().match(regex);
-    const m2 = String(num2).trim().match(regex);
-         
-    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
-    const float1 = parseFloat(m1[1] || "0");
-    const float2 = parseFloat(m2[1] || "0");
-    const suffix1 = m1[2].toUpperCase().trim();
-    const suffix2 = m2[2].toUpperCase().trim();
-    return float1 === float2 && suffix1 === suffix2;
-}
+import { isSameIssue } from '@/lib/utils/issue-parser';
 
 export async function getDownloadClient(protocol: string = 'torrent') {
   const clients = await prisma.downloadClient.findMany();
@@ -95,7 +82,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                   where: { seriesId: localSeries.id }
               });
 
-              const issueSkeleton = allSeriesIssues.find(i => looseCompareIssue(i.number, targetIssueNum));
+              const issueSkeleton = allSeriesIssues.find(i => isSameIssue(i.number, targetIssueNum));
 
               if (issueSkeleton && issueSkeleton.releaseDate) {
                   const parsedIssueYear = issueSkeleton.releaseDate.split('-')[0];

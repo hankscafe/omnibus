@@ -6,6 +6,7 @@ import { detectManga } from '@/lib/manga-detector';
 import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { extractIssueNumber } from '@/lib/utils/issue-parser';
 
 export const LibraryScanner = {
     async scan(): Promise<boolean | null> {
@@ -123,26 +124,6 @@ export const LibraryScanner = {
             }
 
             const existingFolders = new Set(allSeries.map(s => path.normalize(s.folderPath || "").toLowerCase()));
-
-            // --- HELPER: Fast Issue Extraction ---
-            function extractIssueNumber(filename: string): string {
-                let clean = filename.replace(/\.\w+$/, ''); 
-                clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-                const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-                if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
-                const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
-                if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
-                const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-                if (matches.length > 0) {
-                    for (let i = matches.length - 1; i >= 0; i--) {
-                        const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
-                        const numVal = parseFloat(matchVal);
-                        if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) continue; 
-                        return matchVal;
-                    }
-                }
-                return "1"; 
-            }
 
             const findSeriesFolders = async (dir: string, baseRoot: string, libId: string, libIsManga: boolean) => {
                 const folderName = path.basename(dir);

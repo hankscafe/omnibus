@@ -1,5 +1,5 @@
 # --- Stage 1: Build Environment ---
-FROM node:22-alpine3.20 AS builder
+FROM node:22-bookworm-slim AS builder
 
 # Safely update npm to the latest version for the BUILD stage only
 RUN corepack enable && corepack prepare npm@latest --activate
@@ -7,9 +7,9 @@ RUN corepack enable && corepack prepare npm@latest --activate
 # Cache-busting argument (Overridden by GitHub Actions to force fresh patch pull)
 ARG CACHEBUST=1
 
-# Build-time dependencies (Standard stable repo)
-RUN apk update && apk upgrade --no-cache && \
-    apk add --no-cache libc6-compat openssl
+# Build-time dependencies (Debian stable repo)
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -32,18 +32,21 @@ RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {
 RUN find .next/standalone/node_modules -type d -name "uuid" -exec rm -rf {} + || true
 
 # Force secure versions into the standalone folder
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.5 nodemailer@latest uuid@latest --no-save --legacy-peer-deps --force
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nodemailer@latest uuid@latest --no-save --legacy-peer-deps --force
+
+# --- THE FIX: Inject the missing native binaries into the standalone output ---
+RUN cp -r node_modules/node-unar .next/standalone/node_modules/
 
 # --- Stage 2: Final Production Image ---
-FROM node:22-alpine3.20 AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 
 # Cache-busting argument for the final stage
 ARG CACHEBUST=1
 
-# Apply OS patches (Standard stable repo)
-RUN apk update && apk upgrade --no-cache && \
-    apk add --no-cache busybox libc6-compat openssl
+# Apply OS patches (Debian stable repo)
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # --- THE CLEANUP CRUSHER ---
 # Omnibus runs via 'node server.js'. It does NOT need npm at runtime.

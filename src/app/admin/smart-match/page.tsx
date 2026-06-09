@@ -14,6 +14,35 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 
+const extractIssueNumberClient = (filename: string): string => {
+    let clean = filename.replace(/\.\w+$/, '');
+    clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+    const crossRefRegex = /[\[\(][^[\]()]*[a-zA-Z]+[^[\]()]*\d+[^[\]()]*[\]\)]/g;
+    clean = clean.replace(crossRefRegex, (match) => {
+        if (match.match(/(?:#|issue|ch(?:apter)?|vol(?:ume)?|v\s*\.)/i)) return match;
+        return '';
+    });
+    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
+    let volumeNum: string | null = null;
+    const volRegex = /(?<=^|[^a-zA-Z])(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/gi;
+    const noVolString = clean.replace(volRegex, (match, p1) => {
+        if (!volumeNum) volumeNum = p1.replace(/^0+(?=\d)/, '');
+        return '';
+    });
+    const matches = [...noVolString.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
+    if (matches.length > 0) {
+        for (let i = matches.length - 1; i >= 0; i--) {
+            const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
+            const numVal = parseFloat(matchVal);
+            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) continue;
+            return matchVal;
+        }
+    }
+    if (volumeNum) return volumeNum;
+    return "1";
+};
+
 export default function SmartMatchPage() {
     const [unmatched, setUnmatched] = useState<any[]>([]);
     const [suggestions, setSuggestions] = useState<Record<string, any>>({});
@@ -25,6 +54,11 @@ export default function SmartMatchPage() {
     const [manualMatchId, setManualMatchId] = useState("");
     const [manualMatchTarget, setManualMatchTarget] = useState<any>(null);
     const [isManualMatching, setIsManualMatching] = useState(false);
+
+    const [exactIssueId, setExactIssueId] = useState("");
+    const [exactIssueNumber, setExactIssueNumber] = useState("");
+    const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string }>>({});
+    const [manualMatchResult, setManualMatchResult] = useState<any>(null);
     
     // --- NEW: Multi-Select & Bulk Processing State ---
     const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -136,6 +170,8 @@ export default function SmartMatchPage() {
         try {
             Logger.log(`[Smart Match Debug] Accepting match for "${series.name}". Linking to ${suggestion.metadataSource || 'COMICVINE'} ID: ${suggestion.id}`, 'debug');
             
+            const override = issueOverrides[series.id] || {};
+            
             const res = await fetch('/api/library/match-series', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -146,7 +182,9 @@ export default function SmartMatchPage() {
                     metadataSource: suggestion.metadataSource || 'COMICVINE',
                     name: suggestion.name,
                     year: suggestion.year,
-                    publisher: suggestion.publisher
+                    publisher: suggestion.publisher,
+                    exactIssueId: override.issueId || undefined,
+                    exactIssueNumber: override.issueNumber || undefined
                 })
             });
 
@@ -200,6 +238,7 @@ export default function SmartMatchPage() {
 
     const handleManualLookup = async () => {
         setIsManualMatching(true);
+        setManualMatchResult(null); // Reset previous searches
         try {
             const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9a-zA-Z-]/g, '');
             if (!cleanId) throw new Error("Invalid ID format");
@@ -210,34 +249,56 @@ export default function SmartMatchPage() {
             const data = await res.json();
 
             if (res.ok && data && !data.error) {
+                // FIX: Accurately parse the issue count from either API
+                const issueCount = data.count || data.count_of_issues || data.issue_count || data.issues?.length || "?";
+
                 const suggestionData = {
                     id: data.id || data.volumeId,
                     name: data.name,
                     year: data.year,
                     publisher: data.publisher,
                     image: data.image,
-                    count: "?",
-                    metadataSource: searchProvider
+                    count: issueCount,
+                    description: data.description,
+                    metadataSource: searchProvider,
+                    rawIssues: data.issues || [] // Hold onto raw issues for cross-referencing IDs
                 };
 
-                if (isBulkManualMatch) {
-                    setSuggestions(prev => {
-                        const next = { ...prev };
-                        selectedItems.forEach(id => {
-                            next[id] = suggestionData;
-                        });
-                        return next;
-                    });
-                    toast({ title: "Custom ID Applied", description: "Matches set for selected items. Click 'Accept Selected' to confirm and save." });
-                } else {
-                    setSuggestions(prev => ({
-                        ...prev,
-                        [manualMatchTarget.id]: suggestionData
-                    }));
-                    toast({ title: "Match Found", description: "You can now accept the manual match." });
-                }
+                // Show preview instead of closing modal
+                setManualMatchResult(suggestionData);
                 
-                setManualMatchOpen(false);
+                // AUTO-MAP: Extract issue numbers and match IDs
+                const newOverrides = { ...issueOverrides };
+                const itemsToMap = isBulkManualMatch ? Array.from(selectedItems) : (manualMatchTarget ? [manualMatchTarget.id] : []);
+
+                itemsToMap.forEach(id => {
+                    const item = unmatched.find(s => s.id === id);
+                    if (item?.isRawFile) {
+                        const extractedNum = extractIssueNumberClient(item.name);
+                        let matchedIssueId = "";
+
+                        // If the API provided the volume's issue list, try to find the exact ID match
+                        if (suggestionData.rawIssues?.length > 0) {
+                            const apiIssue = suggestionData.rawIssues.find((i: any) => {
+                                const apiNum = i.issue_number?.toString() || i.number?.toString();
+                                return apiNum?.replace(/^0+(?=\d)/, '') === extractedNum.replace(/^0+(?=\d)/, '');
+                            });
+                            if (apiIssue) matchedIssueId = apiIssue.id?.toString() || "";
+                        }
+
+                        newOverrides[id] = { issueNumber: extractedNum, issueId: matchedIssueId };
+                        
+                        // Update individual states for single-match mode
+                        if (!isBulkManualMatch) {
+                            setExactIssueNumber(extractedNum);
+                            setExactIssueId(matchedIssueId);
+                        }
+                    }
+                });
+
+                setIssueOverrides(newOverrides);
+                toast({ title: "Volume Found", description: "Review the metadata and issue mappings, then click Apply Match." });
+
             } else {
                 throw new Error(data.error || "Volume not found");
             }
@@ -245,8 +306,30 @@ export default function SmartMatchPage() {
             toast({ title: "Lookup Failed", description: e.message, variant: "destructive" });
         } finally {
             setIsManualMatching(false);
-            setIsBulkManualMatch(false);
         }
+    };
+
+    const handleApplyManualMatch = () => {
+        if (!manualMatchResult) return;
+
+        if (isBulkManualMatch) {
+            setSuggestions(prev => {
+                const next = { ...prev };
+                selectedItems.forEach(id => { next[id] = manualMatchResult; });
+                return next;
+            });
+            toast({ title: "Custom ID Applied", description: "Matches set for selected items. Click 'Accept Selected' to confirm and save." });
+        } else if (manualMatchTarget) {
+            setSuggestions(prev => ({
+                ...prev,
+                [manualMatchTarget.id]: manualMatchResult
+            }));
+            toast({ title: "Match Found", description: "You can now accept the manual match." });
+        }
+        
+        setManualMatchOpen(false);
+        setManualMatchResult(null);
+        setIsBulkManualMatch(false);
     };
 
     const handleDismiss = (id: string) => {
@@ -444,7 +527,10 @@ export default function SmartMatchPage() {
                                             setManualMatchTarget(series);
                                             setIsBulkManualMatch(false);
                                             setManualMatchOpen(true);
+                                            setManualMatchResult(null);
                                             setManualMatchId("");
+                                            setExactIssueId(issueOverrides[series.id]?.issueId || "");
+                                            setExactIssueNumber(issueOverrides[series.id]?.issueNumber || "");
                                         }}
                                     >
                                         <Search className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Custom ID</span>
@@ -482,6 +568,7 @@ export default function SmartMatchPage() {
                                 setIsBulkManualMatch(true);
                                 setManualMatchTarget(null);
                                 setManualMatchOpen(true);
+                                setManualMatchResult(null);
                                 setManualMatchId("");
                             }}
                         >
@@ -511,7 +598,8 @@ export default function SmartMatchPage() {
                                 : `Enter the exact ID for ${manualMatchTarget?.name}.`}
                         </DialogDescription>
                     </DialogHeader>
-                    <div className="py-4 space-y-4">
+                    
+                    <div className="py-2 space-y-4">
                         {metronConfigured && (
                             <div className="space-y-2">
                                 <Label>Metadata Source</Label>
@@ -526,27 +614,140 @@ export default function SmartMatchPage() {
                                 </Select>
                             </div>
                         )}
+                        
                         <div className="space-y-2">
                             <Label>{searchProvider === 'METRON' ? 'Metron Series ID (or Slug)' : 'ComicVine Volume ID'}</Label>
-                            <Input 
-                                value={manualMatchId} 
-                                onChange={(e) => setManualMatchId(e.target.value)} 
-                                placeholder="e.g. 4050-12345 or 12746"
-                                className="bg-background border-border"
-                            />
+                            <div className="flex gap-2 items-start">
+                                <Input 
+                                    value={manualMatchId} 
+                                    onChange={(e) => setManualMatchId(e.target.value)} 
+                                    placeholder="e.g. 4050-12345 or 12746"
+                                    className="bg-background border-border flex-1"
+                                    onKeyDown={(e) => e.key === 'Enter' && manualMatchId && handleManualLookup()}
+                                />
+                                <Button onClick={handleManualLookup} disabled={isManualMatching || !manualMatchId} className="shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 font-bold">
+                                    {isManualMatching ? <Loader2 className="w-4 h-4 animate-spin md:mr-2" /> : <Search className="w-4 h-4 md:mr-2" />} 
+                                    <span className="hidden md:inline">Look Up</span>
+                                </Button>
+                            </div>
                             <p className="text-[11px] text-muted-foreground mt-1.5">
-                                Tip: Search on{" "}
-                                <a href="https://comicvine.gamespot.com/volumes/" target="_blank" rel="noreferrer" className="text-primary underline">ComicVine</a> 
-                                {" "}or{" "}
-                                <a href="https://metron.cloud/series/" target="_blank" rel="noreferrer" className="text-primary underline">Metron</a> 
-                                {" "}to find the correct volume/series ID.
+                                Tip: Search on <a href="https://comicvine.gamespot.com/volumes/" target="_blank" rel="noreferrer" className="text-primary underline">ComicVine</a> or <a href="https://metron.cloud/series/" target="_blank" rel="noreferrer" className="text-primary underline">Metron</a> to find the correct volume/series ID.
                             </p>
                         </div>
+
+                        {/* --- NEW: SERIES PREVIEW --- */}
+                        {manualMatchResult && (
+                            <div className="mt-4 p-3 bg-muted/40 rounded-xl border border-border flex gap-4 items-start animate-in fade-in slide-in-from-top-2">
+                                <div className="w-[72px] h-[108px] shrink-0 rounded bg-background border border-border overflow-hidden shadow-sm">
+                                    {manualMatchResult.image ? <img src={manualMatchResult.image} className="w-full h-full object-cover" alt="Cover" /> : <ImageIcon className="w-6 h-6 m-auto mt-10 text-muted-foreground/50" />}
+                                </div>
+                                <div className="min-w-0 flex-1 flex flex-col">
+                                    <h4 className="font-bold text-foreground break-words whitespace-normal text-sm leading-tight">{manualMatchResult.name}</h4>
+                                    
+                                    <div className="flex items-center gap-2 mt-1.5 mb-2 flex-wrap">
+                                        <p className="text-[11px] font-medium text-muted-foreground shrink-0">{manualMatchResult.publisher || 'Unknown'} • {manualMatchResult.year || '????'}</p>
+                                        <div className="inline-flex px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 uppercase tracking-wider shrink-0">
+                                            {manualMatchResult.count} Issues
+                                        </div>
+                                        
+                                        {/* --- NEW: Dynamic External Link --- */}
+                                        <a 
+                                            href={manualMatchResult.metadataSource === 'METRON' ? `https://metron.cloud/series/${manualMatchResult.id}/` : `https://comicvine.gamespot.com/volume/4050-${manualMatchResult.id}/`} 
+                                            target="_blank" 
+                                            rel="noopener noreferrer" 
+                                            className="text-[10px] font-bold text-primary hover:underline flex items-center gap-1 ml-auto shrink-0"
+                                        >
+                                            <ExternalLink className="w-3 h-3" /> 
+                                            View on {manualMatchResult.metadataSource === 'METRON' ? 'Metron' : 'ComicVine'}
+                                        </a>
+                                    </div>
+
+                                    {manualMatchResult.description && (
+                                        <p className="text-[11px] text-muted-foreground/80 leading-snug line-clamp-4" title={manualMatchResult.description}>
+                                            {manualMatchResult.description}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* --- OPTIONAL ISSUE MAPPING (Only visible if preview loaded) --- */}
+                        {manualMatchResult && ((manualMatchTarget?.isRawFile && !isBulkManualMatch) || isBulkManualMatch) && (
+                            <div className="space-y-3 mt-2 pt-4 border-t border-border max-h-[35vh] overflow-y-auto pr-2 animate-in fade-in">
+                                <h4 className="font-bold text-sm text-primary flex items-center gap-2">
+                                    <FileText className="w-4 h-4" /> Issue Mapping (Auto-Filled)
+                                </h4>
+                                <p className="text-xs text-muted-foreground leading-tight">
+                                    Omnibus has extracted the issue numbers and cross-referenced them with the API to auto-fill exact Issue IDs. You can manually correct these below before applying.
+                                </p>
+                                
+                                {/* Single Match View */}
+                                {!isBulkManualMatch && manualMatchTarget && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1">
+                                            <Label className="text-[11px] text-muted-foreground uppercase">Issue Number</Label>
+                                            <Input 
+                                                placeholder="e.g. 1" 
+                                                value={issueOverrides[manualMatchTarget.id]?.issueNumber ?? exactIssueNumber} 
+                                                onChange={e => {
+                                                    setExactIssueNumber(e.target.value);
+                                                    setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueNumber: e.target.value } }));
+                                                }} 
+                                                className="bg-background border-border h-9" 
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label className="text-[11px] text-muted-foreground uppercase">Exact Issue ID</Label>
+                                            <Input 
+                                                placeholder="Optional" 
+                                                value={issueOverrides[manualMatchTarget.id]?.issueId ?? exactIssueId} 
+                                                onChange={e => {
+                                                    setExactIssueId(e.target.value);
+                                                    setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueId: e.target.value } }));
+                                                }} 
+                                                className="bg-background border-border h-9" 
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Bulk Match View */}
+                                {isBulkManualMatch && Array.from(selectedItems).map(id => {
+                                    const item = unmatched.find(s => s.id === id);
+                                    if (!item?.isRawFile) return null;
+                                    
+                                    return (
+                                        <div key={id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 p-2.5 border border-border rounded-lg bg-muted/20 items-center">
+                                            <div className="sm:col-span-6 truncate text-xs font-medium text-foreground" title={item.name}>
+                                                {item.name}
+                                            </div>
+                                            <div className="sm:col-span-3">
+                                                <Input 
+                                                    placeholder="Issue #" 
+                                                    value={issueOverrides[id]?.issueNumber || ""} 
+                                                    onChange={e => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], issueNumber: e.target.value, issueId: prev[id]?.issueId || "" } }))} 
+                                                    className="h-8 text-xs bg-background border-border" 
+                                                />
+                                            </div>
+                                            <div className="sm:col-span-3">
+                                                <Input 
+                                                    placeholder="Issue ID" 
+                                                    value={issueOverrides[id]?.issueId || ""} 
+                                                    onChange={e => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], issueId: e.target.value, issueNumber: prev[id]?.issueNumber || "" } }))} 
+                                                    className="h-8 text-xs bg-background border-border" 
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
-                    <DialogFooter className="gap-2 sm:gap-0">
-                        <Button variant="outline" onClick={() => setManualMatchOpen(false)} disabled={isManualMatching} className="border-border hover:bg-muted text-foreground">Cancel</Button>
-                        <Button onClick={handleManualLookup} disabled={isManualMatching || !manualMatchId} className="bg-primary text-primary-foreground hover:bg-primary/90 font-bold">
-                            {isManualMatching ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Search className="w-4 h-4 mr-2" />} Look Up ID
+                    
+                    <DialogFooter className="gap-2 sm:gap-0 mt-2">
+                        <Button variant="outline" onClick={() => { setManualMatchOpen(false); setManualMatchResult(null); }} className="border-border hover:bg-muted text-foreground">Cancel</Button>
+                        <Button onClick={handleApplyManualMatch} disabled={!manualMatchResult} className="bg-green-600 text-white hover:bg-green-700 font-bold">
+                            <Check className="w-4 h-4 mr-2" /> Apply Match
                         </Button>
                     </DialogFooter>
                 </DialogContent>

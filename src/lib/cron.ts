@@ -6,6 +6,7 @@ import { Importer } from './importer';
 import { omnibusQueue, syncSchedules } from '@/lib/queue';
 import { DiscordNotifier } from '@/lib/discord';
 import { getErrorMessage } from './utils/error';
+import { extractIssueNumber } from '@/lib/utils/issue-parser';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
@@ -162,21 +163,8 @@ export function initCronJobs() {
                       
                       Logger.log(`[Cron Debug] Evaluating active torrent "${torrent.name}" against DB Request "${r.activeDownloadName}"`, 'debug');
 
-                      const extractNum = (str: string) => {
-                          const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-                          const chMatch = clean.match(/(?:ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                          if (chMatch) return parseFloat(chMatch[1]);
-                          const issueMatch = clean.match(/(?:#|issue\s*#?)\s*0*(\d+(?:\.\d+)?)/i);
-                          if (issueMatch) return parseFloat(issueMatch[1]);
-                          const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                          if (volMatch) return parseFloat(volMatch[1]);
-                          const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                          if (fallbacks.length > 0) return parseFloat(fallbacks[fallbacks.length - 1][1]);
-                          return null;
-                      };
-
-                      const reqNum = extractNum(reqNameLower);
-                      const torNum = extractNum(torNameLower);
+                      const reqNum = parseFloat(extractIssueNumber(reqNameLower));
+                      const torNum = parseFloat(extractIssueNumber(torNameLower));
 
                       const reqYear = seriesYearMap.get(r.volumeId);
                       const torYearMatch = torNameLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);

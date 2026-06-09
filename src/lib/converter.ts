@@ -6,8 +6,7 @@ import sharp from 'sharp';
 import { Logger } from '@/lib/logger';
 import { prisma } from '@/lib/db';
 import crypto from 'crypto';
-// @ts-ignore
-import { createExtractorFromFile } from 'node-unrar-js/esm';
+import { unpack } from 'node-unar';
 import { getErrorMessage } from './utils/error';
 
 export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
@@ -29,21 +28,14 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         const convertToWebp = config.convert_to_webp === 'true';
         const webpQuality = parseInt(config.webp_quality || '80', 10);
         
-        const options: any = { 
-             filepath: cbrPath,
-             targetPath: tempDir 
-          };
-                 
-        const wasmPath = path.join(process.cwd(), 'node_modules', 'node-unrar-js', 'esm', 'js', 'unrar.wasm');
-        if (fs.existsSync(wasmPath)) {
-            const wasmBuf = fs.readFileSync(wasmPath);
-            options.wasmBinary = wasmBuf.buffer.slice(wasmBuf.byteOffset, wasmBuf.byteOffset + wasmBuf.byteLength);
-        }
+        // --- UPDATED EXTRACTION LOGIC ---
+        await unpack(cbrPath, {
+            targetDir: tempDir,
+            forceOverwrite: true,
+            noDirectory: true // Prevents it from creating an unwanted sub-folder
+        });
+        // --------------------------------
         
-        const extractor = await createExtractorFromFile(options);
-        const extracted = extractor.extract();
-         
-        Array.from((extracted.files as any) || []);
         const allImages: string[] = [];
         
         async function findImages(currentDir: string) {

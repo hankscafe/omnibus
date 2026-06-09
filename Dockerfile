@@ -37,8 +37,10 @@ WORKDIR /app
 
 ARG CACHEBUST=1
 
-# 2. Upgrade all OS packages to patch the "Fixable" CVEs (gnutls28, perl, tar, etc.)
-RUN apt-get update && apt-get upgrade -y && \
+# 2. Upgrade OS and explicitly force perl-base to patch High Severity CVEs
+RUN apt-get update && \
+    apt-get install -y --only-upgrade perl-base && \
+    apt-get dist-upgrade -y && \
     apt-get install -y --no-install-recommends openssl ca-certificates
 
 # 3. --- OS CACHE CLEANUP ---

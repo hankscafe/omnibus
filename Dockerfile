@@ -37,9 +37,9 @@ WORKDIR /app
 
 ARG CACHEBUST=1
 
-# 1. Grab any patches Debian DOES have available, and install OpenSSL
+# 1. Grab any patches Debian DOES have available, and install OpenSSL and unar
 RUN apt-get update && apt-get dist-upgrade -y && \
-    apt-get install -y --no-install-recommends openssl ca-certificates
+    apt-get install -y --no-install-recommends openssl ca-certificates unar
 
 # 2. --- THE NUCLEAR OS CLEANUP ---
 # Because apt-get refuses to uninstall tar/perl due to dpkg dependencies, 

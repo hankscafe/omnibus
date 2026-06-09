@@ -32,7 +32,7 @@ RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {
 RUN find .next/standalone/node_modules -type d -name "uuid" -exec rm -rf {} + || true
 
 # Force secure versions into the standalone folder
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nodemailer@latest uuid@latest --no-save --legacy-peer-deps --force
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nodemailer@latest uuid@11.1.1 --no-save --legacy-peer-deps --force
 
 # --- THE FIX: Inject the missing native binaries into the standalone output ---
 RUN cp -r node_modules/node-unar .next/standalone/node_modules/

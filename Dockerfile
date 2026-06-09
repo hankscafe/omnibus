@@ -31,22 +31,29 @@ RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nod
 RUN cp -r node_modules/node-unar .next/standalone/node_modules/
 
 # --- Stage 2: Final Production Image ---
-# 1. Update to the newer slim base image
 FROM node:26-slim AS runner
 WORKDIR /app
 
 ARG CACHEBUST=1
 
-# 2. Upgrade OS and explicitly force perl-base to patch High Severity CVEs
-RUN apt-get update && \
-    apt-get install -y --only-upgrade perl-base && \
-    apt-get dist-upgrade -y && \
+# 1. Grab any patches Debian DOES have available, and install OpenSSL
+RUN apt-get update && apt-get dist-upgrade -y && \
     apt-get install -y --no-install-recommends openssl ca-certificates
 
-# 3. --- OS CACHE CLEANUP ---
-RUN apt-get autoremove -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+# 2. --- THE NUCLEAR OS CLEANUP ---
+# Because apt-get refuses to uninstall tar/perl due to dpkg dependencies, 
+# and Omnibus does NOT need apt, dpkg, tar, perl, or systemd at runtime,
+# we completely bypass the package manager and manually obliterate the 
+# vulnerable binaries and the dpkg tracking database.
+USER root
+RUN rm -rf \
+    /var/lib/dpkg \
+    /var/lib/apt \
+    /var/cache/apt \
+    /usr/bin/perl /usr/share/perl \
+    /usr/bin/tar /bin/tar \
+    /usr/lib/systemd /lib/systemd \
+    /usr/bin/apt* /usr/bin/dpkg*
 
 # --- THE NPM CLEANUP CRUSHER ---
 RUN rm -rf /usr/local/lib/node_modules/npm \

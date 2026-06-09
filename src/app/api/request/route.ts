@@ -61,8 +61,15 @@ export async function GET(request: NextRequest) {
       );
       let issueNumberStr = "";
       
-      const regexMatch = req.activeDownloadName?.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-      if (regexMatch) issueNumberStr = ` Issue #${regexMatch[1].padStart(3, '0')}`;
+      // Added -? to capture the negative sign
+      const regexMatch = req.activeDownloadName?.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)/i);
+      if (regexMatch) {
+          let parsedNum = regexMatch[1];
+          const isNeg = parsedNum.startsWith('-');
+          if (isNeg) parsedNum = parsedNum.substring(1);
+          
+          issueNumberStr = ` Issue #${isNeg ? '-' : ''}${parsedNum.padStart(3, '0')}`;
+      }
 
       let finalImageUrl = req.imageUrl;
 
@@ -300,9 +307,9 @@ export async function POST(request: NextRequest) {
       });
 
       const ownedIssueNumbers = new Set(existingLibraryIssues.map(i => {
-          const match = i.number.match(/(\d+(?:\.\d+)?)/);
-          return match ? parseFloat(match[1]) : NaN;
-      }).filter(n => !isNaN(n)));
+           const match = i.number.match(/(-?\d+(?:\.\d+)?)/);
+           return match ? parseFloat(match[1]) : NaN;
+       }).filter(n => !isNaN(n)));
 
       if (metadataSource === 'METRON') {
           const metron = new MetronProvider();

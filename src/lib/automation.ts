@@ -74,7 +74,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
           }
 
           const cleanReqName = (freshReq.activeDownloadName || name).replace(/\.\w+$/, '');
-          const issueNumMatch = cleanReqName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+          const issueNumMatch = cleanReqName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?[a-zA-Z]?)/i);
           
           if (issueNumMatch) {
               const targetIssueNum = issueNumMatch[1];

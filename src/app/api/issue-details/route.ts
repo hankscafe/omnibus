@@ -64,7 +64,7 @@ export async function GET(request: Request) {
             let finalName = `${volName} #${issueNum}`;
             
             // --- FIX: Ensure the API strictly ignores the generic "Issue #3" override ---
-            const isGeneric = issueTitle.match(/^Issue\s*#?\s*\d+$/i) !== null;
+            const isGeneric = issueTitle.match(/^Issue\s*#?\s*-?\d+$/i) !== null;
             
             if (issueTitle && issueTitle !== volName && !issueTitle.includes(`#${issueNum}`) && !isGeneric) {
                 finalName += `: ${issueTitle}`;

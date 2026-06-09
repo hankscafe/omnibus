@@ -19,9 +19,11 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     let searchName = name;
     
     // --- SMART SUBTITLE SLICER ---
-    const isSingleIssue = /(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+/i.test(name);
+    // Added -? to correctly identify single-issue requests for negative numbers
+    const isSingleIssue = /(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+/i.test(name);
     if (isSingleIssue) {
-        const splitMatch = name.match(/^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*(.*)$/i);
+        // Added -? to properly split subtitles from negative issues
+        const splitMatch = name.match(/^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*(.*)$/i);
         if (splitMatch) {
             searchName = splitMatch[1].trim();
         }

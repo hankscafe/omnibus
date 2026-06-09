@@ -22,7 +22,13 @@ const extractIssueNumberClient = (filename: string): string => {
         if (match.match(/(?:#|issue|ch(?:apter)?|vol(?:ume)?|v\s*\.)/i)) return match;
         return '';
     });
-    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    // GUARDED NEGATIVE CHECK (Mirrors backend logic)
+    const explicitNegative = clean.match(/(?:#\s*-|issue\s+#?-|issue\s+-|ch(?:apter)?\s+-|vol(?:ume)?\s+-|v\s*-)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    if (explicitNegative) {
+        return "-" + explicitNegative[1].replace(/^0+(?=\d)/, '');
+    }
+
+    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?|vol(?:ume)?|v\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
     let volumeNum: string | null = null;
     const volRegex = /(?<=^|[^a-zA-Z])(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/gi;

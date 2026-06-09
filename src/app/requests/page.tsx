@@ -55,7 +55,8 @@ function RequestCard({
     if (!desc && req.volumeId) {
         setLoadingDesc(true);
         try {
-            const issueMatch = req.seriesName?.match(/#(\d+(?:\.\d+)?)/);
+            // Added -? to correctly fetch synopses for negative issue requests
+            const issueMatch = req.seriesName?.match(/#(-?\d+(?:\.\d+)?)/);
             
             if (issueMatch) {
                 const targetIssueNum = parseFloat(issueMatch[1]);

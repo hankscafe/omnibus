@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { InteractiveSearchModal } from '@/components/interactive-search-modal';
 
@@ -25,7 +25,7 @@ describe('Component: InteractiveSearchModal', () => {
         window.PointerEvent = class PointerEvent extends Event {} as any;
     });
 
-    it('should optimize the initial query by stripping subtitles and appending the year', () => {
+    it('should optimize the initial query by stripping subtitles and appending the year', async () => {
         const comicData = {
             cvId: 123,
             year: '1988',
@@ -45,10 +45,14 @@ describe('Component: InteractiveSearchModal', () => {
 
         // The search box should have aggressively stripped the subtitle and isolated the year
         const searchInput = screen.getByRole('textbox');
-        expect(searchInput).toHaveValue('Batman 1988');
+        
+        // Wrap in waitFor to account for state updates in useEffect
+        await waitFor(() => {
+            expect(searchInput).toHaveValue('Batman 1988');
+        });
     });
     
-    it('should correctly pad issue numbers during optimization', () => {
+    it('should correctly pad issue numbers during optimization', async () => {
         const comicData = {
             cvId: 123,
             year: '2016',
@@ -68,6 +72,10 @@ describe('Component: InteractiveSearchModal', () => {
 
         // Base name is "Batman", issue "1" -> "001", year "2016"
         const searchInput = screen.getByRole('textbox');
-        expect(searchInput).toHaveValue('Batman 001 2016');
+        
+        // Wrap in waitFor to account for state updates in useEffect
+        await waitFor(() => {
+            expect(searchInput).toHaveValue('Batman 001 2016');
+        });
     });
 });

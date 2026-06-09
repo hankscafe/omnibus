@@ -52,7 +52,7 @@ export async function GET(request: Request) {
         }
 
         const fileName = path.basename(p.issue.filePath || '');
-        const explicitMatch = fileName.match(/(?:#|issue\s*#?)\s*(\d+(\.\d+)?)/i);
+        const explicitMatch = fileName.match(/(?:#|issue\s*#?)\s*(-?\d+(\.\d+)?)/i);
         
         let parsedNum = p.issue.number;
         if (explicitMatch) parsedNum = explicitMatch[1];

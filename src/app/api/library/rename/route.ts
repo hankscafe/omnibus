@@ -104,13 +104,23 @@ export async function POST(request: NextRequest) {
             }
 
             const ext = path.extname(actualFilePath);
-            let paddedNum = issue.number;
+            
+            let paddedNum = String(issue.number || "0");
+            
+            // 1. Check for and temporarily remove the negative sign
+            const isNegative = paddedNum.startsWith('-');
+            if (isNegative) paddedNum = paddedNum.substring(1);
+
+            // 2. Safely apply zero-padding
             if (!paddedNum.includes('.')) {
                 paddedNum = paddedNum.padStart(3, '0');
             } else {
                 const parts = paddedNum.split('.');
                 paddedNum = `${parts[0].padStart(3, '0')}.${parts[1]}`;
             }
+            
+            // 3. Re-attach the negative sign
+            if (isNegative) paddedNum = '-' + paddedNum;
 
             // FIX: Determine correct file pattern based on manga status
             const patternToUse = s.isManga ? activeMangaFilePattern : activeFilePattern;

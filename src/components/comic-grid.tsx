@@ -430,8 +430,9 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                 <>
                 <div className="flex-1 overflow-y-auto p-4 sm:p-6">
                     <div className="mb-4 sm:mb-6">
-                         <DialogTitle className="text-2xl sm:text-3xl font-bold leading-tight mb-2 text-foreground pr-8">{selectedComic.name}</DialogTitle>
-                         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                        <DialogTitle className="text-2xl sm:text-3xl font-bold leading-tight mb-2 text-foreground pr-8">{selectedComic.name}</DialogTitle>
+                        <DialogDescription className="sr-only">Details and download actions for {selectedComic.name}</DialogDescription>
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                            <Badge variant="outline" className="gap-1 font-normal border-border text-muted-foreground"><Calendar className="w-3 h-3"/> {selectedComic.year}</Badge>
                            {selectedComic.publisher && selectedComic.publisher !== 'Unknown' && (<span className="text-sm font-bold text-muted-foreground">{selectedComic.publisher}</span>)}
                          </div>

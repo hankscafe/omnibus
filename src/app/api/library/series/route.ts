@@ -10,6 +10,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
+import { extractIssueNumber } from '@/lib/utils/issue-parser';
 
 const safeParse = (str: string | null) => {
     if (!str) return [];
@@ -17,30 +18,6 @@ const safeParse = (str: string | null) => {
         const arr = JSON.parse(str); 
         return Array.isArray(arr) ? arr.filter((item: string) => item !== "NONE") : [];
     } catch { return []; }
-}
-
-function extractIssueNumber(filename: string): string {
-    let clean = filename.replace(/\.\w+$/, ''); 
-    clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-    
-    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
-
-    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
-    if (volMatch) return volMatch[1].replace(/^0+(?=\d)/, '');
-    
-    const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) {
-        for (let i = matches.length - 1; i >= 0; i--) {
-            const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
-            const numVal = parseFloat(matchVal);
-            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) {
-                continue; 
-            }
-            return matchVal;
-        }
-    }
-    return "1"; 
 }
 
 export async function GET(request: Request) {

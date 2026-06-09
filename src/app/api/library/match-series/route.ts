@@ -14,41 +14,12 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { authOptions } from '@/lib/auth';
 import { getServerSession } from 'next-auth';
 import { omnibusQueue } from '@/lib/queue';
+import { extractIssueNumber } from '@/lib/utils/issue-parser';
 
 export async function POST(request: Request) {
   try {
     const req = (await request.json()) as any;
     const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber } = req;
-
-    // Robust internal extractor (incorporates parenthesis fix)
-    function extractIssueNumber(filename: string): string {
-        let clean = filename.replace(/\.\w+$/, ''); 
-        clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-        const crossRefRegex = /[\[\(][^[\]()]*[a-zA-Z]+[^[\]()]*\d+[^[\]()]*[\]\)]/g;
-        clean = clean.replace(crossRefRegex, (match) => {
-            if (match.match(/(?:#|issue|ch(?:apter)?|vol(?:ume)?|v\s*\.)/i)) return match;
-            return ''; 
-        });
-        const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-        if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
-        let volumeNum: string | null = null;
-        const volRegex = /(?<=^|[^a-zA-Z])(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/gi;
-        const noVolString = clean.replace(volRegex, (match, p1) => {
-            if (!volumeNum) volumeNum = p1.replace(/^0+(?=\d)/, '');
-            return ''; 
-        });
-        const matches = [...noVolString.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-        if (matches.length > 0) {
-            for (let i = matches.length - 1; i >= 0; i--) {
-                const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
-                const numVal = parseFloat(matchVal);
-                if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) continue; 
-                return matchVal;
-            }
-        }
-        if (volumeNum) return volumeNum;
-        return "1"; 
-    }
 
     const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
     const targetSource = metadataSource || 'COMICVINE';
@@ -384,7 +355,8 @@ export async function POST(request: Request) {
 
             for (const dbReq of pendingRequests) {
                 const searchStr = (dbReq.activeDownloadName || (dbReq as any).title || (dbReq as any).name || "");
-                const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
+                // Added -? to capture negative requested issues
+                const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(-?\d+(?:\.\d+)?)/i);
                 const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
                 if (issueNum === null) continue;
                 const matchingIssue = seriesIssues.find(i => parseFloat(i.number) === issueNum && i.filePath && i.filePath.length > 0);

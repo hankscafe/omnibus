@@ -2,16 +2,18 @@
 import { Logger } from '@/lib/logger';
 
 export function isSameIssue(num1: string | number, num2: string | number): boolean {
-    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
+    // 1. Regex updated to capture optional leading negative sign natively
+    const regex = /^(-?)0*(\d*(?:\.\d+)?)(.*)$/; 
     const m1 = String(num1).trim().match(regex);
     const m2 = String(num2).trim().match(regex);
          
     if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
     
-    const float1 = parseFloat(m1[1] || "0");
-    const float2 = parseFloat(m2[1] || "0");
-    const suffix1 = m1[2].toUpperCase().trim();
-    const suffix2 = m2[2].toUpperCase().trim();
+    // 2. Combine the negative sign capture group (m1[1]) with the number
+    const float1 = parseFloat((m1[1] || "") + (m1[2] || "0"));
+    const float2 = parseFloat((m2[1] || "") + (m2[2] || "0"));
+    const suffix1 = (m1[3] || "").toUpperCase().trim();
+    const suffix2 = (m2[3] || "").toUpperCase().trim();
     
     return float1 === float2 && suffix1 === suffix2;
 }
@@ -30,6 +32,15 @@ export function extractIssueNumber(filename: string): string {
     });
          
     // 3. HIGHEST PRIORITY: Explicit markers
+    
+    // GUARDED NEGATIVE CHECK: Only match if the negative sign is explicitly preceded by an identifier.
+    // Allowed: "#-1", "Issue -1", "Vol-1". 
+    // This entirely prevents common title hyphens (e.g. "Title - 001.cbz") from becoming negative issues.
+    const explicitNegative = clean.match(/(?:#\s*-|issue\s+#?-|issue\s+-|ch(?:apter)?\s+-|vol(?:ume)?\s+-|v\s*-)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    if (explicitNegative) {
+        return "-" + explicitNegative[1].replace(/^0+(?=\d)/, '');
+    }
+
     const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?|vol(?:ume)?|v\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
 
@@ -42,6 +53,8 @@ export function extractIssueNumber(filename: string): string {
     });
 
     // 5. SECONDARY PRIORITY: Standalone numbers
+    // Note: We DO NOT capture negative signs here anymore. This ensures standalone
+    // numbers with hyphens before them are safely parsed as positive.
     const matches = [...noVolString.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
     if (matches.length > 0) {
         for (let i = matches.length - 1; i >= 0; i--) {

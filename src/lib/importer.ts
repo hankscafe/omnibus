@@ -404,7 +404,8 @@ export const Importer = {
     let isManga = false;
     let cleanSeriesName = (req.activeDownloadName || path.basename(sourcePath))
         .replace(/\.[^/.]+$/, "") 
-        .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(\d+(?:\.\d+)?)/i, '') 
+        // Added -? to strip negative signs so they don't pollute the series name
+        .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(-?\d+(?:\.\d+)?)/i, '') 
         .replace(/\[.*?\]/g, '') 
         .replace(/\(.*?\)/g, '') 
         .trim();

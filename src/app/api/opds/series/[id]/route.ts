@@ -44,8 +44,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (!series) return new Response('Not Found', { status: 404 });
 
     const sortedIssues = series.issues.sort((a, b) => {
-        const numA = parseFloat(a.number.replace(/[^0-9.]/g, '')) || 0;
-        const numB = parseFloat(b.number.replace(/[^0-9.]/g, '')) || 0;
+        // Added the '-' character to the regex to preserve negative numbers
+        const numA = parseFloat(a.number.replace(/[^0-9.-]/g, '')) || 0;
+        const numB = parseFloat(b.number.replace(/[^0-9.-]/g, '')) || 0;
         return numA - numB;
     });
 

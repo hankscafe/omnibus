@@ -5,10 +5,9 @@ FROM node:26-slim AS builder
 # Safely update npm to the latest version for the BUILD stage only
 RUN npm install -g npm@latest
 
-ARG CACHEBUST=1
+ARG CACHEBUST=2
 
 # 2. Add 'apt-get upgrade -y' to catch all fixable build-time vulnerabilities
-# ---> ADD 'unar' TO THE END OF THIS INSTALL LIST <---
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends openssl ca-certificates unar && \
     rm -rf /var/lib/apt/lists/*
 
@@ -35,7 +34,7 @@ RUN cp -r node_modules/node-unar .next/standalone/node_modules/
 FROM node:26-slim AS runner
 WORKDIR /app
 
-ARG CACHEBUST=1
+ARG CACHEBUST=2
 
 # 1. Grab any patches Debian DOES have available, and install OpenSSL and unar
 RUN apt-get update && apt-get dist-upgrade -y && \
@@ -64,16 +63,11 @@ RUN rm -rf /usr/local/lib/node_modules/npm \
     /root/.cache
 
 # 3. --- FIX GNUSTEP / UNAR DEPENDENCY ---
-# unar relies on GNUstep, which expects dpkg-architecture to exist.
-# Since we deleted dpkg and perl, we provide a tiny shell mock to satisfy it.
-RUN echo '#!/bin/sh' > /usr/bin/dpkg-architecture && \
-    echo 'if [ "$1" = "-qDEB_HOST_MULTIARCH" ]; then' >> /usr/bin/dpkg-architecture && \
-    echo '  ARCH=$(uname -m)' >> /usr/bin/dpkg-architecture && \
-    echo '  if [ "$ARCH" = "x86_64" ]; then echo "x86_64-linux-gnu";' >> /usr/bin/dpkg-architecture && \
-    echo '  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then echo "aarch64-linux-gnu";' >> /usr/bin/dpkg-architecture && \
-    echo '  else echo "$ARCH-linux-gnu"; fi' >> /usr/bin/dpkg-architecture && \
-    echo 'fi' >> /usr/bin/dpkg-architecture && \
-    chmod +x /usr/bin/dpkg-architecture
+# Provide a pure Node.js mock for dpkg-architecture to satisfy GNUstep.
+# It is copied to local/bin as well so the restricted shell cannot miss it.
+RUN printf '#!/usr/bin/env node\nconsole.log(process.arch === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu");\n' > /usr/bin/dpkg-architecture && \
+    chmod +x /usr/bin/dpkg-architecture && \
+    cp /usr/bin/dpkg-architecture /usr/local/bin/dpkg-architecture
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

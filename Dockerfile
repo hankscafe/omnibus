@@ -63,6 +63,18 @@ RUN rm -rf /usr/local/lib/node_modules/npm \
     /root/.npm \
     /root/.cache
 
+# 3. --- FIX GNUSTEP / UNAR DEPENDENCY ---
+# unar relies on GNUstep, which expects dpkg-architecture to exist.
+# Since we deleted dpkg and perl, we provide a tiny shell mock to satisfy it.
+RUN echo '#!/bin/sh' > /usr/bin/dpkg-architecture && \
+    echo 'if [ "$1" = "-qDEB_HOST_MULTIARCH" ]; then' >> /usr/bin/dpkg-architecture && \
+    echo '  ARCH=$(uname -m)' >> /usr/bin/dpkg-architecture && \
+    echo '  if [ "$ARCH" = "x86_64" ]; then echo "x86_64-linux-gnu";' >> /usr/bin/dpkg-architecture && \
+    echo '  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then echo "aarch64-linux-gnu";' >> /usr/bin/dpkg-architecture && \
+    echo '  else echo "$ARCH-linux-gnu"; fi' >> /usr/bin/dpkg-architecture && \
+    echo 'fi' >> /usr/bin/dpkg-architecture && \
+    chmod +x /usr/bin/dpkg-architecture
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 

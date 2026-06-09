@@ -375,7 +375,13 @@ export async function POST(request: Request) {
     
     try {
         if (isFile) {
-            await omnibusQueue.add('LIBRARY_SCAN', { type: 'LIBRARY_SCAN' }, { jobId: `LIBRARY_SCAN_${Date.now()}` });
+            // Include specificPath inside the payload
+            await omnibusQueue.add('LIBRARY_SCAN', { 
+                type: 'LIBRARY_SCAN', 
+                specificPath: activeFolderPath 
+            }, { 
+                jobId: `LIBRARY_SCAN_${Date.now()}` 
+            });
         }
         
         if (existingRecord?.id) {

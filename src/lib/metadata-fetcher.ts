@@ -17,7 +17,8 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     });
     if (!series) throw new Error("Series not found in database.");
 
-    Logger.log(`[Metadata] Fetching data for ID: ${metadataId} via ${metadataSource}`, 'info');
+    // Update this line:
+    Logger.log(`[Metadata] Fetching data for: "${series.name}" (ID: ${metadataId} via ${metadataSource})`, 'info');
 
     if (metadataSource === 'METRON') {
         try {
@@ -268,10 +269,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let syncedCount = 0;
     let issuesCallsMade = 0;
 
-    Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
+    Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
     let latestDateMs = 0;
     while (offset < totalResults && loopCount < 20) {
-        Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
+        Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
         let issueRes;
         try {
             issueRes = await axios.get<{ number_of_total_results: number; results: any[] }>(`https://comicvine.gamespot.com/api/issues/`, {

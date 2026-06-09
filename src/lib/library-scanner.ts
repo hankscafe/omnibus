@@ -9,9 +9,9 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 
 export const LibraryScanner = {
-    async scan(): Promise<boolean | null> {
+    async scan(specificPath?: string): Promise<boolean | null> {
         const lockId = 'LIBRARY_SCAN_ACTIVE';
-        const timeoutLimit = new Date(Date.now() - 10 * 60 * 1000); 
+        const timeoutLimit = new Date(Date.now() - 10 * 60 * 1000);
         
         try {
             // Safeguards for test environments with incomplete Prisma mocks
@@ -27,12 +27,11 @@ export const LibraryScanner = {
                         // Atomic update: only succeeds if the lock hasn't been renewed by someone else
                         const result = await prisma.jobLock.updateMany({
                             where: { 
-                                id: lockId, 
+                                id: lockId,
                                 lockedAt: { lt: timeoutLimit } 
                             },
                             data: { lockedAt: new Date() }
                         });
-
                         if (!result || result.count === 0) {
                             Logger.log("[Scan] Library scan already in progress. Skipping.", "warn");
                             return null;
@@ -56,7 +55,8 @@ export const LibraryScanner = {
         }
 
         try {
-            Logger.log("[Scan] Starting automated library disk scan...", "info");
+            Logger.log(specificPath ? `[Scan] Starting targeted library scan for: ${specificPath}` : "[Scan] Starting automated library disk scan...", "info");
+            
             const libraries = await prisma.library.findMany();
             for (const lib of libraries) {
                 if (!fs.existsSync(lib.path)) {
@@ -65,62 +65,63 @@ export const LibraryScanner = {
                 }
             }
 
-            // --- FIX: Smarter Ghost Series Detection ---
             const allSeries = await prisma.series.findMany({ 
                 select: { id: true, folderPath: true, monitored: true, metadataId: true } 
             });
             
-            const activeRequests = await prisma.request.findMany({
-                where: { status: { notIn: ['COMPLETED', 'IMPORTED', 'CANCELLED'] } },
-                select: { volumeId: true }
-            });
-            const activeReqVolumeIds = new Set(activeRequests.map(r => r.volumeId));
+            // PERFORMANCE SAFEGUARD: Only execute global database cleanup routines on full automation cycles.
+            // Bypassing this during targeted imports saves immense amounts of DB lookup time and disk I/O.
+            if (!specificPath) {
+                const activeRequests = await prisma.request.findMany({
+                    where: { status: { notIn: ['COMPLETED', 'IMPORTED', 'CANCELLED'] } },
+                    select: { volumeId: true }
+                });
+                const activeReqVolumeIds = new Set(activeRequests.map(r => r.volumeId));
+                const badIds: string[] = allSeries
+                    .filter(s => {
+                        // If folder physically exists, it's good
+                        if (s.folderPath && fs.existsSync(s.folderPath)) return false; 
+                        // If the series is being monitored for new issues, keep it
+                        if (s.monitored) return false;
+                        // If the series has active/pending requests tied to it, keep it
+                        if (s.metadataId && activeReqVolumeIds.has(s.metadataId)) return false;
+                        
+                        // Otherwise, the folder is gone and no one is looking for it -> Ghost
+                        return true;
+                    })
+                    .map(s => s.id);
 
-            const badIds: string[] = allSeries
-                .filter(s => {
-                    // If folder physically exists, it's good
-                    if (s.folderPath && fs.existsSync(s.folderPath)) return false; 
-                    // If the series is being monitored for new issues, keep it
-                    if (s.monitored) return false;
-                    // If the series has active/pending requests tied to it, keep it
-                    if (s.metadataId && activeReqVolumeIds.has(s.metadataId)) return false;
-                    
-                    // Otherwise, the folder is gone and no one is looking for it -> Ghost
-                    return true;
-                })
-                .map(s => s.id);
+                if (badIds.length > 0) {
+                    await prisma.issue.deleteMany({ where: { seriesId: { in: badIds } } });
+                    await prisma.series.deleteMany({ where: { id: { in: badIds } } });
+                    Logger.log(`[Scan] Purged ${badIds.length} ghost series records.`, 'info');
+                }
 
-            if (badIds.length > 0) {
-                await prisma.issue.deleteMany({ where: { seriesId: { in: badIds } } });
-                await prisma.series.deleteMany({ where: { id: { in: badIds } } });
-                Logger.log(`[Scan] Purged ${badIds.length} ghost series records.`, 'info');
-            }
-
-            Logger.log(`[Scanner Debug] Searching for ghost issues with missing files...`, 'debug');
-            const allFiles = await prisma.issue.findMany({ where: { filePath: { not: null } } });
-            let ghostIssueCount = 0;
-
-            for (const issue of allFiles) {
-                if (issue.filePath && !fs.existsSync(issue.filePath)) {
-                    Logger.log(`[Scanner Debug] Removing ghost file path: ${issue.filePath}`, 'debug');
-                    try {
-                        if (issue.metadataId && !issue.metadataId.startsWith('unmatched')) {
-                            await prisma.issue.update({
-                                where: { id: issue.id },
-                                data: { filePath: null, status: 'WANTED' }
-                            });
-                        } else {
-                            await prisma.readProgress.deleteMany({ where: { issueId: issue.id } }).catch(()=>({}));
-                            await prisma.issue.delete({ where: { id: issue.id } });
+                Logger.log(`[Scanner Debug] Searching for ghost issues with missing files...`, 'debug');
+                const allFiles = await prisma.issue.findMany({ where: { filePath: { not: null } } });
+                let ghostIssueCount = 0;
+                for (const issue of allFiles) {
+                    if (issue.filePath && !fs.existsSync(issue.filePath)) {
+                        Logger.log(`[Scanner Debug] Removing ghost file path: ${issue.filePath}`, 'debug');
+                        try {
+                            if (issue.metadataId && !issue.metadataId.startsWith('unmatched')) {
+                                await prisma.issue.update({
+                                    where: { id: issue.id },
+                                    data: { filePath: null, status: 'WANTED' }
+                                });
+                            } else {
+                                await prisma.readProgress.deleteMany({ where: { issueId: issue.id } }).catch(()=>({}));
+                                await prisma.issue.delete({ where: { id: issue.id } });
+                            }
+                            ghostIssueCount++;
+                        } catch (e: any) {
+                            Logger.log(`[Scanner Debug] Error removing ghost issue ${issue.id}: ${e.message}`, 'error');
                         }
-                        ghostIssueCount++;
-                    } catch (e: any) {
-                        Logger.log(`[Scanner Debug] Error removing ghost issue ${issue.id}: ${e.message}`, 'error');
                     }
                 }
-            }
-            if (ghostIssueCount > 0) {
-                Logger.log(`[Scan] Cleared ${ghostIssueCount} ghost issue files.`, 'info');
+                if (ghostIssueCount > 0) {
+                    Logger.log(`[Scan] Cleared ${ghostIssueCount} ghost issue files.`, 'info');
+                }
             }
 
             const existingFolders = new Set(allSeries.map(s => path.normalize(s.folderPath || "").toLowerCase()));
@@ -128,32 +129,26 @@ export const LibraryScanner = {
             const findSeriesFolders = async (dir: string, baseRoot: string, libId: string, libIsManga: boolean) => {
                 const folderName = path.basename(dir);
                 if (folderName.startsWith('.')) return;
-
                 Logger.log(`[Scanner Debug] Traversing directory: ${dir}`, 'debug');
-
                 const entries = await fs.promises.readdir(dir, { withFileTypes: true });
                 const files = entries.filter(e => !e.isDirectory()).map(e => e.name);
                 const bookFiles = files.filter(f => f.toLowerCase().match(/\.(cbz|cbr|zip)$/));
-
                 if (bookFiles.length > 0) {
                     const normDir = path.normalize(dir).toLowerCase();
                     if (!existingFolders.has(normDir)) {
                         try {
                             const firstArchive = path.join(dir, bookFiles[0]);
                             Logger.log(`[Scanner Debug] Found ${bookFiles.length} archives in new folder. Parsing metadata from: ${bookFiles[0]}`, 'debug');
-
                             const embeddedMeta = await parseComicInfo(firstArchive);
-
                             const cleanedName = embeddedMeta?.series || folderName.replace(/\s\(\d{4}\)$/, "").trim() || "Unknown Series";
                             const year = embeddedMeta?.year || parseInt(folderName.match(/\((\d{4})\)/)?.[1] || "0");
                             
                             Logger.log(`[Scanner Debug] Extracted from folder/XML -> Name: "${cleanedName}", Year: ${year}, Publisher: "${embeddedMeta?.publisher || 'None'}"`, 'debug');
-
-                            // --- NEW: Add fallbacks for older cache/mock objects ---
+                            
                             const resolvedSeriesMetaId = embeddedMeta?.metadataId?.toString() || embeddedMeta?.cvId?.toString() || `unmatched_${Math.random()}`;
                             const resolvedSeriesMetaSource = embeddedMeta?.metadataSource || (embeddedMeta?.cvId ? 'COMICVINE' : 'LOCAL');
                             const resolvedSeriesMatchState = (embeddedMeta?.metadataId || embeddedMeta?.cvId) ? 'MATCHED' : 'UNMATCHED';
-
+                            
                             const createdSeries = await prisma.series.create({
                                 data: {
                                     folderPath: dir.replace(/\\/g, '/'),
@@ -169,14 +164,12 @@ export const LibraryScanner = {
                                     libraryId: libId
                                 }
                             });
-
+                            
                             const issuesToCreate = bookFiles.map(file => {
                                 const stdNum = extractIssueNumber(file);
-                                
                                 const resolvedIssueMetaId = embeddedMeta?.metadataIssueId?.toString() || embeddedMeta?.cvIssueId?.toString() || `unmatched_${Math.random()}`;
                                 const resolvedIssueMetaSource = embeddedMeta?.metadataSource || (embeddedMeta?.cvIssueId ? 'COMICVINE' : 'LOCAL');
                                 const resolvedIssueMatchState = (embeddedMeta?.metadataIssueId || embeddedMeta?.cvIssueId) ? 'MATCHED' : 'UNMATCHED';
-
                                 return {
                                     seriesId: createdSeries.id,
                                     metadataId: resolvedIssueMetaId,
@@ -187,11 +180,9 @@ export const LibraryScanner = {
                                     filePath: path.join(dir, file).replace(/\\/g, '/')
                                 };
                             });
-
                             if (issuesToCreate.length > 0) {
                                 await prisma.issue.createMany({ data: issuesToCreate });
                             }
-
                             Logger.log(`[Scan] Found and indexed new series: ${cleanedName} with ${issuesToCreate.length} issues.`, "success");
                         } catch(e) {
                             Logger.log(`[Scanner Debug] Failed to index folder ${dir}: ${getErrorMessage(e)}`, 'error');
@@ -207,11 +198,23 @@ export const LibraryScanner = {
                 }
             };
 
-            for (const lib of libraries) {
-                await findSeriesFolders(lib.path, lib.path, lib.id, lib.isManga);
+            // TARGETED DIRECTORY DISPATCHING
+            if (specificPath) {
+                const targetPath = fs.statSync(specificPath).isDirectory() ? specificPath : path.dirname(specificPath);
+                const targetLib = libraries.find(l => path.normalize(targetPath).toLowerCase().startsWith(path.normalize(l.path).toLowerCase()));
+                
+                if (targetLib) {
+                    await findSeriesFolders(targetPath, targetLib.path, targetLib.id, targetLib.isManga);
+                } else {
+                    Logger.log(`[Scan] Targeted path is not within any registered library: ${targetPath}`, "warn");
+                }
+            } else {
+                for (const lib of libraries) {
+                    await findSeriesFolders(lib.path, lib.path, lib.id, lib.isManga);
+                }
             }
             
-            Logger.log("[Scan] Library disk scan complete.", "success");
+            Logger.log(specificPath ? "[Scan] Targeted scan complete." : "[Scan] Library disk scan complete.", "success");
             return true;
         } finally {
             if (prisma.jobLock && typeof prisma.jobLock.delete === 'function') {

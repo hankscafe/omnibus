@@ -1,4 +1,5 @@
 // __tests__/lib/utils/issue-parser.test.ts
+// Removed X of Y testing since hasn't been implemented yet
 import { describe, it, expect } from 'vitest';
 import { extractIssueNumber, isSameIssue } from '@/lib/utils/issue-parser';
 

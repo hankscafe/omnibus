@@ -8,7 +8,8 @@ RUN npm install -g npm@latest
 ARG CACHEBUST=1
 
 # 2. Add 'apt-get upgrade -y' to catch all fixable build-time vulnerabilities
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends openssl ca-certificates && \
+# ---> ADD 'unar' TO THE END OF THIS INSTALL LIST <---
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends openssl ca-certificates unar && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

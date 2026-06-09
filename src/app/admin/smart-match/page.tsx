@@ -454,8 +454,13 @@ export default function SmartMatchPage() {
 
                                 {/* LOCAL FOLDER/FILE DATA */}
                                 <div className="flex-1 min-w-[200px] w-full md:w-auto">
-                                    <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">
-                                        {series.isRawFile ? 'Loose File' : 'Local Folder'}
+                                    <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-2">
+                                        <span>{series.isRawFile ? 'Loose File' : 'Local Folder'}</span>
+                                        {series.isRawFile && (
+                                            <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md font-bold text-[10px]">
+                                                Detected Issue: #{issueOverrides[series.id]?.issueNumber || extractIssueNumberClient(series.name)}
+                                            </span>
+                                        )}
                                     </div>
                                     <div className="flex items-start gap-3">
                                         <div className="p-3 bg-muted rounded-lg shrink-0">

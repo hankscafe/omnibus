@@ -8,7 +8,7 @@ RUN npm install -g npm@latest
 ARG CACHEBUST=2
 
 # 2. Add 'apt-get upgrade -y' to catch all fixable build-time vulnerabilities
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends openssl ca-certificates unar && \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends openssl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -28,7 +28,6 @@ RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {
 RUN find .next/standalone/node_modules -type d -name "uuid" -exec rm -rf {} + || true
 
 RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nodemailer@latest uuid@11.1.1 --no-save --legacy-peer-deps --force
-RUN cp -r node_modules/node-unar .next/standalone/node_modules/
 
 # --- Stage 2: Final Production Image ---
 FROM node:26-slim AS runner

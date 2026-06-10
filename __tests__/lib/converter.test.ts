@@ -51,10 +51,6 @@ vi.mock('sharp', () => ({
     }))
 }));
 
-vi.mock('node-unrar-js/esm', () => ({
-    createExtractorFromFile: vi.fn().mockResolvedValue({ extract: vi.fn().mockReturnValue({ files: [] }) })
-}));
-
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Data Processing: Archive Repacker', () => {

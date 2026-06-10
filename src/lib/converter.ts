@@ -6,8 +6,11 @@ import sharp from 'sharp';
 import { Logger } from '@/lib/logger';
 import { prisma } from '@/lib/db';
 import crypto from 'crypto';
-import { unpack } from 'node-unar';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getErrorMessage } from './utils/error';
+
+const execFileAsync = promisify(execFile);
 
 export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
     if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar)$/)) return null;
@@ -28,12 +31,23 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         const convertToWebp = config.convert_to_webp === 'true';
         const webpQuality = parseInt(config.webp_quality || '80', 10);
         
-        // --- UPDATED EXTRACTION LOGIC ---
-        await unpack(cbrPath, {
-            targetDir: tempDir,
-            forceOverwrite: true,
-            noDirectory: true // Prevents it from creating an unwanted sub-folder
-        });
+        // --- NATIVE OS EXTRACTION ---
+        // Call the unar binary directly. execFile passes args as an array with
+        // no shell, so filenames with quotes/parens/backticks can't break anything.
+        // -q quiet, -o output dir, -f force overwrite, -D no containing subfolder,
+        // -p '' makes password-protected archives fail fast instead of prompting on stdin
+        try {
+            await execFileAsync(
+                'unar',
+                ['-q', '-p', '', '-o', tempDir, '-f', '-D', cbrPath],
+                { maxBuffer: 10 * 1024 * 1024 }
+            );
+        } catch (unarErr: any) {
+            const detail = unarErr?.code === 'ENOENT'
+                ? 'unar binary not found on PATH (is it installed in this environment?)'
+                : unarErr?.stderr || unarErr?.message || 'Unknown CLI error';
+            throw new Error(`Native extraction failed: ${detail}`);
+        }
         // --------------------------------
         
         const allImages: string[] = [];
@@ -88,6 +102,11 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
             imageCount++;
         }
         
+        const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
+        if (fs.existsSync(comicInfoPath)) {
+            zip.addLocalFile(comicInfoPath, "", "ComicInfo.xml");
+        }
+
         zip.writeZip(cbzPath);
         
         if (fs.existsSync(cbrPath)) {
@@ -194,7 +213,7 @@ export async function repackArchive(filePath: string): Promise<boolean> {
             imageCount++;
         }
         
-        const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
+       const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
         if (fs.existsSync(comicInfoPath)) {
             newZip.addLocalFile(comicInfoPath, "", "ComicInfo.xml");
         }

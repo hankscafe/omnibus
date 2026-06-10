@@ -39,13 +39,20 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         let expectedPages = -1;
         let unrarExitError: any = null;
 
+                let rarListing: string | null = null;
         try {
             const { stdout } = await execFileAsync('unrar', ['lb', '-p-', cbrPath], execOpts);
-            expectedPages = stdout.split('\n')
+            rarListing = stdout;
+        } catch (err: any) {
+            // unrar exits non-zero for benign structural quirks (e.g. a missing
+            // end-of-archive block) even when the listing printed in full, so
+            // salvage its stdout. A genuine non-RAR file yields an empty listing.
+            rarListing = typeof err?.stdout === 'string' && err.stdout.trim() !== '' ? err.stdout : null;
+        }
+        if (rarListing !== null) {
+            expectedPages = rarListing.split('\n')
                 .filter(line => line.trim().match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i))
                 .length;
-        } catch {
-            expectedPages = -1; // Not a RAR archive (or unrar missing) — use unar below
         }
 
         if (expectedPages >= 0) {

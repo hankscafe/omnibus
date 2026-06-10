@@ -9,6 +9,8 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger'; 
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
+import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
+import { UNMATCHED_DIR } from '@/lib/utils/paths';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,7 +32,7 @@ export async function POST(request: Request) {
                 const fullPath = path.join(dir, item.name);
                 if (item.isDirectory()) {
                     await getPhysicalFiles(fullPath, fileList);
-                } else if (item.name.match(/\.(cbz|cbr|zip)$/i)) {
+                } else if (COMIC_EXT_REGEX.test(item.name)) {
                     fileList.push(fullPath);
                 }
             }
@@ -226,7 +228,7 @@ export async function POST(request: Request) {
             
             // SECURITY FIX: Path Traversal & Root Deletion Prevention
             const libraries = await prisma.library.findMany();
-            const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+            const unmatchedDir = UNMATCHED_DIR;
             
             // Resolve to absolute paths and ensure they end with a trailing slash
             // (e.g., "/data/comics" becomes "/data/comics/")

@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
+import { DEFAULT_SCORING_RULES } from "@/lib/utils/defaults"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -319,16 +320,7 @@ export default function SettingsPage() {
                     setScoringRules([]);
                 }
             } else {
-                setScoringRules([
-                    { id: 's1', term: '.cbz', score: 500 },
-                    { id: 's2', term: '(digital)', score: 300 },
-                    { id: 's3', term: '[digital]', score: 300 },
-                    { id: 's4', term: 'webrip', score: 200 },
-                    { id: 's5', term: 'web-dl', score: 200 },
-                    { id: 's6', term: '.cbr', score: -400 },
-                    { id: 's7', term: '.rar', score: -400 },
-                    { id: 's8', term: 'vapi', score: -400 }
-                ]);
+                setScoringRules(DEFAULT_SCORING_RULES.map((r, i) => ({ id: `s${i + 1}`, ...r })));
             }
 
             const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
@@ -1700,17 +1692,17 @@ export default function SettingsPage() {
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Save className="w-3 h-3"/> Backup Directory</p>
-                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_BACKUPS_DIR}>{envPaths?.OMNIBUS_BACKUPS_DIR || '/backups'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_BACKUPS_DIR}>{envPaths?.OMNIBUS_BACKUPS_DIR || '/config/backups'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where automated database backups are saved.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Zap className="w-3 h-3"/> Cache & Temp Dir</p>
-                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_CACHE_DIR}>{envPaths?.OMNIBUS_CACHE_DIR || '/cache'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_CACHE_DIR}>{envPaths?.OMNIBUS_CACHE_DIR || '/config/cache'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Map this to a drive with plenty of free space.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><FileText className="w-3 h-3"/> Log Directory</p>
-                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_LOGS_DIR}>{envPaths?.OMNIBUS_LOGS_DIR || '/app/config/logs'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_LOGS_DIR}>{envPaths?.OMNIBUS_LOGS_DIR || '/config/logs'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where system activity logs are written.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">

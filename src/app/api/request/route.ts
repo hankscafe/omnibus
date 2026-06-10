@@ -14,25 +14,11 @@ import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
 import { getErrorMessage } from '@/lib/utils/error';
 import { syncSeriesMetadata } from '@/lib/metadata-fetcher'; 
 import { AuditLogger } from '@/lib/audit-logger';
-import { MetronProvider } from '@/lib/metadata/providers/metron'; 
+import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 import { omnibusQueue } from '@/lib/queue';
 
 export const dynamic = 'force-dynamic';
-
-const getMetronCover = async (seriesName: string, issueNumber: string, user?: string, pass?: string) => {
-    if (!user || !pass) return null;
-    try {
-        const res = await axios.get(`https://metron.cloud/api/issue/`, {
-            params: { series_name: seriesName, number: issueNumber },
-            auth: { username: user, password: pass },
-            headers: { 'User-Agent': 'Omnibus/1.0' },
-            timeout: 4000
-        });
-        return res.data?.results?.[0]?.image || null;
-    } catch (e) {
-        return null;
-    }
-};
 
 export async function GET(request: NextRequest) {
   const token = await getToken({ req: request });

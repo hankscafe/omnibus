@@ -5,6 +5,8 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
+import { UNMATCHED_DIR } from '@/lib/utils/paths';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +23,7 @@ export async function GET() {
         });
 
         // 2. Append loose files from the unmatched drop directory
-        const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+        const unmatchedDir = UNMATCHED_DIR;
         const rawFiles: any[] = [];
         
         try {
@@ -30,7 +32,7 @@ export async function GET() {
             if (fs.existsSync(unmatchedDir)) {
                 const files = await fs.promises.readdir(unmatchedDir);
                 for (const file of files) {
-                    if (file.match(/\.(cbz|cbr|zip|rar|epub)$/i)) {
+                    if (COMIC_EXT_REGEX.test(file)) {
                         rawFiles.push({
                             id: `raw_${Buffer.from(file).toString('base64')}`, // Safe Mock ID
                             name: file.replace(/\.[^/.]+$/, ""), // Strip extension for search guessing

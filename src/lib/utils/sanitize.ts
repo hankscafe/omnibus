@@ -5,6 +5,15 @@ import sanitizeHtml from 'sanitize-html';
  * Strips dangerous tags (script, object, iframe) and 
  * dangerous attributes (onerror, onclick, onload).
  */
+/**
+ * Strips characters that are invalid in file/folder names.
+ * Used everywhere Omnibus builds paths from series/publisher names —
+ * all callers MUST use this so renames and imports produce identical paths.
+ */
+export function sanitizeFilename(str: string): string {
+    return str.replace(/[<>:"/\\|?*]/g, '').trim();
+}
+
 export function sanitizeDescription(html: string | null | undefined): string {
     if (!html) return "";
 

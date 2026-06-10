@@ -9,15 +9,8 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
-import { parseComicVineCredits } from '@/lib/utils'; 
-
-const safeParse = (str: string | null) => {
-    if (!str) return [];
-    try { 
-        const arr = JSON.parse(str); 
-        return Array.isArray(arr) ? arr.filter((item: string) => item !== "NONE") : [];
-    } catch { return []; }
-}
+import { parseComicVineCredits } from '@/lib/utils';
+import { safeParse } from '@/lib/utils/safe-parse';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

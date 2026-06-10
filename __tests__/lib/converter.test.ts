@@ -4,19 +4,38 @@ import fs from 'fs-extra';
 import sharp from 'sharp';
 
 // 1. Hoist the mocks
-const mocks = vi.hoisted(() => ({
-    findManySettings: vi.fn(),
-    addLocalFile: vi.fn(),
-    writeZip: vi.fn(),
-    log: vi.fn(),
-    webp: vi.fn().mockReturnThis(),
-    toFile: vi.fn().mockResolvedValue(true)
-}));
+const mocks = vi.hoisted(() => {
+    const execFileAsync = vi.fn();
+    const execFile: any = vi.fn();
+    // converter.ts calls promisify(execFile) at module load; promisify picks up
+    // this custom implementation, so tests control the async exec calls directly.
+    execFile[Symbol.for('nodejs.util.promisify.custom')] = execFileAsync;
+    return {
+        findManySettings: vi.fn(),
+        findFirstIssue: vi.fn(),
+        updateIssue: vi.fn(),
+        addLocalFile: vi.fn(),
+        writeZip: vi.fn(),
+        log: vi.fn(),
+        webp: vi.fn().mockReturnThis(),
+        toFile: vi.fn().mockResolvedValue(true),
+        execFile,
+        execFileAsync
+    };
+});
 
 // 2. Mock dependencies
 vi.mock('@/lib/db', () => ({
-    prisma: { systemSetting: { findMany: mocks.findManySettings } }
+    prisma: {
+        systemSetting: { findMany: mocks.findManySettings },
+        issue: { findFirst: mocks.findFirstIssue, update: mocks.updateIssue }
+    }
 }));
+
+vi.mock('child_process', () => {
+    const cp = { execFile: mocks.execFile };
+    return { ...cp, default: cp };
+});
 
 vi.mock('fs-extra', () => ({
     default: {
@@ -86,5 +105,28 @@ describe('Data Processing: Archive Repacker', () => {
         const result = await repackArchive('/library/comic.pdf');
         expect(result).toBe(false);
         expect(mocks.writeZip).not.toHaveBeenCalled();
+    });
+
+    it('should route .cb7 files through the conversion pipeline via the unar fallback', async () => {
+        mocks.findManySettings.mockResolvedValueOnce([{ key: 'convert_to_webp', value: 'false' }]);
+        mocks.findFirstIssue.mockResolvedValueOnce(null);
+        // unrar cannot list a 7z archive: it rejects with empty stdout, which
+        // routes extraction to the format-agnostic unar fallback.
+        mocks.execFileAsync
+            .mockRejectedValueOnce(Object.assign(new Error('not a RAR archive'), { stdout: '' }))
+            .mockResolvedValueOnce({ stdout: '', stderr: '' });
+
+        const result = await repackArchive('/library/comic.cb7');
+
+        expect(result).toBe(true);
+        expect(mocks.execFileAsync).toHaveBeenNthCalledWith(1, 'unrar', expect.arrayContaining(['lb']), expect.anything());
+        expect(mocks.execFileAsync).toHaveBeenNthCalledWith(2, 'unar', expect.arrayContaining(['/library/comic.cb7']), expect.anything());
+        expect(mocks.writeZip).toHaveBeenCalledWith('/library/comic.cbz');
+    });
+
+    it('should still reject conversion attempts for unsupported extensions', async () => {
+        const result = await repackArchive('/library/comic.docx');
+        expect(result).toBe(false);
+        expect(mocks.execFileAsync).not.toHaveBeenCalled();
     });
 });

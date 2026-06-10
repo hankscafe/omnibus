@@ -10,6 +10,7 @@ import { omnibusQueue } from '@/lib/queue';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
+import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 
 export async function POST(request: Request) {
   try {
@@ -36,8 +37,6 @@ export async function POST(request: Request) {
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
 
-    function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
-    
     const safePublisher = publisher && publisher !== "Unknown" ? sanitize(publisher) : "Other";
     const safeSeries = sanitize(name || "Unknown Series");
     const safeYear = year ? year.toString() : "";

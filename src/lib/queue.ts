@@ -15,6 +15,9 @@ import { searchAndDownload } from '@/lib/automation';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
+import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
+import { BACKUPS_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
 
 const execFileAsync = promisify(execFile);
 
@@ -339,7 +342,7 @@ export function initWorker() {
                     const key = crypto.createHash('sha256').update(String(secret)).digest();
                     const iv = crypto.randomBytes(16);
                     
-                    const backupDir = process.env.OMNIBUS_BACKUPS_DIR || '/backups';
+                    const backupDir = BACKUPS_DIR;
                     await fs.ensureDir(backupDir);
                     const fileName = `omnibus_backup_${Date.now()}.json`;
                     const filePath = path.join(backupDir, fileName);
@@ -461,7 +464,9 @@ export function initWorker() {
                                      { filePath: { endsWith: '.cbr' } },
                                      { filePath: { endsWith: '.CBR' } },
                                      { filePath: { endsWith: '.rar' } },
-                                     { filePath: { endsWith: '.RAR' } }
+                                     { filePath: { endsWith: '.RAR' } },
+                                     { filePath: { endsWith: '.cb7' } },
+                                     { filePath: { endsWith: '.CB7' } }
                                  ]
                              }
                         });
@@ -560,8 +565,8 @@ export function initWorker() {
                 }
 
                 case 'WATCHED_FOLDER_SYNC': {
-                    const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
-                    const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+                    const watchedDir = WATCHED_DIR;
+                    const unmatchedDir = UNMATCHED_DIR;
 
                     await fs.ensureDir(watchedDir);
                     await fs.ensureDir(unmatchedDir);
@@ -575,7 +580,7 @@ export function initWorker() {
                                 await scanWatchedDir(fullPath);
                             } else {
                                 const ext = path.extname(item.name).toLowerCase();
-                                if (['.cbz', '.cbr', '.zip', '.rar', '.epub'].includes(ext)) {
+                                if (COMIC_EXTENSIONS.includes(ext)) {
                                     filesToProcess.push(fullPath);
                                 }
                             }
@@ -605,10 +610,10 @@ export function initWorker() {
                         const file = path.basename(filePath); 
                         const ext = path.extname(filePath).toLowerCase();
                         
-                        if (!['.cbz', '.cbr', '.zip', '.rar', '.epub'].includes(ext)) continue;
+                        if (!COMIC_EXTENSIONS.includes(ext)) continue;
 
                         try {
-                            if (ext === '.cbr' || ext === '.rar') {
+                            if (ext === '.cbr' || ext === '.rar' || ext === '.cb7') {
                                 const convertedPath = await convertCbrToCbz(filePath);
                                 if (convertedPath) {
                                     filePath = convertedPath;
@@ -656,7 +661,6 @@ export function initWorker() {
                                     targetLib = libraries[0];
                                 }
 
-                                const sanitize = (str: string) => str.replace(/[<>:"/\\|?*]/g, '').trim();
                                 const safeSeries = sanitize(meta.series);
                                 const safeYear = meta.year ? meta.year.toString() : "";
                                 const safePub = sanitize(safePublisher);

@@ -7,6 +7,7 @@ import { getToken } from 'next-auth/jwt';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
+import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,8 +40,6 @@ export async function POST(request: NextRequest) {
     let filesRenamed = 0;
     let foldersRenamed = 0;
     let lastProcessedPath = ""; // --- NEW: Track the path ---
-
-    function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
 
     for (const s of seriesList) {
         if (!s.folderPath || !fs.existsSync(s.folderPath)) {

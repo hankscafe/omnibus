@@ -3,13 +3,14 @@ import fs from 'fs';
 import path from 'path';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { CONFIG_DIR } from '@/lib/utils/paths';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
     try {
         const resolvedParams = await params;
         const pathArray = resolvedParams.path;
 
-        const configDir = process.env.OMNIBUS_CONFIG_DIR || '/config';
+        const configDir = CONFIG_DIR;
         const baseDir = path.resolve(configDir, 'uploads');
         const filePath = path.resolve(baseDir, ...pathArray);
 

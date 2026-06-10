@@ -3,18 +3,9 @@ import { prisma } from '@/lib/db';
 import { validateApiKey } from '@/lib/api-auth';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { escapeXml } from '@/lib/utils/xml';
 
 export const dynamic = 'force-dynamic';
-
-const escapeXml = (unsafe: string | null | undefined) => {
-    if (!unsafe) return '';
-    return unsafe.replace(/[<>&'"]/g, (c) => {
-        switch (c) {
-            case '<': return '&lt;'; case '>': return '&gt;'; case '&': return '&amp;';
-            case '\'': return '&apos;'; case '"': return '&quot;'; default: return c;
-        }
-    });
-};
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
     try {

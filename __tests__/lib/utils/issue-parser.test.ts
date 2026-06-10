@@ -41,5 +41,20 @@ describe('Utility: Issue Number Parser', () => {
             expect(extractIssueNumber('Batman 2016 #001.cbz')).toBe('1');
             expect(extractIssueNumber('Batman (2016) Issue -1.cbz')).toBe('-1');
         });
+
+        it('should extract trailing issue numbers from volume-tagged filenames', () => {
+            expect(extractIssueNumber('Uncanny X-Men-V1-001.cbz')).toBe('1');
+            expect(extractIssueNumber('Uncanny X-Men-V1-023.cbz')).toBe('23');
+            expect(extractIssueNumber('Uncanny X-Men-V1-066.cbz')).toBe('66');
+        });
+
+        it('should prefer explicit issue markers over volume tokens', () => {
+            expect(extractIssueNumber('Spider-Man v2 #5.cbz')).toBe('5');
+            expect(extractIssueNumber('Batman Vol 2 Issue 12.cbz')).toBe('12');
+        });
+
+        it('should fall back to the volume number only when no other number exists', () => {
+            expect(extractIssueNumber('Batman Vol 4.cbz')).toBe('4');
+        });
     });
 });

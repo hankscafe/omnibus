@@ -5,6 +5,7 @@ import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
 import { prisma } from './db';
 import { markSystemFlag } from './utils/system-flags';
+import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
 
 // --- NEW: FlareSolverr 403-Bypass Helper ---
 async function fetchGetComicsHtml(url: string) {
@@ -107,15 +108,10 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
     // Generate both word arrays for TPB vs Single Issue validation
     const cleanOriginal = originalQuery.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
     
-    // --- RESTORED MISSING VARIABLES ---
-    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
     const safeQueryWords = safeQuery.toLowerCase().split(' ').filter(w => w.length > 0 && !stopWords.includes(w));
     const originalQueryWords = cleanOriginal.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 0 && !stopWords.includes(w));
 
-    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut'];
-    const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
     const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanOriginal.toLowerCase().includes(k));
-    // ----------------------------------
 
     const reqIssueMatch = cleanOriginal.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
     let reqNum = reqIssueMatch ? parseFloat(reqIssueMatch[1]) : null;

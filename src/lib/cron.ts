@@ -7,6 +7,7 @@ import { omnibusQueue, syncSchedules } from '@/lib/queue';
 import { DiscordNotifier } from '@/lib/discord';
 import { getErrorMessage } from './utils/error';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
+import { JUNK_WORDS as junkWords } from '@/lib/utils/search-terms';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
@@ -189,8 +190,6 @@ export function initCronJobs() {
 
                       let cleanReqName = reqNameLower.replace(/[0-9]/g, '');
                       let cleanTorName = torNameLower.replace(/[0-9]/g, '');
-                      
-                      const junkWords = ['eng', 'cbz', 'cbr', 'cb7', 'zip', 'rar', 'webrip', 'digital', 'vol', 'volume', 'ch', 'chapter', 'issue', 'tpb', 'rip', 'the', 'and', 'of', 'by', 'gn'];
                       
                       const reqWords = cleanReqName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
                       const torWords = cleanTorName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));

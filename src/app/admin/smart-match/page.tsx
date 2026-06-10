@@ -13,41 +13,7 @@ import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIc
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
-
-const extractIssueNumberClient = (filename: string): string => {
-    let clean = filename.replace(/\.\w+$/, '');
-    clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-    const crossRefRegex = /[\[\(][^[\]()]*[a-zA-Z]+[^[\]()]*\d+[^[\]()]*[\]\)]/g;
-    clean = clean.replace(crossRefRegex, (match) => {
-        if (match.match(/(?:#|issue|ch(?:apter)?|vol(?:ume)?|v\s*\.)/i)) return match;
-        return '';
-    });
-    // GUARDED NEGATIVE CHECK (Mirrors backend logic)
-    const explicitNegative = clean.match(/(?:#\s*-|issue\s+#?-|issue\s+-|ch(?:apter)?\s+-|vol(?:ume)?\s+-|v\s*-)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    if (explicitNegative) {
-        return "-" + explicitNegative[1].replace(/^0+(?=\d)/, '');
-    }
-
-    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?|vol(?:ume)?|v\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
-    let volumeNum: string | null = null;
-    const volRegex = /(?<=^|[^a-zA-Z])(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/gi;
-    const noVolString = clean.replace(volRegex, (match, p1) => {
-        if (!volumeNum) volumeNum = p1.replace(/^0+(?=\d)/, '');
-        return '';
-    });
-    const matches = [...noVolString.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) {
-        for (let i = matches.length - 1; i >= 0; i--) {
-            const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
-            const numVal = parseFloat(matchVal);
-            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) continue;
-            return matchVal;
-        }
-    }
-    if (volumeNum) return volumeNum;
-    return "1";
-};
+import { extractIssueNumber } from "@/lib/utils/issue-parser"
 
 export default function SmartMatchPage() {
     const [unmatched, setUnmatched] = useState<any[]>([]);
@@ -280,7 +246,7 @@ export default function SmartMatchPage() {
                 itemsToMap.forEach(id => {
                     const item = unmatched.find(s => s.id === id);
                     if (item?.isRawFile) {
-                        const extractedNum = extractIssueNumberClient(item.name);
+                        const extractedNum = extractIssueNumber(item.name);
                         let matchedIssueId = "";
 
                         // If the API provided the volume's issue list, try to find the exact ID match
@@ -458,7 +424,7 @@ export default function SmartMatchPage() {
                                         <span>{series.isRawFile ? 'Loose File' : 'Local Folder'}</span>
                                         {series.isRawFile && (
                                             <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md font-bold text-[10px]">
-                                                Detected Issue: #{issueOverrides[series.id]?.issueNumber || extractIssueNumberClient(series.name)}
+                                                Detected Issue: #{issueOverrides[series.id]?.issueNumber || extractIssueNumber(series.name)}
                                             </span>
                                         )}
                                     </div>

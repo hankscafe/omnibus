@@ -5,6 +5,7 @@ import AdmZip from 'adm-zip';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { escapeXml } from '@/lib/utils/xml';
 
 export async function writeComicInfo(issueId: string): Promise<boolean> {
     // Declare 'issue' outside the try block so it can be accessed in the catch block for logging
@@ -114,20 +115,6 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         Logger.log(`[Writer] Failed to write XML for ${issueIdentifier}: ${getErrorMessage(error)}`, 'error');
         return false;
     }
-}
-
-function escapeXml(unsafe: string | null) {
-    if (!unsafe) return '';
-    return unsafe.replace(/[<>&'"]/g, (c) => {
-        switch (c) {
-            case '<': return '&lt;';
-            case '>': return '&gt;';
-            case '&': return '&amp;';
-            case '\'': return '&apos;';
-            case '"': return '&quot;';
-            default: return c;
-        }
-    });
 }
 
 export async function writeSeriesJson(seriesId: string): Promise<boolean> {

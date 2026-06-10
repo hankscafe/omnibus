@@ -6,6 +6,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { CONFIG_DIR } from '@/lib/utils/paths';
 
 export async function GET(req: Request) {
   const token = await getToken({ req: req as any });
@@ -114,7 +115,7 @@ export async function POST(req: Request) {
   const token = await getToken({ req: req as any });
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const configDir = process.env.OMNIBUS_CONFIG_DIR || '/config';
+  const configDir = CONFIG_DIR;
 
   try {
     const { avatarBase64, bannerBase64, removeBanner } = await req.json();

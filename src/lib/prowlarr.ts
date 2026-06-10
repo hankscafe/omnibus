@@ -4,6 +4,7 @@ import { prisma } from './db';
 import { Logger } from './logger';
 import { getCustomHeaders } from './utils/headers';
 import { getErrorMessage } from './utils/error';
+import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
 import { ProwlarrSearchResult } from '@/types';
 
 export const ProwlarrService = {
@@ -14,11 +15,8 @@ export const ProwlarrService = {
     if (!config.prowlarr_url || !config.prowlarr_key) return [];
 
     const cleanQuery = query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
-    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
     const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => w.length > 0);
 
-    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut'];
-    const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
     const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanQuery.toLowerCase().includes(k));
 
     let configuredIndexers: { id: number | string }[] = [];

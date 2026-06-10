@@ -7,6 +7,7 @@ import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
+import { isComicFile } from '@/lib/utils/formats';
 
 export const LibraryScanner = {
     async scan(specificPath?: string): Promise<boolean | null> {
@@ -132,7 +133,7 @@ export const LibraryScanner = {
                 Logger.log(`[Scanner Debug] Traversing directory: ${dir}`, 'debug');
                 const entries = await fs.promises.readdir(dir, { withFileTypes: true });
                 const files = entries.filter(e => !e.isDirectory()).map(e => e.name);
-                const bookFiles = files.filter(f => f.toLowerCase().match(/\.(cbz|cbr|zip)$/));
+                const bookFiles = files.filter(f => isComicFile(f));
                 if (bookFiles.length > 0) {
                     const normDir = path.normalize(dir).toLowerCase();
                     if (!existingFolders.has(normDir)) {

@@ -15,6 +15,7 @@ import {
   CheckSquare, Square, ExternalLink
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
+import { COMIC_EXT_REGEX } from "@/lib/utils/formats"
 import {
   Select,
   SelectContent,
@@ -88,7 +89,7 @@ function RequestCard({
       setIsCancelling(false);
   }
 
-  const displayName = (req.seriesName || "Unknown Request").replace(/\.(cbz|cbr|zip)$/i, '');
+  const displayName = (req.seriesName || "Unknown Request").replace(COMIC_EXT_REGEX, '');
   const isCompleted = ['IMPORTED', 'COMPLETED'].includes(req.status);
 
   // Parse Provider

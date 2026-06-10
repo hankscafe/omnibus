@@ -5,6 +5,7 @@ import AdmZip from 'adm-zip';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -37,11 +38,11 @@ export async function GET(request: Request) {
     }
 
     const isZip = filePath.toLowerCase().match(/\.(cbz|epub|zip)$/);
-    const isRar = filePath.toLowerCase().match(/\.(cbr|rar)$/);
+    const needsConversion = filePath.toLowerCase().match(/\.(cbr|rar|cb7)$/);
 
-    if (isRar) {
-        Logger.log(`[Reader Debug] Extraction failed: Unsupported CBR format requested.`, 'debug');
-        return NextResponse.json({ error: "This .cbr file is waiting to be automatically converted to .cbz. Please check back in a few minutes or run the CBR Auto-Converter job in Admin settings." }, { status: 400 });
+    if (needsConversion) {
+        Logger.log(`[Reader Debug] Extraction failed: Archive format requires conversion to CBZ.`, 'debug');
+        return NextResponse.json({ error: "This archive is waiting to be automatically converted to .cbz. Please check back in a few minutes or run the CBR Auto-Converter job in Admin settings." }, { status: 400 });
     }
     
     if (!isZip) {
@@ -57,8 +58,7 @@ export async function GET(request: Request) {
     const pages = zipEntries
       .filter(entry => {
         const name = entry.entryName.toLowerCase();
-        return !entry.isDirectory && !name.includes('__macosx') && 
-               (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png') || name.endsWith('.webp'));
+        return !entry.isDirectory && !name.includes('__macosx') && IMAGE_EXT_REGEX.test(name);
       })
       .map(entry => entry.entryName);
 

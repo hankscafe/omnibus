@@ -9,16 +9,17 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getErrorMessage } from './utils/error';
+import { CACHE_DIR } from '@/lib/utils/paths';
+import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 
 const execFileAsync = promisify(execFile);
 
 export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
-    if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar)$/)) return null;
-    const cbzPath = cbrPath.replace(/\.(cbr|rar)$/i, '.cbz');
+    if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar|cb7)$/)) return null;
+    const cbzPath = cbrPath.replace(/\.(cbr|rar|cb7)$/i, '.cbz');
          
     // --- THE FIX: Safe local fallback path to /config/cache ---
-    const baseTempDir = process.env.OMNIBUS_CACHE_DIR || '/config/cache';
-    const tempDir = path.join(baseTempDir, `cbr_${crypto.randomBytes(8).toString('hex')}`);
+    const tempDir = path.join(CACHE_DIR, `cbr_${crypto.randomBytes(8).toString('hex')}`);
     try {
         await fs.ensureDir(tempDir);
         Logger.log(`[Converter] Starting conversion for: ${path.basename(cbrPath)}`, 'info');
@@ -34,7 +35,8 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
                 // --- NATIVE OS EXTRACTION ---
         // Official unrar is the primary decoder: unar/XADMaster corrupts some files
         // inside RAR 2.0 archives (common in vintage comic rips). unar remains the
-        // fallback because it auto-detects .cbr files that are secretly ZIP/7z.
+        // fallback because it auto-detects other formats: genuine 7z archives
+        // (.cb7) and .cbr files that are secretly ZIP.
         const execOpts = { maxBuffer: 10 * 1024 * 1024 };
         let expectedPages = -1;
         let unrarExitError: any = null;
@@ -51,7 +53,7 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         }
         if (rarListing !== null) {
             expectedPages = rarListing.split('\n')
-                .filter(line => line.trim().match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i))
+                .filter(line => IMAGE_EXT_REGEX.test(line.trim()))
                 .length;
         }
 
@@ -85,7 +87,7 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
                 const fullPath = path.join(currentDir, item.name);
                 if (item.isDirectory()) {
                     await findImages(fullPath);
-                } else if (item.name.match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i)) {
+                } else if (IMAGE_EXT_REGEX.test(item.name)) {
                     allImages.push(fullPath);
                 }
             }
@@ -169,16 +171,14 @@ export async function repackArchive(filePath: string): Promise<boolean> {
     if (!filePath || !fs.existsSync(filePath)) return false;
     const ext = path.extname(filePath).toLowerCase();
     
-    if (ext === '.cbr' || ext === '.rar') {
+    if (ext === '.cbr' || ext === '.rar' || ext === '.cb7') {
         const newPath = await convertCbrToCbz(filePath);
         return !!newPath;
     }
     
     if (ext !== '.cbz' && ext !== '.zip') return false;
     
-    // --- THE FIX: Safe local fallback path to /config/cache ---
-    const baseTempDir = process.env.OMNIBUS_CACHE_DIR || '/config/cache';
-    const tempDir = path.join(baseTempDir, `repack_${crypto.randomBytes(8).toString('hex')}`);
+    const tempDir = path.join(CACHE_DIR, `repack_${crypto.randomBytes(8).toString('hex')}`);
     
     try {
         await fs.ensureDir(tempDir);
@@ -202,7 +202,7 @@ export async function repackArchive(filePath: string): Promise<boolean> {
                 const fullPath = path.join(currentDir, item.name);
                 if (item.isDirectory()) {
                     await findImages(fullPath);
-                } else if (item.name.match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i) && !item.name.toLowerCase().includes('__macosx')) {
+                } else if (IMAGE_EXT_REGEX.test(item.name) && !item.name.toLowerCase().includes('__macosx')) {
                     allImages.push(fullPath);
                 }
             }

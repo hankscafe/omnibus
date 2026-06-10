@@ -11,14 +11,8 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
-
-const safeParse = (str: string | null) => {
-    if (!str) return [];
-    try { 
-        const arr = JSON.parse(str); 
-        return Array.isArray(arr) ? arr.filter((item: string) => item !== "NONE") : [];
-    } catch { return []; }
-}
+import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
+import { safeParse } from '@/lib/utils/safe-parse';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -130,7 +124,7 @@ export async function GET(request: Request) {
 
             const filesByNum = new Map<string, string[]>();
             for (const file of files) {
-                if (file.toLowerCase().match(/\.(cbz|cbr|cb7|zip|rar|epub)$/)) { 
+                if (COMIC_EXT_REGEX.test(file)) {
                     const stdNum = extractIssueNumber(file);
                     if (!filesByNum.has(stdNum)) filesByNum.set(stdNum, []);
                     filesByNum.get(stdNum)!.push(file);

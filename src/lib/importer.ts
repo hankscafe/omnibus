@@ -11,10 +11,9 @@ import { syncSeriesMetadata } from './metadata-fetcher';
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
-
-function sanitize(str: string) {
-  return str.replace(/[<>:"/\\|?*]/g, '').trim();
-}
+import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
+import { WATCHED_DIR } from '@/lib/utils/paths';
 
 function fixMagicNumberSync(filePath: string): string {
     try {
@@ -114,7 +113,7 @@ export const Importer = {
     await new Promise(r => setTimeout(r, 1000));
 
     if (!fs.existsSync(sourcePath)) {
-        const extensions = ['.cbz', '.cbr', '.zip', '.rar', '.cb7', '.epub'];
+        const extensions = COMIC_EXTENSIONS;
         for (const ext of extensions) {
             if (fs.existsSync(sourcePath + ext)) {
                 sourcePath = sourcePath + ext;
@@ -192,7 +191,7 @@ export const Importer = {
                 const fullPath = path.join(dir, item.name);
                 if (item.isDirectory()) {
                     results = results.concat(await getComicFilesInDir(fullPath));
-                } else if (item.name.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
+                } else if (COMIC_EXT_REGEX.test(item.name)) {
                     results.push(fullPath);
                 }
             }
@@ -216,7 +215,7 @@ export const Importer = {
             try {
                 const zip = new AdmZip(sourcePath);
                 const entries = zip.getEntries();
-                const comicFiles = entries.filter((e: any) => !e.isDirectory && e.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i));
+                const comicFiles = entries.filter((e: any) => !e.isDirectory && COMIC_EXT_REGEX.test(e.entryName));
                 
                 if (comicFiles.length > 0) {
                     isBatchArchive = true;
@@ -235,7 +234,7 @@ export const Importer = {
         Logger.log(`[Importer Debug] Detected batch payload. isBatchFolder: ${isBatchFolder}, isBatchArchive: ${isBatchArchive}. Total items: ${totalItems}`, 'debug');
         Logger.log(`[Importer] Batch download detected. Routing to WATCHED folder...`, 'info');
         
-        const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
+        const watchedDir = WATCHED_DIR;
         await fs.ensureDir(watchedDir);
         let moveSuccessCount = 0;
 
@@ -268,7 +267,7 @@ export const Importer = {
                 const zip = new AdmZip(sourcePath);
                 const entries = zip.getEntries();
                 for (const entry of entries) {
-                    if (!entry.isDirectory && entry.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
+                    if (!entry.isDirectory && COMIC_EXT_REGEX.test(entry.entryName)) {
                         const fileName = path.basename(entry.entryName);
                         Logger.log(`[Importer Debug] Extracting nested archive from ZIP to Watched: ${fileName}`, 'debug');
                         let finalDest = path.join(watchedDir, fileName);
@@ -518,7 +517,7 @@ export const Importer = {
     if (isActualZip) {
         try {
             const zip = new AdmZip(actualSourceFile);
-            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp|gif)$/i)).length;
+            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && IMAGE_EXT_REGEX.test(e.entryName)).length;
             
             const { parseComicInfo } = await import('./metadata-extractor');
             xmlMeta = await parseComicInfo(actualSourceFile);
@@ -607,7 +606,7 @@ export const Importer = {
       finalPath = fixMagicNumberSync(finalPath);
       fileName = path.basename(finalPath);
 
-      if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar')) {
+      if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar') || finalPath.toLowerCase().endsWith('.cb7')) {
           Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');
           const { convertCbrToCbz } = await import('./converter');
           const convertedPath = await convertCbrToCbz(finalPath);

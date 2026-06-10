@@ -6,6 +6,7 @@ import packageJson from '../../../../../package.json';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { validateApiKey } from '@/lib/api-auth';
+import { CACHE_DIR, LOGS_DIR, BACKUPS_DIR } from '@/lib/utils/paths';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,10 +100,10 @@ export async function GET(req: NextRequest) {
 
     // --- FIX: Generalized fallbacks for environment paths ---
     const envPaths = {
-        DATABASE_URL: (process.env.DATABASE_URL || 'file:./database.db').replace(/:.*@/, ':****@'),
-        OMNIBUS_BACKUPS_DIR: process.env.OMNIBUS_BACKUPS_DIR || '/backups',
-        OMNIBUS_CACHE_DIR: process.env.OMNIBUS_CACHE_DIR || '/cache',
-        OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs'
+        DATABASE_URL: (process.env.DATABASE_URL || 'file:./omnibus.db').replace(/:.*@/, ':****@'),
+        OMNIBUS_BACKUPS_DIR: BACKUPS_DIR,
+        OMNIBUS_CACHE_DIR: CACHE_DIR,
+        OMNIBUS_LOGS_DIR: LOGS_DIR
     };
 
     return NextResponse.json({

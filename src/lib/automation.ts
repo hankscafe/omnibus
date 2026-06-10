@@ -9,6 +9,7 @@ import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
 import { SystemNotifier } from '@/lib/notifications';
 import { isSameIssue } from '@/lib/utils/issue-parser';
+import { DEFAULT_SCORING_RULES } from '@/lib/utils/defaults';
 
 export async function getDownloadClient(protocol: string = 'torrent') {
   const clients = await prisma.downloadClient.findMany();
@@ -280,11 +281,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
 
       if (healthyResults.length > 0) {
         const scoringSetting = await prisma.systemSetting.findUnique({ where: { key: 'release_scoring_rules' } });
-        let scoringRules = [
-            { term: '.cbz', score: 500 }, { term: '(digital)', score: 300 }, { term: '[digital]', score: 300 },
-            { term: 'webrip', score: 200 }, { term: 'web-dl', score: 200 }, { term: '.cbr', score: -400 },
-            { term: '.rar', score: -400 }, { term: 'vapi', score: -400 }
-        ];
+        let scoringRules = [...DEFAULT_SCORING_RULES];
 
         if (scoringSetting?.value) {
             try {

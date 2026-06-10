@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 import { useColorTheme } from "@/components/ThemeProvider"
+import { COMIC_EXT_REGEX } from "@/lib/utils/formats"
 import { 
   User as UserIcon, Upload, Loader2, ListOrdered, CheckCircle2, 
   Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, 
@@ -95,7 +96,7 @@ function ActivityCard({ req, getStatusBadge, onCancel }: { req: any, getStatusBa
       setIsCancelling(false);
   }
 
-  const displayName = (req.seriesName || "Unknown Request").replace(/\.(cbz|cbr|zip)$/i, '');
+  const displayName = (req.seriesName || "Unknown Request").replace(COMIC_EXT_REGEX, '');
   const isCompleted = ['IMPORTED', 'COMPLETED'].includes(req.status);
 
   // Parse Provider

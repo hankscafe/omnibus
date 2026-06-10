@@ -15,6 +15,9 @@ import { authOptions } from '@/lib/auth';
 import { getServerSession } from 'next-auth';
 import { omnibusQueue } from '@/lib/queue';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
+import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
+import { sanitizeFilename } from '@/lib/utils/sanitize';
+import { UNMATCHED_DIR } from '@/lib/utils/paths';
 
 export async function POST(request: Request) {
   try {
@@ -31,7 +34,7 @@ export async function POST(request: Request) {
     Logger.log(`[Match Series Debug] Starting manual match. ID: ${targetMetaId} | Source: ${targetSource} | Path: ${oldFolderPath}`, 'debug');
 
     const libraries = await prisma.library.findMany();
-    const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+    const unmatchedDir = UNMATCHED_DIR;
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     authorizedRoots.push(path.normalize(unmatchedDir).toLowerCase());
     
@@ -94,8 +97,8 @@ export async function POST(request: Request) {
     if (!realName) realName = path.basename(oldFolderPath).replace(/\s\(\d{4}\)$/, "").trim(); 
     if (!realPublisher) realPublisher = 'Other';
 
-    const safePublisher = realPublisher.replace(/[<>:"/\\|?*]/g, '').trim();
-    const safeName = realName.replace(/[<>:"/\\|?*]/g, '').trim();
+    const safePublisher = sanitizeFilename(realPublisher);
+    const safeName = sanitizeFilename(realName);
     const safeYear = realYear > 0 ? realYear.toString() : ''; 
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
@@ -210,7 +213,8 @@ export async function POST(request: Request) {
         
         for (const file of files) {
             const rawExt = path.extname(file);
-            if (['.cbz', '.cbr', '.cb7', '.pdf', '.epub', '.zip'].includes(rawExt.toLowerCase())) {
+            // PDF is matchable but not readable in the app — kept deliberately outside COMIC_EXTENSIONS
+            if ([...COMIC_EXTENSIONS, '.pdf'].includes(rawExt.toLowerCase())) {
                 const oldName = path.basename(file, rawExt);
                 let finalExt = rawExt.toLowerCase();
                 let issueNumStr = "";
@@ -318,9 +322,9 @@ export async function POST(request: Request) {
                                 Logger.log(`[Match Series Debug] DB Created successfully for Issue ${issueNumStr}`, 'debug');
                             }
 
-                            // --- NEW: Trigger the Auto-Converter for genuine CBRs! ---
-                            if (finalExt === '.cbr' && finalIssueId) {
-                                Logger.log(`[Match Series Debug] Genuine CBR detected. Queueing conversion for Issue ${finalIssueId}...`, 'debug');
+                            // --- NEW: Trigger the Auto-Converter for genuine CBRs and CB7s! ---
+                            if ((finalExt === '.cbr' || finalExt === '.cb7' || finalExt === '.rar') && finalIssueId) {
+                                Logger.log(`[Match Series Debug] Convertible archive detected. Queueing conversion for Issue ${finalIssueId}...`, 'debug');
                                 
                                 await omnibusQueue.add('CBR_CONVERSION', 
                                     { type: 'CBR_CONVERSION', issueId: finalIssueId }, 

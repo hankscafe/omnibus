@@ -41,7 +41,7 @@ export function extractIssueNumber(filename: string): string {
         return "-" + explicitNegative[1].replace(/^0+(?=\d)/, '');
     }
 
-    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?|vol(?:ume)?|v\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+    const issueMatch = clean.match(/(?:#|(?<=^|[^a-zA-Z])(?:issue\s*#?|ch(?:apter)?\.?))\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
 
     // 4. Temporarily hide Volume tokens

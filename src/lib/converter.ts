@@ -31,24 +31,44 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         const convertToWebp = config.convert_to_webp === 'true';
         const webpQuality = parseInt(config.webp_quality || '80', 10);
         
-        // --- NATIVE OS EXTRACTION ---
-        // Call the unar binary directly. execFile passes args as an array with
-        // no shell, so filenames with quotes/parens/backticks can't break anything.
-        // -q quiet, -o output dir, -f force overwrite, -D no containing subfolder,
-        // -p '' makes password-protected archives fail fast instead of prompting on stdin
+                // --- NATIVE OS EXTRACTION ---
+        // Official unrar is the primary decoder: unar/XADMaster corrupts some files
+        // inside RAR 2.0 archives (common in vintage comic rips). unar remains the
+        // fallback because it auto-detects .cbr files that are secretly ZIP/7z.
+        const execOpts = { maxBuffer: 10 * 1024 * 1024 };
+        let expectedPages = -1;
+        let unrarExitError: any = null;
+
         try {
-            await execFileAsync(
-                'unar',
-                ['-q', '-p', '', '-o', tempDir, '-f', '-D', cbrPath],
-                { maxBuffer: 10 * 1024 * 1024 }
-            );
-        } catch (unarErr: any) {
-            const detail = unarErr?.code === 'ENOENT'
-                ? 'unar binary not found on PATH (is it installed in this environment?)'
-                : unarErr?.stderr || unarErr?.message || 'Unknown CLI error';
-            throw new Error(`Native extraction failed: ${detail}`);
+            const { stdout } = await execFileAsync('unrar', ['lb', '-p-', cbrPath], execOpts);
+            expectedPages = stdout.split('\n')
+                .filter(line => line.trim().match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i))
+                .length;
+        } catch {
+            expectedPages = -1; // Not a RAR archive (or unrar missing) — use unar below
         }
-        // --------------------------------
+
+        if (expectedPages >= 0) {
+            // Vintage archives often carry benign structural quirks (e.g. a missing
+            // end-of-archive block) that make unrar exit non-zero even though every
+            // file extracted OK. Success is judged by comparing extracted page count
+            // against the listing below, not by the exit code.
+            try {
+                await execFileAsync('unrar', ['x', '-y', '-o+', '-p-', '-idq', cbrPath, `${tempDir}/`], execOpts);
+            } catch (err: any) {
+                unrarExitError = err;
+            }
+        } else {
+            try {
+                await execFileAsync('unar', ['-q', '-p', '', '-o', tempDir, '-f', '-D', cbrPath], execOpts);
+            } catch (unarErr: any) {
+                const detail = unarErr?.code === 'ENOENT'
+                    ? 'unar binary not found on PATH (is it installed in this environment?)'
+                    : unarErr?.stderr || unarErr?.message || 'Unknown CLI error';
+                throw new Error(`Native extraction failed: ${detail}`);
+            }
+        }
+        // ----------------------------
         
         const allImages: string[] = [];
         
@@ -65,6 +85,11 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         }
         await findImages(tempDir);
         Logger.log(`[Converter Debug] Found ${allImages.length} images inside CBR archive: ${path.basename(cbrPath)}`, 'debug');
+
+        if (expectedPages >= 0 && allImages.length < expectedPages) {
+            const detail = unrarExitError?.stderr || unrarExitError?.message || 'archive may be damaged';
+            throw new Error(`Native extraction failed: only ${allImages.length} of ${expectedPages} pages extracted (${detail})`);
+        }
         
         if (allImages.length === 0) {
             throw new Error("Archive contained no valid images after extraction.");

@@ -35,9 +35,10 @@ WORKDIR /app
 
 ARG CACHEBUST=2
 
-# 1. Grab any patches Debian DOES have available, and install OpenSSL and unar
-RUN apt-get update && apt-get dist-upgrade -y && \
-    apt-get install -y --no-install-recommends openssl ca-certificates unar
+# 1. Grab any patches Debian DOES have available, and install OpenSSL, unar, and official unrar (non-free)
+RUN sed -i 's/Components: main/Components: main non-free/' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get dist-upgrade -y && \
+    apt-get install -y --no-install-recommends openssl ca-certificates unar unrar
 
 # 2. --- THE NUCLEAR OS CLEANUP ---
 # Because apt-get refuses to uninstall tar/perl due to dpkg dependencies, 

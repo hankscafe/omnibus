@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Search, Loader2, Download, Ban, Globe, HardDrive, Users, Database } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
+import { formatBytes } from "@/lib/utils/format"
 
 interface Props {
   isOpen: boolean;
@@ -143,12 +144,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
     }
   }
 
-  const formatSize = (bytes: number) => {
-    if (!bytes) return '-';
-    const mb = bytes / (1024 * 1024);
-    if (mb > 1024) return `${(mb / 1024).toFixed(2)} GB`;
-    return `${mb.toFixed(0)} MB`;
-  }
+  const formatSize = (bytes: number) => bytes ? formatBytes(bytes) : '-';
 
   const getAge = (dateString: string) => {
     if (!dateString) return 'N/A';

@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { recordDailyReading } from '@/lib/reading-stats';
 
 export async function PUT(request: Request) {
     try {
@@ -45,8 +46,26 @@ export async function PUT(request: Request) {
     });
 
     if (matchedIssue) {
-        const currentSimulatedPage = Math.round(percentage * 100);
-        const isCompleted = percentage >= 0.99;
+        const newPercentage = Math.max(0, Math.min(1, Number(percentage) || 0));
+        const currentSimulatedPage = Math.round(newPercentage * 100);
+        const isCompleted = newPercentage >= 0.99;
+
+        // Feed the activity heatmap: convert the percentage advance into pages.
+        // Stats failures must never break the actual progress sync.
+        try {
+            const oldProgress = await prisma.readProgress.findUnique({
+                where: { userId_issueId: { userId: user.id, issueId: matchedIssue.id } }
+            });
+            const oldPercentage = oldProgress && oldProgress.totalPages > 0
+                ? Math.min(1, oldProgress.currentPage / oldProgress.totalPages)
+                : 0;
+            // Use the issue's real page count when known; otherwise percentage points stand in for pages
+            const pageBasis = matchedIssue.pageCount > 0 ? matchedIssue.pageCount : 100;
+            const pagesReadDelta = Math.round(Math.max(0, newPercentage - oldPercentage) * pageBasis);
+            await recordDailyReading(user.id, matchedIssue.id, pagesReadDelta);
+        } catch (statError) {
+            Logger.log(`[KOReader Sync API] Failed to record heatmap stats: ${getErrorMessage(statError)}`, 'warn');
+        }
 
         await prisma.readProgress.upsert({
             where: { userId_issueId: { userId: user.id, issueId: matchedIssue.id } },

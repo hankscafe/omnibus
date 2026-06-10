@@ -213,8 +213,7 @@ export async function POST(request: Request) {
         
         for (const file of files) {
             const rawExt = path.extname(file);
-            // PDF is matchable but not readable in the app — kept deliberately outside COMIC_EXTENSIONS
-            if ([...COMIC_EXTENSIONS, '.pdf'].includes(rawExt.toLowerCase())) {
+            if (COMIC_EXTENSIONS.includes(rawExt.toLowerCase())) {
                 const oldName = path.basename(file, rawExt);
                 let finalExt = rawExt.toLowerCase();
                 let issueNumStr = "";

@@ -194,6 +194,207 @@ function ActivityCard({ req, getStatusBadge, onCancel }: { req: any, getStatusBa
   )
 }
 
+// --- Helper Component: Reading Activity Heatmap ---
+const HEATMAP_DAYS = 180;
+const CELL_PITCH = 16; // 12px cell + 4px gap, used to position month labels
+
+function ActivityHeatmap({ analytics }: { analytics: any }) {
+    const [selectedDate, setSelectedDate] = useState<string | null>(null);
+    const scrollRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        // Keep the most recent weeks in view on narrow screens
+        if (scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+    }, [analytics]);
+
+    if (!analytics?.heatmap) return null;
+
+    const heatmap: Record<string, number> = analytics.heatmap;
+    const details: Record<string, any[]> = analytics.heatmapDetails || {};
+
+    // Format to YYYY-MM-DD strictly using local time
+    const toDateStr = (d: Date) => {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+    const formatDate = (dateStr: string) => new Date(`${dateStr}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+    const today = new Date();
+    // Force time to noon local time to avoid any Daylight Saving Time midnight skips!
+    today.setHours(12, 0, 0, 0);
+
+    // Streaks are computed over the full year of data, not just the visible window
+    let currentStreak = 0;
+    const streakCursor = new Date(today);
+    if (!heatmap[toDateStr(streakCursor)]) streakCursor.setDate(streakCursor.getDate() - 1); // No reading yet today doesn't break the streak
+    while (heatmap[toDateStr(streakCursor)]) {
+        currentStreak++;
+        streakCursor.setDate(streakCursor.getDate() - 1);
+    }
+
+    let longestStreak = 0;
+    let run = 0;
+    const yearCursor = new Date(today);
+    yearCursor.setDate(yearCursor.getDate() - 365);
+    for (let i = 0; i <= 365; i++) {
+        run = heatmap[toDateStr(yearCursor)] ? run + 1 : 0;
+        if (run > longestStreak) longestStreak = run;
+        yearCursor.setDate(yearCursor.getDate() + 1);
+    }
+
+    // Build week-aligned columns (Sunday through Saturday)
+    const start = new Date(today);
+    start.setDate(start.getDate() - HEATMAP_DAYS);
+    start.setDate(start.getDate() - start.getDay()); // Snap back to Sunday
+
+    const weeks: { dateStr: string; pages: number; inRange: boolean }[][] = [];
+    const monthLabels: { index: number; label: string }[] = [];
+    const cursor = new Date(start);
+    let lastMonth = -1;
+    while (cursor <= today) {
+        if (cursor.getMonth() !== lastMonth) {
+            monthLabels.push({ index: weeks.length, label: cursor.toLocaleString(undefined, { month: 'short' }) });
+            lastMonth = cursor.getMonth();
+        }
+        const week = [];
+        for (let i = 0; i < 7; i++) {
+            const dateStr = toDateStr(cursor);
+            week.push({ dateStr, pages: heatmap[dateStr] || 0, inRange: cursor <= today });
+            cursor.setDate(cursor.getDate() + 1);
+        }
+        weeks.push(week);
+    }
+    // Drop the first month label if the next one starts almost immediately (avoids "Dec Jan" crowding)
+    if (monthLabels.length >= 2 && monthLabels[1].index - monthLabels[0].index < 2) monthLabels.shift();
+
+    const colorFor = (pages: number) => {
+        if (pages <= 0) return 'bg-muted/50 border-border';
+        if (pages <= 15) return 'bg-primary/30 border-primary/20';
+        if (pages <= 50) return 'bg-primary/60 border-primary/40';
+        return 'bg-primary border-primary/80';
+    };
+
+    const selectedEntries = selectedDate
+        ? [...(details[selectedDate] || [])].sort((a, b) => (b.pagesRead ?? 0) - (a.pagesRead ?? 0) || a.seriesName.localeCompare(b.seriesName))
+        : [];
+
+    return (
+        <div className="mt-4 p-4 bg-muted/20 border border-border rounded-xl space-y-3">
+            {/* Streaks */}
+            <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="secondary" className="font-bold text-[10px] bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20">
+                    <Flame className="w-3 h-3 mr-1" /> {currentStreak} Day Streak
+                </Badge>
+                <Badge variant="secondary" className="font-bold text-[10px] bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border border-yellow-500/20">
+                    <Trophy className="w-3 h-3 mr-1" /> Best: {longestStreak} Days
+                </Badge>
+            </div>
+
+            {/* Calendar grid */}
+            <div ref={scrollRef} className="overflow-x-auto pb-1">
+                <div className="min-w-max ml-auto">
+                    {/* Month labels */}
+                    <div className="relative h-4 ml-8">
+                        {monthLabels.map(m => (
+                            <span key={`${m.label}-${m.index}`} className="absolute text-[9px] font-bold text-muted-foreground uppercase" style={{ left: `${m.index * CELL_PITCH}px` }}>
+                                {m.label}
+                            </span>
+                        ))}
+                    </div>
+                    <div className="flex gap-1">
+                        {/* Weekday labels */}
+                        <div className="flex flex-col gap-1 w-7 shrink-0">
+                            {['', 'Mon', '', 'Wed', '', 'Fri', ''].map((label, i) => (
+                                <div key={i} className="w-7 h-3 text-[8px] font-bold text-muted-foreground leading-3">{label}</div>
+                            ))}
+                        </div>
+                        {weeks.map((week, wi) => (
+                            <div key={wi} className="flex flex-col gap-1">
+                                {week.map(day => {
+                                    if (!day.inRange) return <div key={day.dateStr} className="w-3 h-3" />;
+                                    const issueCount = details[day.dateStr]?.length || 0;
+                                    const tooltip = `${formatDate(day.dateStr)}: ${day.pages} pages read${issueCount > 0 ? ` • ${issueCount} issue${issueCount > 1 ? 's' : ''}` : ''}`;
+                                    return (
+                                        <button
+                                            key={day.dateStr}
+                                            type="button"
+                                            title={tooltip}
+                                            onClick={() => setSelectedDate(prev => prev === day.dateStr ? null : day.dateStr)}
+                                            className={`w-3 h-3 rounded-sm border ${colorFor(day.pages)} transition-colors hover:ring-2 hover:ring-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground ${selectedDate === day.dateStr ? 'ring-2 ring-foreground' : ''}`}
+                                        />
+                                    );
+                                })}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Legend */}
+            <div className="flex items-center justify-between text-[9px] font-bold text-muted-foreground uppercase tracking-wider">
+                <span className="normal-case font-medium tracking-normal">Click a day to see what you read</span>
+                <div className="flex items-center gap-1">
+                    Less
+                    <div className="w-3 h-3 rounded-sm border bg-muted/50 border-border" />
+                    <div className="w-3 h-3 rounded-sm border bg-primary/30 border-primary/20" />
+                    <div className="w-3 h-3 rounded-sm border bg-primary/60 border-primary/40" />
+                    <div className="w-3 h-3 rounded-sm border bg-primary border-primary/80" />
+                    More
+                </div>
+            </div>
+
+            {/* Selected day detail */}
+            {selectedDate && (
+                <div className="border-t border-border pt-3 space-y-2 animate-in fade-in slide-in-from-top-1">
+                    <div className="flex items-center justify-between">
+                        <h5 className="text-xs font-bold flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-primary" /> {formatDate(selectedDate)}
+                        </h5>
+                        <Badge variant="secondary" className="font-mono text-[10px] bg-muted">
+                            {heatmap[selectedDate] || 0} Pages
+                        </Badge>
+                    </div>
+                    {selectedEntries.length === 0 ? (
+                        <p className="text-xs text-muted-foreground italic">
+                            {(heatmap[selectedDate] || 0) > 0 ? 'No issue details were recorded for this day.' : 'No reading activity on this day.'}
+                        </p>
+                    ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {selectedEntries.map((entry, i) => {
+                                const content = (
+                                    <div className="flex items-center gap-3 p-2 rounded-lg border border-border bg-background hover:border-primary/50 transition-colors h-full">
+                                        <div className="w-8 h-12 bg-muted rounded border border-border overflow-hidden shrink-0 flex items-center justify-center">
+                                            {entry.coverUrl ? <img src={entry.coverUrl} className="w-full h-full object-cover" alt="" /> : <BookOpen className="w-3.5 h-3.5 text-muted-foreground" />}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="font-bold text-xs truncate" title={entry.seriesName}>{entry.seriesName}</p>
+                                            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider truncate">
+                                                Issue #{entry.issueNumber}{entry.issueName ? ` — ${entry.issueName}` : ''}
+                                            </p>
+                                            {entry.pagesRead !== null && (
+                                                <p className="text-[10px] text-primary font-bold mt-0.5">{entry.pagesRead} pages read</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                                return entry.seriesPath ? (
+                                    <Link key={i} href={`/library/series?path=${encodeURIComponent(entry.seriesPath)}`} className="block">
+                                        {content}
+                                    </Link>
+                                ) : (
+                                    <div key={i}>{content}</div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 const getThemeGradient = (theme: string) => {
     switch (theme) {
       case 'vigilante': return 'from-red-700 via-red-900 to-slate-900';
@@ -395,49 +596,6 @@ export default function ProfilePage() {
           toast({ title: "Error cancelling request", variant: "destructive" });
       }
   };
-
-  // --- HEATMAP GENERATOR HELPER ---
-  const renderHeatmap = () => {
-      if (!analytics?.heatmap) return null;
-      
-      const today = new Date();
-      // Force time to noon local time to avoid any Daylight Saving Time midnight skips!
-      today.setHours(12, 0, 0, 0);
-      
-      const days = [];
-      // Generate the last 180 days
-      for (let i = 180; i >= 0; i--) {
-          const d = new Date(today);
-          d.setDate(d.getDate() - i);
-          
-          // Format to YYYY-MM-DD strictly using local time
-          const year = d.getFullYear();
-          const month = String(d.getMonth() + 1).padStart(2, '0');
-          const day = String(d.getDate()).padStart(2, '0');
-          const dateStr = `${year}-${month}-${day}`;
-          
-          const pagesRead = analytics.heatmap[dateStr] || 0;
-          
-          let colorClass = "bg-muted/50 border-border"; 
-          if (pagesRead > 0 && pagesRead <= 15) colorClass = "bg-primary/30 border-primary/20";
-          else if (pagesRead > 15 && pagesRead <= 50) colorClass = "bg-primary/60 border-primary/40";
-          else if (pagesRead > 50) colorClass = "bg-primary border-primary/80";
-
-          days.push(
-              <div 
-                  key={dateStr} 
-                  title={`${dateStr}: ${pagesRead} pages read`}
-                  className={`w-3 h-3 sm:w-4 sm:h-4 rounded-sm border ${colorClass} transition-colors hover:ring-2 hover:ring-foreground`}
-              />
-          );
-      }
-
-      return (
-          <div className="flex flex-wrap gap-1 mt-4 p-4 bg-muted/20 border border-border rounded-xl justify-end">
-              {days}
-          </div>
-      );
-  }
 
   // --- 2FA Handlers ---
   const handleBegin2FASetup = async () => {
@@ -748,7 +906,7 @@ export default function ProfilePage() {
                             </Badge>
                         </CardHeader>
                         <CardContent className="px-6 pb-4">
-                            {renderHeatmap()}
+                            <ActivityHeatmap analytics={analytics} />
                         </CardContent>
                     </Card>
                 </div>

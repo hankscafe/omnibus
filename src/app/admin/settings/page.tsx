@@ -928,7 +928,7 @@ export default function SettingsPage() {
                                     Export series.json for Komga / Kavita
                                 </Label>
                                 <p className="text-[11px] text-muted-foreground">
-                                    Automatically writes a <code>series.json</code> file to the root of your series folders. This allows external reading servers to instantly recognize your metadata if you map them to the same storage drive.
+                                    Automatically writes a Mylar-format (v1.0.2) <code>series.json</code> file to the root of your series folders. This allows external reading servers to instantly recognize your metadata if you map them to the same storage drive.
                                 </p>
                             </div>
                         </div>

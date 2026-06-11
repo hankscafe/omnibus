@@ -4,6 +4,8 @@ import path from 'path';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -12,6 +14,26 @@ export async function GET(request: Request) {
   if (!filePath) return new Response("Missing path parameter", { status: 400 });
 
   try {
+    // Enforce the download permission server-side — UI gating alone lets any
+    // authenticated user fetch files by path. Fresh DB lookup (not the JWT)
+    // so revoking the permission takes effect immediately.
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+
+    let user = null;
+    const userId = (session?.user as any)?.id;
+    if (userId) {
+        user = await prisma.user.findUnique({ where: { id: userId } });
+    } else if (session?.user?.email) {
+        user = await prisma.user.findUnique({ where: { email: session.user.email } });
+    }
+
+    if (!user) return new Response("Unauthorized", { status: 401 });
+
+    const canDownload = user.role === 'ADMIN' || user.canDownload === true;
+    if (!canDownload) {
+        return new Response("Forbidden: You do not have permission to download files.", { status: 403 });
+    }
     // NATIVE DB FETCH: Get all configured libraries to authorize the path
     const libraries = await prisma.library.findMany();
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());

@@ -96,6 +96,7 @@ function SeriesContent() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(true);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
+  const [seriesDownloadProgress, setSeriesDownloadProgress] = useState<number | null>(null);
 
   const [deleteIssueModalOpen, setDeleteIssueModalOpen] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<any>(null);
@@ -489,11 +490,36 @@ function SeriesContent() {
       if (success) successCount++;
       await new Promise(resolve => setTimeout(resolve, 300));
     }
-    toast({ 
-      title: "Bulk Request Complete", 
-      description: `Successfully queued ${successCount} of ${missingIssues.length} missing issues.` 
+    toast({
+      title: "Bulk Request Complete",
+      description: `Successfully queued ${successCount} of ${missingIssues.length} missing issues.`
     });
     setIsBulkDownloading(false);
+  }
+
+  // Downloads every issue file in the series to the user's device, one at a time.
+  // Reuses the per-issue download endpoint, so each file arrives as its original .cbz.
+  const handleDownloadSeries = async () => {
+    const files = downloadedIssues.filter(i => i.fullPath);
+    if (files.length === 0) return;
+    setSeriesDownloadProgress(0);
+    toast({ title: "Series Download Started", description: `Downloading ${files.length} issues. Your browser may ask permission to download multiple files.` });
+
+    try {
+        for (let idx = 0; idx < files.length; idx++) {
+            const link = document.createElement('a');
+            link.href = `/api/library/download?path=${encodeURIComponent(files[idx].fullPath)}`;
+            link.download = '';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setSeriesDownloadProgress(idx + 1);
+            // Space out the triggers so the browser doesn't drop downloads
+            await new Promise(resolve => setTimeout(resolve, 700));
+        }
+    } finally {
+        setSeriesDownloadProgress(null);
+    }
   }
 
   const toggleFavorite = async () => {
@@ -1349,6 +1375,20 @@ function SeriesContent() {
               <div className="space-y-6">
                   <div className="flex items-center justify-between border-b-2 border-border pb-4">
                       <h4 className="font-black flex items-center gap-2 text-xl text-foreground tracking-tight"><Layers className="w-6 h-6 text-primary"/> Downloaded Issues ({downloadedIssues.length})</h4>
+                      <div className="flex items-center gap-2 shrink-0">
+                      {canDownload && downloadedIssues.some(i => i.fullPath) && (
+                          <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-8 px-3 text-xs font-bold bg-muted hover:bg-muted/80 text-foreground border border-border"
+                              onClick={handleDownloadSeries}
+                              disabled={seriesDownloadProgress !== null || isSelectionMode}
+                          >
+                              {seriesDownloadProgress !== null
+                                  ? (<><Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /><span className="hidden sm:inline">Downloading {seriesDownloadProgress}/{downloadedIssues.filter(i => i.fullPath).length}</span></>)
+                                  : (<><Download className="w-4 h-4 sm:mr-1" /><span className="hidden sm:inline">Download Series</span></>)}
+                          </Button>
+                      )}
                       <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
                           <Button variant={isSelectionMode ? "secondary" : "ghost"} size="sm" className="h-8 px-2 text-xs font-bold" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedIssues(new Set()); }}>
                               {isSelectionMode ? <Square className="w-4 h-4 sm:mr-1" /> : <CheckSquare className="w-4 h-4 sm:mr-1" />}
@@ -1358,8 +1398,9 @@ function SeriesContent() {
                           <Button variant={viewMode === 'grid' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('grid')}><LayoutGrid className="w-4 h-4" /></Button>
                           <Button variant={viewMode === 'list' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('list')}><List className="w-4 h-4" /></Button>
                       </div>
+                      </div>
                   </div>
-                  
+
                   {viewMode === 'grid' ? (
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6 pb-4">
                           {downloadedIssues.map((issue) => {

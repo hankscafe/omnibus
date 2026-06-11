@@ -467,9 +467,12 @@ export default function SmartMatchPage() {
                                             <div className="min-w-0 flex-1">
                                                 <h4 className="font-bold text-foreground break-words whitespace-normal text-sm leading-tight">{suggestion.name}</h4>
                                                 <p className="text-xs text-muted-foreground break-words whitespace-normal mt-1">{suggestion.publisher || 'Unknown'} • {suggestion.year || '????'}</p>
-                                                <div className="flex items-center gap-3 mt-1.5">
+                                                <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                                                     <p className="text-[10px] text-muted-foreground/80">{suggestion.count} Issues</p>
-                                                    <a 
+                                                    <p className="text-[10px] font-mono font-bold text-muted-foreground/80 bg-muted px-1.5 py-0.5 rounded border border-border" title={`${providerLabel} ${providerLabel === 'Metron' ? 'Series' : 'Volume'} ID`}>
+                                                        ID: {suggestion.id}
+                                                    </p>
+                                                    <a
                                                         href={(suggestion.metadataSource || searchProvider) === 'METRON' ? `https://metron.cloud/series/${suggestion.id}/` : `https://comicvine.gamespot.com/volume/4050-${suggestion.id}/`} 
                                                         target="_blank" 
                                                         rel="noopener noreferrer" 

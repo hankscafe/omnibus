@@ -42,6 +42,7 @@ export async function GET(request: Request) {
     const pendingOnly = searchParams.get('pending') === 'true';
     const monitored = searchParams.get('monitored') === 'true';
     const era = searchParams.get('era') || 'ALL';
+    const bookTypeFilter = searchParams.get('bookType') || 'ALL';
     const readStatus = searchParams.get('readStatus') || 'ALL';
 
     if (shouldScanDisk) {
@@ -87,6 +88,15 @@ export async function GET(request: Request) {
         else if (era === '1990s') where.AND.push({ year: { gte: 1990, lt: 2000 } });
         else if (era === '1980s') where.AND.push({ year: { gte: 1980, lt: 1990 } });
         else if (era === 'CLASSIC') where.AND.push({ year: { lt: 1980, gt: 0 } });
+    }
+
+    if (['Print', 'OneShot', 'TPB', 'GN'].includes(bookTypeFilter)) {
+        if (bookTypeFilter === 'Print') {
+            // Uncategorized series are standard print series until told otherwise
+            where.AND.push({ OR: [{ bookType: 'Print' }, { bookType: null }] });
+        } else {
+            where.AND.push({ bookType: bookTypeFilter });
+        }
     }
 
     if (readStatus !== 'ALL') {

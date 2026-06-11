@@ -60,8 +60,8 @@ function SeriesContent() {
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({ 
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false, isManga: false, matchState: 'MATCHED'
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED'
   });
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
@@ -82,7 +82,7 @@ function SeriesContent() {
   const [isSearchingMore, setIsSearchingMore] = useState(false);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false });
+  const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "Print" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   const [reportModalOpen, setReportModalOpen] = useState(false);
@@ -252,19 +252,21 @@ function SeriesContent() {
                 year: data.year ? data.year.toString() : null,
                 description: data.description || null,
                 status: data.status || null,
+                bookType: data.bookType || null,
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
                 matchState: data.matchState || 'MATCHED'
             });
-            
+
             setEditForm({
                 name: data.seriesName || data.name || "",
-                publisher: data.publisher || "", 
+                publisher: data.publisher || "",
                 year: data.year ? data.year.toString() : "",
                 cvId: data.metadataId ? data.metadataId.toString() : (data.cvId ? data.cvId.toString() : ""),
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
-                status: data.status || 'Ongoing'
+                status: data.status || 'Ongoing',
+                bookType: data.bookType || 'Print'
             });
 
             // --- FIX: Intelligently fallback to the first missing issue if nothing is downloaded yet ---
@@ -588,7 +590,8 @@ function SeriesContent() {
                   cvId: editForm.cvId || "",
                   monitored: editForm.monitored,
                   isManga: editForm.isManga,
-                  status: editForm.status
+                  status: editForm.status,
+                  bookType: editForm.bookType
               })
           });
           if (!res.ok) throw new Error("Failed to save info.");
@@ -919,14 +922,23 @@ function SeriesContent() {
               </div>
 
               <div className="flex flex-col gap-2">
-                  <div className="flex gap-2 pb-1">
-                      {seriesInfo.status && (
-                          <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
-                              {seriesInfo.status}
-                          </Badge>
+                  <div className="flex flex-col gap-2 pb-1">
+                      {(seriesInfo.status || (seriesInfo.bookType && seriesInfo.bookType !== 'Print')) && (
+                          <div className="flex gap-2">
+                              {seriesInfo.status && (
+                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
+                                      {seriesInfo.status}
+                                  </Badge>
+                              )}
+                              {seriesInfo.bookType && seriesInfo.bookType !== 'Print' && (
+                                  <Badge variant="secondary" className="w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20">
+                                      {seriesInfo.bookType === 'OneShot' ? 'One-Shot' : seriesInfo.bookType}
+                                  </Badge>
+                              )}
+                          </div>
                       )}
                       {seriesInfo.id && (
-                          <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
+                          <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`w-full justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
                               {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
                           </Badge>
                       )}
@@ -1790,17 +1802,33 @@ function SeriesContent() {
                   <div className="grid gap-2"><Label>Series Name</Label><Input value={editForm.name} onChange={(e) => setEditForm({...editForm, name: e.target.value})} className="bg-background border-border" /></div>
                   <div className="grid gap-2"><Label>Year</Label><Input value={editForm.year} onChange={(e) => setEditForm({...editForm, year: e.target.value})} className="bg-background border-border" /></div>
                   
-                  <div className="grid gap-2">
-                      <Label>Status</Label>
-                      <Select value={editForm.status} onValueChange={(v) => setEditForm({...editForm, status: v})}>
-                          <SelectTrigger className="bg-background border-border h-12 sm:h-10">
-                              <SelectValue placeholder="Ongoing" />
-                          </SelectTrigger>
-                          <SelectContent className="bg-popover border-border">
-                              <SelectItem value="Ongoing">Ongoing</SelectItem>
-                              <SelectItem value="Ended">Ended</SelectItem>
-                          </SelectContent>
-                      </Select>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                          <Label>Status</Label>
+                          <Select value={editForm.status} onValueChange={(v) => setEditForm({...editForm, status: v})}>
+                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                                  <SelectValue placeholder="Ongoing" />
+                              </SelectTrigger>
+                              <SelectContent className="bg-popover border-border">
+                                  <SelectItem value="Ongoing">Ongoing</SelectItem>
+                                  <SelectItem value="Ended">Ended</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
+                      <div className="grid gap-2">
+                          <Label>Book Type</Label>
+                          <Select value={editForm.bookType} onValueChange={(v) => setEditForm({...editForm, bookType: v})}>
+                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                                  <SelectValue placeholder="Print" />
+                              </SelectTrigger>
+                              <SelectContent className="bg-popover border-border">
+                                  <SelectItem value="Print">Print (Standard Series)</SelectItem>
+                                  <SelectItem value="OneShot">One-Shot</SelectItem>
+                                  <SelectItem value="TPB">Trade Paperback</SelectItem>
+                                  <SelectItem value="GN">Graphic Novel</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
                   </div>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">

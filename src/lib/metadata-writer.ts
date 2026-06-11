@@ -143,6 +143,25 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
             return false;
         }
 
+        const jsonPath = path.join(series.folderPath, 'series.json');
+
+        // Never clobber a series.json Omnibus didn't create (e.g. a curated Mylar
+        // library). Ownership is tracked in the DB; the one exception is our own
+        // legacy Komga-style format from before ownership tracking existed, which
+        // is recognizable (no version key, Komga-only fields) and safe to upgrade.
+        if (!series.seriesJsonWritten && fs.existsSync(jsonPath)) {
+            let isLegacyOmnibusFile = false;
+            try {
+                const existing = JSON.parse(await fs.readFile(jsonPath, 'utf-8'));
+                isLegacyOmnibusFile = !existing.version && existing.metadata?.readingDirection !== undefined;
+            } catch (e) { /* unreadable or not JSON — treat as foreign */ }
+
+            if (!isLegacyOmnibusFile) {
+                Logger.log(`[Writer] Skipping series.json for ${series.name}: the existing file was not created by Omnibus.`, 'warn');
+                return false;
+            }
+        }
+
         // comicid is the ComicVine volume ID per the Mylar spec; never substitute a Metron ID
         let comicid: number | null = series.cvId ?? null;
         if (comicid === null && series.metadataSource === 'COMICVINE' && series.metadataId) {
@@ -173,33 +192,56 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
             .replace(/(<([^>]+)>)/gi, '')
             .trim();
 
-        // Mylar series.json schema v1.0.2 — the format Komga, Kavita, and Mylar consume
+        // comic_image prefers the remote ComicVine/Metron cover URL. When that isn't
+        // known, fall back to the locally cached cover served through Omnibus (made
+        // absolute via NEXTAUTH_URL) so the field is never empty when a cover exists.
+        let comicImage: string | null = series.remoteCoverUrl || null;
+        if (!comicImage && series.coverUrl) {
+            if (series.coverUrl.startsWith('http')) {
+                comicImage = series.coverUrl;
+            } else {
+                const baseUrl = (process.env.NEXTAUTH_URL || 'http://localhost:3000').replace(/\/$/, '');
+                comicImage = series.coverUrl.startsWith('/')
+                    ? `${baseUrl}${series.coverUrl}`
+                    : `${baseUrl}/api/library/cover?path=${encodeURIComponent(series.coverUrl)}`;
+            }
+        }
+
+        // Mylar series.json schema v1.0.2 — the format Komga, Kavita, and Mylar consume.
+        // Unknown values are null, never "": Komga ignores nulls but chokes on blanks.
         // https://github.com/mylar3/mylar3/wiki/series.json-schema-(version-1.0.2)
         const seriesJson = {
             version: '1.0.2',
             metadata: {
                 type: 'comicSeries',
-                publisher: series.publisher || '',
+                publisher: series.publisher || null,
                 imprint: null,
                 name: series.name,
                 comicid: comicid,
                 year: series.year,
-                description_text: descriptionText,
-                description_formatted: descriptionFormatted,
+                description_text: descriptionText || null,
+                description_formatted: descriptionFormatted || null,
                 volume: null,
-                booktype: 'Print',
+                booktype: series.bookType || 'Print',
                 age_rating: null,
                 collects: null,
-                comic_image: series.coverUrl || '',
+                comic_image: comicImage,
                 total_issues: series.issues.length,
-                publication_run: publicationRun,
+                publication_run: publicationRun || null,
                 status: isEnded ? 'Ended' : 'Continuing'
             }
         };
 
-        const jsonPath = path.join(series.folderPath, 'series.json');
         Logger.log(`[Metadata Writer Debug] Exporting Mylar-spec series.json to: ${jsonPath}`, 'debug');
         await fs.writeFile(jsonPath, JSON.stringify(seriesJson, null, 2), 'utf-8');
+
+        // Claim ownership so future runs keep this file updated
+        if (!series.seriesJsonWritten) {
+            await prisma.series.update({
+                where: { id: series.id },
+                data: { seriesJsonWritten: true }
+            });
+        }
         return true;
     } catch (error) {
         Logger.log(`[Writer] Failed to write series.json for ${seriesId}: ${getErrorMessage(error)}`, 'error');

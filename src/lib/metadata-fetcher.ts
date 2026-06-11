@@ -9,7 +9,18 @@ import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
 import { markSystemFlag, logApiUsage } from './utils/system-flags';
-import { isSameIssue } from '@/lib/utils/issue-parser'; 
+import { isSameIssue } from '@/lib/utils/issue-parser';
+
+// Providers rarely report when a series ends, so Omnibus guesses: no new issue
+// within the admin-configured window (months) = Ended. Returns null when the
+// guess is disabled (window of 0 / "Never").
+async function getSeriesEndedCutoff(): Promise<{ cutoffMs: number, months: number } | null> {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: 'series_ended_months' } });
+    const parsed = parseInt(setting?.value || '18', 10);
+    const months = isNaN(parsed) ? 18 : parsed;
+    if (months <= 0) return null;
+    return { cutoffMs: Date.now() - Math.round(months * 30.44 * 24 * 60 * 60 * 1000), months };
+}
 
 export async function syncSeriesMetadata(metadataId: string, folderPath: string, metadataSource: string = 'COMICVINE') {
     const series = await prisma.series.findFirst({ 
@@ -79,7 +90,11 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     year: details.year || series.year,
                     universe: details.universe,
                     description: details.description,
-                    coverUrl: metronFinalCover, 
+                    coverUrl: metronFinalCover,
+                    // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
+                    ...(details.coverUrl ? { remoteCoverUrl: details.coverUrl } : {}),
+                    // Metron's series_type is authoritative, but never clobber a manual categorization
+                    ...(details.bookType && !series.bookType ? { bookType: details.bookType } : {}),
                     status: details.status
                 }
             });
@@ -148,13 +163,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             }
 
             if (details.status !== 'Ended' && latestDateMs > 0) {
-                const cutoffMs = Date.now() - (545 * 24 * 60 * 60 * 1000); // 1.5 years
-                if (latestDateMs < cutoffMs) {
+                const endedWindow = await getSeriesEndedCutoff();
+                if (endedWindow && latestDateMs < endedWindow.cutoffMs) {
                     await prisma.series.update({
                         where: { id: series.id },
                         data: { status: 'Ended' }
                     });
-                    Logger.log(`[Metadata] Series "${series.name}" marked as Ended due to >1.5 years of inactivity.`, 'info');
+                    Logger.log(`[Metadata] Series "${series.name}" marked as Ended after ${endedWindow.months}+ months without a new issue.`, 'info');
                 }
             }
 
@@ -191,7 +206,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let volRes;
     try {
         volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
-            params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year' },
+            params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year,count_of_issues' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 15000
         });
@@ -249,6 +264,14 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         }
     }
 
+    // ComicVine has no format field, so book type is a conservative guess: explicit
+    // format hints in the volume name, or a finished single-issue volume = one-shot
+    let guessedBookType: string | null = null;
+    const volName = volData.name || '';
+    if (/graphic novel|\bOGN\b/i.test(volName)) guessedBookType = 'GN';
+    else if (/\bTPB\b|trade paperback|\bHC\b|hardcover/i.test(volName)) guessedBookType = 'TPB';
+    else if (volData.count_of_issues === 1 && volData.end_year) guessedBookType = 'OneShot';
+
     await prisma.series.update({
         where: { id: series.id },
         data: {
@@ -256,8 +279,12 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             publisher: volData.publisher?.name || 'Other',
             year: parseInt(volData.start_year || "0") || series.year,
             description: volData.description || volData.deck || null,
-            coverUrl: cvFinalCover, 
-            status: volData.end_year ? 'Ended' : 'Ongoing' 
+            coverUrl: cvFinalCover,
+            // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
+            ...(imageUrl ? { remoteCoverUrl: imageUrl } : {}),
+            // Heuristic only fills a blank — never clobber a manual categorization
+            ...(guessedBookType && !series.bookType ? { bookType: guessedBookType } : {}),
+            status: volData.end_year ? 'Ended' : 'Ongoing'
         }
     });
 
@@ -362,13 +389,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     }
 
     if (!volData.end_year && latestDateMs > 0) {
-        const cutoffMs = Date.now() - (545 * 24 * 60 * 60 * 1000); // 1.5 years
-        if (latestDateMs < cutoffMs) {
+        const endedWindow = await getSeriesEndedCutoff();
+        if (endedWindow && latestDateMs < endedWindow.cutoffMs) {
             await prisma.series.update({
                 where: { id: series.id },
                 data: { status: 'Ended' }
             });
-            Logger.log(`[Metadata] Series "${series.name}" marked as Ended due to >1.5 years of inactivity.`, 'info');
+            Logger.log(`[Metadata] Series "${series.name}" marked as Ended after ${endedWindow.months}+ months without a new issue.`, 'info');
         }
     }
 

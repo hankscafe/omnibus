@@ -10,7 +10,7 @@ import {
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe
+  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -124,6 +124,7 @@ function LibraryContent() {
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false) 
   const [monitoredFilter, setMonitoredFilter] = useState(false)
   const [eraFilter, setEraFilter] = useState("ALL")
+  const [bookTypeFilter, setBookTypeFilter] = useState("ALL")
   const [readStatus, setReadStatus] = useState("ALL")
   const [randomTrigger, setRandomTrigger] = useState(0)
 
@@ -195,7 +196,7 @@ function LibraryContent() {
   const filtersRef = useRef({
       search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
       sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
-      read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
+      bookType: bookTypeFilter, read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
   });
 
   useEffect(() => {
@@ -210,9 +211,9 @@ function LibraryContent() {
       filtersRef.current = {
           search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
           sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
-          read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
+          bookType: bookTypeFilter, read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
       };
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, monitoredFilter, eraFilter, readStatus, activeCollection, pageSize, randomTrigger]);
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, monitoredFilter, eraFilter, bookTypeFilter, readStatus, activeCollection, pageSize, randomTrigger]);
 
   useEffect(() => {
       document.title = "Omnibus - Library";
@@ -317,6 +318,7 @@ function LibraryContent() {
       if (f.favs) params.append('favorites', 'true');
       if (f.monitored) params.append('monitored', 'true');
       if (f.era !== 'ALL') params.append('era', f.era);
+      if (f.bookType !== 'ALL') params.append('bookType', f.bookType);
       if (f.read !== 'ALL') params.append('readStatus', f.read);
       if (f.col !== 'ALL') params.append('collection', f.col);
       if (f.sort === 'random') params.append('_t', Date.now().toString());
@@ -395,7 +397,7 @@ function LibraryContent() {
       if (isFirstRender.current) return;
       setPage(1); 
       loadLibraryData(1, false, false); 
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, readStatus, randomTrigger, pageSize, loadLibraryData])
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, bookTypeFilter, readStatus, randomTrigger, pageSize, loadLibraryData])
 
   const toggleViewMode = (mode: 'grid' | 'list') => {
       setViewMode(mode)
@@ -431,6 +433,7 @@ function LibraryContent() {
       setShowFavoritesOnly(false);
       setMonitoredFilter(false);
       setEraFilter("ALL");
+      setBookTypeFilter("ALL");
       setReadStatus("ALL");
       setActiveCollection("ALL");
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -726,7 +729,7 @@ function LibraryContent() {
       } catch (e: any) { toastRef.current({ title: "Delete Failed", description: e.message, variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
-  const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL";
+  const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || bookTypeFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL";
 
   return (
     <div className="container mx-auto py-10 px-6 relative transition-colors duration-300">
@@ -868,6 +871,19 @@ function LibraryContent() {
                       <SelectItem value="1990s">1990s</SelectItem>
                       <SelectItem value="1980s">1980s</SelectItem>
                       <SelectItem value="CLASSIC">Pre-1980s</SelectItem>
+                  </SelectContent>
+              </Select>
+
+              <Select value={bookTypeFilter} onValueChange={setBookTypeFilter}>
+                  <SelectTrigger aria-label="Filter by book type" className="flex-1 sm:w-[140px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                      <div className="flex items-center gap-2 truncate"><BookType className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Book Type" /></div>
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
+                      <SelectItem value="ALL">All Types</SelectItem>
+                      <SelectItem value="Print">Print Series</SelectItem>
+                      <SelectItem value="OneShot">One-Shots</SelectItem>
+                      <SelectItem value="TPB">Trade Paperbacks</SelectItem>
+                      <SelectItem value="GN">Graphic Novels</SelectItem>
                   </SelectContent>
               </Select>
 

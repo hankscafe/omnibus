@@ -119,7 +119,10 @@ model Series {
   
   description     String?
   status          String?
+  bookType        String?  // 'Print' | 'OneShot' | 'TPB' | 'GN' (Mylar booktype values); null = unknown
   coverUrl        String?
+  remoteCoverUrl  String?  // Original ComicVine/Metron cover URL (coverUrl becomes a local path after caching)
+  seriesJsonWritten Boolean @default(false) // Omnibus owns the series.json in this folder; foreign files are never overwritten
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
 

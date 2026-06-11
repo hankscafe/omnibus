@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
     userFindMany: vi.fn(),
     systemSettingUpsert: vi.fn(),
     systemSettingFindMany: vi.fn(),
+    systemSettingFindUnique: vi.fn(),
+    queueAdd: vi.fn(),
     axiosGet: vi.fn(),
     writeComicInfo: vi.fn().mockResolvedValue(true),
     writeSeriesJson: vi.fn().mockResolvedValue(true),
@@ -26,9 +28,10 @@ vi.mock('@/lib/db', () => ({
     prisma: {
         $transaction: mocks.transaction, // <-- FIX: Added to Prisma mock object
         jobLog: { create: mocks.jobLogCreate },
-        systemSetting: { 
-            upsert: mocks.systemSettingUpsert, 
+        systemSetting: {
+            upsert: mocks.systemSettingUpsert,
             findMany: mocks.systemSettingFindMany,
+            findUnique: mocks.systemSettingFindUnique,
             deleteMany: vi.fn()
         },
         series: { findMany: mocks.seriesFindMany, update: mocks.seriesUpdate },
@@ -71,7 +74,7 @@ vi.mock('@/lib/mailer', () => ({
 // 3. Intercept BullMQ Worker creation
 vi.mock('bullmq', () => ({
     Queue: class QueueMock {
-        add = vi.fn();
+        add = mocks.queueAdd;
         getRepeatableJobs = vi.fn().mockResolvedValue([]);
         removeRepeatableByKey = vi.fn();
     },
@@ -133,13 +136,15 @@ describe('Cron: BullMQ Worker Router', () => {
         }));
     });
 
-    it('should correctly process EMBED_METADATA and generate series.json files', async () => {
+    it('should process EMBED_METADATA (XML only) and chain a scoped EXPORT_SERIES_JSON job when the export is enabled', async () => {
         initWorker();
-        
+
         // Return a mock issue that needs its ComicInfo.xml injected
         mocks.issueFindMany.mockResolvedValueOnce([
             { id: 'issue_100', seriesId: 'series_99' }
         ]);
+        // The series.json export feature is enabled
+        mocks.systemSettingFindUnique.mockResolvedValueOnce({ value: 'true' });
 
         const mockJob = {
             id: 'job_embed',
@@ -149,12 +154,61 @@ describe('Cron: BullMQ Worker Router', () => {
 
         await mocks.workerCb.current(mockJob);
 
-        // Verify the background job called the correct external writers
         expect(mocks.writeComicInfo).toHaveBeenCalledWith('issue_100');
-        expect(mocks.writeSeriesJson).toHaveBeenCalledWith('series_99');
-        
+        // series.json writing is no longer inlined in this job...
+        expect(mocks.writeSeriesJson).not.toHaveBeenCalled();
+        // ...instead the separate job is queued for the same series scope
+        expect(mocks.queueAdd).toHaveBeenCalledWith(
+            'EXPORT_SERIES_JSON',
+            expect.objectContaining({ type: 'EXPORT_SERIES_JSON', seriesIds: ['series_99'] }),
+            expect.anything()
+        );
+
         expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ jobType: 'EMBED_METADATA', status: 'COMPLETED' })
+        }));
+    });
+
+    it('should write series.json files when EXPORT_SERIES_JSON runs with the export enabled', async () => {
+        initWorker();
+
+        mocks.systemSettingFindUnique.mockResolvedValueOnce({ value: 'true' });
+        mocks.seriesFindMany.mockResolvedValueOnce([{ id: 'series_99' }]);
+
+        const mockJob = {
+            id: 'job_export',
+            data: { type: 'EXPORT_SERIES_JSON', seriesIds: ['series_99'] },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        expect(mocks.writeSeriesJson).toHaveBeenCalledWith('series_99');
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ jobType: 'EXPORT_SERIES_JSON', status: 'COMPLETED' })
+        }));
+    });
+
+    it('should skip EXPORT_SERIES_JSON with a warning log when the export feature is disabled', async () => {
+        initWorker();
+
+        mocks.systemSettingFindUnique.mockResolvedValueOnce({ value: 'false' });
+
+        const mockJob = {
+            id: 'job_export_disabled',
+            data: { type: 'EXPORT_SERIES_JSON' },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        expect(mocks.writeSeriesJson).not.toHaveBeenCalled();
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({
+                jobType: 'EXPORT_SERIES_JSON',
+                status: 'COMPLETED_WITH_ERRORS',
+                message: expect.stringContaining('Skipped')
+            })
         }));
     });
 

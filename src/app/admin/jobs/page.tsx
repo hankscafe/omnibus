@@ -34,7 +34,9 @@ const INTERVALS = [
 export default function ScheduledJobsPage() {
   const router = useRouter()
   const [metadataSyncSchedule, setMetadataSyncSchedule] = useState("24")
-  const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0") 
+  const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0")
+  const [seriesJsonSchedule, setSeriesJsonSchedule] = useState("0")
+  const [seriesJsonEnabled, setSeriesJsonEnabled] = useState(false)
   const [librarySyncSchedule, setLibrarySyncSchedule] = useState("12") 
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
@@ -65,9 +67,9 @@ export default function ScheduledJobsPage() {
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null)
 
   const currentStateString = JSON.stringify({
-      metadataSyncSchedule, embedMetadataSchedule, librarySyncSchedule,
+      metadataSyncSchedule, embedMetadataSchedule, seriesJsonSchedule, seriesJsonEnabled, librarySyncSchedule,
       monitorSyncSchedule, diagnosticsSyncSchedule, backupSyncSchedule, backupSyncDay,
-      cacheCleanupSchedule, popularSyncSchedule, converterSyncSchedule, 
+      cacheCleanupSchedule, popularSyncSchedule, converterSyncSchedule,
       weeklyDigestSchedule, weeklyDigestDay, watchedSyncSchedule, healthCheckSchedule
   });
 
@@ -121,7 +123,9 @@ export default function ScheduledJobsPage() {
       if (res.ok) {
         const data = await res.json();
         const metaItem = data.settings.find((c: any) => c.key === 'metadata_sync_schedule');
-        const embedItem = data.settings.find((c: any) => c.key === 'embed_metadata_schedule'); 
+        const embedItem = data.settings.find((c: any) => c.key === 'embed_metadata_schedule');
+        const seriesJsonItem = data.settings.find((c: any) => c.key === 'series_json_schedule');
+        const seriesJsonEnabledItem = data.settings.find((c: any) => c.key === 'export_series_json');
         const libItem = data.settings.find((c: any) => c.key === 'library_sync_schedule');
         const monitorItem = data.settings.find((c: any) => c.key === 'monitor_sync_schedule'); 
         const diagItem = data.settings.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
@@ -139,6 +143,8 @@ export default function ScheduledJobsPage() {
         
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (embedItem) setEmbedMetadataSchedule(embedItem.value);
+        if (seriesJsonItem) setSeriesJsonSchedule(seriesJsonItem.value);
+        setSeriesJsonEnabled(seriesJsonEnabledItem?.value === 'true');
         if (libItem) setLibrarySyncSchedule(libItem.value);
         if (monitorItem) setMonitorSyncSchedule(monitorItem.value);
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
@@ -160,8 +166,21 @@ export default function ScheduledJobsPage() {
     }
   };
 
+  // Scheduling the series.json job requires the export feature itself; enabling
+  // the schedule turns the feature on (saved together with the schedules)
+  const handleSeriesJsonScheduleChange = (v: string) => {
+      setSeriesJsonSchedule(v);
+      if (v !== "0" && !seriesJsonEnabled) {
+          setSeriesJsonEnabled(true);
+          toast({
+              title: "series.json Export Required",
+              description: "This job needs the series.json export feature, so it has been switched on. It will be saved together with your schedule changes."
+          });
+      }
+  };
+
   // --- ADDED: Updated signature payload to accept the two new job triggers ---
-  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter' | 'embed_metadata' | 'weekly_digest' | 'watched_sync' | 'health_check' | 'cache_cleanup') => {
+  const handleRunJob = async (job: 'metadata' | 'library' | 'monitor' | 'diagnostics' | 'backup' | 'popular' | 'converter' | 'embed_metadata' | 'export_series_json' | 'weekly_digest' | 'watched_sync' | 'health_check' | 'cache_cleanup') => {
       setRunningJob(job);
       toast({ title: "Job Started", description: `The ${job} process has been triggered in the background.` });
       try {
@@ -193,6 +212,8 @@ export default function ScheduledJobsPage() {
                   settings: {
                       metadata_sync_schedule: metadataSyncSchedule,
                       embed_metadata_schedule: embedMetadataSchedule,
+                      series_json_schedule: seriesJsonSchedule,
+                      export_series_json: seriesJsonEnabled ? "true" : "false",
                       library_sync_schedule: librarySyncSchedule,
                       monitor_sync_schedule: monitorSyncSchedule,
                       diagnostics_sync_schedule: diagnosticsSyncSchedule,
@@ -363,6 +384,29 @@ export default function ScheduledJobsPage() {
                         </Select>
                         <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('embed_metadata')} disabled={runningJob === 'embed_metadata'}>
                             {runningJob === 'embed_metadata' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
+                        </Button>
+                    </CardContent>
+                </Card>
+
+                <Card className={`shadow-sm border-border bg-background transition-all hover:shadow-md ${!seriesJsonEnabled ? 'opacity-80' : ''}`}>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileJson className="w-5 h-5 text-primary" /> Export series.json</CardTitle>
+                        <CardDescription className="text-muted-foreground">Writes Mylar-format series.json files to series folders for Komga / Kavita.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <Select value={seriesJsonEnabled ? seriesJsonSchedule : "0"} onValueChange={handleSeriesJsonScheduleChange}>
+                            <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                                {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        {!seriesJsonEnabled && (
+                            <p className="text-[11px] text-amber-600 dark:text-amber-500 font-medium leading-snug">
+                                The series.json export feature is currently disabled. Selecting a schedule will enable it automatically.
+                            </p>
+                        )}
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('export_series_json')} disabled={runningJob === 'export_series_json' || !seriesJsonEnabled}>
+                            {runningJob === 'export_series_json' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
                         </Button>
                     </CardContent>
                 </Card>

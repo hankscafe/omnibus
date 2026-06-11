@@ -10,6 +10,7 @@ export interface MetadataSeries {
     coverUrl: string | null;
     status: 'Ongoing' | 'Ended';
     issueCount?: number;
+    bookType?: 'Print' | 'OneShot' | 'TPB' | 'GN' | null;
 }
 
 export interface MetadataIssue {

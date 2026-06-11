@@ -14,6 +14,22 @@ import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 
 const execFileAsync = promisify(execFile);
 
+// Reads the leading magic bytes of a file; returns an empty buffer on any failure
+async function readFileSignature(filePath: string): Promise<Buffer> {
+    try {
+        const fd = await fs.open(filePath, 'r');
+        const buffer = Buffer.alloc(4);
+        try {
+            await fs.read(fd, buffer, 0, 4, 0);
+        } finally {
+            await fs.close(fd);
+        }
+        return buffer;
+    } catch {
+        return Buffer.alloc(0);
+    }
+}
+
 export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
     if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar|cb7)$/)) return null;
     const cbzPath = cbrPath.replace(/\.(cbr|rar|cb7)$/i, '.cbz');
@@ -32,49 +48,62 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         const convertToWebp = config.convert_to_webp === 'true';
         const webpQuality = parseInt(config.webp_quality || '80', 10);
         
-                // --- NATIVE OS EXTRACTION ---
+        // --- NATIVE OS EXTRACTION ---
         // Official unrar is the primary decoder: unar/XADMaster corrupts some files
         // inside RAR 2.0 archives (common in vintage comic rips). unar remains the
-        // fallback because it auto-detects other formats: genuine 7z archives
-        // (.cb7) and .cbr files that are secretly ZIP.
+        // fallback because it auto-detects other formats, e.g. genuine 7z archives
+        // (.cb7). ZIPs in disguise are routed by magic bytes and never reach either.
         const execOpts = { maxBuffer: 10 * 1024 * 1024 };
         let expectedPages = -1;
         let unrarExitError: any = null;
 
-                let rarListing: string | null = null;
-        try {
-            const { stdout } = await execFileAsync('unrar', ['lb', '-p-', cbrPath], execOpts);
-            rarListing = stdout;
-        } catch (err: any) {
-            // unrar exits non-zero for benign structural quirks (e.g. a missing
-            // end-of-archive block) even when the listing printed in full, so
-            // salvage its stdout. A genuine non-RAR file yields an empty listing.
-            rarListing = typeof err?.stdout === 'string' && err.stdout.trim() !== '' ? err.stdout : null;
-        }
-        if (rarListing !== null) {
-            expectedPages = rarListing.split('\n')
-                .filter(line => IMAGE_EXT_REGEX.test(line.trim()))
-                .length;
-        }
+        // Extensions lie: .cbr files are frequently ZIPs in disguise, and WinRAR's
+        // UnRAR.exe exits 0 with an empty listing for them — so the real container
+        // format, not the extension or exit code, picks the decoder.
+        const signature = await readFileSignature(cbrPath);
+        const isActuallyZip = signature.length >= 2 && signature[0] === 0x50 && signature[1] === 0x4B; // "PK"
 
-        if (expectedPages >= 0) {
-            // Vintage archives often carry benign structural quirks (e.g. a missing
-            // end-of-archive block) that make unrar exit non-zero even though every
-            // file extracted OK. Success is judged by comparing extracted page count
-            // against the listing below, not by the exit code.
-            try {
-                await execFileAsync('unrar', ['x', '-y', '-o+', '-p-', '-idq', cbrPath, `${tempDir}/`], execOpts);
-            } catch (err: any) {
-                unrarExitError = err;
-            }
+        if (isActuallyZip) {
+            Logger.log(`[Converter] ${path.basename(cbrPath)} is a ZIP in disguise — extracting natively`, 'info');
+            new AdmZip(cbrPath).extractAllTo(tempDir, true);
         } else {
+            let rarListing: string | null = null;
             try {
-                await execFileAsync('unar', ['-q', '-p', '', '-o', tempDir, '-f', '-D', cbrPath], execOpts);
-            } catch (unarErr: any) {
-                const detail = unarErr?.code === 'ENOENT'
-                    ? 'unar binary not found on PATH (is it installed in this environment?)'
-                    : unarErr?.stderr || unarErr?.message || 'Unknown CLI error';
-                throw new Error(`Native extraction failed: ${detail}`);
+                const { stdout } = await execFileAsync('unrar', ['lb', '-p-', cbrPath], execOpts);
+                // An empty listing means "not a RAR" even on exit 0 (WinRAR's UnRAR.exe
+                // succeeds silently on non-RAR input) — route it to unar instead.
+                rarListing = typeof stdout === 'string' && stdout.trim() !== '' ? stdout : null;
+            } catch (err: any) {
+                // unrar exits non-zero for benign structural quirks (e.g. a missing
+                // end-of-archive block) even when the listing printed in full, so
+                // salvage its stdout. A genuine non-RAR file yields an empty listing.
+                rarListing = typeof err?.stdout === 'string' && err.stdout.trim() !== '' ? err.stdout : null;
+            }
+            if (rarListing !== null) {
+                expectedPages = rarListing.split('\n')
+                    .filter(line => IMAGE_EXT_REGEX.test(line.trim()))
+                    .length;
+            }
+
+            if (expectedPages >= 0) {
+                // Vintage archives often carry benign structural quirks (e.g. a missing
+                // end-of-archive block) that make unrar exit non-zero even though every
+                // file extracted OK. Success is judged by comparing extracted page count
+                // against the listing below, not by the exit code.
+                try {
+                    await execFileAsync('unrar', ['x', '-y', '-o+', '-p-', '-idq', cbrPath, `${tempDir}/`], execOpts);
+                } catch (err: any) {
+                    unrarExitError = err;
+                }
+            } else {
+                try {
+                    await execFileAsync('unar', ['-q', '-p', '', '-o', tempDir, '-f', '-D', cbrPath], execOpts);
+                } catch (unarErr: any) {
+                    const detail = unarErr?.code === 'ENOENT'
+                        ? 'unar binary not found on PATH (is it installed in this environment?)'
+                        : unarErr?.stderr || unarErr?.message || 'Unknown CLI error';
+                    throw new Error(`Native extraction failed: ${detail}`);
+                }
             }
         }
         // ----------------------------

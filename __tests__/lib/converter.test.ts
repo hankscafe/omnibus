@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => {
         webp: vi.fn().mockReturnThis(),
         toFile: vi.fn().mockResolvedValue(true),
         execFile,
-        execFileAsync
+        execFileAsync,
+        // Magic bytes served by the fs.read mock; tests overwrite per scenario
+        signature: { bytes: Buffer.alloc(0) }
     };
 });
 
@@ -51,7 +53,13 @@ vi.mock('fs-extra', () => ({
             ]);
         }),
         remove: vi.fn().mockResolvedValue(true),
-        move: vi.fn().mockResolvedValue(true)
+        move: vi.fn().mockResolvedValue(true),
+        open: vi.fn().mockResolvedValue(42),
+        read: vi.fn().mockImplementation((_fd, buffer: Buffer) => {
+            mocks.signature.bytes.copy(buffer);
+            return Promise.resolve({ bytesRead: mocks.signature.bytes.length, buffer });
+        }),
+        close: vi.fn().mockResolvedValue(undefined)
     }
 }));
 
@@ -73,7 +81,10 @@ vi.mock('sharp', () => ({
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Data Processing: Archive Repacker', () => {
-    beforeEach(() => { vi.clearAllMocks(); });
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.signature.bytes = Buffer.alloc(0);
+    });
 
     it('should repack a CBZ file and maintain original image formats if WEBP is disabled', async () => {
         mocks.findManySettings.mockResolvedValueOnce([{ key: 'convert_to_webp', value: 'false' }]);
@@ -128,5 +139,36 @@ describe('Data Processing: Archive Repacker', () => {
         const result = await repackArchive('/library/comic.docx');
         expect(result).toBe(false);
         expect(mocks.execFileAsync).not.toHaveBeenCalled();
+    });
+
+    it('should detect a ZIP disguised as .cbr via magic bytes and convert it without external decoders', async () => {
+        mocks.findManySettings.mockResolvedValueOnce([{ key: 'convert_to_webp', value: 'false' }]);
+        mocks.findFirstIssue.mockResolvedValueOnce(null);
+        // "PK\x03\x04" — a CBZ wearing a .cbr extension
+        mocks.signature.bytes = Buffer.from([0x50, 0x4B, 0x03, 0x04]);
+
+        const result = await repackArchive('/library/comic.cbr');
+
+        expect(result).toBe(true);
+        // Neither unrar nor unar should ever be invoked for a ZIP
+        expect(mocks.execFileAsync).not.toHaveBeenCalled();
+        expect(mocks.writeZip).toHaveBeenCalledWith('/library/comic.cbz');
+    });
+
+    it('should fall back to unar when unrar exits 0 with an empty listing (WinRAR on non-RAR input)', async () => {
+        mocks.findManySettings.mockResolvedValueOnce([{ key: 'convert_to_webp', value: 'false' }]);
+        mocks.findFirstIssue.mockResolvedValueOnce(null);
+        // Not a ZIP by signature, and WinRAR-style unrar "succeeds" silently:
+        // exit code 0 with an empty listing must still mean "not a RAR".
+        mocks.execFileAsync
+            .mockResolvedValueOnce({ stdout: '', stderr: '' })  // unrar lb: exit 0, no output
+            .mockResolvedValueOnce({ stdout: '', stderr: '' }); // unar extraction succeeds
+
+        const result = await repackArchive('/library/comic.cbr');
+
+        expect(result).toBe(true);
+        expect(mocks.execFileAsync).toHaveBeenNthCalledWith(1, 'unrar', expect.arrayContaining(['lb']), expect.anything());
+        expect(mocks.execFileAsync).toHaveBeenNthCalledWith(2, 'unar', expect.arrayContaining(['/library/comic.cbr']), expect.anything());
+        expect(mocks.writeZip).toHaveBeenCalledWith('/library/comic.cbz');
     });
 });

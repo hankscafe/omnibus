@@ -228,6 +228,7 @@ export async function GET(request: Request) {
       publisher: seriesRecord?.publisher || null, 
       year: seriesRecord?.year || null, 
       status: seriesRecord?.status || null,
+      bookType: seriesRecord?.bookType || null,
       monitored: seriesRecord?.monitored || false,
       isManga: seriesRecord?.isManga || false,
       matchState: seriesRecord?.matchState || 'UNMATCHED',

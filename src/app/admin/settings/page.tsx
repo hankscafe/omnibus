@@ -174,7 +174,8 @@ export default function SettingsPage() {
     primary_metadata_source: "COMICVINE",
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030", download_path: "", cv_api_key: "",
     metron_user: "", metron_pass: "",
-    export_series_json: "false", 
+    export_series_json: "false",
+    series_ended_months: "18",
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     filter_foreign_publishers: "",
@@ -916,8 +917,37 @@ export default function SettingsPage() {
                     </div>
 
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
+                        <div>
+                            <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+                                <Database className="w-4 h-4 text-primary" /> Series "Ended" Detection
+                            </h3>
+                            <p className="text-[0.8rem] text-muted-foreground mt-1">
+                                ComicVine and Metron rarely record when a series actually ends, so Omnibus guesses: if no new issue has been
+                                released within this window, the series is marked as Ended during metadata syncs. Choose a longer window for
+                                slow-publishing series, or Never to only trust the providers.
+                            </p>
+                        </div>
+                        <Select
+                            value={config.series_ended_months || "18"}
+                            onValueChange={(v) => setConfig({...config, series_ended_months: v})}
+                        >
+                            <SelectTrigger className="w-full sm:w-[300px] h-12 sm:h-10 bg-muted/50 border-border text-foreground font-bold">
+                                <SelectValue placeholder="18 Months" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="6">6 Months</SelectItem>
+                                <SelectItem value="12">12 Months</SelectItem>
+                                <SelectItem value="18">18 Months (Default)</SelectItem>
+                                <SelectItem value="24">24 Months</SelectItem>
+                                <SelectItem value="36">36 Months</SelectItem>
+                                <SelectItem value="0">Never (Trust Providers Only)</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    <div className="space-y-4 pt-6 border-t border-border mt-4">
                         <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
-                            <Switch 
+                            <Switch
                                 id="export-series-json"
                                 checked={config.export_series_json === "true"} 
                                 onCheckedChange={(c) => setConfig({...config, export_series_json: c ? "true" : "false"})} 

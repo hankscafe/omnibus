@@ -183,7 +183,7 @@ export async function syncSchedules() {
                     'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule',
                     'diagnostics_sync_schedule', 'backup_sync_schedule', 'backup_sync_day', 'popular_sync_schedule',
                     'weekly_digest_schedule', 'weekly_digest_day', 'cbr_conversion_schedule', 'embed_metadata_schedule',
-                    'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule'
+                    'series_json_schedule', 'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule'
                 ]
             }
         }
@@ -244,6 +244,7 @@ export async function syncSchedules() {
     
     await addJob('CBR_CONVERSION', config.cbr_conversion_schedule);
     await addJob('EMBED_METADATA', config.embed_metadata_schedule);
+    await addJob('EXPORT_SERIES_JSON', config.series_json_schedule);
     await addJob('CACHE_CLEANUP', config.cache_cleanup_schedule);
 
     // --- REPLACED: Converted hardcoded 15m intervals to dynamic user variables ---
@@ -962,15 +963,15 @@ export function initWorker() {
                 }
 
                 case 'EMBED_METADATA': {
-                    await prisma.systemSetting.upsert({ 
-                        where: { key: 'last_embed_sync' }, 
-                        update: { value: nowStr }, 
-                        create: { key: 'last_embed_sync', value: nowStr } 
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'last_embed_sync' },
+                        update: { value: nowStr },
+                        create: { key: 'last_embed_sync', value: nowStr }
                     });
-                    
-                    const { writeComicInfo, writeSeriesJson } = await import('@/lib/metadata-writer');
+
+                    const { writeComicInfo } = await import('@/lib/metadata-writer');
                     const whereClause: any = { filePath: { endsWith: '.cbz' } };
-                    
+
                     if (job.data.seriesId) {
                         whereClause.seriesId = job.data.seriesId;
                     } else if (job.data.issueIds && Array.isArray(job.data.issueIds)) {
@@ -991,23 +992,79 @@ export function initWorker() {
                         } else {
                             failCount++;
                         }
-                        await new Promise(r => setTimeout(r, 1000)); 
-                    }
-
-                    const uniqueSeriesIds = new Set(issues.map(i => i.seriesId));
-                    let seriesJsonCount = 0;
-                    
-                    for (const sId of uniqueSeriesIds) {
-                        const wroteJson = await writeSeriesJson(sId);
-                        if (wroteJson) seriesJsonCount++;
+                        await new Promise(r => setTimeout(r, 1000));
                     }
 
                     await prisma.jobLog.create({
-                        data: { 
-                            jobType: 'EMBED_METADATA', 
-                            status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', 
-                            durationMs: Date.now() - startTime, 
-                            message: `Metadata embedding complete. Updated ${successCount} files. Failed: ${failCount}. Exported ${seriesJsonCount} series.json files.` 
+                        data: {
+                            jobType: 'EMBED_METADATA',
+                            status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
+                            durationMs: Date.now() - startTime,
+                            message: `Metadata embedding complete. Updated ${successCount} files. Failed: ${failCount}.`
+                        }
+                    });
+
+                    // Chain the (now separate) series.json export for the same series scope
+                    const exportSetting = await prisma.systemSetting.findUnique({ where: { key: 'export_series_json' } });
+                    if (exportSetting?.value === 'true') {
+                        const uniqueSeriesIds = Array.from(new Set(issues.map(i => i.seriesId)));
+                        if (uniqueSeriesIds.length > 0) {
+                            await omnibusQueue.add('EXPORT_SERIES_JSON', {
+                                type: 'EXPORT_SERIES_JSON',
+                                seriesIds: uniqueSeriesIds
+                            }, {
+                                jobId: `EXPORT_SJSON_CHAIN_${Date.now()}`,
+                                removeOnComplete: true,
+                                removeOnFail: true
+                            });
+                        }
+                    }
+                    break;
+                }
+
+                case 'EXPORT_SERIES_JSON': {
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'last_series_json_sync' },
+                        update: { value: nowStr },
+                        create: { key: 'last_series_json_sync', value: nowStr }
+                    });
+
+                    const exportEnabled = await prisma.systemSetting.findUnique({ where: { key: 'export_series_json' } });
+                    if (exportEnabled?.value !== 'true') {
+                        await prisma.jobLog.create({
+                            data: {
+                                jobType: 'EXPORT_SERIES_JSON',
+                                status: 'COMPLETED_WITH_ERRORS',
+                                durationMs: Date.now() - startTime,
+                                message: 'Skipped: the series.json export feature is disabled. Enable it in Settings or via the job card toggle.'
+                            }
+                        });
+                        break;
+                    }
+
+                    const { writeSeriesJson } = await import('@/lib/metadata-writer');
+                    const seriesWhere: any = { metadataSource: { in: ['COMICVINE', 'METRON'] } };
+
+                    if (job.data.seriesId) {
+                        seriesWhere.id = job.data.seriesId;
+                    } else if (job.data.seriesIds && Array.isArray(job.data.seriesIds)) {
+                        seriesWhere.id = { in: job.data.seriesIds };
+                    }
+
+                    const seriesList = await prisma.series.findMany({ where: seriesWhere, select: { id: true } });
+
+                    let exportedCount = 0;
+                    for (const s of seriesList) {
+                        const wroteJson = await writeSeriesJson(s.id);
+                        if (wroteJson) exportedCount++;
+                    }
+
+                    await prisma.jobLog.create({
+                        data: {
+                            jobType: 'EXPORT_SERIES_JSON',
+                            status: 'COMPLETED',
+                            durationMs: Date.now() - startTime,
+                            message: `series.json export complete. Wrote ${exportedCount} of ${seriesList.length} series folders.`
                         }
                     });
                     break;

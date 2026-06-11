@@ -23,6 +23,7 @@ export async function POST(request: Request) {
             'library': 'LIBRARY_SCAN',
             'metadata': 'METADATA_SYNC',
             'embed_metadata': 'EMBED_METADATA',
+            'export_series_json': 'EXPORT_SERIES_JSON',
             'monitor': 'SERIES_MONITOR',
             'diagnostics': 'DIAGNOSTICS',
             'popular': 'DISCOVER_SYNC',

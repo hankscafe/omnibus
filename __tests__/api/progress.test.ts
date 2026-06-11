@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     findUniqueProgress: vi.fn(),
     upsertProgress: vi.fn(),
     upsertDailyStat: vi.fn(),
+    upsertDailyIssueRead: vi.fn(),
     getServerSession: vi.fn(),
     log: vi.fn()
 }));
@@ -20,7 +21,8 @@ vi.mock('@/lib/db', () => ({
     prisma: {
         issue: { findMany: mocks.findManyIssues },
         readProgress: { findUnique: mocks.findUniqueProgress, upsert: mocks.upsertProgress },
-        dailyReadingStat: { upsert: mocks.upsertDailyStat }
+        dailyReadingStat: { upsert: mocks.upsertDailyStat },
+        dailyIssueRead: { upsert: mocks.upsertDailyIssueRead }
     }
 }));
 
@@ -85,6 +87,12 @@ describe('API Route: Reading Progress Tracker', () => {
         // The delta is 15 pages. It should log exactly 15 new pages read today!
         expect(mocks.upsertDailyStat).toHaveBeenCalledWith(expect.objectContaining({
             create: expect.objectContaining({ pagesRead: 15 }),
+            update: expect.objectContaining({ pagesRead: { increment: 15 } })
+        }));
+
+        // It should also record WHICH issue was read today for the heatmap detail view
+        expect(mocks.upsertDailyIssueRead).toHaveBeenCalledWith(expect.objectContaining({
+            create: expect.objectContaining({ issueId: 'issue_1', pagesRead: 15 }),
             update: expect.objectContaining({ pagesRead: { increment: 15 } })
         }));
     });

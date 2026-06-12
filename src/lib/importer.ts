@@ -10,65 +10,10 @@ import { SystemNotifier } from './notifications';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
-
-function sanitize(str: string) {
-  return str.replace(/[<>:"/\\|?*]/g, '').trim();
-}
-
-function isSameIssue(num1: string | number, num2: string | number): boolean {
-    // Splits the string into [Full Match, Numbers, Letters]
-    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
-    const m1 = String(num1).trim().match(regex);
-    const m2 = String(num2).trim().match(regex);
-    
-    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
-
-    const float1 = parseFloat(m1[1] || "0");
-    const float2 = parseFloat(m2[1] || "0");
-    const suffix1 = m1[2].toUpperCase().trim();
-    const suffix2 = m2[2].toUpperCase().trim();
-
-    return float1 === float2 && suffix1 === suffix2;
-}
-
-function extractIssueNumber(filename: string): string {
-    let clean = filename.replace(/\.\w+$/, ''); 
-    clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
-    
-    // 1. HIGHEST PRIORITY
-    const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    if (issueMatch) {
-        const num = issueMatch[1].replace(/^0+(?=\d)/, '');
-        Logger.log(`[Issue Extractor Debug] Matched explicit #/Issue rule for "${filename}" -> Result: ${num}`, 'debug');
-        return num;
-    }
-
-    // 2. SECONDARY PRIORITY
-    const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
-    if (volMatch) {
-        const num = volMatch[1].replace(/^0+(?=\d)/, '');
-        Logger.log(`[Issue Extractor Debug] Matched Volume/V rule for "${filename}" -> Result: ${num}`, 'debug');
-        return num;
-    }
-    
-    // 3. FALLBACK
-    const matches = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?[a-zA-Z]?)(?=[^a-zA-Z0-9]|$)/g)];
-    if (matches.length > 0) {
-        for (let i = matches.length - 1; i >= 0; i--) {
-            const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
-            const numVal = parseFloat(matchVal);
-            
-            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) {
-                continue; 
-            }
-            Logger.log(`[Issue Extractor Debug] Matched Fallback end-of-string rule for "${filename}" -> Result: ${matchVal}`, 'debug');
-            return matchVal;
-        }
-    }
-    
-    Logger.log(`[Issue Extractor Debug] Failed to match any extraction rule for "${filename}". Defaulting to "1"`, 'debug');
-    return "1"; 
-}
+import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
+import { WATCHED_DIR } from '@/lib/utils/paths';
 
 function fixMagicNumberSync(filePath: string): string {
     try {
@@ -168,7 +113,7 @@ export const Importer = {
     await new Promise(r => setTimeout(r, 1000));
 
     if (!fs.existsSync(sourcePath)) {
-        const extensions = ['.cbz', '.cbr', '.zip', '.rar', '.cb7', '.epub'];
+        const extensions = COMIC_EXTENSIONS;
         for (const ext of extensions) {
             if (fs.existsSync(sourcePath + ext)) {
                 sourcePath = sourcePath + ext;
@@ -246,7 +191,7 @@ export const Importer = {
                 const fullPath = path.join(dir, item.name);
                 if (item.isDirectory()) {
                     results = results.concat(await getComicFilesInDir(fullPath));
-                } else if (item.name.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
+                } else if (COMIC_EXT_REGEX.test(item.name)) {
                     results.push(fullPath);
                 }
             }
@@ -270,7 +215,7 @@ export const Importer = {
             try {
                 const zip = new AdmZip(sourcePath);
                 const entries = zip.getEntries();
-                const comicFiles = entries.filter((e: any) => !e.isDirectory && e.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i));
+                const comicFiles = entries.filter((e: any) => !e.isDirectory && COMIC_EXT_REGEX.test(e.entryName));
                 
                 if (comicFiles.length > 0) {
                     isBatchArchive = true;
@@ -289,7 +234,7 @@ export const Importer = {
         Logger.log(`[Importer Debug] Detected batch payload. isBatchFolder: ${isBatchFolder}, isBatchArchive: ${isBatchArchive}. Total items: ${totalItems}`, 'debug');
         Logger.log(`[Importer] Batch download detected. Routing to WATCHED folder...`, 'info');
         
-        const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
+        const watchedDir = WATCHED_DIR;
         await fs.ensureDir(watchedDir);
         let moveSuccessCount = 0;
 
@@ -322,7 +267,7 @@ export const Importer = {
                 const zip = new AdmZip(sourcePath);
                 const entries = zip.getEntries();
                 for (const entry of entries) {
-                    if (!entry.isDirectory && entry.entryName.match(/\.(cbz|cbr|zip|rar|cb7|epub)$/i)) {
+                    if (!entry.isDirectory && COMIC_EXT_REGEX.test(entry.entryName)) {
                         const fileName = path.basename(entry.entryName);
                         Logger.log(`[Importer Debug] Extracting nested archive from ZIP to Watched: ${fileName}`, 'debug');
                         let finalDest = path.join(watchedDir, fileName);
@@ -458,7 +403,8 @@ export const Importer = {
     let isManga = false;
     let cleanSeriesName = (req.activeDownloadName || path.basename(sourcePath))
         .replace(/\.[^/.]+$/, "") 
-        .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(\d+(?:\.\d+)?)/i, '') 
+        // Added -? to strip negative signs so they don't pollute the series name
+        .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(-?\d+(?:\.\d+)?)/i, '') 
         .replace(/\[.*?\]/g, '') 
         .replace(/\(.*?\)/g, '') 
         .trim();
@@ -571,7 +517,7 @@ export const Importer = {
     if (isActualZip) {
         try {
             const zip = new AdmZip(actualSourceFile);
-            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp|gif)$/i)).length;
+            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && IMAGE_EXT_REGEX.test(e.entryName)).length;
             
             const { parseComicInfo } = await import('./metadata-extractor');
             xmlMeta = await parseComicInfo(actualSourceFile);
@@ -660,7 +606,7 @@ export const Importer = {
       finalPath = fixMagicNumberSync(finalPath);
       fileName = path.basename(finalPath);
 
-      if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar')) {
+      if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar') || finalPath.toLowerCase().endsWith('.cb7')) {
           Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');
           const { convertCbrToCbz } = await import('./converter');
           const convertedPath = await convertCbrToCbz(finalPath);

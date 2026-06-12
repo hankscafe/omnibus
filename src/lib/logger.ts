@@ -1,4 +1,6 @@
 // src/lib/logger.ts
+import { LOGS_DIR } from './utils/paths';
+
 type LogEntry = { timestamp: string; message: string; type: 'info' | 'error' | 'success' | 'warn' | 'debug' };
 
 // Prevent logs from being cleared during Next.js Hot Reloads, and persist the log level
@@ -58,7 +60,7 @@ export const Logger = {
         const path = pathRaw.default || pathRaw;
         
         try {
-            const logDir = process.env.OMNIBUS_LOGS_DIR || path.join(process.cwd(), 'config', 'logs');
+            const logDir = LOGS_DIR;
             
             // --- THE FIX: Wrap mkdirSync inside a quiet error trap to safely handle existing shared Docker mounts ---
             if (!fs.existsSync(logDir)) {
@@ -90,7 +92,7 @@ export const Logger = {
             const fs = fsRaw.default || fsRaw;
             const path = pathRaw.default || pathRaw;
             try {
-                const logDir = process.env.OMNIBUS_LOGS_DIR || path.join(process.cwd(), 'config', 'logs');
+                const logDir = LOGS_DIR;
                 const logFile = path.join(logDir, 'omnibus.log');
                 fs.writeFileSync(logFile, "");
             } catch(e) {}

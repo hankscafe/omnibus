@@ -2,7 +2,7 @@ name: Build, Publish, and Release Docker Image
 
 on:
   push:
-    branches: ['main']
+    branches: ['main', 'rust-engine']
     tags: ['v*']
 
 env:
@@ -42,12 +42,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # --- AUTOMATED RELEASE STEPS ---
+      # --- AUTOMATED RELEASE STEPS (main only: branch builds publish images, never releases) ---
       - name: Get version from package.json
         id: package-version
         run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
 
       - name: Check if Release exists
+        if: github.ref == format('refs/heads/{0}', 'main')
         id: check-release
         run: |
           if gh release view v${{ env.VERSION }} &>/dev/null; then
@@ -59,7 +60,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub Release
-        if: env.EXISTS == 'false'
+        if: github.ref == format('refs/heads/{0}', 'main') && env.EXISTS == 'false'
         uses: ncipollo/release-action@v1
         with:
           tag: v${{ env.VERSION }}
@@ -95,6 +96,9 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
             type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            # The rust-engine branch publishes side-by-side test images; it never touches :latest.
+            type=raw,value=rust-engine,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
+            type=raw,value=v${{ env.VERSION }}-rust,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
             type=ref,event=tag
             type=sha
 
@@ -111,7 +115,7 @@ jobs:
             CACHEBUST=${{ github.run_id }}
 
       - name: Update Docker Hub Description
-        if: success() 
+        if: success() && github.ref == format('refs/heads/{0}', 'main')
         uses: peter-evans/dockerhub-description@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -158,9 +162,9 @@ jobs:
           
           curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
 
-      # --- SPECIFIC RELEASE NOTIFICATION (PLAIN TEXT FORMAT) ---
+      # --- SPECIFIC RELEASE NOTIFICATION (PLAIN TEXT FORMAT, main only) ---
       - name: Send Release Announcement to Discord
-        if: success() 
+        if: success() && github.ref == format('refs/heads/{0}', 'main')
         env:
           DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASES }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -256,6 +260,10 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
             type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            # The rust-engine branch is currently the only source of engine builds; tagged per-branch
+            # so the eventual merge to main can own :latest cleanly.
+            type=raw,value=rust-engine,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
+            type=raw,value=v${{ env.VERSION }}-rust,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
             type=ref,event=tag
             type=sha
 

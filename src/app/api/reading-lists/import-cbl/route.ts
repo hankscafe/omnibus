@@ -78,7 +78,7 @@ export async function POST(request: Request) {
             Logger.log(`[CBL Import Debug] Evaluating CBL entry: "${seriesName} #${issueNum}"`, 'debug');
 
             const normalizedSearchSeries = normalize(seriesName);
-            const parsedTargetNum = parseFloat(issueNum.replace(/[^0-9.]/g, ''));
+            const parsedTargetNum = parseFloat(issueNum.replace(/[^0-9.-]/g, ''));
 
             const matchedSeries = allSeries.find(s => normalize(s.name) === normalizedSearchSeries || normalize(s.name).includes(normalizedSearchSeries));
             let matchedIssueId = null;

@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
     koreaderUpsert: vi.fn(),
     findFirstIssue: vi.fn(),
     readProgressUpsert: vi.fn(),
+    readProgressFindUnique: vi.fn(),
+    upsertDailyStat: vi.fn(),
+    upsertDailyIssueRead: vi.fn(),
     log: vi.fn()
 }));
 
@@ -19,7 +22,9 @@ vi.mock('@/lib/db', () => ({
         apiKey: { findUnique: mocks.findUniqueApi },
         koreaderSync: { upsert: mocks.koreaderUpsert },
         issue: { findFirst: mocks.findFirstIssue },
-        readProgress: { upsert: mocks.readProgressUpsert }
+        readProgress: { upsert: mocks.readProgressUpsert, findUnique: mocks.readProgressFindUnique },
+        dailyReadingStat: { upsert: mocks.upsertDailyStat },
+        dailyIssueRead: { upsert: mocks.upsertDailyIssueRead }
     }
 }));
 
@@ -81,5 +86,50 @@ describe('Integrations: KOReader Progress Sync', () => {
         expect(mocks.readProgressUpsert).toHaveBeenCalledWith(expect.objectContaining({
             update: expect.objectContaining({ isCompleted: true, currentPage: 100 })
         }));
+    });
+
+    it('should feed the reading heatmap with pages derived from the percentage advance', async () => {
+        mocks.findUniqueOpds.mockResolvedValueOnce({
+            user: { id: 'user_1', username: 'TestUser' }
+        });
+        // The matched issue has a known real page count of 40
+        mocks.findFirstIssue.mockResolvedValueOnce({ id: 'issue_100', pageCount: 40 });
+        // The user had previously synced to 25%
+        mocks.readProgressFindUnique.mockResolvedValueOnce({ currentPage: 25, totalPages: 100 });
+
+        const req = createReq(
+            { 'x-auth-user': 'TestUser', 'x-auth-key': 'valid_key' },
+            { document: '/manga/Naruto/vol_1.cbz', percentage: 0.75, progress: 'page 30', device: 'Kindle', device_id: 'abc' }
+        );
+        const res = await PUT(req);
+        expect(res.status).toBe(200);
+
+        // A 50% advance through a 40-page issue = 20 pages read today
+        expect(mocks.upsertDailyStat).toHaveBeenCalledWith(expect.objectContaining({
+            create: expect.objectContaining({ pagesRead: 20 }),
+            update: expect.objectContaining({ pagesRead: { increment: 20 } })
+        }));
+        expect(mocks.upsertDailyIssueRead).toHaveBeenCalledWith(expect.objectContaining({
+            create: expect.objectContaining({ issueId: 'issue_100', pagesRead: 20 })
+        }));
+    });
+
+    it('should not log heatmap pages when the synced percentage moves backwards', async () => {
+        mocks.findUniqueOpds.mockResolvedValueOnce({
+            user: { id: 'user_1', username: 'TestUser' }
+        });
+        mocks.findFirstIssue.mockResolvedValueOnce({ id: 'issue_100', pageCount: 40 });
+        // The user was already at 80%, but the device syncs an older 50% state
+        mocks.readProgressFindUnique.mockResolvedValueOnce({ currentPage: 80, totalPages: 100 });
+
+        const req = createReq(
+            { 'x-auth-user': 'TestUser', 'x-auth-key': 'valid_key' },
+            { document: '/manga/Naruto/vol_1.cbz', percentage: 0.5, progress: 'page 20', device: 'Kindle', device_id: 'abc' }
+        );
+        const res = await PUT(req);
+        expect(res.status).toBe(200);
+
+        expect(mocks.upsertDailyStat).not.toHaveBeenCalled();
+        expect(mocks.upsertDailyIssueRead).not.toHaveBeenCalled();
     });
 });

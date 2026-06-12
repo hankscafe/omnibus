@@ -13,7 +13,7 @@ describe('Utility: Issue Number Parser', () => {
         it('should correctly evaluate negative numbers', () => {
             expect(isSameIssue('-1', '-001')).toBe(true);
             expect(isSameIssue('-2.5', '-2.50')).toBe(true);
-
+            
             // Should not falsely equate a positive and negative
             expect(isSameIssue('-1', '1')).toBe(false);
         });

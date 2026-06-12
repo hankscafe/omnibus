@@ -27,17 +27,67 @@ export async function GET() {
 
         const heatmapMap: Record<string, number> = {};
         let totalPagesReadThisYear = 0;
-        
+
         dailyStats.forEach(stat => {
             const dateStr = stat.date.toISOString().split('T')[0];
             heatmapMap[dateStr] = stat.pagesRead;
             totalPagesReadThisYear += stat.pagesRead;
         });
 
+        // 1b. FETCH PER-DAY ISSUE DETAILS (which series/issues were read each day)
+        const issueReads = await prisma.dailyIssueRead.findMany({
+            where: { userId, date: { gte: oneYearAgo } },
+            include: { issue: { include: { series: true } } },
+            orderBy: { date: 'asc' }
+        });
+
+        type HeatmapEntry = {
+            seriesName: string;
+            seriesPath: string | null;
+            issueNumber: string;
+            issueName: string | null;
+            coverUrl: string | null;
+            pagesRead: number | null;
+        };
+        const heatmapDetails: Record<string, HeatmapEntry[]> = {};
+
+        issueReads.forEach(read => {
+            if (!read.issue) return;
+            const dateStr = read.date.toISOString().split('T')[0];
+            if (!heatmapDetails[dateStr]) heatmapDetails[dateStr] = [];
+            heatmapDetails[dateStr].push({
+                seriesName: read.issue.series?.name || 'Unknown Series',
+                seriesPath: read.issue.series?.folderPath || null,
+                issueNumber: read.issue.number,
+                issueName: read.issue.name,
+                coverUrl: read.issue.coverUrl,
+                pagesRead: read.pagesRead
+            });
+        });
+
         // 2. FETCH WRAPPED DATA (Top Genres, Publishers, Characters)
         const allProgress = await prisma.readProgress.findMany({
             where: { userId },
             include: { issue: { include: { series: true } } }
+        });
+
+        // Backfill detail for active days that predate per-issue tracking: attribute each
+        // issue to the day its progress was last updated. Days that already have exact
+        // DailyIssueRead rows are never mixed with approximated entries.
+        const daysWithExactDetail = new Set(Object.keys(heatmapDetails));
+        allProgress.forEach(prog => {
+            if (!prog.issue || !prog.updatedAt) return;
+            const dateStr = prog.updatedAt.toISOString().split('T')[0];
+            if (daysWithExactDetail.has(dateStr) || heatmapMap[dateStr] === undefined) return;
+            if (!heatmapDetails[dateStr]) heatmapDetails[dateStr] = [];
+            heatmapDetails[dateStr].push({
+                seriesName: prog.issue.series?.name || 'Unknown Series',
+                seriesPath: prog.issue.series?.folderPath || null,
+                issueNumber: prog.issue.number,
+                issueName: prog.issue.name,
+                coverUrl: prog.issue.coverUrl,
+                pagesRead: null
+            });
         });
 
         const publisherCounts: Record<string, number> = {};
@@ -85,6 +135,7 @@ export async function GET() {
 
         return NextResponse.json({
             heatmap: heatmapMap,
+            heatmapDetails,
             totalPagesReadThisYear,
             topPublisher: getTop(publisherCounts),
             topGenre: getTop(genreCounts),

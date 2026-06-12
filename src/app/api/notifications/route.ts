@@ -5,6 +5,8 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
+import { UNMATCHED_DIR } from '@/lib/utils/paths';
 
 export async function GET() {
   try {
@@ -73,10 +75,10 @@ export async function GET() {
         let looseFilesCount = 0;
         try {
             const fs = await import('fs');
-            const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+            const unmatchedDir = UNMATCHED_DIR;
             if (fs.existsSync(unmatchedDir)) {
                 const files = await fs.promises.readdir(unmatchedDir);
-                looseFilesCount = files.filter(f => f.match(/\.(cbz|cbr|zip|rar|epub)$/i)).length;
+                looseFilesCount = files.filter(f => COMIC_EXT_REGEX.test(f)).length;
             }
         } catch (e) {}
 

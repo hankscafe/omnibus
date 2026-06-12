@@ -10,6 +10,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { logApiUsage } from '@/lib/utils/system-flags';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -29,21 +30,6 @@ interface MappedIssueResult {
     coverArtists: string[];
     metadataSource?: string;
 }
-
-const getMetronCover = async (seriesName: string, issueNumber: string, user?: string, pass?: string) => {
-    if (!user || !pass) return null;
-    try {
-        const res = await axios.get(`https://metron.cloud/api/issue/`, {
-            params: { series_name: seriesName, number: issueNumber },
-            auth: { username: user, password: pass },
-            headers: { 'User-Agent': 'Omnibus/1.0' },
-            timeout: 4000
-        });
-        return res.data?.results?.[0]?.image || null;
-    } catch (e) {
-        return null;
-    }
-};
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

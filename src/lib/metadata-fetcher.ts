@@ -8,21 +8,18 @@ import { parseComicVineCredits } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
-import { markSystemFlag, logApiUsage } from './utils/system-flags'; 
+import { markSystemFlag, logApiUsage } from './utils/system-flags';
+import { isSameIssue } from '@/lib/utils/issue-parser';
 
-function isSameIssue(num1: string | number, num2: string | number): boolean {
-    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
-    const m1 = String(num1).trim().match(regex);
-    const m2 = String(num2).trim().match(regex);
-    
-    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
-
-    const float1 = parseFloat(m1[1] || "0");
-    const float2 = parseFloat(m2[1] || "0");
-    const suffix1 = m1[2].toUpperCase().trim();
-    const suffix2 = m2[2].toUpperCase().trim();
-
-    return float1 === float2 && suffix1 === suffix2;
+// Providers rarely report when a series ends, so Omnibus guesses: no new issue
+// within the admin-configured window (months) = Ended. Returns null when the
+// guess is disabled (window of 0 / "Never").
+async function getSeriesEndedCutoff(): Promise<{ cutoffMs: number, months: number } | null> {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: 'series_ended_months' } });
+    const parsed = parseInt(setting?.value || '18', 10);
+    const months = isNaN(parsed) ? 18 : parsed;
+    if (months <= 0) return null;
+    return { cutoffMs: Date.now() - Math.round(months * 30.44 * 24 * 60 * 60 * 1000), months };
 }
 
 export async function syncSeriesMetadata(metadataId: string, folderPath: string, metadataSource: string = 'COMICVINE') {
@@ -31,7 +28,8 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     });
     if (!series) throw new Error("Series not found in database.");
 
-    Logger.log(`[Metadata] Fetching data for ID: ${metadataId} via ${metadataSource}`, 'info');
+    // Update this line:
+    Logger.log(`[Metadata] Fetching data for: "${series.name}" (ID: ${metadataId} via ${metadataSource})`, 'info');
 
     if (metadataSource === 'METRON') {
         try {
@@ -92,7 +90,11 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     year: details.year || series.year,
                     universe: details.universe,
                     description: details.description,
-                    coverUrl: metronFinalCover, 
+                    coverUrl: metronFinalCover,
+                    // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
+                    ...(details.coverUrl ? { remoteCoverUrl: details.coverUrl } : {}),
+                    // Metron's series_type is authoritative, but never clobber a manual categorization
+                    ...(details.bookType && !series.bookType ? { bookType: details.bookType } : {}),
                     status: details.status
                 }
             });
@@ -161,13 +163,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             }
 
             if (details.status !== 'Ended' && latestDateMs > 0) {
-                const cutoffMs = Date.now() - (545 * 24 * 60 * 60 * 1000); // 1.5 years
-                if (latestDateMs < cutoffMs) {
+                const endedWindow = await getSeriesEndedCutoff();
+                if (endedWindow && latestDateMs < endedWindow.cutoffMs) {
                     await prisma.series.update({
                         where: { id: series.id },
                         data: { status: 'Ended' }
                     });
-                    Logger.log(`[Metadata] Series "${series.name}" marked as Ended due to >1.5 years of inactivity.`, 'info');
+                    Logger.log(`[Metadata] Series "${series.name}" marked as Ended after ${endedWindow.months}+ months without a new issue.`, 'info');
                 }
             }
 
@@ -204,7 +206,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let volRes;
     try {
         volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
-            params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year' },
+            params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year,count_of_issues' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 15000
         });
@@ -262,6 +264,14 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         }
     }
 
+    // ComicVine has no format field, so book type is a conservative guess: explicit
+    // format hints in the volume name, or a finished single-issue volume = one-shot
+    let guessedBookType: string | null = null;
+    const volName = volData.name || '';
+    if (/graphic novel|\bOGN\b/i.test(volName)) guessedBookType = 'GN';
+    else if (/\bTPB\b|trade paperback|\bHC\b|hardcover/i.test(volName)) guessedBookType = 'TPB';
+    else if (volData.count_of_issues === 1 && volData.end_year) guessedBookType = 'OneShot';
+
     await prisma.series.update({
         where: { id: series.id },
         data: {
@@ -269,8 +279,12 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             publisher: volData.publisher?.name || 'Other',
             year: parseInt(volData.start_year || "0") || series.year,
             description: volData.description || volData.deck || null,
-            coverUrl: cvFinalCover, 
-            status: volData.end_year ? 'Ended' : 'Ongoing' 
+            coverUrl: cvFinalCover,
+            // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
+            ...(imageUrl ? { remoteCoverUrl: imageUrl } : {}),
+            // Heuristic only fills a blank — never clobber a manual categorization
+            ...(guessedBookType && !series.bookType ? { bookType: guessedBookType } : {}),
+            status: volData.end_year ? 'Ended' : 'Ongoing'
         }
     });
 
@@ -282,10 +296,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let syncedCount = 0;
     let issuesCallsMade = 0;
 
-    Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
+    Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
     let latestDateMs = 0;
     while (offset < totalResults && loopCount < 20) {
-        Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume ${metadataId} (Offset: ${offset}, Limit: 100)`, 'debug');
+        Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
         let issueRes;
         try {
             issueRes = await axios.get<{ number_of_total_results: number; results: any[] }>(`https://comicvine.gamespot.com/api/issues/`, {
@@ -375,13 +389,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     }
 
     if (!volData.end_year && latestDateMs > 0) {
-        const cutoffMs = Date.now() - (545 * 24 * 60 * 60 * 1000); // 1.5 years
-        if (latestDateMs < cutoffMs) {
+        const endedWindow = await getSeriesEndedCutoff();
+        if (endedWindow && latestDateMs < endedWindow.cutoffMs) {
             await prisma.series.update({
                 where: { id: series.id },
                 data: { status: 'Ended' }
             });
-            Logger.log(`[Metadata] Series "${series.name}" marked as Ended due to >1.5 years of inactivity.`, 'info');
+            Logger.log(`[Metadata] Series "${series.name}" marked as Ended after ${endedWindow.months}+ months without a new issue.`, 'info');
         }
     }
 

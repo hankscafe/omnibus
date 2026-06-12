@@ -18,6 +18,17 @@ const hasRole = (roleObj: any, roleName: string): boolean => {
     return extractName(roleObj).toLowerCase().includes(roleName);
 };
 
+// Maps Metron's series_type (e.g. "One-Shot", "Trade Paperback", "Ongoing Series")
+// to the Mylar booktype values used in series.json
+const mapSeriesType = (seriesType: any): 'Print' | 'OneShot' | 'TPB' | 'GN' | null => {
+    const name = extractName(seriesType).toLowerCase();
+    if (!name) return null;
+    if (name.includes('one-shot') || name.includes('one shot') || name.includes('single issue')) return 'OneShot';
+    if (name.includes('trade paperback') || name.includes('omnibus') || name.includes('hard cover') || name.includes('hardcover')) return 'TPB';
+    if (name.includes('graphic novel')) return 'GN';
+    return 'Print'; // Ongoing, Limited, Annual, Digital Chapters, etc. are all standard print series
+};
+
 export class MetronProvider implements IMetadataProvider {
     private readonly baseUrl = 'https://metron.cloud/api';
     private readonly requestHeaders = { 'User-Agent': 'Omnibus/1.0' };
@@ -226,7 +237,8 @@ export class MetronProvider implements IMetadataProvider {
             description: series.desc || null,
             coverUrl: coverUrl,
             status: series.status?.name === 'Ended' ? 'Ended' : 'Ongoing',
-            issueCount: series.issue_count || 0
+            issueCount: series.issue_count || 0,
+            bookType: mapSeriesType(series.series_type)
         };
     }
 

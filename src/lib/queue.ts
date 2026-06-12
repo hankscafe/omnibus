@@ -436,10 +436,10 @@ export function initWorker() {
                 }
 
                 case 'CBR_CONVERSION': {
-                    await prisma.systemSetting.upsert({ 
-                        where: { key: 'last_converter_sync' }, 
-                        update: { value: nowStr }, 
-                        create: { key: 'last_converter_sync', value: nowStr } 
+                    await prisma.systemSetting.upsert({
+                         where: { key: 'last_converter_sync' },
+                         update: { value: nowStr },
+                         create: { key: 'last_converter_sync', value: nowStr }
                     });
 
                     // An optional issueId converts just that issue (targeted conversion, beta.034).
@@ -488,6 +488,7 @@ export function initWorker() {
                 }
                 
                 case 'LIBRARY_SCAN': {
+                    const { specificPath } = job.data || {};
                     await prisma.systemSetting.upsert({ 
                         where: { key: 'last_library_sync' }, 
                         update: { value: nowStr }, 
@@ -495,7 +496,7 @@ export function initWorker() {
                     });
                     
                     const { LibraryScanner } = await import('@/lib/library-scanner');
-                    await LibraryScanner.scan();
+                    await LibraryScanner.scan(specificPath);
                     
                     const lastStorageRun = await prisma.systemSetting.findUnique({ 
                         where: { key: 'storage_deep_dive_last_run' } 

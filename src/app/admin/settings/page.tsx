@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
+import { DEFAULT_SCORING_RULES } from "@/lib/utils/defaults"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -173,7 +174,8 @@ export default function SettingsPage() {
     primary_metadata_source: "COMICVINE",
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030", download_path: "", cv_api_key: "",
     metron_user: "", metron_pass: "",
-    export_series_json: "false", 
+    export_series_json: "false",
+    series_ended_months: "18",
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     filter_foreign_publishers: "",
@@ -192,7 +194,10 @@ export default function SettingsPage() {
     telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
     apprise_enabled: "false", apprise_url: "", apprise_events: "[]",
     allow_bulk_packs: "false",
+    prioritize_packs: "false",
     ddl_enabled: "true",
+    getcomics_interactive_pages: "4",
+    getcomics_automated_pages: "5",
     engine_max_scan_workers: "", engine_max_convert_workers: "", engine_cpu_cap: "",
     engine_max_blocking_threads: "", engine_memory_ceiling_mb: ""
   })
@@ -318,16 +323,7 @@ export default function SettingsPage() {
                     setScoringRules([]);
                 }
             } else {
-                setScoringRules([
-                    { id: 's1', term: '.cbz', score: 500 },
-                    { id: 's2', term: '(digital)', score: 300 },
-                    { id: 's3', term: '[digital]', score: 300 },
-                    { id: 's4', term: 'webrip', score: 200 },
-                    { id: 's5', term: 'web-dl', score: 200 },
-                    { id: 's6', term: '.cbr', score: -400 },
-                    { id: 's7', term: '.rar', score: -400 },
-                    { id: 's8', term: 'vapi', score: -400 }
-                ]);
+                setScoringRules(DEFAULT_SCORING_RULES.map((r, i) => ({ id: `s${i + 1}`, ...r })));
             }
 
             const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
@@ -367,9 +363,13 @@ export default function SettingsPage() {
         if (!newConfig.prowlarr_categories) newConfig.prowlarr_categories = "7030";
         if (newConfig.discord_enabled === undefined) newConfig.discord_enabled = "true";
         if (newConfig.allow_bulk_packs === undefined) newConfig.allow_bulk_packs = "false";
+        if (newConfig.prioritize_packs === undefined) newConfig.prioritize_packs = "false";
         if (newConfig.oidc_force_sso === undefined) newConfig.oidc_force_sso = "false";
         if (newConfig.oidc_auto_approve === undefined) newConfig.oidc_auto_approve = "false";
         if (newConfig.ddl_enabled === undefined) newConfig.ddl_enabled = "true";
+        
+        if (!newConfig.getcomics_interactive_pages) newConfig.getcomics_interactive_pages = "4";
+        if (!newConfig.getcomics_automated_pages) newConfig.getcomics_automated_pages = "5";
         
         if (!newConfig.filter_junk_words) newConfig.filter_junk_words = "preview, sample, ashcan, cropped, scanned, fixed, incomplete, damaged, partial, promo, teaser";
         if (!newConfig.filter_match_ratio) newConfig.filter_match_ratio = "60";
@@ -919,8 +919,37 @@ export default function SettingsPage() {
                     </div>
 
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
+                        <div>
+                            <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+                                <Database className="w-4 h-4 text-primary" /> Series "Ended" Detection
+                            </h3>
+                            <p className="text-[0.8rem] text-muted-foreground mt-1">
+                                ComicVine and Metron rarely record when a series actually ends, so Omnibus guesses: if no new issue has been
+                                released within this window, the series is marked as Ended during metadata syncs. Choose a longer window for
+                                slow-publishing series, or Never to only trust the providers.
+                            </p>
+                        </div>
+                        <Select
+                            value={config.series_ended_months || "18"}
+                            onValueChange={(v) => setConfig({...config, series_ended_months: v})}
+                        >
+                            <SelectTrigger className="w-full sm:w-[300px] h-12 sm:h-10 bg-muted/50 border-border text-foreground font-bold">
+                                <SelectValue placeholder="18 Months" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="6">6 Months</SelectItem>
+                                <SelectItem value="12">12 Months</SelectItem>
+                                <SelectItem value="18">18 Months (Default)</SelectItem>
+                                <SelectItem value="24">24 Months</SelectItem>
+                                <SelectItem value="36">36 Months</SelectItem>
+                                <SelectItem value="0">Never (Trust Providers Only)</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    <div className="space-y-4 pt-6 border-t border-border mt-4">
                         <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
-                            <Switch 
+                            <Switch
                                 id="export-series-json"
                                 checked={config.export_series_json === "true"} 
                                 onCheckedChange={(c) => setConfig({...config, export_series_json: c ? "true" : "false"})} 
@@ -931,7 +960,7 @@ export default function SettingsPage() {
                                     Export series.json for Komga / Kavita
                                 </Label>
                                 <p className="text-[11px] text-muted-foreground">
-                                    Automatically writes a <code>series.json</code> file to the root of your series folders. This allows external reading servers to instantly recognize your metadata if you map them to the same storage drive.
+                                    Automatically writes a Mylar-format (v1.0.2) <code>series.json</code> file to the root of your series folders. This allows external reading servers to instantly recognize your metadata if you map them to the same storage drive.
                                 </p>
                             </div>
                         </div>
@@ -1339,6 +1368,55 @@ export default function SettingsPage() {
                                 <p className="text-[11px] text-muted-foreground">If enabled, when requesting a single issue, Omnibus is allowed to download full "Story Arc" or "Chronological" zip packs from direct download sites if an exact single-issue file cannot be found.</p>
                             </div>
                         </div>
+
+                        {/* --- NEW: Prioritize Packs Toggle --- */}
+                        <div className={`flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-2 transition-opacity ${config.allow_bulk_packs !== "true" ? "opacity-50 pointer-events-none" : ""}`}>
+                            <Switch 
+                                id="prioritize-packs-toggle"
+                                checked={config.prioritize_packs === "true"} 
+                                onCheckedChange={(c) => setConfig({...config, prioritize_packs: c ? "true" : "false"})} 
+                                className="scale-110 sm:scale-100"
+                                disabled={config.allow_bulk_packs !== "true"}
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="prioritize-packs-toggle" className="cursor-pointer font-bold text-base text-foreground">Prioritize Packs / Collections First</Label>
+                                <p className="text-[11px] text-muted-foreground">If enabled, Omnibus will search for full series packs or collections <strong>before</strong> searching for individual issues. Highly recommended for faster library building.</p>
+                            </div>
+                        </div>
+
+                        {/* GetComics Interactive Search Depth */}
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label htmlFor="getcomics_interactive_pages" className="font-bold text-foreground">Interactive Search Depth (Pages)</Label>
+                            <Input 
+                                id="getcomics_interactive_pages" 
+                                type="number" 
+                                min="1" 
+                                max="15" 
+                                value={config.getcomics_interactive_pages || "4"} 
+                                onChange={(e) => setConfig({ ...config, getcomics_interactive_pages: e.target.value })} 
+                                className="h-12 sm:h-10 bg-background border-border text-foreground w-full sm:w-32"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                The maximum number of pages GetComics will scan during manual UI searches. Higher numbers pull more results but take longer to load. (Default: 4)
+                            </p>
+                        </div>
+
+                        {/* GetComics Automated Search Depth */}
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label htmlFor="getcomics_automated_pages" className="font-bold text-foreground">Automated Search Depth (Pages)</Label>
+                            <Input 
+                                id="getcomics_automated_pages" 
+                                type="number" 
+                                min="1" 
+                                max="15" 
+                                value={config.getcomics_automated_pages || "5"} 
+                                onChange={(e) => setConfig({ ...config, getcomics_automated_pages: e.target.value })} 
+                                className="h-12 sm:h-10 bg-background border-border text-foreground w-full sm:w-32"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                The maximum number of pages GetComics will scan during background download queue tasks. (Default: 5)
+                            </p>
+                        </div>
                     </div>
 
                     <div className={`space-y-8 transition-opacity duration-300 pt-6 border-t border-border ${config.ddl_enabled === "false" ? "opacity-50 pointer-events-none" : ""}`}>
@@ -1684,17 +1762,17 @@ export default function SettingsPage() {
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Save className="w-3 h-3"/> Backup Directory</p>
-                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_BACKUPS_DIR}>{envPaths?.OMNIBUS_BACKUPS_DIR || '/backups'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_BACKUPS_DIR}>{envPaths?.OMNIBUS_BACKUPS_DIR || '/config/backups'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where automated database backups are saved.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><Zap className="w-3 h-3"/> Cache & Temp Dir</p>
-                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_CACHE_DIR}>{envPaths?.OMNIBUS_CACHE_DIR || '/cache'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_CACHE_DIR}>{envPaths?.OMNIBUS_CACHE_DIR || '/config/cache'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Map this to a drive with plenty of free space.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">
                                     <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-1.5"><FileText className="w-3 h-3"/> Log Directory</p>
-                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_LOGS_DIR}>{envPaths?.OMNIBUS_LOGS_DIR || '/app/config/logs'}</p>
+                                    <p className="font-mono text-sm font-bold text-primary truncate" title={envPaths?.OMNIBUS_LOGS_DIR}>{envPaths?.OMNIBUS_LOGS_DIR || '/config/logs'}</p>
                                     <p className="text-[10px] text-muted-foreground mt-2">Where system activity logs are written.</p>
                                 </div>
                                 <div className="p-4 bg-muted/30 border border-border rounded-lg shadow-sm">

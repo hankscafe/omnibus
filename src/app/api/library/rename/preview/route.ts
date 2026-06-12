@@ -71,12 +71,21 @@ export async function POST(request: NextRequest) {
                 const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : safeYear;
                 
                 let formattedNum = String(issue.number || "0");
+                
+                // 1. Check for and temporarily remove the negative sign
+                const isNegative = formattedNum.startsWith('-');
+                if (isNegative) formattedNum = formattedNum.substring(1);
+
+                // 2. Safely apply zero-padding
                 if (!formattedNum.includes('.')) {
                     formattedNum = formattedNum.padStart(3, '0');
                 } else {
                     const parts = formattedNum.split('.');
                     formattedNum = `${parts[0].padStart(3, '0')}.${parts[1]}`;
                 }
+                
+                // 3. Re-attach the negative sign
+                if (isNegative) formattedNum = '-' + formattedNum;
 
                 // --- NEW: Add Issue Title extraction & cleanup ---
                 let cleanIssueName = issue.name || "";

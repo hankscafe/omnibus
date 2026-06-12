@@ -3,18 +3,9 @@ import { prisma } from '@/lib/db';
 import { validateApiKey } from '@/lib/api-auth';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { escapeXml } from '@/lib/utils/xml';
 
 export const dynamic = 'force-dynamic';
-
-const escapeXml = (unsafe: string | null | undefined) => {
-    if (!unsafe) return '';
-    return unsafe.replace(/[<>&'"]/g, (c) => {
-        switch (c) {
-            case '<': return '&lt;'; case '>': return '&gt;'; case '&': return '&amp;';
-            case '\'': return '&apos;'; case '"': return '&quot;'; default: return c;
-        }
-    });
-};
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
     try {
@@ -44,8 +35,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (!series) return new Response('Not Found', { status: 404 });
 
     const sortedIssues = series.issues.sort((a, b) => {
-        const numA = parseFloat(a.number.replace(/[^0-9.]/g, '')) || 0;
-        const numB = parseFloat(b.number.replace(/[^0-9.]/g, '')) || 0;
+        // Added the '-' character to the regex to preserve negative numbers
+        const numA = parseFloat(a.number.replace(/[^0-9.-]/g, '')) || 0;
+        const numB = parseFloat(b.number.replace(/[^0-9.-]/g, '')) || 0;
         return numA - numB;
     });
 

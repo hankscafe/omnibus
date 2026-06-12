@@ -7,6 +7,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
+import { CONFIG_DIR } from '@/lib/utils/paths';
 
 export async function GET() {
     const authOptions = await getAuthOptions();
@@ -27,7 +28,7 @@ export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const configDir = process.env.OMNIBUS_CONFIG_DIR || '/config';
+    const configDir = CONFIG_DIR;
 
     try {
         const { id, name, description, actionType, targetValue, iconBase64 } = await req.json();

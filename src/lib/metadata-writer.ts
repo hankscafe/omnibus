@@ -5,6 +5,7 @@ import AdmZip from 'adm-zip';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { escapeXml } from '@/lib/utils/xml';
 
 export async function writeComicInfo(issueId: string): Promise<boolean> {
     // Declare 'issue' outside the try block so it can be accessed in the catch block for logging
@@ -116,18 +117,16 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
     }
 }
 
-function escapeXml(unsafe: string | null) {
-    if (!unsafe) return '';
-    return unsafe.replace(/[<>&'"]/g, (c) => {
-        switch (c) {
-            case '<': return '&lt;';
-            case '>': return '&gt;';
-            case '&': return '&amp;';
-            case '\'': return '&apos;';
-            case '"': return '&quot;';
-            default: return c;
-        }
-    });
+const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+// Formats a "YYYY-MM-DD" release date as "Month YYYY" (e.g. "March 1999")
+function formatMonthYear(dateStr: string): string {
+    const [year, month] = dateStr.split('-');
+    const monthIdx = parseInt(month, 10) - 1;
+    return monthIdx >= 0 && monthIdx <= 11 ? `${MONTH_NAMES[monthIdx]} ${year}` : year;
 }
 
 export async function writeSeriesJson(seriesId: string): Promise<boolean> {
@@ -144,44 +143,105 @@ export async function writeSeriesJson(seriesId: string): Promise<boolean> {
             return false;
         }
 
-        const allGenres = new Set<string>();
-        for (const issue of series.issues) {
-            if ((issue as any).genres) {
-                try {
-                    const parsed = JSON.parse((issue as any).genres);
-                    if (Array.isArray(parsed)) {
-                        parsed.forEach((g: string) => { if (g !== 'NONE') allGenres.add(g); });
-                    }
-                } catch(e) {}
+        const jsonPath = path.join(series.folderPath, 'series.json');
+
+        // Never clobber a series.json Omnibus didn't create (e.g. a curated Mylar
+        // library). Ownership is tracked in the DB; the one exception is our own
+        // legacy Komga-style format from before ownership tracking existed, which
+        // is recognizable (no version key, Komga-only fields) and safe to upgrade.
+        if (!series.seriesJsonWritten && fs.existsSync(jsonPath)) {
+            let isLegacyOmnibusFile = false;
+            try {
+                const existing = JSON.parse(await fs.readFile(jsonPath, 'utf-8'));
+                isLegacyOmnibusFile = !existing.version && existing.metadata?.readingDirection !== undefined;
+            } catch (e) { /* unreadable or not JSON — treat as foreign */ }
+
+            if (!isLegacyOmnibusFile) {
+                Logger.log(`[Writer] Skipping series.json for ${series.name}: the existing file was not created by Omnibus.`, 'warn');
+                return false;
             }
         }
 
-        let webUrl = '';
-        if (series.metadataSource === 'METRON' && series.metadataId) webUrl = `https://metron.cloud/series/${series.metadataId}/`;
-        else if (series.metadataSource === 'COMICVINE' && series.metadataId) webUrl = `https://comicvine.gamespot.com/volume/4050-${series.metadataId}/`;
+        // comicid is the ComicVine volume ID per the Mylar spec; never substitute a Metron ID
+        let comicid: number | null = series.cvId ?? null;
+        if (comicid === null && series.metadataSource === 'COMICVINE' && series.metadataId) {
+            const parsed = parseInt(series.metadataId, 10);
+            if (!isNaN(parsed)) comicid = parsed;
+        }
 
-        const links = webUrl ? [{ label: series.metadataSource === 'METRON' ? "Metron.Cloud" : "ComicVine", url: webUrl }] : [];
+        const isEnded = series.status === 'Ended';
 
-        const komgaMetadata = {
+        const releaseDates = series.issues
+            .map(i => i.releaseDate)
+            .filter((d): d is string => !!d)
+            .sort();
+
+        let publicationRun = '';
+        if (releaseDates.length > 0) {
+            const start = formatMonthYear(releaseDates[0]);
+            const end = isEnded ? formatMonthYear(releaseDates[releaseDates.length - 1]) : 'Present';
+            publicationRun = `${start} - ${end}`;
+        } else if (series.year) {
+            publicationRun = isEnded ? `${series.year}` : `${series.year} - Present`;
+        }
+
+        const rawDesc = series.description || '';
+        const descriptionText = rawDesc.replace(/(<([^>]+)>)/gi, '').trim();
+        const descriptionFormatted = rawDesc
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/(<([^>]+)>)/gi, '')
+            .trim();
+
+        // comic_image prefers the remote ComicVine/Metron cover URL. When that isn't
+        // known, fall back to the locally cached cover served through Omnibus (made
+        // absolute via NEXTAUTH_URL) so the field is never empty when a cover exists.
+        let comicImage: string | null = series.remoteCoverUrl || null;
+        if (!comicImage && series.coverUrl) {
+            if (series.coverUrl.startsWith('http')) {
+                comicImage = series.coverUrl;
+            } else {
+                const baseUrl = (process.env.NEXTAUTH_URL || 'http://localhost:3000').replace(/\/$/, '');
+                comicImage = series.coverUrl.startsWith('/')
+                    ? `${baseUrl}${series.coverUrl}`
+                    : `${baseUrl}/api/library/cover?path=${encodeURIComponent(series.coverUrl)}`;
+            }
+        }
+
+        // Mylar series.json schema v1.0.2 — the format Komga, Kavita, and Mylar consume.
+        // Unknown values are null, never "": Komga ignores nulls but chokes on blanks.
+        // https://github.com/mylar3/mylar3/wiki/series.json-schema-(version-1.0.2)
+        const seriesJson = {
+            version: '1.0.2',
             metadata: {
-                title: series.name,
-                titleSort: series.name,
-                status: series.status === 'Ended' ? 'ENDED' : 'ONGOING',
-                summary: series.description ? series.description.replace(/(<([^>]+)>)/gi, "").trim() : "",
-                publisher: series.publisher || "",
-                readingDirection: series.isManga ? 'RIGHT_TO_LEFT' : 'LEFT_TO_RIGHT',
-                ageRating: null,
-                language: "en",
-                genres: Array.from(allGenres),
-                tags: [],
-                totalBookCount: series.issues.length,
-                links: links 
+                type: 'comicSeries',
+                publisher: series.publisher || null,
+                imprint: null,
+                name: series.name,
+                comicid: comicid,
+                year: series.year,
+                description_text: descriptionText || null,
+                description_formatted: descriptionFormatted || null,
+                volume: null,
+                booktype: series.bookType || 'Print',
+                age_rating: null,
+                collects: null,
+                comic_image: comicImage,
+                total_issues: series.issues.length,
+                publication_run: publicationRun || null,
+                status: isEnded ? 'Ended' : 'Continuing'
             }
         };
 
-        const jsonPath = path.join(series.folderPath, 'series.json');
-        Logger.log(`[Metadata Writer Debug] Exporting Komga-compatible series.json to: ${jsonPath}`, 'debug');
-        await fs.writeFile(jsonPath, JSON.stringify(komgaMetadata, null, 2), 'utf-8');
+        Logger.log(`[Metadata Writer Debug] Exporting Mylar-spec series.json to: ${jsonPath}`, 'debug');
+        await fs.writeFile(jsonPath, JSON.stringify(seriesJson, null, 2), 'utf-8');
+
+        // Claim ownership so future runs keep this file updated
+        if (!series.seriesJsonWritten) {
+            await prisma.series.update({
+                where: { id: series.id },
+                data: { seriesJsonWritten: true }
+            });
+        }
         return true;
     } catch (error) {
         Logger.log(`[Writer] Failed to write series.json for ${seriesId}: ${getErrorMessage(error)}`, 'error');

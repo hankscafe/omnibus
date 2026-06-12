@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   if (!id) return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
 
   // --- FIX: Bumped cache key to v11 to flush generically named issues ("Issue #3") ---
-  const cacheKey = `meta_details_v11_${type}_${provider}_${id}`;
+  const cacheKey = `meta_details_v12_${type}_${provider}_${id}`;
   const cachedData = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
   
   if (cachedData?.value) {
@@ -64,7 +64,7 @@ export async function GET(request: Request) {
             let finalName = `${volName} #${issueNum}`;
             
             // --- FIX: Ensure the API strictly ignores the generic "Issue #3" override ---
-            const isGeneric = issueTitle.match(/^Issue\s*#?\s*\d+$/i) !== null;
+            const isGeneric = issueTitle.match(/^Issue\s*#?\s*-?\d+$/i) !== null;
             
             if (issueTitle && issueTitle !== volName && !issueTitle.includes(`#${issueNum}`) && !isGeneric) {
                 finalName += `: ${issueTitle}`;
@@ -106,6 +106,9 @@ export async function GET(request: Request) {
                 year: details?.year?.toString() || '????',
                 description: details?.description || "No description available.",
                 siteUrl: `https://metron.cloud/series/${details?.sourceId}/`, 
+                // Bypass strict TypeScript checking for these dynamic API fields
+                count: (details as any)?.issueCount || (details as any)?.count_of_issues || "?",
+                issues: (details as any)?.issues || [],
                 writers: [], artists: [], coverArtists: [], colorists: [], letterers: [],
                 characters: [], teams: [], locations: [], genres: [], storyArcs: [],
                 htmlDescription: details?.description || ""
@@ -118,11 +121,17 @@ export async function GET(request: Request) {
 
         const endpoint = isIssue ? `issue/4000-${id}` : `volume/4050-${id}`;
         
+        const baseFields = 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,site_detail_url';
+        
+        // Only ask for issue lists if we are looking up a Volume!
+        const fieldList = isIssue ? baseFields : `${baseFields},count_of_issues,issues`;
+
         const res = await axios.get(`https://comicvine.gamespot.com/api/${endpoint}/`, {
             params: { 
                 api_key: cvKey, 
                 format: 'json', 
-                field_list: 'id,name,issue_number,start_year,cover_date,store_date,image,deck,description,publisher,volume,person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,site_detail_url' 
+                // Added count_of_issues and issues to the end
+                field_list: fieldList
             }
         });
         
@@ -165,6 +174,8 @@ export async function GET(request: Request) {
           image: issueData.image?.medium_url,
           year: (issueData.start_year || issueData.cover_date || "").split('-')[0] || '????',
           description: cleanHtml.replace(/<[^>]*>?/gm, '').trim().substring(0, 800),
+          count: issueData.count_of_issues || "?",
+          issues: issueData.issues || [],
           writers: writers.slice(0, 10),
           artists: artists.slice(0, 10),
           coverArtists: coverArtists.slice(0, 10),

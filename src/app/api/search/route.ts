@@ -14,15 +14,22 @@ const BASE_URL = 'https://comicvine.gamespot.com/api';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const query = searchParams.get('q');
+  const rawQuery = searchParams.get('q');
   let provider = searchParams.get('provider');
   
   const page = parseInt(searchParams.get('page') || '1', 10);
   const limit = 40;
 
-  if (!query) {
+  if (!rawQuery) {
     return NextResponse.json({ error: 'Query parameter "q" is required' }, { status: 400 });
   }
+
+  // --- SMART SEARCH: Extract Year and Clean Query ---
+  const yearMatch = rawQuery.match(/\b(19\d{2}|20\d{2})\b/);
+  const reqYear = yearMatch ? yearMatch[1] : null;
+  
+  // Updated to strip (), [], and {}
+  const query = rawQuery.replace(/\s*[\(\[\{]?(19\d{2}|20\d{2})[\)\]\}]?\s*/g, ' ').trim() || rawQuery;
 
   try {
     const settings = await prisma.systemSetting.findMany({
@@ -35,7 +42,7 @@ export async function GET(request: Request) {
     }
 
     // --- NEW: Robust Database Caching ---
-    const cacheKey = `search_v3_${provider}_${query.toLowerCase().replace(/[^a-z0-9]/g, '_')}_p${page}`;
+    const cacheKey = `search_v3_${provider}_${rawQuery.toLowerCase().replace(/[^a-z0-9]/g, '_')}_p${page}`;
     const cachedData = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
     
     if (cachedData?.value) {
@@ -131,6 +138,15 @@ export async function GET(request: Request) {
         const totalResults = response.data.number_of_total_results || 0;
         finalResults = results;
         hasMore = (page * limit) < totalResults;
+    }
+
+    // --- SORT BY EXTRACTED YEAR ---
+    if (reqYear) {
+        finalResults.sort((a, b) => {
+            const aMatch = (a.year && a.year.toString() === reqYear) ? 1 : 0;
+            const bMatch = (b.year && b.year.toString() === reqYear) ? 1 : 0;
+            return bMatch - aMatch;
+        });
     }
 
     // --- UPSERT CACHE ---

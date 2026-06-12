@@ -7,6 +7,7 @@ import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
+import { LOGS_DIR } from '@/lib/utils/paths';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,8 +21,8 @@ export async function GET() {
             return new NextResponse("Unauthorized", { status: 401 });
         }
 
-        // Dynamically find the log file using the same logic from logger.ts
-        const logDir = process.env.OMNIBUS_LOGS_DIR || path.join(process.cwd(), 'config', 'logs');
+        // Same location logger.ts writes to
+        const logDir = LOGS_DIR;
         const logFile = path.join(logDir, 'omnibus.log');
 
         if (!fs.existsSync(logFile)) {

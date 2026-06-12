@@ -14,11 +14,15 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { authOptions } from '@/lib/auth';
 import { getServerSession } from 'next-auth';
 import { omnibusQueue } from '@/lib/queue';
+import { extractIssueNumber } from '@/lib/utils/issue-parser';
+import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
+import { sanitizeFilename } from '@/lib/utils/sanitize';
+import { UNMATCHED_DIR } from '@/lib/utils/paths';
 
 export async function POST(request: Request) {
   try {
     const req = (await request.json()) as any;
-    const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher } = req;
+    const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber } = req;
 
     const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
     const targetSource = metadataSource || 'COMICVINE';
@@ -30,7 +34,7 @@ export async function POST(request: Request) {
     Logger.log(`[Match Series Debug] Starting manual match. ID: ${targetMetaId} | Source: ${targetSource} | Path: ${oldFolderPath}`, 'debug');
 
     const libraries = await prisma.library.findMany();
-    const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+    const unmatchedDir = UNMATCHED_DIR;
     const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
     authorizedRoots.push(path.normalize(unmatchedDir).toLowerCase());
     
@@ -93,8 +97,8 @@ export async function POST(request: Request) {
     if (!realName) realName = path.basename(oldFolderPath).replace(/\s\(\d{4}\)$/, "").trim(); 
     if (!realPublisher) realPublisher = 'Other';
 
-    const safePublisher = realPublisher.replace(/[<>:"/\\|?*]/g, '').trim();
-    const safeName = realName.replace(/[<>:"/\\|?*]/g, '').trim();
+    const safePublisher = sanitizeFilename(realPublisher);
+    const safeName = sanitizeFilename(realName);
     const safeYear = realYear > 0 ? realYear.toString() : ''; 
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
@@ -206,37 +210,47 @@ export async function POST(request: Request) {
 
     try {
         const files = await fs.promises.readdir(activeFolderPath);
-        const pathUpdates = [];
         
         for (const file of files) {
-            const ext = path.extname(file);
-            if (['.cbz', '.cbr', '.cb7', '.pdf', '.epub', '.zip'].includes(ext.toLowerCase())) {
-                const oldName = path.basename(file, ext);
+            const rawExt = path.extname(file);
+            if (COMIC_EXTENSIONS.includes(rawExt.toLowerCase())) {
+                const oldName = path.basename(file, rawExt);
+                let finalExt = rawExt.toLowerCase();
                 let issueNumStr = "";
+                let targetIssueMetaId = null;
                 
-                Logger.log(`[Match Series Debug] Evaluating file for rename: "${file}"`, 'debug');
-                
-                const explicitMatch = oldName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-                if (explicitMatch) {
-                    issueNumStr = explicitMatch[1];
-                    Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via explicit #/Issue match.`, 'debug');
-                } else {
-                    const volMatch = oldName.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/i);
-                    if (volMatch) {
-                        issueNumStr = volMatch[1];
-                        Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via Volume/V match.`, 'debug');
-                    } else {
-                        const cleanName = oldName.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').replace(/\s+of\s+\d+/gi, '').trim();
-                        const endMatch = cleanName.match(/(?:issue\s?|-|\s|^)0*(\d+(?:\.\d+)?[a-zA-Z]?)\s*$/i);
-                        if (endMatch) {
-                            issueNumStr = endMatch[1];
-                            Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via fallback end-of-string match.`, 'debug');
+                // --- NEW: Magic Number Check! Fix fake CBRs directly in the Matcher ---
+                if (finalExt === '.cbr') {
+                    try {
+                        const buffer = Buffer.alloc(4);
+                        const fd = await fs.promises.open(path.join(activeFolderPath, file), 'r');
+                        await fd.read(buffer, 0, 4, 0);
+                        await fd.close();
+                        if (buffer.toString('hex') === '504b0304') {
+                            finalExt = '.cbz';
+                            Logger.log(`[Match Series Debug] Fake CBR detected for ${file}. Correcting to .cbz`, 'debug');
                         }
-                    }
+                    } catch (e) {}
+                }
+
+                // 1. Identify if this is the EXACT file we clicked in the UI
+                const isTargetFile = require('path').basename(file) === require('path').basename(oldFolderPath);
+                
+                // Skip adjacent files to prevent accidental ghost records
+                if (!isTargetFile) {
+                    continue; 
                 }
                 
-                if (!issueNumStr) {
-                    Logger.log(`[Match Series Debug] Failed to extract any issue number from ${oldName}`, 'warn');
+                Logger.log(`[Match Series Debug] Evaluating exact target file for rename: "${file}"`, 'debug');
+                
+                // Proceed with exact overrides
+                if (exactIssueNumber) {
+                    issueNumStr = exactIssueNumber;
+                    targetIssueMetaId = exactIssueId || null;
+                    Logger.log(`[Match Series Debug] Using exact issue override: ${issueNumStr}`, 'debug');
+                } else {
+                    issueNumStr = extractIssueNumber(file);
+                    Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via auto-extraction.`, 'debug');
                 }
                 
                 if (issueNumStr) {
@@ -249,6 +263,7 @@ export async function POST(request: Request) {
                         
                     const issueYear = existingRecord ? (existingRecord.year?.toString() || safeYear) : safeYear;
                         
+                    // Use finalExt so the rename applies the verified extension
                     const newFileName = filePatternToUse
                         .replace(/{Publisher}/gi, safePublisher || "Other")
                         .replace(/{Series}/gi, safeName)
@@ -256,31 +271,72 @@ export async function POST(request: Request) {
                         .replace(/{VolumeYear}/gi, safeYear)
                         .replace(/{IssueYear}/gi, issueYear)
                         .replace(/{Issue}/gi, formattedNum)
-                        .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
+                        .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + finalExt;
                     
                     const oldFilePath = path.join(activeFolderPath, file);
                     const newFilePath = path.join(activeFolderPath, newFileName);
                     
-                    Logger.log(`[Match Series Debug] Generated new path: [${newFilePath}]`, 'debug');
-                    
+                    // 1. Handle OS Rename
                     if (oldFilePath !== newFilePath && !fs.existsSync(newFilePath)) {
                         Logger.log(`[Match Series Debug] Executing OS File Rename: ${file} -> ${newFileName}`, 'debug');
                         await fs.promises.rename(oldFilePath, newFilePath);
-                        if (existingRecord) {
-                            pathUpdates.push(prisma.issue.updateMany({
-                                where: { seriesId: existingRecord.id, number: issueNumStr },
-                                data: { filePath: newFilePath }
-                            }));
+                    }
+                    
+                    // 2. Inline Database Update (No more silent transaction rollbacks!)
+                    if (existingRecord) {
+                        const updatePayload: any = { 
+                            filePath: newFilePath,
+                            number: issueNumStr,
+                            seriesId: existingRecord.id 
+                        };
+                        
+                        if (isTargetFile && targetIssueMetaId) {
+                            updatePayload.metadataId = targetIssueMetaId.toString(); // Force string to prevent DB crashes
+                            updatePayload.metadataSource = targetSource; 
+                            updatePayload.matchState = 'MATCHED';
                         }
-                    } else if (oldFilePath !== newFilePath) {
-                        Logger.log(`[Match Series Debug] Skipping rename: Target file already exists at ${newFilePath}`, 'debug');
+
+                        try {
+                            const existingIssue = await prisma.issue.findFirst({
+                                where: { seriesId: existingRecord.id, number: issueNumStr }
+                            });
+
+                            let finalIssueId;
+
+                            if (existingIssue) {
+                                const updated = await prisma.issue.update({
+                                    where: { id: existingIssue.id },
+                                    data: updatePayload
+                                });
+                                finalIssueId = updated.id;
+                                Logger.log(`[Match Series Debug] DB Updated successfully for Issue ${issueNumStr}`, 'debug');
+                            } else {
+                                const created = await prisma.issue.create({
+                                    data: {
+                                        ...updatePayload,
+                                        name: `Issue ${issueNumStr}`
+                                    }
+                                });
+                                finalIssueId = created.id;
+                                Logger.log(`[Match Series Debug] DB Created successfully for Issue ${issueNumStr}`, 'debug');
+                            }
+
+                            // --- NEW: Trigger the Auto-Converter for genuine CBRs and CB7s! ---
+                            if ((finalExt === '.cbr' || finalExt === '.cb7' || finalExt === '.rar') && finalIssueId) {
+                                Logger.log(`[Match Series Debug] Convertible archive detected. Queueing conversion for Issue ${finalIssueId}...`, 'debug');
+                                
+                                await omnibusQueue.add('CBR_CONVERSION', 
+                                    { type: 'CBR_CONVERSION', issueId: finalIssueId }, 
+                                    { jobId: `CBR_CONVERSION_${finalIssueId}_${Date.now()}` }
+                                );
+                            }
+
+                        } catch (dbErr) {
+                            Logger.log(`[Match Series Debug] CRITICAL DB ERROR for Issue ${issueNumStr}: ${dbErr}`, 'error');
+                        }
                     }
                 }
             }
-        }
-        
-        if (pathUpdates.length > 0) {
-            await prisma.$transaction(pathUpdates).catch(() => {});
         }
 
         if (imageUrl) {
@@ -302,7 +358,8 @@ export async function POST(request: Request) {
 
             for (const dbReq of pendingRequests) {
                 const searchStr = (dbReq.activeDownloadName || (dbReq as any).title || (dbReq as any).name || "");
-                const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(\d+(?:\.\d+)?)/i);
+                // Added -? to capture negative requested issues
+                const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(-?\d+(?:\.\d+)?)/i);
                 const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
                 if (issueNum === null) continue;
                 const matchingIssue = seriesIssues.find(i => parseFloat(i.number) === issueNum && i.filePath && i.filePath.length > 0);
@@ -321,7 +378,13 @@ export async function POST(request: Request) {
     
     try {
         if (isFile) {
-            await omnibusQueue.add('LIBRARY_SCAN', { type: 'LIBRARY_SCAN' }, { jobId: `LIBRARY_SCAN_${Date.now()}` });
+            // Include specificPath inside the payload
+            await omnibusQueue.add('LIBRARY_SCAN', { 
+                type: 'LIBRARY_SCAN', 
+                specificPath: activeFolderPath 
+            }, { 
+                jobId: `LIBRARY_SCAN_${Date.now()}` 
+            });
         }
         
         if (existingRecord?.id) {

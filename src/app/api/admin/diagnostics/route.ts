@@ -9,6 +9,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import { UNMATCHED_DIR } from '@/lib/utils/paths';
 
 export const dynamic = 'force-dynamic';
 
@@ -180,7 +181,7 @@ export async function POST(request: Request) {
         if (action === 'delete-orphans') {
             const { paths } = payload;
             const libraries = await prisma.library.findMany();
-            const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
+            const unmatchedDir = UNMATCHED_DIR;
             
             const authorizedRoots = [
                 ...libraries.map(l => path.resolve(l.path).toLowerCase()),

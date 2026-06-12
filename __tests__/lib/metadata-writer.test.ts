@@ -7,17 +7,19 @@ import fs from 'fs-extra';
 const mocks = vi.hoisted(() => ({
     findUniqueIssue: vi.fn(),
     findUniqueSeries: vi.fn(),
+    updateSeries: vi.fn(),
     findUniqueSetting: vi.fn(),
     addFile: vi.fn(),
     writeZip: vi.fn(),
-    move: vi.fn()
+    move: vi.fn(),
+    readFile: vi.fn()
 }));
 
 // 2. Mock dependencies
 vi.mock('@/lib/db', () => ({
     prisma: {
         issue: { findUnique: mocks.findUniqueIssue },
-        series: { findUnique: mocks.findUniqueSeries },
+        series: { findUnique: mocks.findUniqueSeries, update: mocks.updateSeries },
         systemSetting: { findUnique: mocks.findUniqueSetting }
     }
 }));
@@ -26,7 +28,8 @@ vi.mock('fs-extra', () => ({
     default: {
         existsSync: vi.fn().mockReturnValue(true),
         move: mocks.move,
-        writeFile: vi.fn().mockResolvedValue(true)
+        writeFile: vi.fn().mockResolvedValue(true),
+        readFile: mocks.readFile
     }
 }));
 
@@ -124,22 +127,30 @@ describe('Ecosystem: Metadata Writer', () => {
         expect(xmlString).toContain('<Web>https://metron.cloud/issue/789/</Web>');
     });
 
-    it('should successfully generate a Komga-compatible series.json file', async () => {
+    it('should generate a Mylar v1.0.2 series.json for an ended ComicVine series', async () => {
         // Make sure the feature is "enabled" in the DB
         mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'true' });
 
         mocks.findUniqueSeries.mockResolvedValueOnce({
             id: 'series_1',
-            name: 'Chainsaw Man',
-            publisher: 'Shueisha',
-            status: 'Ongoing',
-            isManga: true,
-            folderPath: '/library/manga/chainsaw',
-            metadataId: '101',
-            metadataSource: 'METRON',
+            name: 'Wildcats',
+            publisher: 'DC Comics',
+            year: 1999,
+            status: 'Ended',
+            isManga: false,
+            folderPath: '/library/comics/wildcats',
+            cvId: null,
+            metadataId: '9418',
+            metadataSource: 'COMICVINE',
+            description: '<p>Six months after Grifter left the <em>Wildcats</em>.</p>',
+            coverUrl: '/api/library/cover?path=%2Fcomics%2Fwildcats%2Fcover.jpg',
+            remoteCoverUrl: 'https://comicvine.gamespot.com/a/uploads/scale_large/wildcats.jpg',
+            bookType: null,
+            seriesJsonWritten: true,
             issues: [
-                { genres: JSON.stringify(['Action', 'Gore']) },
-                { genres: JSON.stringify(['Action', 'Demon']) }
+                { releaseDate: '1999-03-01' },
+                { releaseDate: '2001-12-15' },
+                { releaseDate: '2000-06-10' }
             ]
         });
 
@@ -150,11 +161,132 @@ describe('Ecosystem: Metadata Writer', () => {
 
         expect(fsWriteSpy).toHaveBeenCalledTimes(1);
         const jsonPayload = JSON.parse(fsWriteSpy.mock.calls[0][1] as string);
-        
-        expect(jsonPayload.metadata.title).toBe('Chainsaw Man');
-        expect(jsonPayload.metadata.readingDirection).toBe('RIGHT_TO_LEFT'); 
-        expect(jsonPayload.metadata.genres).toEqual(expect.arrayContaining(['Action', 'Gore', 'Demon'])); 
-        // Verify it routed the JSON link to Metron
-        expect(jsonPayload.metadata.links[0].url).toBe('https://metron.cloud/series/101/');
+
+        expect(jsonPayload.version).toBe('1.0.2');
+        expect(jsonPayload.metadata.type).toBe('comicSeries');
+        expect(jsonPayload.metadata.name).toBe('Wildcats');
+        expect(jsonPayload.metadata.publisher).toBe('DC Comics');
+        expect(jsonPayload.metadata.comicid).toBe(9418);
+        expect(jsonPayload.metadata.year).toBe(1999);
+        expect(jsonPayload.metadata.description_text).toBe('Six months after Grifter left the Wildcats.');
+        expect(jsonPayload.metadata.booktype).toBe('Print'); // null bookType defaults to Print
+        // The REMOTE ComicVine URL, never the Omnibus-local cached cover path
+        expect(jsonPayload.metadata.comic_image).toBe('https://comicvine.gamespot.com/a/uploads/scale_large/wildcats.jpg');
+        expect(jsonPayload.metadata.total_issues).toBe(3);
+        expect(jsonPayload.metadata.publication_run).toBe('March 1999 - December 2001');
+        expect(jsonPayload.metadata.status).toBe('Ended');
+    });
+
+    it('should write a null comicid and Present run for an ongoing Metron series', async () => {
+        process.env.NEXTAUTH_URL = 'https://omnibus.example.com';
+        mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'true' });
+
+        mocks.findUniqueSeries.mockResolvedValueOnce({
+            id: 'series_2',
+            name: 'Chainsaw Man',
+            publisher: 'Shueisha',
+            year: 2020,
+            status: 'Ongoing',
+            isManga: true,
+            folderPath: '/library/manga/chainsaw',
+            cvId: null,
+            metadataId: '101',
+            metadataSource: 'METRON',
+            description: null,
+            coverUrl: '/api/library/cover?path=%2Fmanga%2Fchainsaw%2Fcover.jpg',
+            remoteCoverUrl: null,
+            bookType: 'TPB',
+            seriesJsonWritten: true,
+            issues: [
+                { releaseDate: '2020-09-29' },
+                { releaseDate: null }
+            ]
+        });
+
+        const fsWriteSpy = vi.spyOn(fs, 'writeFile');
+
+        const success = await writeSeriesJson('series_2');
+        expect(success).toBe(true);
+
+        const jsonPayload = JSON.parse(fsWriteSpy.mock.calls[0][1] as string);
+
+        // A Metron series ID must never be written as the ComicVine comicid
+        expect(jsonPayload.metadata.comicid).toBeNull();
+        expect(jsonPayload.metadata.status).toBe('Continuing');
+        expect(jsonPayload.metadata.publication_run).toBe('September 2020 - Present');
+        expect(jsonPayload.metadata.total_issues).toBe(2);
+        expect(jsonPayload.metadata.booktype).toBe('TPB'); // categorized series carry their real booktype
+
+        // Unknown values must be null, never "" — Komga ignores nulls but chokes on blanks.
+        expect(jsonPayload.metadata.description_text).toBeNull();
+        expect(jsonPayload.metadata.description_formatted).toBeNull();
+        const blanks = Object.entries(jsonPayload.metadata).filter(([, v]) => v === '');
+        expect(blanks).toEqual([]);
+
+        // No remote cover known — falls back to the locally cached cover as an absolute URL
+        expect(jsonPayload.metadata.comic_image).toBe('https://omnibus.example.com/api/library/cover?path=%2Fmanga%2Fchainsaw%2Fcover.jpg');
+    });
+
+    it('should never overwrite a series.json that Omnibus did not create', async () => {
+        mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'true' });
+
+        mocks.findUniqueSeries.mockResolvedValueOnce({
+            id: 'series_3',
+            name: 'Curated Series',
+            publisher: 'DC Comics',
+            year: 1999,
+            status: 'Ended',
+            isManga: false,
+            folderPath: '/library/comics/curated',
+            seriesJsonWritten: false, // Omnibus has never written this folder's series.json
+            issues: []
+        });
+        // The existing file is a genuine Mylar-generated file (has a version key)
+        mocks.readFile.mockResolvedValueOnce(JSON.stringify({
+            version: '1.0.2',
+            metadata: { type: 'comicSeries', name: 'Curated Series', comicid: 9418 }
+        }));
+
+        const fsWriteSpy = vi.spyOn(fs, 'writeFile');
+
+        const success = await writeSeriesJson('series_3');
+
+        expect(success).toBe(false);
+        expect(fsWriteSpy).not.toHaveBeenCalled();
+        expect(mocks.updateSeries).not.toHaveBeenCalled();
+    });
+
+    it('should upgrade a legacy Omnibus (Komga-style) series.json and claim ownership', async () => {
+        mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'true' });
+
+        mocks.findUniqueSeries.mockResolvedValueOnce({
+            id: 'series_4',
+            name: 'Old Export',
+            publisher: 'Marvel',
+            year: 2010,
+            status: 'Ended',
+            isManga: false,
+            folderPath: '/library/comics/old-export',
+            cvId: 555,
+            metadataSource: 'COMICVINE',
+            seriesJsonWritten: false, // Written before ownership tracking existed
+            issues: [{ releaseDate: '2010-01-01' }]
+        });
+        // The old Omnibus Komga-style format: no version key, Komga-only fields
+        mocks.readFile.mockResolvedValueOnce(JSON.stringify({
+            metadata: { title: 'Old Export', readingDirection: 'LEFT_TO_RIGHT', status: 'ENDED' }
+        }));
+
+        const fsWriteSpy = vi.spyOn(fs, 'writeFile');
+
+        const success = await writeSeriesJson('series_4');
+
+        expect(success).toBe(true);
+        const jsonPayload = JSON.parse(fsWriteSpy.mock.calls[0][1] as string);
+        expect(jsonPayload.version).toBe('1.0.2');
+        // Ownership is claimed so future runs keep updating the file
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            data: { seriesJsonWritten: true }
+        }));
     });
 });

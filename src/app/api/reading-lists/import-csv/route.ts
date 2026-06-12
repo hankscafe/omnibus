@@ -64,7 +64,7 @@ export async function POST(request: Request) {
             if (!seriesName) continue;
 
             const normalizedSearchSeries = normalize(seriesName);
-            const parsedTargetNum = parseFloat(issueNum.replace(/[^0-9.]/g, ''));
+            const parsedTargetNum = parseFloat(issueNum.replace(/[^0-9.-]/g, ''));
 
             Logger.log(`[CSV Import Debug] Evaluating CSV entry: "${seriesName} #${issueNum}" (Normalized: "${normalizedSearchSeries}")`, 'debug');
 

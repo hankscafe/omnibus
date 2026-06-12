@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,7 +31,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
         
         // We must sort the exact same way we did in the manifest so the indexes match perfectly
         const pages = zip.getEntries()
-            .filter(e => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && e.entryName.match(/\.(jpg|jpeg|png|webp)$/i))
+            .filter(e => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && IMAGE_EXT_REGEX.test(e.entryName))
             .sort((a, b) => a.entryName.localeCompare(b.entryName, undefined, { numeric: true, sensitivity: 'base' }));
 
         Logger.log(`[OPDS Debug] Extracted ${pages.length} valid images from archive.`, 'debug');

@@ -10,6 +10,7 @@ import { omnibusQueue } from '@/lib/queue';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
+import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 
 export async function POST(request: Request) {
   try {
@@ -17,7 +18,11 @@ export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id || 'System';
 
-    const { currentPath, name, year, publisher, cvId, monitored, isManga, status } = await request.json();
+    const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType } = await request.json();
+
+    // Mylar booktype values — anything else is ignored rather than stored
+    const VALID_BOOK_TYPES = ['Print', 'OneShot', 'TPB', 'GN'];
+    const parsedBookType = VALID_BOOK_TYPES.includes(bookType) ? bookType : null;
 
     const parsedIsManga = isManga === true || isManga === 'true' || isManga === 'on' || isManga === 1;
     const parsedMonitored = monitored === true || monitored === 'true' || monitored === 'on' || monitored === 1;
@@ -36,8 +41,6 @@ export async function POST(request: Request) {
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
 
-    function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
-    
     const safePublisher = publisher && publisher !== "Unknown" ? sanitize(publisher) : "Other";
     const safeSeries = sanitize(name || "Unknown Series");
     const safeYear = year ? year.toString() : "";
@@ -92,7 +95,8 @@ export async function POST(request: Request) {
                 metronId: parsedCvId !== null && isMetron ? parsedCvId : existingRecord.metronId,
                 metadataSource: existingRecord.metadataSource || 'COMICVINE',
                 libraryId: targetLib.id,
-                status: status || existingRecord.status
+                status: status || existingRecord.status,
+                bookType: parsedBookType || existingRecord.bookType
             }
         });
 
@@ -130,12 +134,14 @@ export async function POST(request: Request) {
             update: {
                 name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
-                status: status || undefined
+                status: status || undefined,
+                bookType: parsedBookType || undefined
             },
             create: {
                 metadataId: parsedCvId.toString(), metadataSource: 'COMICVINE', matchState: 'MATCHED', name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
-                status: status || 'Ongoing'
+                status: status || 'Ongoing',
+                bookType: parsedBookType
             }
         });
     }

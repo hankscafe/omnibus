@@ -7,6 +7,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { syncSchedules } from '@/lib/queue';
+import { CACHE_DIR, LOGS_DIR, BACKUPS_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
 
 const SENSITIVE_KEYS = [
     'cv_api_key', 
@@ -74,11 +75,11 @@ export async function GET(request: Request) {
 
   const envPaths = {
       DATABASE_URL: (process.env.DATABASE_URL || 'file:./omnibus.db').replace(/:.*@/, ':****@'),
-      OMNIBUS_BACKUPS_DIR: process.env.OMNIBUS_BACKUPS_DIR || '/backups',
-      OMNIBUS_CACHE_DIR: process.env.OMNIBUS_CACHE_DIR || '/cache',
-      OMNIBUS_LOGS_DIR: process.env.OMNIBUS_LOGS_DIR || '/app/config/logs',
-      OMNIBUS_WATCHED_DIR: process.env.OMNIBUS_WATCHED_DIR || '/watched',
-      OMNIBUS_AWAITING_MATCH_DIR: process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched'
+      OMNIBUS_BACKUPS_DIR: BACKUPS_DIR,
+      OMNIBUS_CACHE_DIR: CACHE_DIR,
+      OMNIBUS_LOGS_DIR: LOGS_DIR,
+      OMNIBUS_WATCHED_DIR: WATCHED_DIR,
+      OMNIBUS_AWAITING_MATCH_DIR: UNMATCHED_DIR
   };
 
   return NextResponse.json({

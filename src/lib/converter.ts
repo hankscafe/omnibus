@@ -6,17 +6,36 @@ import sharp from 'sharp';
 import { Logger } from '@/lib/logger';
 import { prisma } from '@/lib/db';
 import crypto from 'crypto';
-// @ts-ignore
-import { createExtractorFromFile } from 'node-unrar-js/esm';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getErrorMessage } from './utils/error';
+import { CACHE_DIR } from '@/lib/utils/paths';
+import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+
+const execFileAsync = promisify(execFile);
+
+// Reads the leading magic bytes of a file; returns an empty buffer on any failure
+async function readFileSignature(filePath: string): Promise<Buffer> {
+    try {
+        const fd = await fs.open(filePath, 'r');
+        const buffer = Buffer.alloc(4);
+        try {
+            await fs.read(fd, buffer, 0, 4, 0);
+        } finally {
+            await fs.close(fd);
+        }
+        return buffer;
+    } catch {
+        return Buffer.alloc(0);
+    }
+}
 
 export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
-    if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar)$/)) return null;
-    const cbzPath = cbrPath.replace(/\.(cbr|rar)$/i, '.cbz');
+    if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar|cb7)$/)) return null;
+    const cbzPath = cbrPath.replace(/\.(cbr|rar|cb7)$/i, '.cbz');
          
     // --- THE FIX: Safe local fallback path to /config/cache ---
-    const baseTempDir = process.env.OMNIBUS_CACHE_DIR || '/config/cache';
-    const tempDir = path.join(baseTempDir, `cbr_${crypto.randomBytes(8).toString('hex')}`);
+    const tempDir = path.join(CACHE_DIR, `cbr_${crypto.randomBytes(8).toString('hex')}`);
     try {
         await fs.ensureDir(tempDir);
         Logger.log(`[Converter] Starting conversion for: ${path.basename(cbrPath)}`, 'info');
@@ -29,21 +48,66 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         const convertToWebp = config.convert_to_webp === 'true';
         const webpQuality = parseInt(config.webp_quality || '80', 10);
         
-        const options: any = { 
-             filepath: cbrPath,
-             targetPath: tempDir 
-          };
-                 
-        const wasmPath = path.join(process.cwd(), 'node_modules', 'node-unrar-js', 'esm', 'js', 'unrar.wasm');
-        if (fs.existsSync(wasmPath)) {
-            const wasmBuf = fs.readFileSync(wasmPath);
-            options.wasmBinary = wasmBuf.buffer.slice(wasmBuf.byteOffset, wasmBuf.byteOffset + wasmBuf.byteLength);
+        // --- NATIVE OS EXTRACTION ---
+        // Official unrar is the primary decoder: unar/XADMaster corrupts some files
+        // inside RAR 2.0 archives (common in vintage comic rips). unar remains the
+        // fallback because it auto-detects other formats, e.g. genuine 7z archives
+        // (.cb7). ZIPs in disguise are routed by magic bytes and never reach either.
+        const execOpts = { maxBuffer: 10 * 1024 * 1024 };
+        let expectedPages = -1;
+        let unrarExitError: any = null;
+
+        // Extensions lie: .cbr files are frequently ZIPs in disguise, and WinRAR's
+        // UnRAR.exe exits 0 with an empty listing for them — so the real container
+        // format, not the extension or exit code, picks the decoder.
+        const signature = await readFileSignature(cbrPath);
+        const isActuallyZip = signature.length >= 2 && signature[0] === 0x50 && signature[1] === 0x4B; // "PK"
+
+        if (isActuallyZip) {
+            Logger.log(`[Converter] ${path.basename(cbrPath)} is a ZIP in disguise — extracting natively`, 'info');
+            new AdmZip(cbrPath).extractAllTo(tempDir, true);
+        } else {
+            let rarListing: string | null = null;
+            try {
+                const { stdout } = await execFileAsync('unrar', ['lb', '-p-', cbrPath], execOpts);
+                // An empty listing means "not a RAR" even on exit 0 (WinRAR's UnRAR.exe
+                // succeeds silently on non-RAR input) — route it to unar instead.
+                rarListing = typeof stdout === 'string' && stdout.trim() !== '' ? stdout : null;
+            } catch (err: any) {
+                // unrar exits non-zero for benign structural quirks (e.g. a missing
+                // end-of-archive block) even when the listing printed in full, so
+                // salvage its stdout. A genuine non-RAR file yields an empty listing.
+                rarListing = typeof err?.stdout === 'string' && err.stdout.trim() !== '' ? err.stdout : null;
+            }
+            if (rarListing !== null) {
+                expectedPages = rarListing.split('\n')
+                    .filter(line => IMAGE_EXT_REGEX.test(line.trim()))
+                    .length;
+            }
+
+            if (expectedPages >= 0) {
+                // Vintage archives often carry benign structural quirks (e.g. a missing
+                // end-of-archive block) that make unrar exit non-zero even though every
+                // file extracted OK. Success is judged by comparing extracted page count
+                // against the listing below, not by the exit code.
+                try {
+                    await execFileAsync('unrar', ['x', '-y', '-o+', '-p-', '-idq', cbrPath, `${tempDir}/`], execOpts);
+                } catch (err: any) {
+                    unrarExitError = err;
+                }
+            } else {
+                try {
+                    await execFileAsync('unar', ['-q', '-p', '', '-o', tempDir, '-f', '-D', cbrPath], execOpts);
+                } catch (unarErr: any) {
+                    const detail = unarErr?.code === 'ENOENT'
+                        ? 'unar binary not found on PATH (is it installed in this environment?)'
+                        : unarErr?.stderr || unarErr?.message || 'Unknown CLI error';
+                    throw new Error(`Native extraction failed: ${detail}`);
+                }
+            }
         }
+        // ----------------------------
         
-        const extractor = await createExtractorFromFile(options);
-        const extracted = extractor.extract();
-         
-        Array.from((extracted.files as any) || []);
         const allImages: string[] = [];
         
         async function findImages(currentDir: string) {
@@ -52,13 +116,18 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
                 const fullPath = path.join(currentDir, item.name);
                 if (item.isDirectory()) {
                     await findImages(fullPath);
-                } else if (item.name.match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i)) {
+                } else if (IMAGE_EXT_REGEX.test(item.name)) {
                     allImages.push(fullPath);
                 }
             }
         }
         await findImages(tempDir);
         Logger.log(`[Converter Debug] Found ${allImages.length} images inside CBR archive: ${path.basename(cbrPath)}`, 'debug');
+
+        if (expectedPages >= 0 && allImages.length < expectedPages) {
+            const detail = unrarExitError?.stderr || unrarExitError?.message || 'archive may be damaged';
+            throw new Error(`Native extraction failed: only ${allImages.length} of ${expectedPages} pages extracted (${detail})`);
+        }
         
         if (allImages.length === 0) {
             throw new Error("Archive contained no valid images after extraction.");
@@ -96,6 +165,11 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
             imageCount++;
         }
         
+        const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
+        if (fs.existsSync(comicInfoPath)) {
+            zip.addLocalFile(comicInfoPath, "", "ComicInfo.xml");
+        }
+
         zip.writeZip(cbzPath);
         
         if (fs.existsSync(cbrPath)) {
@@ -126,16 +200,14 @@ export async function repackArchive(filePath: string): Promise<boolean> {
     if (!filePath || !fs.existsSync(filePath)) return false;
     const ext = path.extname(filePath).toLowerCase();
     
-    if (ext === '.cbr' || ext === '.rar') {
+    if (ext === '.cbr' || ext === '.rar' || ext === '.cb7') {
         const newPath = await convertCbrToCbz(filePath);
         return !!newPath;
     }
     
     if (ext !== '.cbz' && ext !== '.zip') return false;
     
-    // --- THE FIX: Safe local fallback path to /config/cache ---
-    const baseTempDir = process.env.OMNIBUS_CACHE_DIR || '/config/cache';
-    const tempDir = path.join(baseTempDir, `repack_${crypto.randomBytes(8).toString('hex')}`);
+    const tempDir = path.join(CACHE_DIR, `repack_${crypto.randomBytes(8).toString('hex')}`);
     
     try {
         await fs.ensureDir(tempDir);
@@ -159,7 +231,7 @@ export async function repackArchive(filePath: string): Promise<boolean> {
                 const fullPath = path.join(currentDir, item.name);
                 if (item.isDirectory()) {
                     await findImages(fullPath);
-                } else if (item.name.match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i) && !item.name.toLowerCase().includes('__macosx')) {
+                } else if (IMAGE_EXT_REGEX.test(item.name) && !item.name.toLowerCase().includes('__macosx')) {
                     allImages.push(fullPath);
                 }
             }
@@ -202,7 +274,7 @@ export async function repackArchive(filePath: string): Promise<boolean> {
             imageCount++;
         }
         
-        const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
+       const comicInfoPath = path.join(tempDir, 'ComicInfo.xml');
         if (fs.existsSync(comicInfoPath)) {
             newZip.addLocalFile(comicInfoPath, "", "ComicInfo.xml");
         }

@@ -8,10 +8,10 @@ import os from 'os';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { CACHE_DIR as BASE_CACHE_DIR } from '@/lib/utils/paths';
 
-// Respect the Omnibus system cache directory mapping
-const baseCacheDir = process.env.OMNIBUS_CACHE_DIR || '/cache';
-const CACHE_DIR = path.join(baseCacheDir, 'reader_images');
+// Reader page cache lives in a subfolder of the system cache directory
+const CACHE_DIR = path.join(BASE_CACHE_DIR, 'reader_images');
 
 // Disk Cache Cleanup (Runs every hour)
 // Prevents the disk from filling up by deleting pages unaccessed for 24 hours.

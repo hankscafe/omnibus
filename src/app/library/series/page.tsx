@@ -60,8 +60,8 @@ function SeriesContent() {
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({ 
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, monitored: false, isManga: false, matchState: 'MATCHED'
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED'
   });
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
@@ -82,7 +82,7 @@ function SeriesContent() {
   const [isSearchingMore, setIsSearchingMore] = useState(false);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false });
+  const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "Print" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   const [reportModalOpen, setReportModalOpen] = useState(false);
@@ -96,6 +96,7 @@ function SeriesContent() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(true);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
+  const [seriesDownloadProgress, setSeriesDownloadProgress] = useState<number | null>(null);
 
   const [deleteIssueModalOpen, setDeleteIssueModalOpen] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<any>(null);
@@ -252,19 +253,21 @@ function SeriesContent() {
                 year: data.year ? data.year.toString() : null,
                 description: data.description || null,
                 status: data.status || null,
+                bookType: data.bookType || null,
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
                 matchState: data.matchState || 'MATCHED'
             });
-            
+
             setEditForm({
                 name: data.seriesName || data.name || "",
-                publisher: data.publisher || "", 
+                publisher: data.publisher || "",
                 year: data.year ? data.year.toString() : "",
                 cvId: data.metadataId ? data.metadataId.toString() : (data.cvId ? data.cvId.toString() : ""),
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
-                status: data.status || 'Ongoing'
+                status: data.status || 'Ongoing',
+                bookType: data.bookType || 'Print'
             });
 
             // --- FIX: Intelligently fallback to the first missing issue if nothing is downloaded yet ---
@@ -487,11 +490,36 @@ function SeriesContent() {
       if (success) successCount++;
       await new Promise(resolve => setTimeout(resolve, 300));
     }
-    toast({ 
-      title: "Bulk Request Complete", 
-      description: `Successfully queued ${successCount} of ${missingIssues.length} missing issues.` 
+    toast({
+      title: "Bulk Request Complete",
+      description: `Successfully queued ${successCount} of ${missingIssues.length} missing issues.`
     });
     setIsBulkDownloading(false);
+  }
+
+  // Downloads every issue file in the series to the user's device, one at a time.
+  // Reuses the per-issue download endpoint, so each file arrives as its original .cbz.
+  const handleDownloadSeries = async () => {
+    const files = downloadedIssues.filter(i => i.fullPath);
+    if (files.length === 0) return;
+    setSeriesDownloadProgress(0);
+    toast({ title: "Series Download Started", description: `Downloading ${files.length} issues. Your browser may ask permission to download multiple files.` });
+
+    try {
+        for (let idx = 0; idx < files.length; idx++) {
+            const link = document.createElement('a');
+            link.href = `/api/library/download?path=${encodeURIComponent(files[idx].fullPath)}`;
+            link.download = '';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setSeriesDownloadProgress(idx + 1);
+            // Space out the triggers so the browser doesn't drop downloads
+            await new Promise(resolve => setTimeout(resolve, 700));
+        }
+    } finally {
+        setSeriesDownloadProgress(null);
+    }
   }
 
   const toggleFavorite = async () => {
@@ -588,7 +616,8 @@ function SeriesContent() {
                   cvId: editForm.cvId || "",
                   monitored: editForm.monitored,
                   isManga: editForm.isManga,
-                  status: editForm.status
+                  status: editForm.status,
+                  bookType: editForm.bookType
               })
           });
           if (!res.ok) throw new Error("Failed to save info.");
@@ -919,14 +948,23 @@ function SeriesContent() {
               </div>
 
               <div className="flex flex-col gap-2">
-                  <div className="flex gap-2 pb-1">
-                      {seriesInfo.status && (
-                          <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
-                              {seriesInfo.status}
-                          </Badge>
+                  <div className="flex flex-col gap-2 pb-1">
+                      {(seriesInfo.status || (seriesInfo.bookType && seriesInfo.bookType !== 'Print')) && (
+                          <div className="flex gap-2">
+                              {seriesInfo.status && (
+                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
+                                      {seriesInfo.status}
+                                  </Badge>
+                              )}
+                              {seriesInfo.bookType && seriesInfo.bookType !== 'Print' && (
+                                  <Badge variant="secondary" className="w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20">
+                                      {seriesInfo.bookType === 'OneShot' ? 'One-Shot' : seriesInfo.bookType}
+                                  </Badge>
+                              )}
+                          </div>
                       )}
                       {seriesInfo.id && (
-                          <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
+                          <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`w-full justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
                               {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
                           </Badge>
                       )}
@@ -1337,6 +1375,20 @@ function SeriesContent() {
               <div className="space-y-6">
                   <div className="flex items-center justify-between border-b-2 border-border pb-4">
                       <h4 className="font-black flex items-center gap-2 text-xl text-foreground tracking-tight"><Layers className="w-6 h-6 text-primary"/> Downloaded Issues ({downloadedIssues.length})</h4>
+                      <div className="flex items-center gap-2 shrink-0">
+                      {canDownload && downloadedIssues.some(i => i.fullPath) && (
+                          <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-8 px-3 text-xs font-bold bg-muted hover:bg-muted/80 text-foreground border border-border"
+                              onClick={handleDownloadSeries}
+                              disabled={seriesDownloadProgress !== null || isSelectionMode}
+                          >
+                              {seriesDownloadProgress !== null
+                                  ? (<><Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /><span className="hidden sm:inline">Downloading {seriesDownloadProgress}/{downloadedIssues.filter(i => i.fullPath).length}</span></>)
+                                  : (<><Download className="w-4 h-4 sm:mr-1" /><span className="hidden sm:inline">Download Series</span></>)}
+                          </Button>
+                      )}
                       <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
                           <Button variant={isSelectionMode ? "secondary" : "ghost"} size="sm" className="h-8 px-2 text-xs font-bold" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedIssues(new Set()); }}>
                               {isSelectionMode ? <Square className="w-4 h-4 sm:mr-1" /> : <CheckSquare className="w-4 h-4 sm:mr-1" />}
@@ -1346,8 +1398,9 @@ function SeriesContent() {
                           <Button variant={viewMode === 'grid' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('grid')}><LayoutGrid className="w-4 h-4" /></Button>
                           <Button variant={viewMode === 'list' ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7" onClick={() => toggleViewMode('list')}><List className="w-4 h-4" /></Button>
                       </div>
+                      </div>
                   </div>
-                  
+
                   {viewMode === 'grid' ? (
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6 pb-4">
                           {downloadedIssues.map((issue) => {
@@ -1790,17 +1843,33 @@ function SeriesContent() {
                   <div className="grid gap-2"><Label>Series Name</Label><Input value={editForm.name} onChange={(e) => setEditForm({...editForm, name: e.target.value})} className="bg-background border-border" /></div>
                   <div className="grid gap-2"><Label>Year</Label><Input value={editForm.year} onChange={(e) => setEditForm({...editForm, year: e.target.value})} className="bg-background border-border" /></div>
                   
-                  <div className="grid gap-2">
-                      <Label>Status</Label>
-                      <Select value={editForm.status} onValueChange={(v) => setEditForm({...editForm, status: v})}>
-                          <SelectTrigger className="bg-background border-border h-12 sm:h-10">
-                              <SelectValue placeholder="Ongoing" />
-                          </SelectTrigger>
-                          <SelectContent className="bg-popover border-border">
-                              <SelectItem value="Ongoing">Ongoing</SelectItem>
-                              <SelectItem value="Ended">Ended</SelectItem>
-                          </SelectContent>
-                      </Select>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                          <Label>Status</Label>
+                          <Select value={editForm.status} onValueChange={(v) => setEditForm({...editForm, status: v})}>
+                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                                  <SelectValue placeholder="Ongoing" />
+                              </SelectTrigger>
+                              <SelectContent className="bg-popover border-border">
+                                  <SelectItem value="Ongoing">Ongoing</SelectItem>
+                                  <SelectItem value="Ended">Ended</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
+                      <div className="grid gap-2">
+                          <Label>Book Type</Label>
+                          <Select value={editForm.bookType} onValueChange={(v) => setEditForm({...editForm, bookType: v})}>
+                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
+                                  <SelectValue placeholder="Print" />
+                              </SelectTrigger>
+                              <SelectContent className="bg-popover border-border">
+                                  <SelectItem value="Print">Print (Standard Series)</SelectItem>
+                                  <SelectItem value="OneShot">One-Shot</SelectItem>
+                                  <SelectItem value="TPB">Trade Paperback</SelectItem>
+                                  <SelectItem value="GN">Graphic Novel</SelectItem>
+                              </SelectContent>
+                          </Select>
+                      </div>
                   </div>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">

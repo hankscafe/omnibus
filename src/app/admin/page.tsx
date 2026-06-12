@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
+import { JUNK_WORDS as junkWords } from "@/lib/utils/search-terms"
 import { 
   TrendingUp, Download, HardDrive, ArrowRight, Loader2, RefreshCw, 
   AlertTriangle, Users, CheckCircle2, Activity, XCircle, 
@@ -428,8 +429,6 @@ const mappedRequests = requests.map(req => {
 
                   let cleanReqName = reqNameLower.replace(/[0-9]/g, '');
                   let cleanTorName = torNameLower.replace(/[0-9]/g, '');
-                  
-                  const junkWords = ['eng', 'cbz', 'cbr', 'cb7', 'zip', 'rar', 'webrip', 'digital', 'vol', 'volume', 'ch', 'chapter', 'issue', 'tpb', 'rip', 'the', 'and', 'of', 'by', 'gn'];
                   
                   const reqWords = cleanReqName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
                   const torWords = cleanTorName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));

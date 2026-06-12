@@ -5,6 +5,7 @@ import fs from 'fs';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
+import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
@@ -106,7 +107,7 @@ export async function DELETE(request: Request) {
                 
                 if (series?.folderPath && fs.existsSync(series.folderPath)) {
                     const files = await fs.promises.readdir(series.folderPath);
-                    const hasFiles = files.some(f => f.toLowerCase().match(/\.(cbz|cbr)$/));
+                    const hasFiles = files.some(f => COMIC_EXT_REGEX.test(f));
                     if (!hasFiles) await prisma.series.delete({ where: { id: series.id } });
                 }
             }

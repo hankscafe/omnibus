@@ -3,9 +3,10 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
-import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
+import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { recordDailyReading } from '@/lib/reading-stats';
 
 export const dynamic = 'force-dynamic';
 
@@ -107,17 +108,8 @@ export async function POST(request: Request) {
             pagesReadDelta = newPage; // First time opening the book
         }
 
-        // Log the delta to today's stats if they read something
-        if (pagesReadDelta > 0) {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0); // Normalize to midnight UTC
-
-            await prisma.dailyReadingStat.upsert({
-                where: { userId_date: { userId, date: today } },
-                update: { pagesRead: { increment: pagesReadDelta } },
-                create: { userId, date: today, pagesRead: pagesReadDelta }
-            });
-        }
+        // Log the delta to today's heatmap stats (daily total + which issue) if they read something
+        await recordDailyReading(userId, issue.id, pagesReadDelta);
         // ---------------------------------------
 
         await prisma.readProgress.upsert({

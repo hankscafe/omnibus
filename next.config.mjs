@@ -6,7 +6,7 @@ const nextConfig = {
   poweredByHeader: false,
   
   // FIX: Moved out of "experimental" and renamed for Next.js 15
-  // Tells Webpack to ignore BullMQ/Redis during strict static bundling
+  // Tells Webpack to ignore BullMQ/Redis/Native Extractors during strict static bundling
   serverExternalPackages: ['bullmq', 'ioredis'],
 
   // Add these two lines to bypass strict CI checks during Docker builds

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { CACHE_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
 
 export interface HealthCheckResult {
     id: string;
@@ -215,7 +216,7 @@ export async function runSystemHealthCheck() {
     }
 
     // 9. Cache Integrity Check
-    const cacheDir = process.env.OMNIBUS_CACHE_DIR || '/cache';
+    const cacheDir = CACHE_DIR;
     if (!fs.existsSync(cacheDir)) {
         results.push({ id: 'cache_dir', name: 'Cache Directory', status: 'error', message: `Cache directory (${cacheDir}) is missing. Reading and conversions will fail.` });
     } else {
@@ -224,6 +225,33 @@ export async function runSystemHealthCheck() {
             results.push({ id: 'cache_dir', name: 'Cache Directory', status: 'ok', message: 'Accessible and writable' });
         } catch (e) {
             results.push({ id: 'cache_dir', name: 'Cache Directory', status: 'error', message: `Cache directory (${cacheDir}) lacks Read/Write permissions.` });
+        }
+    }
+
+    // 9b. Watched & Unmatched Directory Check
+    // Both default to container-root mount points. If neither the env var nor a
+    // volume mount is in place, anything written there lands in the container's
+    // ephemeral layer and is lost on recreation — surface that before it bites.
+    const ingestDirChecks = [
+        {
+            id: 'watched_dir', name: 'Watched Directory', dir: WATCHED_DIR,
+            missingMsg: `Watched directory (${WATCHED_DIR}) does not exist. Watched-folder imports are disabled. Verify the volume mount or OMNIBUS_WATCHED_DIR.`
+        },
+        {
+            id: 'unmatched_dir', name: 'Unmatched Directory', dir: UNMATCHED_DIR,
+            missingMsg: `Unmatched directory (${UNMATCHED_DIR}) does not exist. Files sent to UNMATCHED would be written inside the container and lost on recreation. Verify the volume mount or OMNIBUS_AWAITING_MATCH_DIR.`
+        }
+    ];
+    for (const check of ingestDirChecks) {
+        if (!fs.existsSync(check.dir)) {
+            results.push({ id: check.id, name: check.name, status: 'warning', message: check.missingMsg });
+        } else {
+            try {
+                await fs.promises.access(check.dir, fs.constants.W_OK | fs.constants.R_OK);
+                results.push({ id: check.id, name: check.name, status: 'ok', message: `${check.dir} is accessible and writable` });
+            } catch (e) {
+                results.push({ id: check.id, name: check.name, status: 'warning', message: `${check.dir} exists but lacks Read/Write permissions. Imports through this folder will fail.` });
+            }
         }
     }
 

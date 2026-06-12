@@ -48,7 +48,8 @@ export async function POST(request: Request) {
 
           issues.sort((a, b) => {
               if (a.seriesId !== b.seriesId) return a.series.name.localeCompare(b.series.name);
-              return parseFloat(a.number.replace(/[^0-9.]/g, '')) - parseFloat(b.number.replace(/[^0-9.]/g, ''));
+              // Added '-' to regex to preserve negative values during sort
+              return parseFloat(a.number.replace(/[^0-9.-]/g, '')) - parseFloat(b.number.replace(/[^0-9.-]/g, ''));
           });
 
           const itemsData = issues.map(issue => ({

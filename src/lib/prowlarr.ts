@@ -4,21 +4,19 @@ import { prisma } from './db';
 import { Logger } from './logger';
 import { getCustomHeaders } from './utils/headers';
 import { getErrorMessage } from './utils/error';
+import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
 import { ProwlarrSearchResult } from '@/types';
 
 export const ProwlarrService = {
-  async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string): Promise<ProwlarrSearchResult[]> {
+  async searchComics(query: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string, allowPacksOverride?: boolean): Promise<ProwlarrSearchResult[]> {
     const settings = await prisma.systemSetting.findMany();
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
     if (!config.prowlarr_url || !config.prowlarr_key) return [];
 
     const cleanQuery = query.replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
-    const stopWords = ['the', 'a', 'an', 'of', 'and', 'or', 'vol', 'volume', 'issue', 'black', 'white', 'blood'];
     const queryWords = cleanQuery.toLowerCase().split(' ').filter(w => w.length > 0);
 
-    const boundedVariantKeywords = ['noir', 'b&w', 'sketch', 'blank', 'virgin', 'uncut'];
-    const openVariantKeywords = ['variant', 'special edition', "director's cut", "directors cut", 'facsimile', 'black and white', 'extended'];
     const userWantsVariant = [...boundedVariantKeywords, ...openVariantKeywords].some(k => cleanQuery.toLowerCase().includes(k));
 
     let configuredIndexers: { id: number | string }[] = [];
@@ -39,7 +37,12 @@ export const ProwlarrService = {
     // --- SMART CATEGORY FILTERING ---
     const categoriesStr = config.prowlarr_categories || '7030';
     let categories = categoriesStr.split(',').map(c => c.trim()).filter(Boolean);
-    const allowBulkPacks = config.allow_bulk_packs === 'true';
+    
+    // --- FIX: Apply the override flag so Prowlarr respects isolated issue requests ---
+    let allowBulkPacks = config.allow_bulk_packs === 'true';
+    if (!isInteractive && allowPacksOverride === false) {
+        allowBulkPacks = false;
+    }
 
     if (!isManga) {
         categories = categories.filter(cat => cat !== '8030');

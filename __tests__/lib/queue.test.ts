@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
     userFindMany: vi.fn(),
     systemSettingUpsert: vi.fn(),
     systemSettingFindMany: vi.fn(),
+    systemSettingFindUnique: vi.fn(),
+    queueAdd: vi.fn(),
     axiosGet: vi.fn(),
     sendWeeklyDigest: vi.fn().mockResolvedValue(true),
     digestHistoryCreate: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock('@/lib/db', () => ({
         systemSetting: {
             upsert: mocks.systemSettingUpsert,
             findMany: mocks.systemSettingFindMany,
+            findUnique: mocks.systemSettingFindUnique,
             deleteMany: vi.fn()
         },
         series: { findMany: mocks.seriesFindMany, update: mocks.seriesUpdate },
@@ -70,7 +73,7 @@ vi.mock('ioredis', () => ({
 // 3. Intercept BullMQ Worker creation
 vi.mock('bullmq', () => ({
     Queue: class QueueMock {
-        add = vi.fn();
+        add = mocks.queueAdd;
         getRepeatableJobs = vi.fn().mockResolvedValue([]);
         removeRepeatableByKey = vi.fn();
     },
@@ -230,6 +233,61 @@ describe('Cron: BullMQ Worker Router', () => {
             `${ENGINE_URL}/api/metadata/embed`,
             expect.objectContaining({ body: JSON.stringify({ series_id: null, issue_ids: null }) })
         );
+    });
+
+    it('should forward EXPORT_SERIES_JSON to the engine when the export is enabled', async () => {
+        initWorker();
+
+        mocks.systemSettingFindUnique.mockResolvedValueOnce({ value: 'true' });
+        mocks.engineFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ exported: 1, total: 1 }) });
+
+        const mockJob = {
+            id: 'job_export',
+            data: { type: 'EXPORT_SERIES_JSON', seriesIds: ['series_99'] },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        // The Mylar-spec writer lives in the engine; the job is a thin forwarder.
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/metadata/export-series-json`,
+            expect.objectContaining({
+                method: 'POST',
+                headers: expect.objectContaining({ 'X-Internal-Secret': 'test-secret' }),
+                body: JSON.stringify({ series_ids: ['series_99'] })
+            })
+        );
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({
+                jobType: 'EXPORT_SERIES_JSON',
+                status: 'COMPLETED',
+                message: expect.stringContaining('Wrote 1 of 1')
+            })
+        }));
+    });
+
+    it('should skip EXPORT_SERIES_JSON with a warning log when the export feature is disabled', async () => {
+        initWorker();
+
+        mocks.systemSettingFindUnique.mockResolvedValueOnce({ value: 'false' });
+
+        const mockJob = {
+            id: 'job_export_disabled',
+            data: { type: 'EXPORT_SERIES_JSON' },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        expect(mocks.engineFetch).not.toHaveBeenCalled();
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({
+                jobType: 'EXPORT_SERIES_JSON',
+                status: 'COMPLETED_WITH_ERRORS',
+                message: expect.stringContaining('Skipped')
+            })
+        }));
     });
 
     it('should compile and send a WEEKLY_DIGEST if new issues are found', async () => {

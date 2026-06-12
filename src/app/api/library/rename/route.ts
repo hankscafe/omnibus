@@ -7,6 +7,7 @@ import { getToken } from 'next-auth/jwt';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
+import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,8 +40,6 @@ export async function POST(request: NextRequest) {
     let filesRenamed = 0;
     let foldersRenamed = 0;
     let lastProcessedPath = ""; // --- NEW: Track the path ---
-
-    function sanitize(str: string) { return str.replace(/[<>:"/\\|?*]/g, '').trim(); }
 
     for (const s of seriesList) {
         if (!s.folderPath || !fs.existsSync(s.folderPath)) {
@@ -104,13 +103,23 @@ export async function POST(request: NextRequest) {
             }
 
             const ext = path.extname(actualFilePath);
-            let paddedNum = issue.number;
+            
+            let paddedNum = String(issue.number || "0");
+            
+            // 1. Check for and temporarily remove the negative sign
+            const isNegative = paddedNum.startsWith('-');
+            if (isNegative) paddedNum = paddedNum.substring(1);
+
+            // 2. Safely apply zero-padding
             if (!paddedNum.includes('.')) {
                 paddedNum = paddedNum.padStart(3, '0');
             } else {
                 const parts = paddedNum.split('.');
                 paddedNum = `${parts[0].padStart(3, '0')}.${parts[1]}`;
             }
+            
+            // 3. Re-attach the negative sign
+            if (isNegative) paddedNum = '-' + paddedNum;
 
             // FIX: Determine correct file pattern based on manga status
             const patternToUse = s.isManga ? activeMangaFilePattern : activeFilePattern;

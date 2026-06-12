@@ -14,25 +14,11 @@ import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
 import { getErrorMessage } from '@/lib/utils/error';
 import { syncSeriesMetadata } from '@/lib/metadata-fetcher'; 
 import { AuditLogger } from '@/lib/audit-logger';
-import { MetronProvider } from '@/lib/metadata/providers/metron'; 
+import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 import { omnibusQueue } from '@/lib/queue';
 
 export const dynamic = 'force-dynamic';
-
-const getMetronCover = async (seriesName: string, issueNumber: string, user?: string, pass?: string) => {
-    if (!user || !pass) return null;
-    try {
-        const res = await axios.get(`https://metron.cloud/api/issue/`, {
-            params: { series_name: seriesName, number: issueNumber },
-            auth: { username: user, password: pass },
-            headers: { 'User-Agent': 'Omnibus/1.0' },
-            timeout: 4000
-        });
-        return res.data?.results?.[0]?.image || null;
-    } catch (e) {
-        return null;
-    }
-};
 
 export async function GET(request: NextRequest) {
   const token = await getToken({ req: request });
@@ -61,8 +47,15 @@ export async function GET(request: NextRequest) {
       );
       let issueNumberStr = "";
       
-      const regexMatch = req.activeDownloadName?.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-      if (regexMatch) issueNumberStr = ` Issue #${regexMatch[1].padStart(3, '0')}`;
+      // Added -? to capture the negative sign
+      const regexMatch = req.activeDownloadName?.match(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v\s*\.?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)/i);
+      if (regexMatch) {
+          let parsedNum = regexMatch[1];
+          const isNeg = parsedNum.startsWith('-');
+          if (isNeg) parsedNum = parsedNum.substring(1);
+          
+          issueNumberStr = ` Issue #${isNeg ? '-' : ''}${parsedNum.padStart(3, '0')}`;
+      }
 
       let finalImageUrl = req.imageUrl;
 
@@ -300,9 +293,9 @@ export async function POST(request: NextRequest) {
       });
 
       const ownedIssueNumbers = new Set(existingLibraryIssues.map(i => {
-          const match = i.number.match(/(\d+(?:\.\d+)?)/);
-          return match ? parseFloat(match[1]) : NaN;
-      }).filter(n => !isNaN(n)));
+           const match = i.number.match(/(-?\d+(?:\.\d+)?)/);
+           return match ? parseFloat(match[1]) : NaN;
+       }).filter(n => !isNaN(n)));
 
       if (metadataSource === 'METRON') {
           const metron = new MetronProvider();

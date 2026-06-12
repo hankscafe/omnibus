@@ -192,7 +192,9 @@ export default function SettingsPage() {
     telegram_enabled: "false", telegram_bot_token: "", telegram_chat_id: "", telegram_events: "[]",
     apprise_enabled: "false", apprise_url: "", apprise_events: "[]",
     allow_bulk_packs: "false",
-    ddl_enabled: "true"
+    ddl_enabled: "true",
+    engine_max_scan_workers: "", engine_max_convert_workers: "", engine_cpu_cap: "",
+    engine_max_blocking_threads: "", engine_memory_ceiling_mb: ""
   })
 
   const [customProwlarrCategories, setCustomProwlarrCategories] = useState("")
@@ -1631,6 +1633,44 @@ export default function SettingsPage() {
                                     <p className="text-[10px] text-muted-foreground">80% provides excellent visual quality while heavily reducing file size.</p>
                                 </div>
                             )}
+                        </div>
+
+                        {/* --- ENGINE CONCURRENCY / PERFORMANCE UI --- */}
+                        <div className="grid gap-4 pt-6 border-t border-border mt-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-foreground">Engine Performance (Concurrency)</h3>
+                                <p className="text-[11px] text-muted-foreground mt-1">
+                                    Tune how hard the Rust engine works the CPU, disk, and memory during scans, conversions, and metadata embedding. Leave a field blank (or 0) for <span className="font-semibold">Auto</span>, which derives a safe value from the host&apos;s CPU count. In a CPU-limited container, set the CPU cap explicitly — auto-detection sees the host&apos;s cores, not the container&apos;s quota. Worker-count changes apply to the next job; the CPU and blocking-pool caps apply after an engine restart.
+                                </p>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="grid gap-1.5">
+                                    <Label className="text-foreground font-semibold">Max scan workers</Label>
+                                    <Input type="number" min="0" placeholder="Auto (CPU cores)" value={config.engine_max_scan_workers ?? ""} onChange={e => setConfig({...config, engine_max_scan_workers: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
+                                    <p className="text-[10px] text-muted-foreground">Parallel file-probe / folder-walk tasks for library scans and diagnostics (ghost / storage / integrity).</p>
+                                </div>
+                                <div className="grid gap-1.5">
+                                    <Label className="text-foreground font-semibold">Max convert workers</Label>
+                                    <Input type="number" min="0" placeholder="Auto (half cores)" value={config.engine_max_convert_workers ?? ""} onChange={e => setConfig({...config, engine_max_convert_workers: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
+                                    <p className="text-[10px] text-muted-foreground">Simultaneous heavy archive jobs: CBR-to-CBZ conversion, repack, and metadata embedding.</p>
+                                </div>
+                                <div className="grid gap-1.5">
+                                    <Label className="text-foreground font-semibold">CPU cap (threads)</Label>
+                                    <Input type="number" min="0" placeholder="Auto (all cores)" value={config.engine_cpu_cap ?? ""} onChange={e => setConfig({...config, engine_cpu_cap: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
+                                    <p className="text-[10px] text-muted-foreground">Total worker threads for the engine (tokio + image-encoding pool). Restart required.</p>
+                                </div>
+                                <div className="grid gap-1.5">
+                                    <Label className="text-foreground font-semibold">Max blocking threads</Label>
+                                    <Input type="number" min="0" placeholder="Auto (64)" value={config.engine_max_blocking_threads ?? ""} onChange={e => setConfig({...config, engine_max_blocking_threads: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
+                                    <p className="text-[10px] text-muted-foreground">Ceiling on concurrent blocking file operations (backstop). Restart required.</p>
+                                </div>
+                                <div className="grid gap-1.5">
+                                    <Label className="text-foreground font-semibold">Memory ceiling (MB)</Label>
+                                    <Input type="number" min="0" placeholder="0 = disabled" value={config.engine_memory_ceiling_mb ?? ""} onChange={e => setConfig({...config, engine_memory_ceiling_mb: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
+                                    <p className="text-[10px] text-muted-foreground">Soft cap: when set, derates the scan / convert worker counts to fit (~64&nbsp;MB per task).</p>
+                                </div>
+                            </div>
                         </div>
 
                         {/* --- DOCKER VOLUME BINDINGS UI --- */}

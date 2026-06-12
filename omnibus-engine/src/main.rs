@@ -1,0 +1,953 @@
+mod converter;
+mod scanner;
+mod metadata;
+mod prowlarr;
+mod search_engine;
+mod getcomics;
+mod rate_limiter;
+mod metadata_writer;
+mod watched_sync;
+mod backup;
+mod diagnostics;
+mod manga_detector;
+mod engine_config;
+mod discover;
+mod monitor;
+mod download;
+
+use axum::{routing::post, Router, Json, extract::{State, Request}, http::StatusCode, middleware::{self, Next}, response::Response};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use std::sync::Arc;
+
+#[derive(Deserialize)]
+struct RepackRequest {
+    series_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ScanRequest {
+    library_id: String,
+    library_path: String,
+    // Targeted scan (beta.024): crawl only this subtree and skip the global ghost cleanup.
+    #[serde(default)]
+    specific_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MetadataRequest {
+    series_ids: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct CbrSweepRequest {
+    #[serde(default)]
+    issue_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AutomationRequest {
+    request_id: String,
+    name: String,
+    year: Option<String>,
+    is_manga: Option<bool>,
+    skip_indexers: Option<bool>,
+    // Blocklist of previously-failed releases (title / download URL / GUID / info-hash) to skip
+    // (parity with automation.ts failedItems, forwarded from the Request's failedLinks).
+    #[serde(default)]
+    failed_links: Option<Vec<String>>,
+    // Pack isolation (beta.035): true when the matched series has ZERO downloaded issues, so bulk
+    // packs are worth grabbing; false suppresses packs even when globally enabled. Computed by
+    // queue.ts alongside the dynamic-year lookup (parity with automation.ts allowPacksForThisRequest).
+    #[serde(default)]
+    allow_packs: Option<bool>,
+    // The ORIGINAL series year (pack queries search against this; `year` is the dynamic,
+    // possibly issue-release-overridden year used for issue queries).
+    #[serde(default)]
+    series_year: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct InteractiveSearchQuery {
+    query: String,
+    year: Option<String>,
+    is_manga: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct SearchResponse {
+    success: bool,
+    best_match: Option<prowlarr::ProwlarrResult>,
+    stall_for_review: bool,
+    // A GetComics match was found but resolved to no enabled hoster, and no indexer release was
+    // available either: the link is held for human pickup (parity with automation.ts MANUAL_DDL).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manual_ddl: Option<ManualDdl>,
+}
+
+#[derive(Serialize)]
+struct ManualDdl {
+    url: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct InteractiveResponse {
+    prowlarr: Vec<prowlarr::ProwlarrResult>,
+    getcomics: Vec<prowlarr::ProwlarrResult>,
+}
+
+struct AppState {
+    db: PgPool,
+    limiter: Arc<rate_limiter::RateLimiter>,
+    // Shared secret (Node's NEXTAUTH_SECRET) required in the X-Internal-Secret header on every
+    // request. `None` when unset → endpoints are open (dev/localhost); a startup warning is logged.
+    internal_secret: Option<String>,
+}
+
+/// Authenticates Node→engine calls with the shared NEXTAUTH_SECRET (X-Internal-Secret header),
+/// mirroring Node's /api/internal/notify guard in reverse. When the engine has no secret configured
+/// the check is skipped (single-host/dev — the engine binds 127.0.0.1 by default), having warned at
+/// startup. This is defense-in-depth: the engine mutates the DB and binds 0.0.0.0 inside containers,
+/// where the Node ADMIN-session gate on the forwarding routes is the only other protection.
+async fn require_internal_auth(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if let Some(secret) = &state.internal_secret {
+        let ok = req.headers()
+            .get("x-internal-secret")
+            .and_then(|v| v.to_str().ok())
+            .map(|p| p == secret)
+            .unwrap_or(false);
+        if !ok {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+    Ok(next.run(req).await)
+}
+
+fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    dotenvy::dotenv().ok();
+
+    // Fail fast on a missing/empty DATABASE_URL (parity with Node/Prisma's `env("DATABASE_URL")`,
+    // which refuses to start). Silently falling back to a hardcoded localhost DB would mask a
+    // misconfiguration and risk connecting to (or creating) an unintended database.
+    let db_url = match std::env::var("DATABASE_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => {
+            log::error!(
+                "DATABASE_URL is not set. Provide it via the environment or a .env file \
+                 (e.g. postgresql://user:pass@host:5432/omnibus?schema=public). Refusing to start."
+            );
+            anyhow::bail!("DATABASE_URL must be set");
+        }
+    };
+
+    // Pre-flight: read the runtime concurrency knobs (cpu_cap, blocking_threads) BEFORE building the
+    // real runtime — worker_threads / max_blocking_threads can only be set at construction time.
+    let cfg = {
+        let boot = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        boot.block_on(async {
+            match PgPoolOptions::new().max_connections(1).connect(&db_url).await {
+                Ok(pool) => {
+                    let c = engine_config::EngineConfig::load(&pool).await;
+                    pool.close().await;
+                    c
+                }
+                Err(e) => {
+                    log::warn!("[Config] Preflight DB read failed ({}); using default concurrency limits.", e);
+                    engine_config::EngineConfig::defaults()
+                }
+            }
+        })
+    };
+
+    log::info!(
+        "[Config] Concurrency limits → cpu_cap={} blocking_threads={} scan_workers={} convert_workers={} memory_ceiling_mb={}",
+        cfg.cpu_cap, cfg.blocking_threads, cfg.scan_workers, cfg.convert_workers, cfg.memory_ceiling_mb
+    );
+
+    // Size rayon's global pool (used for per-page WebP encoding in the converter) to the CPU cap.
+    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(cfg.cpu_cap).build_global() {
+        log::warn!("[Config] Could not set the rayon global pool size: {}", e);
+    }
+
+    // Build the real multi-threaded runtime with the configured CPU + blocking-pool caps.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(cfg.cpu_cap)
+        .max_blocking_threads(cfg.blocking_threads)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(run(db_url))
+}
+
+/// Async entrypoint. The runtime is built manually in `main` so its size honors EngineConfig.
+async fn run(db_url: String) -> anyhow::Result<()> {
+    log::info!("Connecting to PostgreSQL database...");
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&db_url)
+        .await?;
+
+    log::info!("✅ Connected to PostgreSQL!");
+
+    let limiter = Arc::new(rate_limiter::RateLimiter::new());
+    let internal_secret = std::env::var("NEXTAUTH_SECRET").ok().filter(|s| !s.is_empty());
+    if internal_secret.is_none() {
+        log::warn!(
+            "NEXTAUTH_SECRET is not set — engine HTTP endpoints are UNAUTHENTICATED. Set it (matching \
+             the Node app) so the engine requires the X-Internal-Secret header on every request."
+        );
+    }
+    let shared_state = Arc::new(AppState { db: pool, limiter, internal_secret });
+
+    let app = Router::new()
+        .route("/api/repack", post(handle_repack))
+        .route("/api/scan", post(handle_scan))
+        .route("/api/converter/cbr-sweep", post(handle_cbr_sweep))
+        .route("/api/watched-sync", post(handle_watched_sync))
+        .route("/api/backup", post(handle_backup))
+        .route("/api/diagnostics/ghosts", post(handle_ghost_check))
+        .route("/api/diagnostics/storage", post(handle_storage_scan))
+        .route("/api/diagnostics/orphans", post(handle_orphan_scan))
+        .route("/api/diagnostics/integrity", post(handle_integrity_scan))
+        .route("/api/metadata/sync", post(handle_metadata_sync))
+        .route("/api/metadata/embed", post(handle_metadata_embed))
+        .route("/api/metadata/export-series-json", post(handle_export_series_json))
+        .route("/api/discover/sync", post(handle_discover_sync))
+        .route("/api/monitor/sync", post(handle_monitor_sync))
+        .route("/api/download/stream", post(handle_download_stream))
+        .route("/api/automation/search", post(handle_search))
+        .route("/api/search/interactive", post(handle_interactive_search))
+        .layer(middleware::from_fn_with_state(shared_state.clone(), require_internal_auth))
+        .with_state(shared_state);
+
+    // Bind address is configurable so the engine can listen on 0.0.0.0 inside a container.
+    let bind_addr = std::env::var("OMNIBUS_ENGINE_BIND").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
+    log::info!("🚀 Omnibus Engine listening on http://{}", bind_addr);
+    axum::serve(listener, app).await.unwrap();
+
+    Ok(())
+}
+
+/// Records a FAILED JobLog so a background-task failure is DB-visible (BullMQ already got its 202,
+/// so without this the failure would only appear in the Rust logs and silently vanish from the UI).
+async fn write_failed_joblog(db: &PgPool, job_type: &str, duration_ms: i32, message: String) {
+    if let Err(e) = sqlx::query(
+        r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+           VALUES ($1, $2, 'FAILED', $3, $4, NOW(), 1)"#,
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(job_type)
+    .bind(duration_ms)
+    .bind(message)
+    .execute(db)
+    .await
+    {
+        log::error!("Failed to write FAILED JobLog for {}: {:?}", job_type, e);
+    }
+}
+
+/// Best-effort callback to the Node app so a detached job's user-facing notification fires on actual
+/// COMPLETION, not at the 202 handoff (the BullMQ worker only awaits the 202). Reuses NEXTAUTH_SECRET
+/// as a shared internal auth token (verified by Node's /api/internal/notify route). Never fatal.
+async fn notify_node(event: &str, description: &str) {
+    let secret = std::env::var("NEXTAUTH_SECRET").unwrap_or_default();
+    if secret.is_empty() {
+        log::debug!("[Notify] NEXTAUTH_SECRET unset; skipping completion notification '{}'.", event);
+        return;
+    }
+    let node_url = std::env::var("OMNIBUS_NODE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let url = format!("{}/api/internal/notify", node_url.trim_end_matches('/'));
+    let body = serde_json::json!({ "event": event, "payload": { "description": description } });
+    match reqwest::Client::new()
+        .post(&url)
+        .header("X-Internal-Secret", &secret)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) if !resp.status().is_success() => {
+            log::warn!("[Notify] Node /api/internal/notify returned {} for '{}'.", resp.status(), event);
+        }
+        Err(e) => log::warn!("[Notify] Could not reach Node for completion notification '{}': {}", event, e),
+        _ => {}
+    }
+}
+
+async fn handle_cbr_sweep(
+    State(state): State<Arc<AppState>>,
+    payload: Option<Json<CbrSweepRequest>>,
+) -> StatusCode {
+    // An optional issue_id converts just that issue (beta.034 targeted conversion); no body = full sweep.
+    let issue_id = payload.and_then(|Json(p)| p.issue_id);
+    match &issue_id {
+        Some(id) => log::info!("Received request to run targeted CBR conversion for issue {}.", id),
+        None => log::info!("Received request to run CBR Conversion Sweep."),
+    }
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match converter::process_cbr_sweep(db.clone(), issue_id).await {
+            Ok((success, fail, details)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                let status = if fail > 0 { "COMPLETED_WITH_ERRORS" } else { "COMPLETED" };
+                
+                let msg = if success == 0 && fail == 0 {
+                    "No CBR files found to convert.".to_string()
+                } else {
+                    format!("{}\nSummary: {} Converted, {} Failed.", details, success, fail)
+                };
+                
+                log::info!("{}", msg);
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'CBR_CONVERTER', $2, $3, $4, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(status)
+                .bind(duration)
+                .bind(msg)
+                .execute(&db).await;
+            },
+            Err(e) => {
+                log::error!("❌ Background CBR Sweep failed: {:?}", e);
+                write_failed_joblog(&db, "CBR_CONVERTER", start_time.elapsed().as_millis() as i32, format!("CBR sweep failed: {:?}", e)).await;
+            },
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn handle_repack(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<RepackRequest>,
+) -> StatusCode {
+    log::info!("Received bulk repack job for {} series", payload.series_ids.len());
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+        let mut success_count = 0;
+        let mut fail_count = 0;
+
+        // Honor the user's WebP settings instead of hardcoding (parity with converter.ts).
+        let (convert_to_webp, webp_quality) = converter::get_webp_settings(&db).await;
+        log::info!("[Repack] WebP conversion: {} (quality {})", convert_to_webp, webp_quality);
+
+        // Collect every issue across all requested series, then process them through one bounded pool.
+        // This fixes the previously strictly-sequential repack (P-2) without going unbounded (P-1).
+        let mut targets: Vec<(String, String)> = Vec::new();
+        for series_id in &payload.series_ids {
+            let issues = sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE "seriesId" = $1 AND "filePath" IS NOT NULL"#)
+                .bind(series_id)
+                .fetch_all(&db)
+                .await
+                .unwrap_or_default();
+            for issue in issues {
+                targets.push((issue.get("id"), issue.get("filePath")));
+            }
+        }
+        log::info!("[Repack] Processing {} archives across {} series.", targets.len(), payload.series_ids.len());
+
+        let cfg = engine_config::EngineConfig::load(&db).await;
+        let sem = Arc::new(tokio::sync::Semaphore::new(cfg.convert_workers));
+        let mut join_set = tokio::task::JoinSet::new();
+        for (issue_id, file_path) in targets {
+            let sem = sem.clone();
+            join_set.spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                let path = PathBuf::from(&file_path);
+                let result = tokio::task::spawn_blocking(move || converter::process_archive(&path, convert_to_webp, webp_quality)).await;
+                (issue_id, file_path, result)
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            let (issue_id, file_path, result) = match res {
+                Ok(t) => t,
+                Err(e) => { log::error!("[Repack] task join error: {:?}", e); fail_count += 1; continue; }
+            };
+            match result {
+                Ok(Ok(new_path)) => {
+                    let new_path_str = new_path.to_string_lossy().to_string();
+                    let mut db_ok = true;
+                    if new_path_str != file_path {
+                        // process_archive already deleted the original and renamed the .cbz, so a failed
+                        // UPDATE would orphan the Issue row pointing at a now-deleted path — surface it.
+                        if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE id = $2"#)
+                            .bind(new_path_str)
+                            .bind(&issue_id)
+                            .execute(&db)
+                            .await
+                        {
+                            log::error!("[Repack] Repacked {} on disk but failed to update filePath: {:?}", issue_id, e);
+                            db_ok = false;
+                        }
+                    }
+                    if db_ok { success_count += 1; } else { fail_count += 1; }
+                }
+                Ok(Err(e)) => { log::error!("Failed to repack issue {}: {:?}", issue_id, e); fail_count += 1; }
+                Err(e) => { log::error!("[Repack] conversion task panicked for {}: {:?}", issue_id, e); fail_count += 1; }
+            }
+        }
+
+        let duration_ms = start_time.elapsed().as_millis() as i32;
+        let status = if fail_count > 0 { "COMPLETED_WITH_ERRORS" } else { "COMPLETED" };
+        let message = format!("Internal repack complete. Processed {} archives successfully. Failed: {}.", success_count, fail_count);
+        let log_id = uuid::Uuid::new_v4().to_string();
+
+        let _ = sqlx::query(
+            r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+               VALUES ($1, 'REPACK_ARCHIVES', $2, $3, $4, NOW(), 1)"#
+        )
+        .bind(log_id)
+        .bind(status)
+        .bind(duration_ms)
+        .bind(message.clone())
+        .execute(&db)
+        .await;
+
+        log::info!("Job complete: {}", message);
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn handle_scan(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ScanRequest>,
+) -> StatusCode {
+    log::info!("Received library scan request for path: {}", payload.library_path);
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let lock_id = format!("LIBRARY_SCAN_{}", payload.library_id);
+
+        // Concurrency lock (parity with the pristine Node JobLock): refuse to start a second scan of the
+        // SAME library while one is active, so overlapping scheduled+manual triggers can't race two
+        // inserts of the same issue. Per-library so different libraries still scan concurrently. A stale
+        // lock (>10 min, e.g. from a crashed scan) is atomically taken over.
+        match sqlx::query(
+            r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, NOW())
+               ON CONFLICT (id) DO UPDATE SET "lockedAt" = NOW()
+               WHERE "JobLock"."lockedAt" < NOW() - INTERVAL '10 minutes'"#,
+        )
+        .bind(&lock_id)
+        .execute(&db)
+        .await
+        {
+            Ok(r) if r.rows_affected() == 0 => {
+                log::warn!("[Scanner] Library {} scan already in progress; skipping.", payload.library_id);
+                return;
+            }
+            Err(e) => log::warn!("[Scanner] Non-fatal JobLock error, proceeding without lock: {:?}", e),
+            _ => {}
+        }
+
+        let start_time = std::time::Instant::now();
+        if let Err(e) = scanner::scan_library(db.clone(), payload.library_path, payload.library_id.clone(), payload.specific_path).await {
+            log::error!("❌ Library scan failed: {:?}", e);
+            write_failed_joblog(&db, "LIBRARY_SCAN", start_time.elapsed().as_millis() as i32, format!("Library scan failed: {:?}", e)).await;
+        }
+
+        // Release the lock (best-effort; the 10-min stale takeover covers a missed release on panic).
+        let _ = sqlx::query(r#"DELETE FROM "JobLock" WHERE id = $1"#).bind(&lock_id).execute(&db).await;
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn handle_metadata_sync(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<MetadataRequest>,
+) -> StatusCode {
+    log::info!("Received request to route metadata synchronization to background threads.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+        match metadata::sync_metadata(db.clone(), payload.series_ids).await {
+            Ok(_) => notify_node("job_metadata_sync", "Metadata synchronization completed.").await,
+            Err(e) => {
+                log::error!("❌ Background Metadata Synchronization failed: {:?}", e);
+                write_failed_joblog(&db, "METADATA_SYNC", start_time.elapsed().as_millis() as i32, format!("Metadata sync failed: {:?}", e)).await;
+                notify_node("job_metadata_sync", "Metadata synchronization failed. Check the engine logs.").await;
+            }
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn handle_metadata_embed(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<metadata_writer::EmbedRequest>,
+) -> StatusCode {
+    log::info!("Received request to embed metadata into archives.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match metadata_writer::process_embed_job(db.clone(), payload).await {
+            Ok((success, fail, json_count)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                let status = if fail > 0 { "COMPLETED_WITH_ERRORS" } else { "COMPLETED" };
+                let msg = format!("Metadata embedding complete. Updated {} files. Failed: {}. Exported {} series.json files.", success, fail, json_count);
+                
+                log::info!("{}", msg);
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'EMBED_METADATA', $2, $3, $4, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(status)
+                .bind(duration)
+                .bind(msg)
+                .execute(&db).await;
+            },
+            Err(e) => {
+                log::error!("❌ Background Metadata Embedding failed: {:?}", e);
+                write_failed_joblog(&db, "EMBED_METADATA", start_time.elapsed().as_millis() as i32, format!("Metadata embedding failed: {:?}", e)).await;
+            },
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+#[derive(serde::Deserialize)]
+struct ExportSeriesJsonRequest {
+    series_ids: Option<Vec<String>>,
+}
+
+/// Standalone Mylar series.json export (the Node EXPORT_SERIES_JSON job forwards here).
+/// Synchronous — file writes only, fast — so Node can log the counts in its own JobLog.
+async fn handle_export_series_json(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ExportSeriesJsonRequest>,
+) -> Json<serde_json::Value> {
+    log::info!("Received request to export Mylar series.json files.");
+    let (exported, total) = metadata_writer::run_series_json_export(&state.db, payload.series_ids).await;
+    log::info!("series.json export complete. Wrote {} of {} series folders.", exported, total);
+    Json(serde_json::json!({ "exported": exported, "total": total }))
+}
+
+async fn handle_search(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AutomationRequest>,
+) -> Json<SearchResponse> {
+    log::info!("Received automation search request for: {} (request {})", payload.name, payload.request_id);
+
+    let is_manga = payload.is_manga.unwrap_or(false);
+    let skip_indexers = payload.skip_indexers.unwrap_or(false);
+    let req_year = payload.year.clone();
+    // The original series year (pack queries search against it); fall back to the dynamic year.
+    let series_year = payload.series_year.clone().or_else(|| req_year.clone());
+
+    // Pack isolation (beta.035): packs are only used when the global setting allows them AND the
+    // request's series owns zero downloaded files; prioritization additionally needs its own flag.
+    let global_allow_bulk = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'allow_bulk_packs'"#)
+        .fetch_optional(&state.db).await.ok().flatten().as_deref() == Some("true");
+    let global_prioritize = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'prioritize_packs'"#)
+        .fetch_optional(&state.db).await.ok().flatten().as_deref() == Some("true");
+    let use_packs = global_allow_bulk && payload.allow_packs.unwrap_or(false);
+    let prioritize_packs = global_prioritize && use_packs;
+
+    let acronyms = search_engine::get_custom_acronyms(&state.db).await.unwrap_or_default();
+    let year_str = req_year.clone().unwrap_or_default();
+    let mut queries = search_engine::generate_search_queries(&payload.name, &year_str, &acronyms, prioritize_packs, use_packs);
+
+    if !queries.contains(&payload.name) {
+        queries.insert(0, payload.name.clone());
+    }
+
+    // Honor skip_indexers (DDL-only requests): skip the Prowlarr fallback entirely.
+    let (prow_res_raw, get_res_raw) = if skip_indexers {
+        log::info!("skip_indexers set — searching Direct Downloads only.");
+        (Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()),
+         getcomics::search(&state.db, &state.limiter, &queries, false, &payload.name, req_year.as_deref(), series_year.as_deref(), is_manga, Some(use_packs)).await)
+    } else {
+        log::info!("Querying Direct Downloads and Indexers concurrently...");
+        tokio::join!(
+            prowlarr::search(&state.db, &state.limiter, &queries, is_manga),
+            getcomics::search(&state.db, &state.limiter, &queries, false, &payload.name, req_year.as_deref(), series_year.as_deref(), is_manga, Some(use_packs))
+        )
+    };
+
+    // Drop blocklisted releases (previously-failed downloads) before the stall count + scoring (parity
+    // with automation.ts failedItems). A result is blocked if the list contains its title, download
+    // URL, GUID, or info-hash (the latter cover Prowlarr's trackingHash = infoHash||guid||downloadUrl).
+    // NOTE (known minor divergence): this runs AFTER each source already broke out of its per-query
+    // loop on the first relevant result, so — unlike Node, which filters inside the loop — it won't try
+    // the next query if the first query's only matches are all blocklisted (a rare retry/DDL-only edge;
+    // the flow still falls through to Prowlarr below). Same "break on first successful query" trade-off
+    // as the GetComics relevance relocation.
+    let blocklist = payload.failed_links.clone().unwrap_or_default();
+    let not_blocked = |r: &prowlarr::ProwlarrResult| -> bool {
+        !blocklist.iter().any(|f| {
+            f == &r.title || f == &r.download_url || f == &r.guid || r.info_hash.as_deref() == Some(f.as_str())
+        })
+    };
+    let get_res_raw = get_res_raw.map(|v| v.into_iter().filter(|r| not_blocked(r)).collect::<Vec<_>>());
+    let prow_res_raw = prow_res_raw.map(|v| v.into_iter().filter(|r| not_blocked(r)).collect::<Vec<_>>());
+
+    // Multiple distinct DDL editions for one request → stall for human review (parity with automation.ts).
+    if let Ok(get_res) = &get_res_raw {
+        if get_res.len() > 1 {
+            let editions: std::collections::HashSet<String> =
+                get_res.iter().map(|r| search_engine::normalize_edition_title(&r.title)).collect();
+            if editions.len() > 1 {
+                log::warn!("Multiple distinct DDL editions found for {}. Stalling for admin review.", payload.name);
+                return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, manual_ddl: None });
+            }
+        }
+    }
+
+    let mut best_match: Option<prowlarr::ProwlarrResult> = None;
+    // A GetComics match whose only hosters are user-disabled is held here, then surfaced as a
+    // MANUAL_DDL link if no indexer release wins either (parity with automation.ts fallbackManualUrl).
+    let mut manual_fallback: Option<(String, String)> = None;
+
+    // Priority phase: Direct Downloads first.
+    if let Ok(get_res) = get_res_raw {
+        if !get_res.is_empty() {
+            // GetComics results are already relevance-filtered per-query in getcomics::search, so here
+            // we only apply the operator's junk/exclude lists + scoring (skip_relevance = true).
+            if let Ok(Some(mut best_ddl)) = search_engine::filter_and_score(
+                &state.db, get_res, &payload.name, is_manga, req_year.clone(), true, Some(use_packs)
+            ).await {
+                // Resolve the article to a concrete hoster link. scrape_deep_link already drops
+                // user-disabled hosters; a "unknown" hoster means no enabled hoster can serve this
+                // match — Node holds it for manual pickup and falls through to Prowlarr.
+                let deep_link = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url)
+                    .await
+                    .unwrap_or(getcomics::DeepLinkResult { url: best_ddl.download_url.clone(), hoster: "unknown".to_string() });
+                if deep_link.hoster != "unknown" {
+                    log::info!("Successfully matched a Direct Download! Discarding indexer results.");
+                    best_ddl.download_url = deep_link.url;
+                    best_ddl.indexer = deep_link.hoster;
+                    best_match = Some(best_ddl);
+                } else {
+                    log::warn!("[GetComics] Best match for {} has no enabled hoster. Holding manual link and falling back to Prowlarr...", payload.name);
+                    manual_fallback = Some((deep_link.url, best_ddl.title.clone()));
+                }
+            }
+        }
+    }
+
+    if best_match.is_none() {
+        log::info!("No downloadable DDL. Evaluating Prowlarr indexer results...");
+        if let Ok(prow_res) = prow_res_raw {
+            if !prow_res.is_empty() {
+                if let Ok(Some(best_prow)) = search_engine::filter_and_score(
+                    &state.db, prow_res, &payload.name, is_manga, req_year.clone(), false, Some(use_packs)
+                ).await {
+                    best_match = Some(best_prow);
+                }
+            }
+        }
+    }
+
+    // DDL deep-links are already resolved above; Prowlarr results are torrents/usenet, returned as-is.
+    if let Some(best) = best_match {
+        return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, manual_ddl: None });
+    }
+
+    // Nothing auto-downloadable. If we held a GetComics link and GetComics is an enabled hoster,
+    // surface it for manual download (parity with the automation.ts MANUAL_DDL fallback, which is
+    // gated on `enabledHosters.includes('getcomics')`).
+    if let Some((url, name)) = manual_fallback {
+        if getcomics::is_hoster_enabled(&state.db, "getcomics").await {
+            log::warn!("Prowlarr failed for {}. Reverting to GetComics manual DDL fallback.", payload.name);
+            return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: Some(ManualDdl { url, name }) });
+        }
+    }
+
+    log::warn!("No valid release found for {} after checking all sources.", payload.name);
+    Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: None })
+}
+
+async fn handle_interactive_search(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<InteractiveSearchQuery>,
+) -> Json<InteractiveResponse> {
+    log::info!("Received Interactive Search request for: {}", payload.query);
+    
+    // Parity with the upstream interactive route (beta.035): both services receive the single raw
+    // query; getcomics::search fans it out into the upstream variant set internally (raw,
+    // symbol-cleaned, year-stripped, issue-stripped) and aggregates across all pages with URL dedup.
+    let queries = vec![payload.query.clone()];
+
+    let (prow_res, get_res) = tokio::join!(
+        prowlarr::search(&state.db, &state.limiter, &queries, payload.is_manga.unwrap_or(false)),
+        getcomics::search(&state.db, &state.limiter, &queries, true, &payload.query, payload.year.as_deref(), payload.year.as_deref(), payload.is_manga.unwrap_or(false), None)
+    );
+
+    Json(InteractiveResponse {
+        prowlarr: prow_res.unwrap_or_default(),
+        getcomics: get_res.unwrap_or_default()
+    })
+}
+
+async fn handle_watched_sync(State(state): State<Arc<AppState>>) -> StatusCode {
+    log::info!("Received request to process Watched Folder.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match watched_sync::process_watched_folder(db.clone()).await {
+            Ok((_success, _unmatched, details)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                log::info!("{}", details);
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'WATCHED_FOLDER_SYNC', 'COMPLETED', $2, $3, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(duration)
+                .bind(details)
+                .execute(&db).await;
+            },
+            Err(e) => {
+                log::error!("❌ Background Watched Sync failed: {:?}", e);
+                write_failed_joblog(&db, "WATCHED_FOLDER_SYNC", start_time.elapsed().as_millis() as i32, format!("Watched folder sync failed: {:?}", e)).await;
+            },
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn handle_backup(State(state): State<Arc<AppState>>) -> StatusCode {
+    log::info!("Received request to run Database Backup.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match backup::process_backup(db.clone()).await {
+            Ok((_, details)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                log::info!("{}", details);
+                notify_node("job_db_backup", &details).await;
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'DATABASE_BACKUP', 'COMPLETED', $2, $3, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(duration)
+                .bind(details)
+                .execute(&db).await;
+            },
+            Err(e) => {
+                log::error!("❌ Background Database Backup failed: {:?}", e);
+                write_failed_joblog(&db, "DATABASE_BACKUP", start_time.elapsed().as_millis() as i32, format!("Database backup failed: {:?}", e)).await;
+                notify_node("job_db_backup", "Database backup failed. Check the engine logs.").await;
+            },
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn handle_discover_sync(State(state): State<Arc<AppState>>) -> StatusCode {
+    log::info!("Received request to run Discover Sync.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match discover::run_discover_sync(db.clone()).await {
+            Ok((_count, details)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                log::info!("{}", details);
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'DISCOVER_SYNC', 'COMPLETED', $2, $3, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(duration)
+                .bind(details)
+                .execute(&db).await;
+            },
+            Err(e) => {
+                log::error!("❌ Background Discover Sync failed: {:?}", e);
+                write_failed_joblog(&db, "DISCOVER_SYNC", start_time.elapsed().as_millis() as i32, format!("Discover sync failed: {:?}", e)).await;
+            },
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+/// SERIES_MONITOR (heavy half). Synchronous — Node needs the candidates to create requests + trigger
+/// searches, so this awaits the full multi-minute fetch and returns skeleton count + candidates.
+async fn handle_monitor_sync(State(state): State<Arc<AppState>>) -> Result<Json<monitor::MonitorOutput>, StatusCode> {
+    log::info!("Received request to run Series Monitor (fetch/match/skeleton phase).");
+    match monitor::run_series_monitor(state.db.clone()).await {
+        Ok(out) => {
+            log::info!("Series Monitor engine phase complete: {} skeletons, {} candidates.", out.skeletons_created, out.candidates.len());
+            Ok(Json(out))
+        }
+        Err(e) => {
+            log::error!("❌ Series Monitor engine phase failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Streams a single DDL (raw byte pump + stall-watchdog + progress). Synchronous — Node awaits the
+/// result to know whether to hand off to the importer. The Mega SDK path + hoster resolution + the
+/// failure alert stay in Node.
+async fn handle_download_stream(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<download::StreamRequest>,
+) -> Json<download::StreamResponse> {
+    log::info!("[Internal DL] Streaming download for request {} -> {}", req.request_id, req.dest_path);
+    match download::stream_download(&state.db, req).await {
+        Ok(final_path) => {
+            log::info!("[Internal DL] Engine stream complete: {}", final_path);
+            Json(download::StreamResponse { success: true, final_path: Some(final_path), error: None })
+        }
+        Err(e) => {
+            log::error!("[Internal DL] Engine stream failed: {:?}", e);
+            Json(download::StreamResponse { success: false, final_path: None, error: Some(e.to_string()) })
+        }
+    }
+}
+
+async fn handle_ghost_check(State(state): State<Arc<AppState>>) -> StatusCode {
+    log::info!("Received request to run Ghost File Diagnostics.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match diagnostics::run_ghost_check(db.clone()).await {
+            Ok((_, _, details)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                log::info!("{}", details);
+                notify_node("job_diagnostics", &details).await;
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'DIAGNOSTICS', 'COMPLETED', $2, $3, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(duration)
+                .bind(details)
+                .execute(&db).await;
+            }
+            Err(e) => {
+                log::error!("❌ Ghost File Diagnostics failed: {:?}", e);
+                write_failed_joblog(&db, "DIAGNOSTICS", start_time.elapsed().as_millis() as i32, format!("Ghost check failed: {:?}", e)).await;
+                notify_node("job_diagnostics", "Ghost file diagnostics failed. Check the engine logs.").await;
+            }
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn handle_storage_scan(State(state): State<Arc<AppState>>) -> StatusCode {
+    log::info!("Received request to run Deep Storage Scan.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match diagnostics::run_storage_scan(db.clone()).await {
+            Ok((_, _, details)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                log::info!("{}", details);
+                notify_node("job_diagnostics", &details).await;
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'STORAGE_SCAN', 'COMPLETED', $2, $3, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(duration)
+                .bind(details)
+                .execute(&db).await;
+            }
+            Err(e) => {
+                log::error!("❌ Deep Storage Scan failed: {:?}", e);
+                write_failed_joblog(&db, "STORAGE_SCAN", start_time.elapsed().as_millis() as i32, format!("Storage scan failed: {:?}", e)).await;
+                notify_node("job_diagnostics", "Deep storage scan failed. Check the engine logs.").await;
+            }
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+#[derive(Serialize)]
+struct OrphanResponse {
+    success: bool,
+    orphaned_files: Vec<String>,
+}
+
+async fn handle_orphan_scan(State(state): State<Arc<AppState>>) -> Json<OrphanResponse> {
+    log::info!("Received request to run Orphaned File Scan.");
+    
+    match diagnostics::run_orphan_scan(state.db.clone()).await {
+        Ok(orphans) => {
+            log::info!("Manual Orphan Scan complete. Found {} orphaned files.", orphans.len());
+            Json(OrphanResponse { success: true, orphaned_files: orphans })
+        },
+        Err(e) => {
+            log::error!("❌ Orphan Scan failed: {:?}", e);
+            Json(OrphanResponse { success: false, orphaned_files: vec![] })
+        }
+    }
+}
+
+async fn handle_integrity_scan(State(state): State<Arc<AppState>>) -> StatusCode {
+    log::info!("Received request to run Archive Integrity Scan.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+
+        match diagnostics::run_integrity_scan(db.clone()).await {
+            Ok((_, _, details)) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                log::info!("{}", details);
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
+                       VALUES ($1, 'DIAGNOSTICS', 'COMPLETED', $2, $3, NOW(), 1)"#
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(duration)
+                .bind(details)
+                .execute(&db).await;
+            }
+            Err(e) => {
+                log::error!("❌ Archive Integrity Scan failed: {:?}", e);
+                write_failed_joblog(&db, "DIAGNOSTICS", start_time.elapsed().as_millis() as i32, format!("Integrity scan failed: {:?}", e)).await;
+            }
+        }
+    });
+
+    StatusCode::ACCEPTED
+}

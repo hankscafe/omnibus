@@ -20,6 +20,7 @@ interface Props {
     image: string;
     type: 'volume' | 'issue';
     metadataSource?: string;
+    isManga?: boolean;
   };
   requestId?: string;
 }
@@ -88,7 +89,10 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
     if (!searchQuery || !searchQuery.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/search/interactive?q=${encodeURIComponent(searchQuery)}`)
+      const params = new URLSearchParams({ q: searchQuery });
+      if (comicData?.year && /^\d{4}$/.test(comicData.year)) params.set('year', comicData.year);
+      if (comicData?.isManga) params.set('isManga', 'true');
+      const res = await fetch(`/api/search/interactive?${params.toString()}`)
       const data = await res.json()
       const combined = [];
       if (data.prowlarr) combined.push(...data.prowlarr);

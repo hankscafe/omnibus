@@ -8,7 +8,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  DOCKERHUB_REPO: omnibus 
+  DOCKERHUB_REPO: omnibus
 
 jobs:
   # --- 1. THE GATEKEEPER: Run tests before touching Docker ---
@@ -186,9 +186,86 @@ jobs:
             --arg notes "$RELEASE_NOTES" \
             --arg image "ghcr.io/${{ env.IMAGE_NAME }}:latest" \
             '{ 
-              content: "🎉 **Release \($version)**\n\n\($url)\n\n\($notes)\n\n**Upgrade:**\n```bash\ndocker pull \($image)\ndocker compose down\ndocker compose up -d\n```" 
+              content: "🎉 **Release \($version)**\n\n\($url)\n\n\($notes)\n\n**Upgrade:**\n```bash\ndocker compose pull\ndocker compose down\ndocker compose up -d\n```" 
             }' \
           )
           
           # Send to Discord and fail with body if rejected
           curl --fail-with-body -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_RELEASE_WEBHOOK
+
+  # --- 3. THE ENGINE GATEKEEPER: lint + test the Rust engine before building its image ---
+  test-engine:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: omnibus-engine
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned so a future stable clippy can't turn `-D warnings` red with no code change.
+          toolchain: "1.96.0"
+          components: clippy
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: omnibus-engine
+      - name: Install C build deps (unrar / bzip2 / libwebp)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev pkg-config
+      - name: Clippy + Test
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+  # --- 4. THE ENGINE PUBLISHER: build & push the Rust engine image ---
+  build-and-push-engine:
+    needs: test-engine # Wait for the engine lint/test gate
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version from package.json
+        run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for the engine image
+        id: meta-engine
+        uses: docker/metadata-action@v5
+        with:
+          # GHCR only: GHCR auto-creates the package on first push (packages: write), so there is no
+          # Docker Hub repo to pre-create. docker-compose.yml pulls the engine from GHCR by default.
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-engine
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push the engine image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./omnibus-engine
+          push: true
+          tags: ${{ steps.meta-engine.outputs.tags }}
+          labels: ${{ steps.meta-engine.outputs.labels }}
+          # Separate cache scope so the engine and Node images don't evict each other.
+          cache-from: type=gha,scope=engine
+          cache-to: type=gha,mode=max,scope=engine

@@ -1,72 +1,101 @@
-version: '3.8'
-
 services:
-  omnibus:
-    image: ghcr.io/hankscafe/omnibus:latest
-    container_name: omnibus
-    restart: unless-stopped
+  db:
+    image: postgres:15-alpine
+    container_name: omnibus_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: omnibus
+      POSTGRES_PASSWORD: omnibus_password
+      POSTGRES_DB: omnibus
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnibus -d omnibus"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- ADD THIS REDIS BLOCK ---
+  redis:
+    image: redis:7-alpine
+    container_name: omnibus_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- Rust engine: heavy/parallel backend tasks (scan, convert, metadata, search, backup) ---
+  omnibus-engine:
+    # Pull the published engine image by default; `docker compose build` still rebuilds from source.
+    image: ${OMNIBUS_ENGINE_IMAGE:-ghcr.io/hankscafe/omnibus-engine:latest}
+    build: ./omnibus-engine
+    container_name: omnibus_engine
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://omnibus:omnibus_password@db:5432/omnibus?schema=public
+      OMNIBUS_ENGINE_BIND: 0.0.0.0:8000
+      # The engine calls back to the Node web app to fire detached-job completion notifications.
+      OMNIBUS_NODE_URL: http://web:3000
+      # IMPORTANT: must match the Node app's NEXTAUTH_SECRET, or AES-encrypted DB backups can't be restored.
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change_this_to_a_random_secure_string_123!}
+      OMNIBUS_BACKUPS_DIR: /config/backups
+      OMNIBUS_CACHE_DIR: /config/cache
+      OMNIBUS_WATCHED_DIR: /data/watched
+      OMNIBUS_AWAITING_MATCH_DIR: /data/unmatched
+    ports:
+      - "8000:8000"
+    # The engine scans/converts/embeds files on disk, so it MUST share the SAME config + data
+    # volumes as the web app. For a real deploy, replace these named volumes with host bind mounts
+    # to your storage (e.g. /mnt/nas/config:/config and /mnt/nas/data:/data).
+    volumes:
+      - config:/config
+      - data:/data
+
+  # --- Node / Next.js web app: the UI + API; forwards heavy jobs to omnibus-engine ---
+  web:
+    # Pull the published image by default; `docker compose build` still rebuilds from source.
+    image: ${OMNIBUS_IMAGE:-ghcr.io/hankscafe/omnibus:latest}
+    build: .
+    container_name: omnibus_web
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      omnibus-engine:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://omnibus:omnibus_password@db:5432/omnibus?schema=public
+      OMNIBUS_REDIS_URL: redis://redis:6379
+      # Reach the Rust engine over the compose network (NOT 127.0.0.1).
+      OMNIBUS_ENGINE_URL: http://omnibus-engine:8000
+      # Must match the engine's NEXTAUTH_SECRET, or AES-encrypted DB backups can't be restored.
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change_this_to_a_random_secure_string_123!}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      # Keep these paths identical to the engine so both containers resolve the same files.
+      OMNIBUS_BACKUPS_DIR: /config/backups
+      OMNIBUS_CACHE_DIR: /config/cache
+      OMNIBUS_LOGS_DIR: /config/logs
+      OMNIBUS_WATCHED_DIR: /data/watched
+      OMNIBUS_AWAITING_MATCH_DIR: /data/unmatched
     ports:
       - "3000:3000"
-    depends_on:
-      - omnibus-redis
-    environment:
-      - TZ=America/New_York
-      
-      # REQUIRED: The canonical URL of your Omnibus instance. NextAuth requires this to match exactly.
-      # Local access only: Set to your NAS IP and port (e.g., http://192.168.1.50:3000)
-      # External access: Set to your public domain (e.g., https://omnibus.yourdomain.com)
-      # NOTE: Do NOT include a trailing slash!
-      - NEXTAUTH_URL=http://<your-ip:port>
-      
-      # REQUIRED: Generate a random string for security
-      # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key. !!DO NOT LOSE THIS!!
-      - NEXTAUTH_SECRET=
-
-      # --- ADVANCED SECURITY SETTINGS ---
-      # By default, Omnibus requires an HTTPS connection to use the "Login As" (Impersonation) feature 
-      # to prevent session tokens from being intercepted over the network.
-      # If you are running Omnibus on a secure, private home network (LAN) without SSL, 
-      # uncomment the line below to bypass this restriction at your own risk.
-      # - ALLOW_INSECURE_IMPERSONATION=true
-      
-      # REQUIRED: Connection URL for the background job queue
-      - OMNIBUS_REDIS_URL=redis://omnibus-redis:6379/0
-      
-      # REQUIRED: Database connection string
-      - DATABASE_URL=file:/config/omnibus.db
-      
-      # PRE-STAGED PATHS: These automatically create subfolders inside your mapped /config volume below
-      - OMNIBUS_CACHE_DIR=/config/cache
-      - OMNIBUS_LOGS_DIR=/config/logs
-      - OMNIBUS_BACKUPS_DIR=/config/backups
-
-      # DROP FOLDERS: Set these inside your single data mount for fast atomic moves!
-      - OMNIBUS_WATCHED_DIR=/data/watched
-      - OMNIBUS_AWAITING_MATCH_DIR=/data/unmatched
-
+    # Shares the SAME config + data volumes as omnibus-engine so both containers see the files.
     volumes:
-      # REQUIRED: Persistent storage for Database, Logs, Backups, Cache, and Uploaded Images
-      - /path/to/your/nas/config:/config
-      
-      # -------------------------------------------------------------------------
-      # OPTION 1: The Recommended Single Data Mount (Fast Atomic Moves/Hardlinks)
-      # -------------------------------------------------------------------------
-      # Maps your entire media/download root to /data for optimal performance
-      - /path/to/your/nas/data:/data 
-      
-      # -------------------------------------------------------------------------
-      # OPTION 2: Separate Mounts (Slower copy/paste/delete operations)
-      # Uncomment these and remove Option 1 if your folders are on different drives
-      # -------------------------------------------------------------------------
-      # - /path/to/your/nas/comics:/comics
-      # - /path/to/your/nas/manga:/manga
-      # - /path/to/your/nas/downloads:/downloads
-      # - /path/to/your/nas/watched:/watched
-      # - /path/to/your/nas/unmatched:/unmatched
+      - config:/config
+      - data:/data
 
-  omnibus-redis:
-    image: redis:alpine
-    container_name: omnibus-redis
-    restart: unless-stopped
-    # No ports exposed to the host machine to prevent conflicts. 
-    # Omnibus connects to this purely via Docker's internal network.
+volumes:
+  pgdata:
+  config:
+  data:

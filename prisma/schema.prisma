@@ -2,7 +2,7 @@
 
 // SQLite configuration
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -39,6 +39,7 @@ model User {
   bookmarks           Bookmark[]
   reviews             Review[]
   dailyReadingStats   DailyReadingStat[]
+  dailyIssueReads     DailyIssueRead[]
   auditLogs           AuditLog[]
   apiKeys             ApiKey[]  @relation("ApiKeysActsAs")
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
@@ -118,7 +119,10 @@ model Series {
   
   description     String?
   status          String?
+  bookType        String?  // 'Print' | 'OneShot' | 'TPB' | 'GN' (Mylar booktype values); null = unknown
   coverUrl        String?
+  remoteCoverUrl  String?  // Original ComicVine/Metron cover URL (coverUrl becomes a local path after caching)
+  seriesJsonWritten Boolean @default(false) // Omnibus owns the series.json in this folder; foreign files are never overwritten
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
 
@@ -173,6 +177,7 @@ model Issue {
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
   bookmarks       Bookmark[]
+  dailyIssueReads DailyIssueRead[]
 
   @@index([seriesId])
   @@index([metadataId])
@@ -457,6 +462,21 @@ model DailyReadingStat {
   @@unique([userId, date])
   @@index([userId])
   @@index([date])
+}
+
+model DailyIssueRead {
+  id        String   @id @default(cuid())
+  userId    String
+  issueId   String
+  date      DateTime
+  pagesRead Int      @default(0)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, issueId, date])
+  @@index([userId, date])
+  @@index([issueId])
 }
 
 model AuditLog {

@@ -3,12 +3,12 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';
-import AdmZip from 'adm-zip';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger'; 
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,28 +22,17 @@ export async function POST(request: Request) {
         const { action, payload } = await request.json();
         const startTime = Date.now();
 
-        // HELPER: Deep scan physical directories
-        async function getPhysicalFiles(dir: string, fileList: string[] = []) {
-            if (!fs.existsSync(dir)) return fileList;
-            const items = await fs.promises.readdir(dir, { withFileTypes: true });
-            for (const item of items) {
-                const fullPath = path.join(dir, item.name);
-                if (item.isDirectory()) {
-                    await getPhysicalFiles(fullPath, fileList);
-                } else if (item.name.match(/\.(cbz|cbr|zip)$/i)) {
-                    fileList.push(fullPath);
-                }
-            }
-            return fileList;
-        }
-
-        // --- SCAN: GHOST RECORDS ---
+        // --- RUST OFFLOADED SCAN: GHOST RECORDS ---
         if (action === 'scan-ghosts') {
-            Logger.log("[UI Job] Manual Ghost Record scan started", "info");
+            Logger.log("[UI Job] Manual Ghost Record scan started via Rust Engine...", "info");
+            
+            const rustResponse = await fetch(ENGINE_URL + '/api/diagnostics/ghosts', { method: 'POST', headers: engineHeaders() });
+            if (!rustResponse.ok) throw new Error(`Rust engine diagnostics endpoint returned status: ${rustResponse.status}`);
+
+            // Re-fetch calculations from DB now that Rust background thread has safely evaluated everything
             const series = await prisma.series.findMany();
             const issues = await prisma.issue.findMany({ include: { series: true } });
 
-            // --- FIX: Smarter Ghost Series Detection ---
             const activeRequests = await prisma.request.findMany({
                 where: { status: { notIn: ['COMPLETED', 'IMPORTED', 'CANCELLED'] } },
                 select: { volumeId: true }
@@ -60,39 +49,26 @@ export async function POST(request: Request) {
                 .map(s => ({ id: s.id, type: 'SERIES', name: s.name, path: s.folderPath || 'Missing Path' }));
             
             const ghostIssues = issues
-                .filter(i => i.filePath && i.filePath.trim().length > 0 && !fs.existsSync(i.filePath))
+                .filter(i => i.status === 'MISSING') // Rust actively marks missing files as 'MISSING' in the DB
                 .map(i => ({ id: i.id, type: 'ISSUE', name: `${i.series?.name} #${i.number}`, path: i.filePath }));
 
             const totalGhosts = ghostSeries.length + ghostIssues.length;
-
-            // LOG TO DATABASE
-            await prisma.jobLog.create({
-                data: {
-                    jobType: 'DIAGNOSTICS',
-                    status: totalGhosts > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
-                    durationMs: Date.now() - startTime,
-                    message: `Manual Ghost Scan found ${totalGhosts} broken links (${ghostSeries.length} series, ${ghostIssues.length} issues).`
-                }
-            });
-
-            Logger.log(`Manual Ghost Scan complete. Found ${totalGhosts} issues.`, totalGhosts > 0 ? "warn" : "success");
+            Logger.log(`Manual Ghost Scan complete via Rust. Found ${totalGhosts} issues.`, totalGhosts > 0 ? "warn" : "success");
+            
             return NextResponse.json({ ghosts: [...ghostSeries, ...ghostIssues] });
         }
 
-        // --- SCAN: ORPHANED FILES ---
+        // --- RUST OFFLOADED SCAN: ORPHANED FILES ---
         if (action === 'scan-orphans') {
-            Logger.log("[UI Job] Manual Orphaned File scan started", "info");
+            Logger.log("[UI Job] Manual Orphaned File scan started via Rust Engine...", "info");
             
-            const libraries = await prisma.library.findMany();
+            const rustResponse = await fetch(ENGINE_URL + '/api/diagnostics/orphans', { method: 'POST', headers: engineHeaders() });
+            if (!rustResponse.ok) throw new Error(`Rust engine orphan endpoint returned status: ${rustResponse.status}`);
             
-            let physicalFiles: string[] = [];
-            for (const lib of libraries) {
-                await getPhysicalFiles(lib.path, physicalFiles);
-            }
+            const data = await rustResponse.json();
+            const physicalOrphans: string[] = data.orphaned_files || [];
 
-            const issues = await prisma.issue.findMany();
-            const dbPaths = new Set(issues.map(i => i.filePath ? path.normalize(i.filePath).toLowerCase() : ''));
-            
+            // Apply global ignore configurations matching original logic rules
             const configSetting = await prisma.systemSetting.findUnique({ where: { key: 'ignored_orphans' } });
             let ignoredPaths = new Set<string>();
             if (configSetting?.value) {
@@ -102,56 +78,40 @@ export async function POST(request: Request) {
                 } catch(e) {}
             }
 
-            const orphans = physicalFiles.filter(p => {
+            const filteredOrphans = physicalOrphans.filter(p => {
                 const normP = path.normalize(p).toLowerCase();
-                return !dbPaths.has(normP) && !ignoredPaths.has(normP);
+                return !ignoredPaths.has(normP);
             });
 
-            await prisma.jobLog.create({
-                data: {
-                    jobType: 'DIAGNOSTICS',
-                    status: orphans.length > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
-                    durationMs: Date.now() - startTime,
-                    message: `Manual Orphan Scan found ${orphans.length} files not indexed in the database.`
-                }
-            });
-
-            Logger.log(`Manual Orphan Scan complete. Found ${orphans.length} orphaned files.`, orphans.length > 0 ? "warn" : "success");
-            return NextResponse.json({ orphans: orphans.map(p => ({ path: p, name: path.basename(p) })) });
+            Logger.log(`Manual Orphan Scan complete via Rust. Found ${filteredOrphans.length} orphaned files.`, filteredOrphans.length > 0 ? "warn" : "success");
+            return NextResponse.json({ orphans: filteredOrphans.map(p => ({ path: p, name: path.basename(p) })) });
         }
 
-        // --- SCAN: ARCHIVE INTEGRITY ---
+        // --- RUST OFFLOADED SCAN: ARCHIVE INTEGRITY ---
         if (action === 'scan-integrity') {
-            Logger.log("[UI Job] Manual Archive Integrity scan started", "info");
-            const issues = await prisma.issue.findMany({ include: { series: true } });
-            const corrupted = [];
+            Logger.log("[UI Job] Manual Archive Integrity scan started via Rust Engine...", "info");
             
-            for (const issue of issues) {
-                if (issue.filePath && fs.existsSync(issue.filePath) && issue.filePath.toLowerCase().endsWith('.cbz')) {
-                    try {
-                        const zip = new AdmZip(issue.filePath);
-                        zip.getEntries(); 
-                    } catch (e) {
-                        corrupted.push({ id: issue.id, name: `${issue.series?.name} #${issue.number}`, path: issue.filePath, error: "Invalid or corrupted zip archive." });
-                    }
-                }
-            }
+            const rustResponse = await fetch(ENGINE_URL + '/api/diagnostics/integrity', { method: 'POST', headers: engineHeaders() });
+            if (!rustResponse.ok) throw new Error(`Rust engine integrity endpoint returned status: ${rustResponse.status}`);
 
-            // LOG TO DATABASE
-            await prisma.jobLog.create({
-                data: {
-                    jobType: 'DIAGNOSTICS',
-                    status: corrupted.length > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
-                    durationMs: Date.now() - startTime,
-                    message: `Manual Integrity Scan tested ${issues.length} archives and found ${corrupted.length} corrupted files.`
-                }
+            // Re-fetch corruptions from DB now that Rust has processed file checks concurrently
+            const corruptedIssues = await prisma.issue.findMany({
+                where: { status: 'CORRUPTED' },
+                include: { series: true }
             });
 
-            Logger.log(`Manual Integrity Scan complete. Found ${corrupted.length} corrupted files.`, corrupted.length > 0 ? "error" : "success");
+            const corrupted = corruptedIssues.map(i => ({
+                id: i.id,
+                name: `${i.series?.name} #${i.number}`,
+                path: i.filePath,
+                error: "Invalid or corrupted zip archive."
+            }));
+
+            Logger.log(`Manual Integrity Scan complete via Rust. Found ${corrupted.length} corrupted files.`, corrupted.length > 0 ? "error" : "success");
             return NextResponse.json({ corrupted });
         }
 
-        // --- SCAN: DUPLICATE ISSUES ---
+        // --- SCAN: DUPLICATE ISSUES (Left in Node as it is lightweight DB string matching) ---
         if (action === 'scan-duplicates') {
             Logger.log("[UI Job] Manual Duplicate scan started", "info");
             const issues = await prisma.issue.findMany({
@@ -198,9 +158,7 @@ export async function POST(request: Request) {
                 }
             }
             
-            // --- AUDIT LOG ---
             await AuditLogger.log('DELETE_DUPLICATE_ISSUES', { issuesDeleted: idsToDelete }, userId);
-
             Logger.log(`Resolved duplicates: Deleted ${idsToDelete.length} records.`, "success");
             return NextResponse.json({ success: true });
         }
@@ -214,22 +172,16 @@ export async function POST(request: Request) {
                 await prisma.issue.deleteMany({ where: { id: { in: ids } } });
             }
             
-            // --- AUDIT LOG ---
             await AuditLogger.log('PURGE_GHOST_RECORDS', { type, idsPurged: ids.length }, userId);
-
             Logger.log(`Purged ghost ${type} records from database.`, "success");
             return NextResponse.json({ success: true });
         }
 
         if (action === 'delete-orphans') {
             const { paths } = payload;
-            
-            // SECURITY FIX: Path Traversal & Root Deletion Prevention
             const libraries = await prisma.library.findMany();
             const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
             
-            // Resolve to absolute paths and ensure they end with a trailing slash
-            // (e.g., "/data/comics" becomes "/data/comics/")
             const authorizedRoots = [
                 ...libraries.map(l => path.resolve(l.path).toLowerCase()),
                 path.resolve(unmatchedDir).toLowerCase()
@@ -238,18 +190,14 @@ export async function POST(request: Request) {
             const deletedPaths = [];
 
             for (const p of paths) {
-                // Flatten the target path to destroy `../` traversal attempts
                 const resolvedTarget = path.resolve(p).toLowerCase();
-                
-                // Ensure the target starts with the authorized root directory, 
-                // but IS NOT the root directory itself.
                 const isAuthorizedChild = authorizedRoots.some(root => 
                     resolvedTarget.startsWith(root) && resolvedTarget.length > root.length
                 );
 
                 if (isAuthorizedChild) {
                     if (fs.existsSync(p)) {
-                        await fs.remove(p); // fs.remove handles the actual deletion safely
+                        await fs.remove(p);
                         deletedPaths.push(p);
                     }
                 } else {
@@ -257,9 +205,7 @@ export async function POST(request: Request) {
                 }
             }
 
-            // --- AUDIT LOG ---
             await AuditLogger.log('DELETE_ORPHANED_FILES', { filesDeleted: deletedPaths }, userId);
-
             Logger.log(`Deleted physical orphaned files from disk.`, "success");
             return NextResponse.json({ success: true });
         }
@@ -281,7 +227,6 @@ export async function POST(request: Request) {
             });
             
             await AuditLogger.log('IGNORE_ORPHANED_FILES', { filesIgnored: paths.length }, userId);
-            
             Logger.log(`Added ${paths.length} paths to orphan ignore list.`, "success");
             return NextResponse.json({ success: true });
         }
@@ -290,7 +235,6 @@ export async function POST(request: Request) {
 
     } catch (error: unknown) {
         Logger.log(`Diagnostics UI Job Failed: ${getErrorMessage(error)}`, 'error');
-
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

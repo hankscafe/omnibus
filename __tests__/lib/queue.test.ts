@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { initWorker } from '@/lib/queue';
+import { ENGINE_URL } from '@/lib/engine';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
     jobLogCreate: vi.fn(),
-    syncSeriesMetadata: vi.fn(),
     runSystemHealthCheck: vi.fn(),
     seriesUpdate: vi.fn(),
     seriesFindMany: vi.fn(),
@@ -13,31 +13,30 @@ const mocks = vi.hoisted(() => ({
     systemSettingUpsert: vi.fn(),
     systemSettingFindMany: vi.fn(),
     axiosGet: vi.fn(),
-    writeComicInfo: vi.fn().mockResolvedValue(true),
-    writeSeriesJson: vi.fn().mockResolvedValue(true),
     sendWeeklyDigest: vi.fn().mockResolvedValue(true),
     digestHistoryCreate: vi.fn(),
-    transaction: vi.fn().mockResolvedValue([]), // <-- FIX: Added transaction mock
+    transaction: vi.fn().mockResolvedValue([]),
+    engineFetch: vi.fn(),
     workerCb: { current: null as any }
 }));
 
 // 2. Mock Dependencies
 vi.mock('@/lib/db', () => ({
     prisma: {
-        $transaction: mocks.transaction, // <-- FIX: Added to Prisma mock object
+        $transaction: mocks.transaction,
         jobLog: { create: mocks.jobLogCreate },
-        systemSetting: { 
-            upsert: mocks.systemSettingUpsert, 
+        systemSetting: {
+            upsert: mocks.systemSettingUpsert,
             findMany: mocks.systemSettingFindMany,
             deleteMany: vi.fn()
         },
         series: { findMany: mocks.seriesFindMany, update: mocks.seriesUpdate },
         issue: { findMany: mocks.issueFindMany },
         user: { findMany: mocks.userFindMany },
-        digestHistory: { 
-            deleteMany: vi.fn(), 
-            findMany: vi.fn().mockResolvedValue([]), 
-            create: mocks.digestHistoryCreate 
+        digestHistory: {
+            deleteMany: vi.fn(),
+            findMany: vi.fn().mockResolvedValue([]),
+            create: mocks.digestHistoryCreate
         }
     }
 }));
@@ -47,25 +46,25 @@ vi.mock('@/lib/api-client', () => ({
     apiClient: { get: mocks.axiosGet }
 }));
 
-// Discover Sync uses axios directly
-vi.mock('axios', () => ({
-    default: { get: mocks.axiosGet }
-}));
-
-vi.mock('@/lib/metadata-fetcher', () => ({ syncSeriesMetadata: mocks.syncSeriesMetadata }));
 vi.mock('@/lib/health-checker', () => ({ runSystemHealthCheck: mocks.runSystemHealthCheck }));
 vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 
-// Mock the file writers for embedding
-vi.mock('@/lib/metadata-writer', () => ({
-    writeComicInfo: mocks.writeComicInfo,
-    writeSeriesJson: mocks.writeSeriesJson
-}));
-
 // Mock the mailer for the digest
 vi.mock('@/lib/mailer', () => ({
     Mailer: { sendWeeklyDigest: mocks.sendWeeklyDigest }
+}));
+
+// queue.ts opens a real Redis connection at import time; BullMQ itself is mocked below,
+// so a no-op stand-in prevents the unhandled ECONNREFUSED noise in test output.
+vi.mock('ioredis', () => ({
+    default: class IORedisMock {
+        on() { return this; }
+        once() { return this; }
+        quit() { return Promise.resolve(); }
+        disconnect() { }
+        duplicate() { return this; }
+    }
 }));
 
 // 3. Intercept BullMQ Worker creation
@@ -77,7 +76,7 @@ vi.mock('bullmq', () => ({
     },
     Worker: class WorkerMock {
         constructor(name: string, cb: any, opts: any) {
-            mocks.workerCb.current = cb; 
+            mocks.workerCb.current = cb;
         }
         on = vi.fn();
     }
@@ -88,7 +87,12 @@ describe('Cron: BullMQ Worker Router', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
-        (globalThis as any).omnibusWorker = null; 
+        (globalThis as any).omnibusWorker = null;
+        process.env.NEXTAUTH_SECRET = 'test-secret';
+
+        // Heavy jobs are forwarded to the Rust engine over HTTP; default to "engine accepted".
+        mocks.engineFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+        vi.stubGlobal('fetch', mocks.engineFetch);
 
         // Bypass all the API-ban delays in the fetcher/sync loops to prevent 5000ms test timeouts
         originalSetTimeout = global.setTimeout;
@@ -99,12 +103,8 @@ describe('Cron: BullMQ Worker Router', () => {
         vi.unstubAllGlobals();
     });
 
-    it('should correctly route the METADATA_SYNC job payload to the fetcher logic', async () => {
+    it('should forward a targeted METADATA_SYNC to the engine without bumping the schedule timer', async () => {
         initWorker();
-        
-        mocks.seriesFindMany.mockResolvedValueOnce([
-            { id: 'series_1', metadataId: 'cv_123', folderPath: '/comics/Batman', metadataSource: 'COMICVINE' }
-        ]);
 
         const mockJob = {
             id: 'job_meta',
@@ -114,9 +114,61 @@ describe('Cron: BullMQ Worker Router', () => {
 
         await mocks.workerCb.current(mockJob);
 
-        expect(mocks.syncSeriesMetadata).toHaveBeenCalledWith('cv_123', '/comics/Batman', 'COMICVINE');
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/metadata/sync`,
+            expect.objectContaining({
+                method: 'POST',
+                headers: expect.objectContaining({
+                    'Content-Type': 'application/json',
+                    'X-Internal-Secret': 'test-secret'
+                }),
+                body: JSON.stringify({ series_ids: ['series_1'] })
+            })
+        );
+
+        // Targeted syncs must not bump the scheduled-run timer
+        expect(mocks.systemSettingUpsert).not.toHaveBeenCalledWith(
+            expect.objectContaining({ where: { key: 'last_metadata_sync' } })
+        );
+
+        // The engine owns the COMPLETED JobLog + notification for this job now
+        expect(mocks.jobLogCreate).not.toHaveBeenCalled();
+    });
+
+    it('should forward a scheduled METADATA_SYNC with series_ids null and bump the schedule timer', async () => {
+        initWorker();
+
+        const mockJob = {
+            id: 'job_meta_sched',
+            data: { type: 'METADATA_SYNC' },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        expect(mocks.systemSettingUpsert).toHaveBeenCalledWith(
+            expect.objectContaining({ where: { key: 'last_metadata_sync' } })
+        );
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/metadata/sync`,
+            expect.objectContaining({ body: JSON.stringify({ series_ids: null }) })
+        );
+    });
+
+    it('should fail the METADATA_SYNC job with a FAILED JobLog when the engine rejects it', async () => {
+        initWorker();
+        mocks.engineFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+
+        const mockJob = {
+            id: 'job_meta_down',
+            data: { type: 'METADATA_SYNC', seriesIds: ['series_1'] },
+            updateProgress: vi.fn()
+        };
+
+        await expect(mocks.workerCb.current(mockJob)).rejects.toThrow('Rust returned error status 503');
+
         expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({ jobType: 'METADATA_SYNC', status: 'COMPLETED' })
+            data: expect.objectContaining({ jobType: 'METADATA_SYNC', status: 'FAILED' })
         }));
     });
 
@@ -133,13 +185,8 @@ describe('Cron: BullMQ Worker Router', () => {
         }));
     });
 
-    it('should correctly process EMBED_METADATA and generate series.json files', async () => {
+    it('should forward a targeted EMBED_METADATA to the engine without bumping the embed timer', async () => {
         initWorker();
-        
-        // Return a mock issue that needs its ComicInfo.xml injected
-        mocks.issueFindMany.mockResolvedValueOnce([
-            { id: 'issue_100', seriesId: 'series_99' }
-        ]);
 
         const mockJob = {
             id: 'job_embed',
@@ -149,28 +196,55 @@ describe('Cron: BullMQ Worker Router', () => {
 
         await mocks.workerCb.current(mockJob);
 
-        // Verify the background job called the correct external writers
-        expect(mocks.writeComicInfo).toHaveBeenCalledWith('issue_100');
-        expect(mocks.writeSeriesJson).toHaveBeenCalledWith('series_99');
-        
-        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({ jobType: 'EMBED_METADATA', status: 'COMPLETED' })
-        }));
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/metadata/embed`,
+            expect.objectContaining({
+                method: 'POST',
+                headers: expect.objectContaining({ 'X-Internal-Secret': 'test-secret' }),
+                body: JSON.stringify({ series_id: 'series_99', issue_ids: null })
+            })
+        );
+
+        // Targeted embeds must not bump the scheduled-run timer
+        expect(mocks.systemSettingUpsert).not.toHaveBeenCalledWith(
+            expect.objectContaining({ where: { key: 'last_embed_sync' } })
+        );
+        expect(mocks.jobLogCreate).not.toHaveBeenCalled();
+    });
+
+    it('should bump the embed timer for a scheduled bulk EMBED_METADATA run', async () => {
+        initWorker();
+
+        const mockJob = {
+            id: 'job_embed_sched',
+            data: { type: 'EMBED_METADATA' },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        expect(mocks.systemSettingUpsert).toHaveBeenCalledWith(
+            expect.objectContaining({ where: { key: 'last_embed_sync' } })
+        );
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/metadata/embed`,
+            expect.objectContaining({ body: JSON.stringify({ series_id: null, issue_ids: null }) })
+        );
     });
 
     it('should compile and send a WEEKLY_DIGEST if new issues are found', async () => {
         initWorker();
-        
+
         // Mock new issues found within the last 7 days
         mocks.issueFindMany.mockResolvedValueOnce([
-            { 
-                id: 'issue_1', 
-                number: '1', 
-                seriesId: 'series_1', 
-                series: { id: 'series_1', name: 'Batman', isManga: false, publisher: 'DC Comics' } 
+            {
+                id: 'issue_1',
+                number: '1',
+                seriesId: 'series_1',
+                series: { id: 'series_1', name: 'Batman', isManga: false, publisher: 'DC Comics' }
             }
         ]);
-        
+
         // Mock the user recipient list
         mocks.userFindMany.mockResolvedValueOnce([
             { email: 'reader@omnibus.com' }
@@ -186,35 +260,18 @@ describe('Cron: BullMQ Worker Router', () => {
 
         // Verify the Mailer was dispatched with the correct compiled payload
         expect(mocks.sendWeeklyDigest).toHaveBeenCalledWith(
-            ['reader@omnibus.com'], 
+            ['reader@omnibus.com'],
             expect.arrayContaining([expect.objectContaining({ name: 'Batman' })]),
             [] // Empty manga array
         );
-        
+
         expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ jobType: 'WEEKLY_DIGEST', status: 'COMPLETED' })
         }));
     });
 
-    it('should filter out manga during DISCOVER_SYNC when discover_manga_filter_mode is HIDE_ALL', async () => {
+    it('should forward DISCOVER_SYNC to the engine and bump the popular-sync timer', async () => {
         initWorker();
-        
-        // Mock DB settings to HIDE_ALL manga, and provide a dummy CV API key
-        mocks.systemSettingFindMany.mockResolvedValue([
-            { key: 'discover_manga_filter_mode', value: 'HIDE_ALL' },
-            { key: 'cv_api_key', value: 'mock_key' },
-            { key: 'manga_publishers', value: 'shueisha, kodansha' } // Manga Publisher Dictionary
-        ]);
-
-        // Mock ComicVine API to return a Manga and a Western Comic
-        mocks.axiosGet.mockResolvedValue({
-            data: {
-                results: [
-                    { id: 1, volume: { id: 10, name: 'Chainsaw Man', publisher: { name: 'Shueisha' } }, issue_number: '1' },
-                    { id: 2, volume: { id: 20, name: 'Batman', publisher: { name: 'DC Comics' } }, issue_number: '1' }
-                ]
-            }
-        });
 
         const mockJob = {
             id: 'job_discover',
@@ -224,20 +281,35 @@ describe('Cron: BullMQ Worker Router', () => {
 
         await mocks.workerCb.current(mockJob);
 
-        // Verify the cache was updated WITHOUT the manga (Chainsaw Man)
-        expect(mocks.systemSettingUpsert).toHaveBeenCalledWith(expect.objectContaining({
-            where: { key: 'discover_cache_new' },
-            create: expect.objectContaining({
-                value: expect.not.stringContaining('Chainsaw Man')
+        // Node still owns the schedule timer; the engine owns the fetch/filter/cache work
+        expect(mocks.systemSettingUpsert).toHaveBeenCalledWith(
+            expect.objectContaining({ where: { key: 'last_popular_sync' } })
+        );
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/discover/sync`,
+            expect.objectContaining({
+                method: 'POST',
+                headers: expect.objectContaining({ 'X-Internal-Secret': 'test-secret' })
             })
-        }));
+        );
+        // The engine writes the DISCOVER_SYNC JobLog itself
+        expect(mocks.jobLogCreate).not.toHaveBeenCalled();
+    });
 
-        // Verify the cache WAS updated WITH the western comic (Batman)
-        expect(mocks.systemSettingUpsert).toHaveBeenCalledWith(expect.objectContaining({
-            where: { key: 'discover_cache_new' },
-            create: expect.objectContaining({
-                value: expect.stringContaining('Batman')
-            })
+    it('should fail DISCOVER_SYNC when the engine is unreachable', async () => {
+        initWorker();
+        mocks.engineFetch.mockRejectedValueOnce(new Error('fetch failed'));
+
+        const mockJob = {
+            id: 'job_discover_down',
+            data: { type: 'DISCOVER_SYNC' },
+            updateProgress: vi.fn()
+        };
+
+        await expect(mocks.workerCb.current(mockJob)).rejects.toThrow('fetch failed');
+
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ jobType: 'DISCOVER_SYNC', status: 'FAILED' })
         }));
     });
 });

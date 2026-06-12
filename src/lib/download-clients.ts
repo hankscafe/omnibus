@@ -9,6 +9,7 @@ import { pipeline } from 'stream/promises';
 import { DiscordNotifier } from './discord';
 import { getErrorMessage } from './utils/error';
 import { HosterEngine } from './hosters';
+import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 
 async function getNetworkHeaders() {
     const customHeaders = await prisma.customHeader.findMany();
@@ -217,6 +218,36 @@ export const DownloadService = {
               } else {
                   throw new Error(`Failed to resolve ${hoster} link: ${resolvedHoster.error}`);
               }
+          }
+
+          // Non-Mega downloads (a plain GetComics URL or a resolved direct HTTP URL) are streamed by
+          // the Rust engine: it owns the byte pump, the 45s stall-watchdog, progress, the small-file
+          // guard, and the .part -> final rename. Hoster resolution (above) and the Mega SDK stream
+          // (below) stay in Node, as does the failure alert in the catch block.
+          if (!resolvedHoster?.isMegaStream) {
+              await prisma.request.update({
+                  where: { id: requestId },
+                  data: { activeDownloadName: finalFilename, status: 'DOWNLOADING', progress: 0, downloadLink: url }
+              });
+              Logger.log(`[Internal DL] Streaming via engine: ${finalFilename}`, 'info');
+
+              const streamRes = await engineFetchLong(ENGINE_URL + '/api/download/stream', {
+                  method: 'POST',
+                  headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                  body: JSON.stringify({
+                      request_id: requestId,
+                      url: finalDownloadUrl,
+                      headers: resolvedHoster?.headers || {},
+                      dest_path: filePath,
+                      ext
+                  })
+              });
+              if (!streamRes.ok) throw new Error(`Engine stream endpoint returned ${streamRes.status}`);
+              const result = await streamRes.json();
+              if (!result.success) throw new Error(result.error || "Engine download failed");
+
+              Logger.log(`[Internal DL] Download complete (engine). Handing off to Importer...`, 'success');
+              return true;
           }
 
           if (fs.existsSync(partFilePath)) {

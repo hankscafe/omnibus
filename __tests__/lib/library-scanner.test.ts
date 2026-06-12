@@ -1,97 +1,103 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+// __tests__/lib/library-scanner.test.ts
+// LibraryScanner.scan() is a thin forwarder: it POSTs each configured library to the
+// Rust engine (/api/scan), which owns the crawl, ComicInfo parsing, JobLock, and ghost
+// sweep (covered by the engine's own unit tests).
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { LibraryScanner } from '@/lib/library-scanner';
+import { ENGINE_URL } from '@/lib/engine';
 
 const mocks = vi.hoisted(() => ({
-    findUniqueLock: vi.fn(),
-    upsertLock: vi.fn(),
-    deleteLock: vi.fn().mockResolvedValue(true), // FIX: Add mockResolvedValue so .catch() works!
     findManyLibraries: vi.fn(),
-    findManySeries: vi.fn(),
-    findManyIssues: vi.fn(), // <-- NEW: Added mock for ghost issue scanner
-    requestFindMany: vi.fn(), // <-- ADDED: Mock for active requests check
-    createSeries: vi.fn(),
-    parseComicInfo: vi.fn(),
+    engineFetch: vi.fn(),
     log: vi.fn()
 }));
 
 vi.mock('@/lib/db', () => ({
     prisma: {
-        jobLock: { findUnique: mocks.findUniqueLock, upsert: mocks.upsertLock, delete: mocks.deleteLock },
-        library: { findMany: mocks.findManyLibraries },
-        series: { findMany: mocks.findManySeries, create: mocks.createSeries, deleteMany: vi.fn() },
-        issue: { 
-            findMany: mocks.findManyIssues, // <-- NEW: Link to hoisted mock
-            deleteMany: vi.fn(),
-            update: vi.fn().mockResolvedValue({}), // <-- NEW: Prevent crashes during ghost sweep
-            delete: vi.fn().mockResolvedValue({})  // <-- NEW: Prevent crashes during ghost sweep
-        },
-        request: { findMany: mocks.requestFindMany }, // <-- ADDED: Link to hoisted mock
-        readProgress: {
-            deleteMany: vi.fn().mockResolvedValue({ count: 0 }) // <-- NEW: Prevent crashes during ghost sweep
-        }
+        library: { findMany: mocks.findManyLibraries }
     }
 }));
 
-vi.mock('fs-extra', () => ({
-    default: {
-        existsSync: vi.fn().mockReturnValue(true),
-        promises: {
-            // FIX: Prevent infinite recursion by returning files inside the sub-directory!
-            readdir: vi.fn().mockImplementation((dir) => {
-                if (typeof dir === 'string' && dir.includes('Batman')) {
-                    return Promise.resolve([
-                        { name: 'issue1.cbz', isDirectory: () => false, isFile: () => true }
-                    ]);
-                }
-                return Promise.resolve([
-                    { name: 'Batman (2016)', isDirectory: () => true, isFile: () => false }
-                ]);
-            })
-        }
-    }
-}));
-
-vi.mock('@/lib/metadata-extractor', () => ({ parseComicInfo: mocks.parseComicInfo }));
-vi.mock('@/lib/manga-detector', () => ({ detectManga: vi.fn().mockResolvedValue(false) }));
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
-describe('File System: Library Scanner', () => {
+describe('File System: Library Scanner (engine forwarder)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mocks.findUniqueLock.mockResolvedValue(null);
-        mocks.findManyLibraries.mockResolvedValue([{ id: 'lib_1', path: '/library/comics', isManga: false }]);
-        mocks.findManySeries.mockResolvedValue([]);
-        mocks.findManyIssues.mockResolvedValue([]); // <-- NEW: Return empty array by default to pass tests
-        mocks.requestFindMany.mockResolvedValue([]); // <-- ADDED: Return empty array to pass active request test
+        process.env.NEXTAUTH_SECRET = 'test-secret';
+        mocks.engineFetch.mockResolvedValue({ ok: true, status: 200 });
+        vi.stubGlobal('fetch', mocks.engineFetch);
+        mocks.findManyLibraries.mockResolvedValue([
+            { id: 'lib_1', name: 'Comics', path: '/library/comics', isManga: false }
+        ]);
     });
 
-    it('should abort if another scan is currently running (Job Lock)', async () => {
-        mocks.findUniqueLock.mockResolvedValueOnce({ lockedAt: new Date(Date.now() - 60000) });
-        
-        const result = await LibraryScanner.scan();
-        
-        expect(result).toBeNull();
-        expect(mocks.findManyLibraries).not.toHaveBeenCalled();
+    afterEach(() => {
+        vi.unstubAllGlobals();
     });
 
-    it('should crawl the directory, parse ComicInfo, and add unindexed series to the database', async () => {
-        mocks.parseComicInfo.mockResolvedValueOnce({
-            series: 'Batman',
-            publisher: 'DC Comics',
-            year: 2016,
-            cvId: 12345
-        });
+    it('should forward one scan request per configured library to the Rust engine', async () => {
+        mocks.findManyLibraries.mockResolvedValueOnce([
+            { id: 'lib_1', name: 'Comics', path: '/library/comics', isManga: false },
+            { id: 'lib_2', name: 'Manga', path: '/library/manga', isManga: true }
+        ]);
 
         const result = await LibraryScanner.scan();
-        
+
         expect(result).toBe(true);
-        expect(mocks.createSeries).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({
-                name: 'Batman',
-                publisher: 'DC Comics',
-                year: 2016,
-                metadataId: '12345'
+        expect(mocks.engineFetch).toHaveBeenCalledTimes(2);
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/scan`,
+            expect.objectContaining({
+                method: 'POST',
+                headers: expect.objectContaining({
+                    'Content-Type': 'application/json',
+                    'X-Internal-Secret': 'test-secret'
+                })
             })
-        }));
+        );
+
+        const bodies = mocks.engineFetch.mock.calls.map((c: any[]) => JSON.parse(c[1].body));
+        expect(bodies[0]).toEqual(expect.objectContaining({ library_id: 'lib_1', library_path: '/library/comics' }));
+        expect(bodies[1]).toEqual(expect.objectContaining({ library_id: 'lib_2', library_path: '/library/manga' }));
+    });
+
+    it('should return false without contacting the engine when no libraries are configured', async () => {
+        mocks.findManyLibraries.mockResolvedValueOnce([]);
+
+        const result = await LibraryScanner.scan();
+
+        expect(result).toBe(false);
+        expect(mocks.engineFetch).not.toHaveBeenCalled();
+    });
+
+    it('should return false when the engine accepts none of the scan requests', async () => {
+        mocks.engineFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+
+        const result = await LibraryScanner.scan();
+
+        expect(result).toBe(false);
+    });
+
+    it('should return false when the engine rejects every library with an error status', async () => {
+        mocks.engineFetch.mockResolvedValue({ ok: false, status: 401 });
+
+        const result = await LibraryScanner.scan();
+
+        expect(result).toBe(false);
+    });
+
+    it('should still return true when at least one library is accepted', async () => {
+        mocks.findManyLibraries.mockResolvedValueOnce([
+            { id: 'lib_1', name: 'Comics', path: '/library/comics', isManga: false },
+            { id: 'lib_2', name: 'Manga', path: '/library/manga', isManga: true }
+        ]);
+        mocks.engineFetch
+            .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+            .mockResolvedValueOnce({ ok: true, status: 200 });
+
+        const result = await LibraryScanner.scan();
+
+        expect(result).toBe(true);
+        expect(mocks.engineFetch).toHaveBeenCalledTimes(2);
     });
 });

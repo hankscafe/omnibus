@@ -4,33 +4,13 @@ import { prisma } from './db';
 import { Logger } from './logger';
 import { SystemNotifier } from './notifications'; 
 import { Mailer } from './mailer';
-import crypto from 'crypto';
 import { apiClient as axios } from '@/lib/api-client';
-import fs from 'fs-extra';
-import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { isReleasedYet } from '@/lib/utils';
-import { searchAndDownload } from '@/lib/automation';
+import { searchAndDownload, looseCompareIssue } from '@/lib/automation';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
-
-const execFileAsync = promisify(execFile);
-
-function isSameIssue(num1: string | number, num2: string | number): boolean {
-    const regex = /^0*(\d*(?:\.\d+)?)(.*)$/; 
-    const m1 = String(num1).trim().match(regex);
-    const m2 = String(num2).trim().match(regex);
-    
-    if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
-
-    const float1 = parseFloat(m1[1] || "0");
-    const float2 = parseFloat(m2[1] || "0");
-    const suffix1 = m1[2].toUpperCase().trim();
-    const suffix2 = m2[2].toUpperCase().trim();
-
-    return float1 === float2 && suffix1 === suffix2;
-}
+import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
+import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
 
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
@@ -77,92 +57,13 @@ function isNewerVersion(latest: string, current: string): boolean {
     return false;
 }
 
-async function getFolderSize(folderPath: string): Promise<number> {
-    try {
-        if (!folderPath || !fs.existsSync(folderPath)) return 0;
-        Logger.log(`[Storage Scan Debug] Path invalid or missing: ${folderPath}`, 'debug');
-        
-        if (process.platform !== 'win32') {
-            try {
-                const { stdout } = await execFileAsync('du', ['-sb', folderPath]);
-                const match = stdout.match(/^(\d+)/);
-                if (match) {
-                    const size = parseInt(match[1], 10);
-                    Logger.log(`[Storage Scan Debug] Fast 'du' calculation for ${folderPath}: ${Math.round(size / 1024 / 1024)} MB`, 'debug');
-                    return size;
-                }
-            } catch (duError) {
-                Logger.log(`[Storage Scan Debug] du command failed for ${folderPath}: ${getErrorMessage(duError)}`, 'debug');
-            }
-        }
-        
-        Logger.log(`[Storage Scan Debug] Manually calculating folder size for: ${folderPath}`, 'debug');
-        const files = await fs.promises.readdir(folderPath, { withFileTypes: true });
-        let totalSize = 0;
-        
-        for (const file of files) {
-            const fullPath = path.join(folderPath, file.name);
-            if (file.isFile()) {
-                const stats = await fs.promises.stat(fullPath);
-                totalSize += stats.size;
-            } else if (file.isDirectory()) {
-                totalSize += await getFolderSize(fullPath);
-            }
-        }
-        return totalSize;
-    } catch (e: any) {
-        Logger.log(`[Storage Scan Debug] Failed to calculate size for ${folderPath}: ${e.message}`, 'error');
-        return 0;
-    }
-}
+// NOTE: the deep storage scan (per-series folder-size walk + storage_deep_dive_cache) is owned by
+// the Rust engine (/api/diagnostics/storage → diagnostics::run_storage_scan), which writes Series.size,
+// the storage_deep_dive_cache JSON the dashboard reads, and both the storage_deep_dive_last_run /
+// last_storage_scan timestamps. The old Node getFolderSize/runStorageScan walk was deleted; callers
+// (LIBRARY_SCAN below, the STORAGE_SCAN job) forward to the engine instead.
 
-async function runStorageScan() {
-    Logger.log(`[Storage Scan Debug] Initializing deep storage scan...`, 'debug');
-    const nowStr = Date.now().toString();
-    
-    await prisma.systemSetting.upsert({
-        where: { key: 'storage_deep_dive_last_run' },
-        update: { value: nowStr },
-        create: { key: 'storage_deep_dive_last_run', value: nowStr }
-    });
-
-    const seriesList = await prisma.series.findMany({
-        select: { id: true, name: true, publisher: true, folderPath: true, isManga: true, _count: { select: { issues: true } } }
-    });
-
-    Logger.log(`[Storage Scan Debug] Found ${seriesList.length} series to evaluate.`, 'debug');
-
-    const storageData: any[] = [];
-    for (const s of seriesList) {
-        Logger.log(`[Storage Scan Debug] Evaluating Series: "${s.name}" at path [${s.folderPath}]`, 'debug');
-        const size = s.folderPath ? await getFolderSize(s.folderPath) : 0;
-        
-        await prisma.series.update({ where: { id: s.id }, data: { size } }).catch(() => {});
-        
-        storageData.push({
-            id: s.id, 
-            name: s.name, 
-            publisher: s.publisher || "Unknown",
-            isManga: s.isManga, 
-            issueCount: s._count.issues,
-            path: s.folderPath, 
-            sizeBytes: size
-        });
-    }
-
-    storageData.sort((a, b) => b.sizeBytes - a.sizeBytes);
-    Logger.log(`[Storage Scan Debug] Completed deep storage scan. Caching results...`, 'debug');
-
-    await prisma.systemSetting.upsert({
-        where: { key: 'storage_deep_dive_cache' },
-        update: { value: JSON.stringify(storageData) },
-        create: { key: 'storage_deep_dive_cache', value: JSON.stringify(storageData) }
-    });
-    
-    return storageData.length;
-}
-
-const globalForMQ = globalThis as unknown as { 
+const globalForMQ = globalThis as unknown as {
     omnibusQueue: Queue; 
     omnibusWorker: Worker; 
     redisConnection: IORedis;
@@ -194,7 +95,7 @@ export async function syncSchedules() {
                     'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule',
                     'diagnostics_sync_schedule', 'backup_sync_schedule', 'backup_sync_day', 'popular_sync_schedule',
                     'weekly_digest_schedule', 'weekly_digest_day', 'cbr_conversion_schedule', 'embed_metadata_schedule',
-                    'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule'
+                    'series_json_schedule', 'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule'
                 ]
             }
         }
@@ -255,6 +156,7 @@ export async function syncSchedules() {
     
     await addJob('CBR_CONVERSION', config.cbr_conversion_schedule);
     await addJob('EMBED_METADATA', config.embed_metadata_schedule);
+    await addJob('EXPORT_SERIES_JSON', config.series_json_schedule);
     await addJob('CACHE_CLEANUP', config.cache_cleanup_schedule);
 
     // --- REPLACED: Converted hardcoded 15m intervals to dynamic user variables ---
@@ -283,10 +185,171 @@ export function initWorker() {
         try {
             switch (type) {
                 case 'SEARCH_AND_DOWNLOAD': {
-                    const { requestId, name, year, publisher, isManga, skipIndexers } = job.data;
-                    const { executeSearchAndDownload } = await import('@/lib/automation');
-                    
-                    await executeSearchAndDownload(requestId, name, year, publisher, isManga, skipIndexers);
+                    const { requestId, name, year, isManga, publisher, skipIndexers } = job.data;
+                    Logger.log(`[BullMQ] Forwarding automated search for ${name} (Year: ${year}, Manga: ${isManga}) to Rust Engine...`, 'info');
+
+                    // Issue-year optimization + pack isolation + blocklist (parity with upstream
+                    // automation.ts at beta.035): override the series year with the matched issue's
+                    // release year, allow bulk packs only when the series owns ZERO downloaded files,
+                    // and forward the Request's failed-download blocklist so the engine skips
+                    // known-bad releases.
+                    const freshReq = await prisma.request.findUnique({ where: { id: requestId } });
+                    let dynamicYear: string | null = year ? String(year) : null;
+                    let allowPacksForThisRequest = false;
+                    let failedItems: string[] = [];
+                    if (freshReq) {
+                        try { failedItems = JSON.parse((freshReq as any).failedLinks || "[]"); } catch { failedItems = []; }
+                        if (freshReq.volumeId && freshReq.volumeId !== "0") {
+                            const reqSource = (freshReq as any).metadataSource || 'COMICVINE';
+                            const localSeries = await prisma.series.findFirst({ where: { metadataId: freshReq.volumeId, metadataSource: reqSource } });
+                            if (localSeries) {
+                                // If they own 0 files for this series, ALWAYS allow packs.
+                                const downloadedIssuesCount = await prisma.issue.count({
+                                    where: { seriesId: localSeries.id, filePath: { not: null } }
+                                });
+                                if (downloadedIssuesCount === 0) {
+                                    allowPacksForThisRequest = true;
+                                }
+
+                                const cleanReqName = (freshReq.activeDownloadName || name).replace(/\.\w+$/, '');
+                                const issueNumMatch = cleanReqName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?[a-zA-Z]?)/i);
+                                if (issueNumMatch) {
+                                    const allSeriesIssues = await prisma.issue.findMany({ where: { seriesId: localSeries.id } });
+                                    const issueSkeleton = allSeriesIssues.find(i => looseCompareIssue(i.number, issueNumMatch[1]));
+                                    if (issueSkeleton && issueSkeleton.releaseDate) {
+                                        const parsedIssueYear = issueSkeleton.releaseDate.split('-')[0];
+                                        if (parsedIssueYear && /^\d{4}$/.test(parsedIssueYear) && parsedIssueYear !== dynamicYear) {
+                                            Logger.log(`[BullMQ] Overriding series year (${dynamicYear}) with issue release year (${parsedIssueYear}) for ${name}`, 'info');
+                                            dynamicYear = parsedIssueYear;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/automation/search', {
+                            method: 'POST',
+                            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                            body: JSON.stringify({
+                                request_id: requestId,
+                                name,
+                                year: dynamicYear,
+                                series_year: year ? String(year) : null,
+                                allow_packs: allowPacksForThisRequest,
+                                is_manga: isManga || false,
+                                skip_indexers: skipIndexers || false,
+                                failed_links: failedItems
+                            })
+                        });
+
+                        if (!rustResponse.ok) {
+                            throw new Error(`Rust engine returned status: ${rustResponse.status}`);
+                        }
+
+                        const resultData = await rustResponse.json();
+                        
+                        if (!resultData.success || !resultData.best_match) {
+                            // MANUAL_DDL fallback: GetComics matched but only on a disabled/unsupported hoster
+                            // and no indexer release was found either — hold the link for human pickup instead
+                            // of stalling (parity with automation.ts MANUAL_DDL).
+                            if (resultData.manual_ddl?.url) {
+                                Logger.log(`[BullMQ] No auto-download client for ${name}. Holding GetComics link for manual download.`, 'warn');
+                                await prisma.request.update({
+                                    where: { id: requestId },
+                                    data: { status: 'MANUAL_DDL', downloadLink: resultData.manual_ddl.url, activeDownloadName: resultData.manual_ddl.name || name }
+                                });
+                                break;
+                            }
+
+                            // Notify the requester so a stalled search isn't silent (parity with the legacy Node path).
+                            const currentReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
+                            await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
+
+                            if (resultData.stall_for_review) {
+                                Logger.log(`[BullMQ] Multiple distinct editions found for: ${name}. Stalling for admin review.`, 'warn');
+                                await SystemNotifier.sendAlert('download_failed', {
+                                    title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
+                                    description: `Multiple distinct versions (variants/special editions) were found for **${name}**. Please use Interactive Search in the Active Downloads queue to select the correct edition.`,
+                                    publisher, year
+                                }).catch(() => {});
+                            } else {
+                                Logger.log(`[BullMQ] Rust engine found no valid matches for: ${name}. Stalling request.`, 'warn');
+                                await SystemNotifier.sendAlert('download_failed', {
+                                    title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
+                                    description: `Omnibus searched all connected indexers and direct download sites but could not find a match for **${name}**.`,
+                                    publisher, year
+                                }).catch(() => {});
+                            }
+                            break;
+                        }
+
+                        const bestMatch = resultData.best_match;
+                        Logger.log(`[BullMQ] Rust Engine selected best match: ${bestMatch.title} [Protocol: ${bestMatch.protocol.toUpperCase()}]`, 'info');
+
+                        // Fetch global system settings for paths
+                        const settings = await prisma.systemSetting.findMany();
+                        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+
+                        // --- NEW: Dynamically import DownloadService to prevent compilation errors and circular loops ---
+                        const { DownloadService } = await import('./download-clients');
+
+                        // --- PROTOCOL SENSITIVE ROUTING ---
+                        if (bestMatch.protocol === 'ddl') {
+                            const safeTitle = bestMatch.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+
+                            // Batch-pack dedup: if another request is already downloading this exact URL,
+                            // attach to it for batch extraction rather than downloading it twice (parity
+                            // with automation.ts duplicateDownload).
+                            const duplicateDownload = await prisma.request.findFirst({
+                                where: { downloadLink: bestMatch.downloadUrl, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: requestId } }
+                            });
+                            if (duplicateDownload) {
+                                Logger.log(`[BullMQ] Batch pack already downloading/downloaded (${bestMatch.downloadUrl}). Queuing ${name} for batch extraction.`, 'info');
+                                await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: bestMatch.downloadUrl } });
+                                break;
+                            }
+
+                            await prisma.request.update({
+                                where: { id: requestId },
+                                data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: bestMatch.downloadUrl }
+                            });
+
+                            // Added types to parameters to fix explicit any rules
+                            DownloadService.downloadDirectFile(bestMatch.downloadUrl, safeTitle, config.download_path, requestId, bestMatch.indexer)
+                                .then(async (success: boolean) => {
+                                    if (success) {
+                                        await new Promise(r => setTimeout(r, 2000));
+                                        const { Importer } = await import('./importer');
+                                        await Importer.importRequest(requestId);
+                                    }
+                                })
+                                .catch((e: any) => Logger.log(`[BullMQ] Built-in DDL Stream crashed: ${e.message}`, 'error'));
+
+                        } else {
+                            const clients = await prisma.downloadClient.findMany();
+                            const clientConfig = clients.find(c => (c.protocol || 'torrent').toLowerCase() === bestMatch.protocol.toLowerCase());
+
+                            if (!clientConfig) {
+                                throw new Error(`No download client configured in settings for protocol: ${bestMatch.protocol}`);
+                            }
+
+                            Logger.log(`[BullMQ] Routing ${bestMatch.protocol.toUpperCase()} release to external client: ${clientConfig.name}`, 'info');
+                            
+                            await DownloadService.addDownload(clientConfig, bestMatch.downloadUrl, bestMatch.title, 0, 0);
+                            
+                            const trackingHash = bestMatch.infoHash || bestMatch.guid || bestMatch.downloadUrl;
+                            await prisma.request.update({ 
+                                where: { id: requestId }, 
+                                data: { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer } 
+                            });
+                        }
+
+                    } catch (err: any) {
+                        Logger.log(`[BullMQ] Failed to process Rust search response: ${err.message}`, 'error');
+                        await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
+                    }
                     break;
                 }
 
@@ -347,104 +410,22 @@ export function initWorker() {
                         update: { value: nowStr }, 
                         create: { key: 'last_backup_sync', value: nowStr } 
                     });
+
+                    Logger.log(`[BullMQ] Forwarding Database Backup Job to Rust Engine...`, 'info');
                     
-                    const algorithm = 'aes-256-cbc';
-                    const secret = process.env.NEXTAUTH_SECRET || 'omnibus_default_encryption_key_!@#';
-                    const key = crypto.createHash('sha256').update(String(secret)).digest();
-                    const iv = crypto.randomBytes(16);
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/backup', { method: 'POST', headers: engineHeaders() });
+                        if (!rustResponse.ok) {
+                            throw new Error(`Rust returned error status ${rustResponse.status}`);
+                        }
+                        Logger.log(`[BullMQ] Rust Engine successfully took over the Database Backup!`, 'info');
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload Database Backup to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
+                    }
                     
-                    const backupDir = process.env.OMNIBUS_BACKUPS_DIR || '/backups';
-                    await fs.ensureDir(backupDir);
-                    const fileName = `omnibus_backup_${Date.now()}.json`;
-                    const filePath = path.join(backupDir, fileName);
-
-                    const writeStream = fs.createWriteStream(filePath);
-                    const cipher = crypto.createCipheriv(algorithm, key, iv);
-
-                    writeStream.write(`{\n  "encrypted": true,\n  "version": "2.2",\n  "iv": "${iv.toString('hex')}",\n  "data": "`);
-                    cipher.on('data', (chunk) => writeStream.write(chunk.toString('hex')));
-
-                    const streamFinished = new Promise<void>((resolve, reject) => {
-                        cipher.on('end', () => { 
-                            writeStream.write(`"\n}`); 
-                            writeStream.end(); 
-                        });
-                        writeStream.on('finish', resolve);
-                        writeStream.on('error', reject);
-                    });
-
-                    cipher.write('{"timestamp":"' + new Date().toISOString() + '","data":{');
-
-                    const tables = [
-                        { name: 'users', model: prisma.user },
-                        { name: 'settings', model: prisma.systemSetting },
-                        { name: 'libraries', model: prisma.library },
-                        { name: 'downloadClients', model: prisma.downloadClient },
-                        { name: 'discordWebhooks', model: prisma.discordWebhook },
-                        { name: 'indexers', model: prisma.indexer },
-                        { name: 'customHeaders', model: prisma.customHeader },
-                        { name: 'searchAcronyms', model: prisma.searchAcronym },
-                        { name: 'collections', model: prisma.collection },
-                        { name: 'readingLists', model: prisma.readingList },
-                        { name: 'trophies', model: prisma.trophy },
-                        { name: 'series', model: prisma.series },
-                        { name: 'issues', model: prisma.issue },
-                        { name: 'requests', model: prisma.request },
-                        { name: 'readProgresses', model: prisma.readProgress },
-                        { name: 'collectionItems', model: prisma.collectionItem },
-                        { name: 'readingListItems', model: prisma.readingListItem },
-                        { name: 'userTrophies', model: prisma.userTrophy },
-                        { name: 'issueReports', model: prisma.issueReport },
-                        { name: 'digestHistory', model: prisma.digestHistory }
-                    ];
-
-                    let firstTable = true;
-                    for (const table of tables) {
-                        Logger.log(`[Backup Debug] Exporting table: ${table.name}`, 'debug');
-                        if (!firstTable) cipher.write(',');
-                        firstTable = false;
-                        cipher.write(`"${table.name}":[`);
-                        let skip = 0;
-                        const take = 500;
-                        let firstRow = true;
-                        
-                        while (true) {
-                            // @ts-ignore
-                            const rows = await table.model.findMany({ skip, take });
-                            if (rows.length === 0) break;
-                            
-                            for (const row of rows) {
-                                if (!firstRow) cipher.write(',');
-                                firstRow = false;
-                                cipher.write(JSON.stringify(row));
-                            }
-                            skip += take;
-                        }
-                        cipher.write(`]`);
-                    }
-
-                    cipher.write('}}');
-                    cipher.end(); 
-                    await streamFinished;
-
-                    const files = await fs.readdir(backupDir);
-                    const backupFiles = files.filter(f => f.startsWith('omnibus_backup_')).sort();
-                    if (backupFiles.length > 5) {
-                        const toDelete = backupFiles.slice(0, backupFiles.length - 5);
-                        for (const file of toDelete) {
-                            await fs.remove(path.join(backupDir, file));
-                        }
-                    }
-
-                    await prisma.jobLog.create({ 
-                        data: { 
-                            jobType: 'DATABASE_BACKUP', 
-                            status: 'COMPLETED', 
-                            durationMs: Date.now() - startTime, 
-                            message: `Backup saved successfully to ${filePath}. Retaining last 5 backups.` 
-                        } 
-                    });
-                    SystemNotifier.sendAlert('job_db_backup', { description: `Backup saved successfully to ${fileName}.` }).catch(() => {});
+                    // The job_db_backup notification now fires from the Rust engine via
+                    // POST /api/internal/notify when the backup actually completes (not at handoff).
                     break;
                 }
 
@@ -460,390 +441,48 @@ export function initWorker() {
                         update: { value: nowStr }, 
                         create: { key: 'last_converter_sync', value: nowStr } 
                     });
-                    
-                    const { convertCbrToCbz } = await import('@/lib/converter');
-                    const cbrIssues = await prisma.issue.findMany({
-                        where: { 
-                            OR: [ 
-                                { filePath: { endsWith: '.cbr' } }, 
-                                { filePath: { endsWith: '.CBR' } }, 
-                                { filePath: { endsWith: '.rar' } }, 
-                                { filePath: { endsWith: '.RAR' } } 
-                            ] 
-                        }
-                    });
 
-                    if (cbrIssues.length === 0) {
-                        await prisma.jobLog.create({ 
-                            data: { 
-                                jobType: 'CBR_CONVERTER', 
-                                status: 'COMPLETED', 
-                                durationMs: Date.now() - startTime, 
-                                message: "No CBR files found to convert." 
-                            } 
+                    // An optional issueId converts just that issue (targeted conversion, beta.034).
+                    const targetIssueId = job.data?.issueId || null;
+                    Logger.log(targetIssueId
+                        ? `[BullMQ] Forwarding targeted CBR conversion for issue ${targetIssueId} to Rust Engine...`
+                        : `[BullMQ] Forwarding CBR Conversion Sweep to Rust Engine...`, 'info');
+
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/converter/cbr-sweep', {
+                            method: 'POST',
+                            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                            body: JSON.stringify({ issue_id: targetIssueId })
                         });
-                        break;
-                    }
-
-                    let successCount = 0;
-                    let failCount = 0;
-                    let details = `Found ${cbrIssues.length} CBR files to convert.\n\n`;
-
-                    for (const issue of cbrIssues) {
-                        if (!issue.filePath) continue;
-                        try {
-                            const newPath = await convertCbrToCbz(issue.filePath);
-                            if (newPath) {
-                                successCount++;
-                                details += `[OK] Converted: ${path.basename(issue.filePath)}\n`;
-                            } else {
-                                failCount++;
-                                details += `[FAIL] Could not convert: ${path.basename(issue.filePath)}\n`;
-                            }
-                        } catch (e: any) {
-                            failCount++;
-                            details += `[FAIL] Error converting ${path.basename(issue.filePath)}: ${e.message}\n`;
+                        
+                        if (!rustResponse.ok) {
+                            throw new Error(`Rust returned error status ${rustResponse.status}`);
                         }
+                        
+                        Logger.log(`[BullMQ] Rust Engine successfully accepted the CBR Sweep!`, 'info');
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload CBR Conversion to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
                     }
-
-                    await prisma.jobLog.create({
-                        data: {
-                            jobType: 'CBR_CONVERTER',
-                            status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
-                            durationMs: Date.now() - startTime,
-                            message: details + `\nSummary: ${successCount} Converted, ${failCount} Failed.`
-                        }
-                    });
-                    
-                    SystemNotifier.sendAlert('job_diagnostics', { description: `CBR Conversion Sweep Complete. Converted: ${successCount}, Failed: ${failCount}` }).catch(() => {});
                     break;
                 }
 
-                case 'REPACK_ARCHIVES': {
-                    const { seriesIds } = job.data;
-                    const { repackArchive } = await import('@/lib/converter');
-                    
-                    let successCount = 0;
-                    let failCount = 0;
-
-                    const issues = await prisma.issue.findMany({
-                        where: { seriesId: { in: seriesIds }, filePath: { not: null } },
-                        include: { series: true }
-                    });
-
-                    if (issues.length === 0) {
-                        await prisma.jobLog.create({
-                            data: { 
-                                jobType: 'REPACK_ARCHIVES', 
-                                status: 'COMPLETED', 
-                                durationMs: Date.now() - startTime, 
-                                message: "No valid files found to repack." 
-                            }
-                        });
-                        break;
-                    }
-
-                    let currentIdx = 0;
-                    for (const issue of issues) {
-                        if (issue.filePath) {
-                            const ok = await repackArchive(issue.filePath);
-                            if (ok) {
-                                successCount++;
-                            } else {
-                                failCount++;
-                            }
-                        }
-                        currentIdx++;
-                        await job.updateProgress(Math.round((currentIdx / issues.length) * 100));
-                    }
-
-                    await prisma.jobLog.create({
-                        data: {
-                            jobType: 'REPACK_ARCHIVES',
-                            status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
-                            durationMs: Date.now() - startTime,
-                            message: `Internal repack complete. Processed ${successCount} archives successfully. Failed: ${failCount}.`
-                        }
-                    });
-                    break;
-                }
+                // REPACK_ARCHIVES is handled exclusively by the Rust engine via /api/repack. The legacy
+                // Node BullMQ handler (serial, no WebP settings) was removed to guarantee a single
+                // repack engine — no producer enqueues this job type; the repack route forwards directly.
 
                 case 'WATCHED_FOLDER_SYNC': {
-                    const watchedDir = process.env.OMNIBUS_WATCHED_DIR || '/watched';
-                    const unmatchedDir = process.env.OMNIBUS_AWAITING_MATCH_DIR || '/unmatched';
-
-                    await fs.ensureDir(watchedDir);
-                    await fs.ensureDir(unmatchedDir);
-
-                    const filesToProcess: string[] = [];
-                    async function scanWatchedDir(currentPath: string) {
-                        const items = await fs.readdir(currentPath, { withFileTypes: true });
-                        for (const item of items) {
-                            const fullPath = path.join(currentPath, item.name);
-                            if (item.isDirectory()) {
-                                await scanWatchedDir(fullPath);
-                            } else {
-                                const ext = path.extname(item.name).toLowerCase();
-                                if (['.cbz', '.cbr', '.zip', '.rar', '.epub'].includes(ext)) {
-                                    filesToProcess.push(fullPath);
-                                }
-                            }
-                        }
-                    }
-                    await scanWatchedDir(watchedDir);
-
-                    let successCount = 0;
-                    let unmatchedCount = 0;
-                    const syncedSeriesIds = new Set<string>();
-
-                    const { convertCbrToCbz } = await import('@/lib/converter');
-                    const { parseComicInfo } = await import('@/lib/metadata-extractor');
-                    const { detectManga } = await import('@/lib/manga-detector');
-
-                    const libraries = await prisma.library.findMany();
-                    if (libraries.length === 0) break;
-
-                    const settings = await prisma.systemSetting.findMany();
-                    const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+                    Logger.log(`[BullMQ] Forwarding Watched Folder Sync to Rust Engine...`, 'info');
                     
-                    const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
-                    const filePattern = config.file_naming_pattern || "{Series} #{Issue}";
-                    const mangaFilePattern = config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
-
-                    for (let filePath of filesToProcess) {
-                        const file = path.basename(filePath); 
-                        const ext = path.extname(filePath).toLowerCase();
-                        
-                        if (!['.cbz', '.cbr', '.zip', '.rar', '.epub'].includes(ext)) continue;
-
-                        try {
-                            if (ext === '.cbr' || ext === '.rar') {
-                                const convertedPath = await convertCbrToCbz(filePath);
-                                if (convertedPath) {
-                                    filePath = convertedPath;
-                                } else {
-                                    continue;
-                                }
-                            }
-
-                            const meta = await parseComicInfo(filePath);
-
-                            if (meta && meta.metadataId && meta.series) {
-                                const safePublisher = meta.publisher || "Other";
-                                Logger.log(`[Watched Sync Debug] Parsed ComicInfo for ${file}: Series="${meta.series}", Issue="${meta.number}", Publisher="${safePublisher}"`, 'debug');
-                                
-                                const existingSeries = await prisma.series.findUnique({
-                                    where: { 
-                                        metadataSource_metadataId: { 
-                                            metadataSource: meta.metadataSource, 
-                                            metadataId: meta.metadataId.toString() 
-                                        } 
-                                    }
-                                });
-
-                                let isManga = false;
-                                if (existingSeries) {
-                                    isManga = existingSeries.isManga;
-                                } else if (meta.mangaTag === 'No') {
-                                    isManga = false;
-                                } else {
-                                    isManga = meta.isManga || await detectManga({ name: meta.series, publisher: { name: safePublisher }, year: meta.year || 0 }, filePath);
-                                }
-
-                                let targetLib = null;
-                                if (existingSeries && existingSeries.libraryId) {
-                                    targetLib = libraries.find(l => l.id === existingSeries.libraryId);
-                                }
-                                
-                                if (!targetLib) {
-                                    targetLib = isManga 
-                                        ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
-                                        : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
-                                }
-                                
-                                if (!targetLib) {
-                                    targetLib = libraries[0];
-                                }
-
-                                const sanitize = (str: string) => str.replace(/[<>:"/\\|?*]/g, '').trim();
-                                const safeSeries = sanitize(meta.series);
-                                const safeYear = meta.year ? meta.year.toString() : "";
-                                const safePub = sanitize(safePublisher);
-                                const universeName = meta.universe || "";
-
-                                let relFolderPath = folderPattern
-                                    .replace(/{Publisher}/gi, safePub)
-                                    .replace(/{Series}/gi, safeSeries)
-                                    .replace(/{Year}/gi, safeYear)
-                                    .replace(/{VolumeYear}/gi, safeYear)
-                                    .replace(/{UniverseName}/gi, sanitize(universeName))
-                                    .replace(/\(\s*\)/g, '')
-                                    .replace(/\[\s*\]/g, '')
-                                    .replace(/\s+/g, ' ')
-                                    .trim();
-
-                                const destFolder = path.join(targetLib.path, ...relFolderPath.split(/[/\\]/).map(p => p.trim()).filter(Boolean));
-                                await fs.ensureDir(destFolder);
-
-                                const extractedNum = meta.number || "1";
-                                let formattedNum = extractedNum.includes('.') || extractedNum.length > 1 ? extractedNum : `0${extractedNum}`;
-                                
-                                const issueYear = meta.year ? meta.year.toString() : safeYear;
-                                const filePatToUse = isManga ? mangaFilePattern : filePattern;
-                                
-                                const issueTitle = meta.title || "";
-
-                                const newFileName = filePatToUse
-                                    .replace(/{Publisher}/gi, safePub)
-                                    .replace(/{Series}/gi, safeSeries)
-                                    .replace(/{Year}/gi, safeYear)
-                                    .replace(/{VolumeYear}/gi, safeYear)
-                                    .replace(/{IssueYear}/gi, issueYear)
-                                    .replace(/{Issue}/gi, formattedNum)
-                                    .replace(/{IssueTitle}/gi, sanitize(issueTitle))
-                                    .replace(/{UniverseName}/gi, sanitize(universeName))
-                                    .replace(/\(\s*\)/g, '')
-                                    .replace(/\[\s*\]/g, '')
-                                    .replace(/\s*-\s*-/g, ' - ') // Collapses double hyphens (e.g., " -  - " becomes " - ")
-                                    .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // Removes any leading or trailing hyphens
-                                    .replace(/\s+/g, ' ')
-                                    .trim();
-
-                                const finalDestPath = path.join(destFolder, `${sanitize(newFileName)}.cbz`);
-                                const sourceDir = path.dirname(filePath);
-
-                                await fs.move(filePath, finalDestPath, { overwrite: true });
-
-                                try {
-                                    const dirsToCheck = [sourceDir];
-                                    const parentDir = path.dirname(sourceDir);
-                                    
-                                    if (parentDir.toLowerCase() !== watchedDir.toLowerCase() && parentDir.toLowerCase().startsWith(watchedDir.toLowerCase())) {
-                                        dirsToCheck.push(parentDir);
-                                    }
-
-                                    for (const dir of dirsToCheck) {
-                                        if (!fs.existsSync(dir)) continue;
-                                        
-                                        const siblingFiles = await fs.readdir(dir);
-                                        for (const sib of siblingFiles) {
-                                            if (sib.match(/\.(jpg|jpeg|png|webp)$/i)) {
-                                                const sibSrc = path.join(dir, sib);
-                                                const sibDest = path.join(destFolder, sib);
-                                                
-                                                try {
-                                                    if (sibSrc.toLowerCase() === sibDest.toLowerCase()) continue;
-                                                    
-                                                    if (!fs.existsSync(sibDest)) {
-                                                        await fs.copy(sibSrc, sibDest);
-                                                    }
-                                                    await fs.remove(sibSrc);
-                                                } catch (imgErr: any) {}
-                                            }
-                                        }
-                                    }
-                                } catch(e: any) {}
-
-                                let safeMetaYear = meta.year;
-                                if (safeMetaYear && (safeMetaYear < 1900 || safeMetaYear > 2100)) {
-                                    safeMetaYear = null; 
-                                }
-
-                                const seriesRecord = await prisma.series.upsert({
-                                    where: { 
-                                        metadataSource_metadataId: { 
-                                            metadataSource: meta.metadataSource, 
-                                            metadataId: meta.metadataId.toString() 
-                                        } 
-                                    },
-                                    update: { folderPath: destFolder },
-                                    create: {
-                                        name: safeSeries, 
-                                        publisher: safePub, 
-                                        year: meta.year || new Date().getFullYear(),
-                                        folderPath: destFolder, 
-                                        metadataId: meta.metadataId.toString(), 
-                                        metadataSource: meta.metadataSource,
-                                        matchState: 'MATCHED', 
-                                        isManga, 
-                                        libraryId: targetLib.id,
-                                        universe: universeName
-                                    }
-                                });
-
-                                syncedSeriesIds.add(seriesRecord.id);
-
-                                await prisma.issue.create({
-                                    data: {
-                                        seriesId: seriesRecord.id,
-                                        metadataId: meta.metadataIssueId ? meta.metadataIssueId.toString() : `unmatched_${Math.random()}`,
-                                        metadataSource: meta.metadataIssueId ? meta.metadataSource : 'LOCAL',
-                                        matchState: meta.metadataIssueId ? 'MATCHED' : 'UNMATCHED',
-                                        number: extractedNum, 
-                                        status: 'DOWNLOADED', 
-                                        filePath: finalDestPath,
-                                        name: meta.title, 
-                                        description: meta.summary,
-                                        writers: meta.writers?.length ? JSON.stringify(meta.writers) : null,
-                                        artists: meta.artists?.length ? JSON.stringify(meta.artists) : null,
-                                        characters: meta.characters?.length ? JSON.stringify(meta.characters) : null
-                                    }
-                                });
-
-                                successCount++;
-                            } else {
-                                Logger.log(`[Watched Sync Debug] Failed to parse sufficient metadata for ${file}. Moving to unmatched folder.`, 'debug');
-                                const finalUnmatchedPath = path.join(unmatchedDir, path.basename(filePath));
-                                await fs.move(filePath, finalUnmatchedPath, { overwrite: true });
-                                unmatchedCount++;
-                            }
-                        } catch (err) {
-                            Logger.log(`[Watched Sync] Error processing ${path.basename(filePath)}`, 'error');
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/watched-sync', { method: 'POST', headers: engineHeaders() });
+                        if (!rustResponse.ok) {
+                            throw new Error(`Rust returned error status ${rustResponse.status}`);
                         }
-                    }
-
-                    async function cleanEmptyFolders(folder: string) {
-                        const items = await fs.readdir(folder, { withFileTypes: true });
-                        let isEmpty = true;
-                        
-                        for (const item of items) {
-                            const fullPath = path.join(folder, item.name);
-                            if (item.isDirectory()) {
-                                const isSubEmpty = await cleanEmptyFolders(fullPath);
-                                if (!isSubEmpty) {
-                                    isEmpty = false;
-                                }
-                            } else {
-                                isEmpty = false;
-                            }
-                        }
-                        
-                        if (isEmpty && folder !== watchedDir) {
-                            await fs.rmdir(folder).catch(() => {});
-                        }
-                        return isEmpty;
-                    }
-                    
-                    await cleanEmptyFolders(watchedDir);
-
-                    if (successCount > 0 || unmatchedCount > 0) {
-                        if (syncedSeriesIds.size > 0) {
-                            await omnibusQueue.add('METADATA_SYNC', { 
-                                type: 'METADATA_SYNC', 
-                                seriesIds: Array.from(syncedSeriesIds) 
-                            }, { 
-                                jobId: `METADATA_SYNC_WATCHED_${Date.now()}` 
-                            });
-                        }
-
-                        await prisma.jobLog.create({
-                            data: { 
-                                jobType: 'WATCHED_FOLDER_SYNC', 
-                                status: 'COMPLETED', 
-                                durationMs: Date.now() - startTime, 
-                                message: `Processed watched folder. Imported: ${successCount}. Moved to unmatched: ${unmatchedCount}.` 
-                            }
-                        });
+                        Logger.log(`[BullMQ] Rust Engine successfully took over the Watched Folder sweep!`, 'info');
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload Watched Folder Sync to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
                     }
                     break;
                 }
@@ -865,12 +504,20 @@ export function initWorker() {
                     const lastRunTime = parseInt(lastStorageRun?.value || "0");
                     const hoursSinceLastRun = (Date.now() - lastRunTime) / (1000 * 60 * 60);
 
-                    let processedCount = 0;
                     let storageMessage = "Skipped heavy storage scan (calculated recently).";
 
                     if (hoursSinceLastRun >= 24) {
-                        processedCount = await runStorageScan();
-                        storageMessage = `Storage calculation completed for ${processedCount} series.`;
+                        // Offload the deep storage scan to the Rust engine (fire-and-forget, like the
+                        // STORAGE_SCAN job). The engine writes Series.size + the cache + the last-run
+                        // timestamps this 24h gate reads.
+                        try {
+                            const rustResponse = await fetch(ENGINE_URL + '/api/diagnostics/storage', { method: 'POST', headers: engineHeaders() });
+                            if (!rustResponse.ok) throw new Error(`Rust returned status ${rustResponse.status}`);
+                            storageMessage = "Deep storage scan offloaded to the engine.";
+                        } catch (e) {
+                            Logger.log(`[BullMQ] Failed to offload storage scan to Rust: ${getErrorMessage(e)}`, 'warn');
+                            storageMessage = "Storage scan offload failed (see logs).";
+                        }
                     }
 
                     await prisma.jobLog.create({ 
@@ -890,454 +537,201 @@ export function initWorker() {
                     const isTargeted = job.data.seriesIds && Array.isArray(job.data.seriesIds) && job.data.seriesIds.length > 0;
                     
                     if (!isTargeted) {
-                        await prisma.systemSetting.upsert({ 
-                            where: { key: 'last_metadata_sync' }, 
-                            update: { value: nowStr }, 
-                            create: { key: 'last_metadata_sync', value: nowStr } 
-                        });
-                    }
-                    
-                    const { syncSeriesMetadata } = await import('@/lib/metadata-fetcher');
-                    let seriesToSync: any[] = [];
-                    
-                    if (isTargeted) {
-                        seriesToSync = await prisma.series.findMany({ 
-                            where: { id: { in: job.data.seriesIds }, metadataId: { not: null } } 
-                        });
-                    } else {
-                        seriesToSync = await prisma.series.findMany({ 
-                            where: { metadataId: { not: null } }, 
-                            orderBy: { updatedAt: 'asc' }, 
-                            take: 15 
+                        await prisma.systemSetting.upsert({
+                            where: { key: 'last_metadata_sync' },
+                            update: { value: nowStr },
+                            create: { key: 'last_metadata_sync', value: nowStr }
                         });
                     }
 
-                    let successCount = 0;
-                    let failCount = 0;
-                    let details = isTargeted
-                        ? `Started Targeted Metadata Sync for ${seriesToSync.length} newly imported series.\n\n`
-                        : `Started Background Metadata Sync for ${seriesToSync.length} series (Chunked to prevent API bans).\n\n`;
+                    Logger.log(`[BullMQ] Forwarding metadata synchronization job to Rust Engine...`, 'info');
 
-                    for (const series of seriesToSync) {
-                        try {
-                            if (!series.metadataId) continue;
-                            Logger.log(`[Metadata Sync Debug] Syncing metadata for series: "${series.name}" (${series.metadataSource} ID: ${series.metadataId})`, 'debug');
-                            await syncSeriesMetadata(series.metadataId, series.folderPath, series.metadataSource);
-                            
-                            await prisma.series.update({ 
-                                where: { id: series.id }, 
-                                data: { updatedAt: new Date() } 
-                            });
-                            
-                            successCount++;
-                            details += `[OK] Synced: ${series.name}\n`;
-                            await new Promise(r => setTimeout(r, 4000));
-                        } catch (e: any) {
-                            failCount++;
-                            details += `[FAIL] ${series.name} - ${e.message}\n`;
-                            
-                            await prisma.series.update({ 
-                                where: { id: series.id }, 
-                                data: { updatedAt: new Date() } 
-                            });
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/metadata/sync', {
+                            method: 'POST',
+                            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                            body: JSON.stringify({
+                                series_ids: isTargeted ? job.data.seriesIds : null
+                            })
+                        });
 
-                            // --- NEW: Catch the fatal limit and stop the job ---
-                            if (e.message === 'FATAL_RATE_LIMIT' || e.message.includes('429')) {
-                                details += `\n[HALTED] API rate limit exhausted. Pausing background job to prevent IP ban.\n`;
-                                Logger.log(`[Metadata Sync] Halted batch due to rate limits to protect IP.`, 'warn');
-                                break; 
-                            }
-                            
-                            await new Promise(r => setTimeout(r, 4000));
+                        if (!rustResponse.ok) {
+                            Logger.log(`[BullMQ] Rust Engine rejected metadata sync job (Status: ${rustResponse.status})`, 'error');
+                            throw new Error(`Rust returned error status ${rustResponse.status}`);
+                        } else {
+                            Logger.log(`[BullMQ] Rust Engine successfully accepted the metadata synchronization process!`, 'info');
+                            // job_metadata_sync now fires from the engine on completion (POST /api/internal/notify).
                         }
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload metadata sync to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
                     }
-
-                    await prisma.jobLog.create({
-                        data: { 
-                            jobType: 'METADATA_SYNC', 
-                            status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', 
-                            durationMs: Date.now() - startTime, 
-                            message: details + `\nFinal Summary: ${successCount} Success, ${failCount} Failed.` 
-                        }
-                    });
-                    
-                    SystemNotifier.sendAlert('job_metadata_sync', { description: `Metadata Sync Finished. Success: ${successCount} | Failed: ${failCount}` }).catch(() => {});
                     break;
                 }
 
-                case 'EMBED_METADATA': {
-                    await prisma.systemSetting.upsert({ 
-                        where: { key: 'last_embed_sync' }, 
-                        update: { value: nowStr }, 
-                        create: { key: 'last_embed_sync', value: nowStr } 
-                    });
+                                case 'EMBED_METADATA': {
+                    const { seriesId, issueIds } = job.data;
                     
-                    const { writeComicInfo, writeSeriesJson } = await import('@/lib/metadata-writer');
-                    const whereClause: any = { filePath: { endsWith: '.cbz' } };
-                    
-                    if (job.data.seriesId) {
-                        whereClause.seriesId = job.data.seriesId;
-                    } else if (job.data.issueIds && Array.isArray(job.data.issueIds)) {
-                        whereClause.id = { in: job.data.issueIds };
-                    } else {
-                        whereClause.series = { metadataSource: { in: ['COMICVINE', 'METRON'] } };
+                    // Only update the global timer if this was a scheduled bulk job
+                    if (!seriesId && (!issueIds || issueIds.length === 0)) {
+                        await prisma.systemSetting.upsert({ 
+                            where: { key: 'last_embed_sync' }, 
+                            update: { value: nowStr }, 
+                            create: { key: 'last_embed_sync', value: nowStr } 
+                        });
                     }
 
-                    const issues = await prisma.issue.findMany({ where: whereClause });
+                    Logger.log(`[BullMQ] Forwarding metadata embedding job to Rust Engine...`, 'info');
 
-                    let successCount = 0;
-                    let failCount = 0;
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/metadata/embed', {
+                            method: 'POST',
+                            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                            body: JSON.stringify({
+                                series_id: seriesId || null,
+                                issue_ids: issueIds && issueIds.length > 0 ? issueIds : null
+                            })
+                        });
 
-                    for (const issue of issues) {
-                        const success = await writeComicInfo(issue.id);
-                        if (success) {
-                            successCount++;
-                        } else {
-                            failCount++;
+                        if (!rustResponse.ok) {
+                            throw new Error(`Rust returned error status ${rustResponse.status}`);
                         }
-                        await new Promise(r => setTimeout(r, 1000)); 
+
+                        Logger.log(`[BullMQ] Rust Engine successfully accepted the metadata embedding process!`, 'info');
+
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload metadata embedding to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
+                    }
+                    break;
+                }
+
+                case 'EXPORT_SERIES_JSON': {
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'last_series_json_sync' },
+                        update: { value: nowStr },
+                        create: { key: 'last_series_json_sync', value: nowStr }
+                    });
+
+                    const exportEnabled = await prisma.systemSetting.findUnique({ where: { key: 'export_series_json' } });
+                    if (exportEnabled?.value !== 'true') {
+                        await prisma.jobLog.create({
+                            data: {
+                                jobType: 'EXPORT_SERIES_JSON',
+                                status: 'COMPLETED_WITH_ERRORS',
+                                durationMs: Date.now() - startTime,
+                                message: 'Skipped: the series.json export feature is disabled. Enable it in Settings or via the job card toggle.'
+                            }
+                        });
+                        break;
                     }
 
-                    const uniqueSeriesIds = new Set(issues.map(i => i.seriesId));
-                    let seriesJsonCount = 0;
-                    
-                    for (const sId of uniqueSeriesIds) {
-                        const wroteJson = await writeSeriesJson(sId);
-                        if (wroteJson) seriesJsonCount++;
-                    }
+                    // The Mylar-spec writer lives in the engine (metadata_writer::run_series_json_export);
+                    // it also runs inline after every engine embed, so this job covers the scheduled/manual path.
+                    const seriesIds: string[] | null = job.data.seriesId
+                        ? [job.data.seriesId]
+                        : (Array.isArray(job.data.seriesIds) ? job.data.seriesIds : null);
+
+                    Logger.log(`[BullMQ] Forwarding series.json export to Rust Engine...`, 'info');
+                    const rustResponse = await fetch(ENGINE_URL + '/api/metadata/export-series-json', {
+                        method: 'POST',
+                        headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({ series_ids: seriesIds })
+                    });
+                    if (!rustResponse.ok) throw new Error(`Rust returned error status ${rustResponse.status}`);
+                    const exportResult = await rustResponse.json();
 
                     await prisma.jobLog.create({
-                        data: { 
-                            jobType: 'EMBED_METADATA', 
-                            status: failCount > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', 
-                            durationMs: Date.now() - startTime, 
-                            message: `Metadata embedding complete. Updated ${successCount} files. Failed: ${failCount}. Exported ${seriesJsonCount} series.json files.` 
+                        data: {
+                            jobType: 'EXPORT_SERIES_JSON',
+                            status: 'COMPLETED',
+                            durationMs: Date.now() - startTime,
+                            message: `series.json export complete. Wrote ${exportResult.exported ?? 0} of ${exportResult.total ?? 0} series folders.`
                         }
                     });
                     break;
                 }
 
                 case 'SERIES_MONITOR': {
-                    await prisma.systemSetting.upsert({ 
-                        where: { key: 'last_monitor_sync' }, 
-                        update: { value: nowStr }, 
-                        create: { key: 'last_monitor_sync', value: nowStr } 
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'last_monitor_sync' },
+                        update: { value: nowStr },
+                        create: { key: 'last_monitor_sync', value: nowStr }
                     });
-                    
+
                     let details = "Hybrid Series Monitor Job Started.\n\n";
-                    let skeletonsCreated = 0;
                     let newRequestsFound = 0;
                     let unreleasedUpgraded = 0;
 
-                    const allRequests = await prisma.request.findMany();
                     const admin = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
-                    const localSeriesList = await prisma.series.findMany({ include: { issues: true } });
-                    const normalize = (str?: string | null) => str ? str.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
 
-                    const metronUser = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
-                    const metronPass = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
-                    
-                    if (metronUser?.value && metronPass?.value) {
-                        const todayObj = new Date();
-                        const pastStr = new Date(todayObj.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-                        const futureStr = new Date(todayObj.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-                        
-                        try {
-                            let nextUrl = `https://metron.cloud/api/issue/?store_date_range_after=${pastStr}&store_date_range_before=${futureStr}`;
-                            const metronIssues: any[] = [];
-                            
-                            while (nextUrl && metronIssues.length < 3000) {
-                                try {
-                                    const res = await axios.get(nextUrl, {
-                                        auth: { username: metronUser.value, password: metronPass.value },
-                                        headers: { 'User-Agent': 'Omnibus/1.0' },
-                                        timeout: 15000,
-                                        validateStatus: (status) => status < 500
-                                    });
-                                    
-                                    if (res.status === 429) {
-                                        const retryAfter = parseInt(res.headers['retry-after'] || '60', 10);
-                                        await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
-                                        continue;
-                                    }
-                                    
-                                    if (res.data && res.data.results) {
-                                        metronIssues.push(...res.data.results);
-                                    }
-                                    
-                                    nextUrl = res.data.next;
-                                    
-                                    const remaining = parseInt(res.headers['x-ratelimit-burst-remaining'] || '20', 10);
-                                    if (remaining <= 2) {
-                                        const reset = parseInt(res.headers['x-ratelimit-burst-reset'] || '0', 10);
-                                        if (reset > 0) {
-                                            const sleepMs = Math.max(0, (reset * 1000) - Date.now()) + 500;
-                                            if (sleepMs > 0) await new Promise(r => setTimeout(r, sleepMs));
-                                        } else {
-                                            await new Promise(r => setTimeout(r, 2000));
-                                        }
-                                    } else if (nextUrl) {
-                                        await new Promise(r => setTimeout(r, 500));
-                                    }
-                                } catch (axiosErr: any) { 
-                                    throw axiosErr; 
-                                }
-                            }
-                            
-                            details += `[Phase 1] Metron Oracle fetched ${metronIssues.length} global upcoming releases.\n`;
-                            
-                            for (const mIssue of metronIssues) {
-                                const mSeriesId = mIssue.series?.id?.toString(); 
-                                const mSeriesName = normalize(mIssue.series?.name);
-                                const mPubName = normalize(mIssue.publisher?.name || mIssue.series?.publisher?.name);
-                                const mNumStr = mIssue.number || mIssue.issue;
-                                const mNum = parseFloat(mNumStr);
-
-                                if (isNaN(mNum)) continue;
-                                let matchedSeries = null;
-
-                                if (mSeriesId) {
-                                    matchedSeries = localSeriesList.find((s: any) => s.metadataSource === 'METRON' && s.metadataId === mSeriesId);
-                                }
-                                
-                                if (!matchedSeries && mSeriesName) {
-                                    matchedSeries = localSeriesList.find((s: any) => normalize(s.name) === mSeriesName && (mPubName ? normalize(s.publisher) === mPubName : true));
-                                }
-                                
-                                if (matchedSeries) {
-                                    Logger.log(`[Series Monitor Debug] Upcoming Metron issue "${mIssue.name || mNumStr}" matched to local series "${matchedSeries.name}"`, 'debug');
-                                    let issueDate = mIssue.store_date || mIssue.cover_date || null;
-                                    const searchName = `${matchedSeries.name} #${mNumStr}`;
-                                    const isReleased = isReleasedYet(mIssue.store_date, mIssue.cover_date);
-                                    
-                                    let skeleton = matchedSeries.issues.find((i: any) => parseFloat(i.number) === mNum);
-                                    if (!skeleton) {
-                                        skeleton = await prisma.issue.create({
-                                            data: {
-                                                seriesId: matchedSeries.id, 
-                                                metadataId: mIssue.id.toString(), 
-                                                metadataSource: 'METRON',
-                                                matchState: 'MATCHED', 
-                                                number: mNumStr.toString(), 
-                                                name: mIssue.name || mIssue.issue_name,
-                                                description: mIssue.desc || mIssue.description || null, 
-                                                releaseDate: issueDate,
-                                                coverUrl: mIssue.image || null, 
-                                                status: 'WANTED'
-                                            }
-                                        }).catch(() => null) as any;
-                                        
-                                        if (skeleton) { 
-                                            matchedSeries.issues.push(skeleton); 
-                                            skeletonsCreated++; 
-                                        }
-                                    } else if (skeleton.releaseDate !== issueDate && issueDate) {
-                                         await prisma.issue.update({ 
-                                             where: { id: skeleton.id }, 
-                                             data: { releaseDate: issueDate } 
-                                         }).catch(() => {});
-                                         skeleton.releaseDate = issueDate;
-                                    }
-
-                                    if (matchedSeries.monitored) {
-                                        const alreadyInLibrary = matchedSeries.issues.some((i: any) => isSameIssue(i.number, mNumStr) && i.filePath && i.filePath.length > 0);
-                                        if (alreadyInLibrary) {
-                                            Logger.log(`[Series Monitor Debug] Issue ${mNumStr} is already downloaded in library. Skipping request.`, 'debug');
-                                            continue;
-                                        }
-
-                                        const alreadyReq = allRequests.find(r => {
-                                            if (r.volumeId !== (matchedSeries.metadataId || matchedSeries.id)) return false;
-                                            const match = r.activeDownloadName?.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-                                            const reqNum = match ? match[1] : null;
-                                            return reqNum ? isSameIssue(reqNum, mNumStr) : false;
-                                        });
-                                        
-                                        const issueYear = issueDate ? issueDate.split('-')[0] : matchedSeries.year?.toString() || new Date().getFullYear().toString();
-
-                                        if (alreadyReq) {
-                                            if (alreadyReq.status === 'UNRELEASED' && isReleased) {
-                                                details += `[UPGRADE] ${searchName} released. Triggering search...\n`;
-                                                await prisma.request.update({ where: { id: alreadyReq.id }, data: { status: 'PENDING' } });
-                                                searchAndDownload(alreadyReq.id, searchName, issueYear, matchedSeries.publisher || "Unknown", matchedSeries.isManga).catch(() => {});
-                                                unreleasedUpgraded++;
-                                                alreadyReq.status = 'PENDING';
-                                            }
-                                        } else {
-                                            const issueStatus = isReleased ? 'PENDING' : 'UNRELEASED';
-                                            details += `[NEW] Queued ${issueStatus}: ${searchName}\n`;
-                                            
-                                            const newReq = await prisma.request.create({
-                                                data: {
-                                                    userId: admin?.id || 'system', 
-                                                    volumeId: matchedSeries.metadataId || matchedSeries.id,
-                                                    status: issueStatus, 
-                                                    activeDownloadName: searchName, 
-                                                    imageUrl: mIssue.image || matchedSeries.coverUrl
-                                                }
-                                            });
-                                            allRequests.push(newReq);
-                                            
-                                            if (isReleased) {
-                                                searchAndDownload(newReq.id, searchName, issueYear, matchedSeries.publisher || "Unknown", matchedSeries.isManga).catch(() => {});
-                                                newRequestsFound++;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (e: any) { 
-                            details += `[Phase 1] Metron Oracle failed: ${e.message}\n`; 
-                        }
+                    // The heavy half (Metron 3000 + ComicVine 25x30 fetch/match/skeleton-upsert) is owned by
+                    // the Rust engine (/api/monitor/sync -> monitor::run_series_monitor). It returns the
+                    // skeleton count + the monitored, matched, not-in-library issues as candidates; request
+                    // creation + searchAndDownload (BullMQ) stay here. The call is synchronous and can take
+                    // minutes -- the engine awaits the full fetch before responding.
+                    let monitorData: any = { skeletons_created: 0, metron_fetched: 0, notes: [], candidates: [] };
+                    try {
+                        const rustResponse = await engineFetchLong(ENGINE_URL + '/api/monitor/sync', { method: 'POST', headers: engineHeaders() });
+                        if (!rustResponse.ok) throw new Error(`Rust returned status ${rustResponse.status}`);
+                        monitorData = await rustResponse.json();
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Series Monitor engine phase failed: ${getErrorMessage(e)}`, 'error');
+                        throw e;
                     }
 
-                    const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
-                    const cvApiKey = cvKeySetting?.value;
+                    const skeletonsCreated = monitorData.skeletons_created || 0;
+                    if (Array.isArray(monitorData.notes)) for (const n of monitorData.notes) details += `${n}\n`;
 
-                    if (cvApiKey) {
-                        const cvSeriesToScan = await prisma.series.findMany({
-                            where: { monitored: true, metadataSource: 'COMICVINE' },
-                            orderBy: { updatedAt: 'asc' }, 
-                            take: 25, 
-                            include: { issues: true }
+                    const allRequests = await prisma.request.findMany();
+
+                    // Request creation / UNRELEASED upgrade from the engine's candidates.
+                    for (const c of (monitorData.candidates || [])) {
+                        const alreadyReq = allRequests.find(r => {
+                            if (r.volumeId !== c.volume_id) return false;
+                            const match = r.activeDownloadName?.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+                            const reqNum = match ? match[1] : null;
+                            return reqNum ? isSameIssue(reqNum, c.issue_number) : false;
                         });
 
-                        for (const seriesRecord of cvSeriesToScan) {
-                            const cvId = seriesRecord.metadataId;
-                            if (!cvId) continue;
-                            
-                            try {
-                                const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
-                                    params: { 
-                                        api_key: cvApiKey, 
-                                        format: 'json', 
-                                        filter: `volume:${cvId}`, 
-                                        sort: 'issue_number:desc', 
-                                        limit: 30, 
-                                        field_list: 'id,name,issue_number,cover_date,store_date,image,deck,description' 
-                                    },
-                                    headers: { 'User-Agent': 'Omnibus/1.0' }, 
-                                    timeout: 10000
-                                });
-                                
-                                const cvIssues = cvRes.data.results || [];
-                                
-                                for (const cvIssue of cvIssues) {
-                                    const cvNumStr = cvIssue.issue_number?.toString();
-                                    if (!cvNumStr) continue;
-                                    Logger.log(`[Series Monitor Debug] Evaluating ComicVine issue #${cvNumStr} for series "${seriesRecord.name}"`, 'debug');
-                                    const alreadyInLibrary = seriesRecord.issues.some((i: any) => isSameIssue(i.number, cvNumStr) && i.filePath && i.filePath.length > 0);
-                                    const searchName = `${seriesRecord.name} #${cvIssue.issue_number}`;
-                                    
-                                    const alreadyReq = allRequests.find(r => {
-                                        if (r.volumeId !== seriesRecord.metadataId) return false;
-                                        const match = r.activeDownloadName?.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-                                        const reqNum = match ? match[1] : null;
-                                        return reqNum ? isSameIssue(reqNum, cvNumStr) : false;
-                                    });
-
-                                    let issueDate = cvIssue.store_date || cvIssue.cover_date || null;
-                                    if (issueDate) {
-                                        if (issueDate.length === 4) issueDate += "-01-01";
-                                        else if (issueDate.length === 7) issueDate += "-28"; 
-                                    }
-
-                                    const isReleased = isReleasedYet(cvIssue.store_date, cvIssue.cover_date);
-                                    const issueYear = issueDate ? issueDate.split('-')[0] : seriesRecord.year?.toString() || new Date().getFullYear().toString();
-
-                                    if (!alreadyInLibrary) {
-                                        const existingSkeleton = seriesRecord.issues.find((i: any) => isSameIssue(i.number, cvNumStr));
-                                        if (!existingSkeleton) {
-                                            await prisma.issue.create({
-                                                data: {
-                                                    seriesId: seriesRecord.id, 
-                                                    metadataId: cvIssue.id.toString(), 
-                                                    metadataSource: 'COMICVINE', 
-                                                    matchState: 'MATCHED',
-                                                    number: cvIssue.issue_number?.toString() || "0", 
-                                                    name: cvIssue.name, 
-                                                    description: cvIssue.description || cvIssue.deck || null,
-                                                    releaseDate: issueDate, 
-                                                    coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null, 
-                                                    status: 'WANTED'
-                                                }
-                                            }).catch(() => {});
-                                            skeletonsCreated++;
-                                        } else if (existingSkeleton.releaseDate !== issueDate && issueDate) {
-                                            await prisma.issue.update({ 
-                                                where: { id: existingSkeleton.id }, 
-                                                data: { releaseDate: issueDate } 
-                                            }).catch(() => {});
-                                        }
-                                    }
-
-                                    if (alreadyInLibrary) continue;
-
-                                    if (alreadyReq) {
-                                        if (alreadyReq.status === 'UNRELEASED' && isReleased) {
-                                            details += `[UPGRADE] CV: ${searchName} is now released.\n`;
-                                            await prisma.request.update({ where: { id: alreadyReq.id }, data: { status: 'PENDING' } });
-                                            searchAndDownload(alreadyReq.id, searchName, issueYear, seriesRecord.publisher || "Unknown", seriesRecord.isManga).catch(() => {});
-                                            unreleasedUpgraded++;
-                                            alreadyReq.status = 'PENDING';
-                                        }
-                                        continue; 
-                                    }
-
-                                    const issueStatus = isReleased ? 'PENDING' : 'UNRELEASED';
-                                    
-                                    const newReq = await prisma.request.create({
-                                        data: {
-                                            userId: admin?.id || 'system', 
-                                            volumeId: cvId.toString(), 
-                                            status: issueStatus,
-                                            activeDownloadName: searchName, 
-                                            imageUrl: cvIssue.image?.medium_url || seriesRecord.coverUrl
-                                        }
-                                    });
-
-                                    allRequests.push(newReq); 
-
-                                    if (isReleased) {
-                                        searchAndDownload(newReq.id, searchName, issueYear, seriesRecord.publisher || "Unknown", seriesRecord.isManga).catch(() => {});
-                                        newRequestsFound++;
-                                    }
+                        if (alreadyReq) {
+                            if (alreadyReq.status === 'UNRELEASED' && c.is_released) {
+                                details += `[UPGRADE] ${c.search_name} released. Triggering search...\n`;
+                                await prisma.request.update({ where: { id: alreadyReq.id }, data: { status: 'PENDING' } });
+                                searchAndDownload(alreadyReq.id, c.search_name, c.issue_year, c.publisher, c.is_manga).catch(() => {});
+                                unreleasedUpgraded++;
+                                alreadyReq.status = 'PENDING';
+                            }
+                        } else {
+                            const issueStatus = c.is_released ? 'PENDING' : 'UNRELEASED';
+                            details += `[NEW] Queued ${issueStatus}: ${c.search_name}\n`;
+                            const newReq = await prisma.request.create({
+                                data: {
+                                    userId: admin?.id || 'system',
+                                    volumeId: c.volume_id,
+                                    status: issueStatus,
+                                    activeDownloadName: c.search_name,
+                                    imageUrl: c.image_url || null
                                 }
-                                
-                                await prisma.series.update({ 
-                                    where: { id: seriesRecord.id }, 
-                                    data: { updatedAt: new Date() } 
-                                }).catch(()=>{});
-                                
-                                await new Promise(r => setTimeout(r, 2000));
-                            } catch (err: any) {}
+                            });
+                            allRequests.push(newReq);
+                            if (c.is_released) {
+                                searchAndDownload(newReq.id, c.search_name, c.issue_year, c.publisher, c.is_manga).catch(() => {});
+                                newRequestsFound++;
+                            }
                         }
                     }
 
+                    // Phase 3 -- UNRELEASED upgrade sweep. Re-fetch series+issues so the engine-created
+                    // skeletons (with releaseDates) are visible to this pass.
+                    const localSeriesList = await prisma.series.findMany({ include: { issues: true } });
                     const unreleasedRequests = allRequests.filter(r => r.status === 'UNRELEASED');
                     for (const req of unreleasedRequests) {
-                        const extractNum = (str: string) => {
-                            const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
-                            
-                            const issueMatch = clean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
-                            if (issueMatch) return parseFloat(issueMatch[1]);
-                            
-                            const volMatch = clean.match(/(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?)(?!\d)/i);
-                            if (volMatch) return parseFloat(volMatch[1]);
-                            
-                            const fallbacks = [...clean.matchAll(/(?<=^|[^a-zA-Z0-9])0*(\d+(?:\.\d+)?)(?=[^a-zA-Z0-9]|$)/g)];
-                            if (fallbacks.length > 0) {
-                                for (let i = fallbacks.length - 1; i >= 0; i--) {
-                                    const numVal = parseFloat(fallbacks[i][1]);
-                                    if (numVal >= 1900 && numVal <= 2099) continue;
-                                    return numVal;
-                                }
-                            }
-                            return null;
-                        };
-                        
-                        const reqNum = extractNum(req.activeDownloadName || "");
-                        if (reqNum !== null) {
+                        // Unified utility (negative-number aware) replaces the old inline extractor.
+                        const reqNumString = extractIssueNumber(req.activeDownloadName || "");
+                        const reqNum = parseFloat(reqNumString);
+
+                        if (!isNaN(reqNum)) {
                             const matchedSeries = localSeriesList.find(s => s.metadataId === req.volumeId || s.id === req.volumeId);
                             if (matchedSeries) {
                                 const skeleton = matchedSeries.issues.find((i: any) => parseFloat(i.number) === reqNum);
@@ -1352,83 +746,28 @@ export function initWorker() {
                         }
                     }
 
-                    await prisma.jobLog.create({ 
-                        data: { 
-                            jobType: 'SERIES_MONITOR', 
-                            status: 'COMPLETED', 
-                            durationMs: Date.now() - startTime, 
-                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades.` 
-                        } 
+                    await prisma.jobLog.create({
+                        data: {
+                            jobType: 'SERIES_MONITOR',
+                            status: 'COMPLETED',
+                            durationMs: Date.now() - startTime,
+                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades.`
+                        }
                     });
                     break;
                 }
 
                 case 'DIAGNOSTICS': {
-                    await prisma.systemSetting.upsert({ 
-                        where: { key: 'last_diagnostics_sync' }, 
-                        update: { value: nowStr }, 
-                        create: { key: 'last_diagnostics_sync', value: nowStr } 
-                    });
-                    
-                    let details = "Diagnostics Scan Started.\n\n";
-                    let issuesFound = 0;
-                    
-                    const series = await prisma.series.findMany();
-                    const ghosts = series.filter(s => !s.folderPath || !fs.existsSync(s.folderPath));
-                    
-                    if (ghosts.length > 0) {
-                        details += `[WARNING] Found ${ghosts.length} ghost series records.\n`;
-                        issuesFound += ghosts.length;
+                    Logger.log(`[BullMQ] Forwarding Ghost File Check to Rust Engine...`, 'info');
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/diagnostics/ghosts', { method: 'POST', headers: engineHeaders() });
+                        if (!rustResponse.ok) throw new Error(`Rust returned status ${rustResponse.status}`);
+                        Logger.log(`[BullMQ] Rust Engine successfully took over Ghost File Diagnostics!`, 'info');
+                        // job_diagnostics now fires from the engine on completion (POST /api/internal/notify).
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload Diagnostics to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
                     }
-
-                    const libraries = await prisma.library.findMany();
-                    let drivesOnline = true;
-                    
-                    for (const lib of libraries) {
-                        if (!fs.existsSync(lib.path)) { 
-                            drivesOnline = false; 
-                            details += `[CRITICAL] Drive disconnected: ${lib.path}. Skipping Ghost Issue scan.\n`; 
-                        }
-                    }
-
-                    if (drivesOnline) {
-                        const allIssues = await prisma.issue.findMany({ where: { filePath: { not: null } } });
-                        let ghostIssueCount = 0;
-                        for (const issue of allIssues) {
-                            if (issue.filePath && !fs.existsSync(issue.filePath)) {
-                                try {
-                                    if (issue.metadataId && !issue.metadataId.startsWith('unmatched')) {
-                                        await prisma.issue.update({ 
-                                            where: { id: issue.id }, 
-                                            data: { filePath: null, status: 'WANTED' } 
-                                        });
-                                    } else {
-                                        await prisma.readProgress.deleteMany({ where: { issueId: issue.id } }).catch(()=>({}));
-                                        await prisma.issue.delete({ where: { id: issue.id } });
-                                    }
-                                    ghostIssueCount++;
-                                } catch (delErr: any) {}
-                            }
-                        }
-                        
-                        if (ghostIssueCount > 0) { 
-                            details += `[WARNING] Found and repaired ${ghostIssueCount} ghost issue files.\n`; 
-                            issuesFound += ghostIssueCount; 
-                        }
-                    }
-
-                    if (issuesFound === 0 && drivesOnline) {
-                        details += "Library is in perfect health. 100% Integrity.\n";
-                    }
-
-                    await prisma.jobLog.create({ 
-                        data: { 
-                            jobType: 'DIAGNOSTICS', 
-                            status: issuesFound > 0 ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED', 
-                            durationMs: Date.now() - startTime, 
-                            message: details 
-                        } 
-                    });
                     break;
                 }
 
@@ -1461,282 +800,44 @@ export function initWorker() {
                 }
 
                 case 'STORAGE_SCAN': {
-                    const processedCount = await runStorageScan();
-                    Logger.log(`[Background Job] Storage Scan Complete. Processed ${processedCount} series.`, "success");
+                    await prisma.systemSetting.upsert({ 
+                        where: { key: 'last_storage_scan' }, 
+                        update: { value: nowStr }, 
+                        create: { key: 'last_storage_scan', value: nowStr } 
+                    });
+
+                    Logger.log(`[BullMQ] Forwarding Deep Storage Scan to Rust Engine...`, 'info');
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/diagnostics/storage', { method: 'POST', headers: engineHeaders() });
+                        if (!rustResponse.ok) throw new Error(`Rust returned status ${rustResponse.status}`);
+                        Logger.log(`[BullMQ] Rust Engine successfully took over Deep Storage Scan!`, 'info');
+                        // job_diagnostics now fires from the engine on completion (POST /api/internal/notify).
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload Storage Scan to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
+                    }
                     break;
                 }
 
                 case 'DISCOVER_SYNC': {
-                    const startTime = Date.now();
-                    await prisma.systemSetting.upsert({ 
-                        where: { key: 'last_popular_sync' }, 
-                        update: { value: nowStr }, 
-                        create: { key: 'last_popular_sync', value: nowStr } 
+                    // The Discover-feed rebuild (ComicVine + Metron fetch/filter/cache) is owned by the
+                    // Rust engine (/api/discover/sync -> discover::run_discover_sync), which writes the
+                    // discover_cache_new / discover_cache_popular caches and the COMPLETED/FAILED JobLog.
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'last_popular_sync' },
+                        update: { value: nowStr },
+                        create: { key: 'last_popular_sync', value: nowStr }
                     });
-    
-                    const allSettings = await prisma.systemSetting.findMany();
-                    const config = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-    
-                    const primarySource = config.primary_metadata_source || 'COMICVINE';
-                    const CV_API_KEY = config.cv_api_key || process.env.CV_API_KEY;
 
-                    if (!CV_API_KEY) throw new Error("Missing ComicVine API Key");
-
-                    const filterEnabled = config.filter_enabled === "true";
-                    const blockedPublishers = config.filter_publishers ? config.filter_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
-                    const blockedKeywords = config.filter_keywords ? config.filter_keywords.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
-
-                    const mangaFilterMode = config.discover_manga_filter_mode || "SHOW_ALL";
-                    const allowedMangaPubs = config.discover_manga_allowed_publishers ? config.discover_manga_allowed_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : [];
-                    
-                    const DEFAULT_MANGA_PUBLISHERS = ["viz media", "kodansha", "yen press", "seven seas", "shueisha", "shogakukan", "tokyopop", "dark horse manga", "vertical", "ghost ship", "denpa", "fakku", "j-novel club", "sublime", "kuma", "ize press", "square enix", "hakusensha", "lezhin", "suiseisha", "nihon bungeisha", "takeshobo", "futabasha", "kadokawa", "akita shoten"];
-                    const mangaPublishersList = config.manga_publishers ? config.manga_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) : DEFAULT_MANGA_PUBLISHERS;
-
-                    const isValid = (item: any) => {
-                            const pubName = (item.volume?.publisher?.name || '').toLowerCase().trim();
-                            const volName = (item.volume?.name || '').toLowerCase().trim();
-                            const concepts = item.volume?.concepts || [];
-                            if (filterEnabled) {
-                                if (blockedPublishers.length > 0 && blockedPublishers.some((bp: string) => pubName.includes(bp))) {
-                                    Logger.log(`[Discover Sync Debug] Filtered out "${volName}" due to blocked publisher: ${pubName}`, 'debug');
-                                    return false;
-                                }
-                                if (blockedKeywords.length > 0 && blockedKeywords.some((bk: string) => volName.includes(bk))) {
-                                    Logger.log(`[Discover Sync Debug] Filtered out "${volName}" due to blocked keyword`, 'debug');
-                                    return false;
-                                }
-                            }
-
-                        const isMangaPublisher = mangaPublishersList.some((mp: string) => pubName.includes(mp));
-                        const hasMangaConcept = concepts.some((c: any) => ['manga', 'shonen', 'seinen', 'shojo', 'josei', 'manhwa', 'manhua', 'webtoon'].includes((c.name || '').toLowerCase()));
-                        
-                        const isManga = isMangaPublisher || hasMangaConcept;
-                        
-                        if (isManga) {
-                            if (mangaFilterMode === "HIDE_ALL") return false;
-                            if (mangaFilterMode === "ALLOWED_ONLY") {
-                                const isAllowed = allowedMangaPubs.length > 0 && allowedMangaPubs.some((amp: string) => pubName.includes(amp) || volName.includes(amp));
-                                if (!isAllowed) return false;
-                            }
-                        }
-                        return true;
-                    };
-
-                    if (primarySource === 'METRON') {
-                        const metronUser = config.metron_user;
-                        const metronPass = config.metron_pass;
-                        if (!metronUser || !metronPass) throw new Error("Metron credentials missing for Discover Sync");
-
-                        const auth = { username: metronUser, password: metronPass };
-        
-                        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-                        let nextUrl: string | null = `https://metron.cloud/api/issue/?store_date_range_after=${thirtyDaysAgo}`;
-                        let metronNewReleases: any[] = [];
-                        
-                        const seriesNameCache = new Map<string, number>();
-        
-                        while (nextUrl && metronNewReleases.length < 50) {
-                            const res: any = await axios.get(nextUrl, { auth, headers: { 'User-Agent': 'Omnibus/1.0' } });
-            
-                            for (const item of (res.data.results || [])) {
-                                let parsedSeriesId: number | null = null;
-                                if (item.series && typeof item.series === 'object') {
-                                    parsedSeriesId = parseInt(item.series.id);
-                                } else if (item.series_id) {
-                                    parsedSeriesId = parseInt(item.series_id);
-                                }
-
-                                let seriesName = typeof item.series === 'string' ? item.series : (item.series?.name || null);
-
-                                if ((!parsedSeriesId || isNaN(parsedSeriesId)) && seriesName) {
-                                    const cleanName = seriesName.replace(/\(\d{4}\)/g, '').trim();
-                                    
-                                    if (seriesNameCache.has(cleanName)) {
-                                        parsedSeriesId = seriesNameCache.get(cleanName) || null;
-                                    } else {
-                                        try {
-                                            const searchRes = await axios.get(`https://metron.cloud/api/series/?name=${encodeURIComponent(cleanName)}`, { 
-                                                auth, 
-                                                headers: { 'User-Agent': 'Omnibus/1.0' }, 
-                                                validateStatus: () => true 
-                                            });
-                                            
-                                            // Ensure we only retry safely
-                                            if (searchRes.status === 429) {
-                                                await new Promise(r => setTimeout(r, 2000));
-                                            } else if (searchRes.status === 200 && searchRes.data?.results?.length > 0) {
-                                                const exact = searchRes.data.results.find((s: any) => (s.name || s.series)?.toLowerCase() === cleanName.toLowerCase());
-                                                parsedSeriesId = exact ? parseInt(exact.id) : parseInt(searchRes.data.results[0].id);
-                                                seriesNameCache.set(cleanName, parsedSeriesId as number);
-                                            } else {
-                                                // Cache the 'Miss' so we don't spam the API 50 times for a bad string
-                                                seriesNameCache.set(cleanName, 0);
-                                            }
-                                        } catch(e) {}
-                                        
-                                        await new Promise(r => setTimeout(r, 600)); 
-                                    }
-                                }
-
-                                const formatted = {
-                                    id: item.id,
-                                    volumeId: parsedSeriesId || 0,
-                                    issueNumber: item.number || '1', 
-                                    isReleased: isReleasedYet(item.store_date, item.cover_date), 
-                                    name: `${seriesName || 'Unknown'} #${item.number || '1'}`,
-                                    year: item.store_date ? item.store_date.split('-')[0] : '????',
-                                    publisher: item.publisher?.name || item.series?.publisher?.name || "Metron",
-                                    image: item.image,
-                                    description: item.desc || "No description available.",
-                                    siteUrl: `https://metron.cloud/issue/${item.id}/`,
-                                    metadataSource: 'METRON'
-                                };
-                                metronNewReleases.push(formatted);
-                            }
-                            nextUrl = res.data.next;
-                            await new Promise(r => setTimeout(r, 1000));
-                        }
-
-                        await prisma.$transaction([
-                            prisma.systemSetting.upsert({ 
-                                where: { key: 'discover_cache_new' }, 
-                                update: { value: JSON.stringify(metronNewReleases) }, 
-                                create: { key: 'discover_cache_new', value: JSON.stringify(metronNewReleases) } 
-                            }),
-                            prisma.systemSetting.upsert({ 
-                                where: { key: 'discover_cache_popular' }, 
-                                update: { value: JSON.stringify([]) }, 
-                                create: { key: 'discover_cache_popular', value: JSON.stringify([]) } 
-                            }),
-                        ]);
-
-                    } else {
-                    
-                        const formatItem = (item: any) => {
-                            let desc = item.deck;
-                            if (!desc && item.description) {
-                               desc = item.description.replace(/(<([^>]+)>)/gi, '');
-                               if (desc.length > 800) desc = desc.substring(0, 800) + '...';
-                            }
-                            
-                            const writers: string[] = []; 
-                            const artists: string[] = []; 
-                            const coverArtists: string[] = [];
-                            
-                            if (item.person_credits) {
-                              item.person_credits.forEach((p: any) => {
-                                const role = (p.role || '').toLowerCase();
-                                if (role.includes('writer') || role.includes('script') || role.includes('plot') || role.includes('story')) writers.push(p.name);
-                                if (role.includes('pencil') || role.includes('ink') || role.includes('artist') || role.includes('color') || role.includes('illustrator')) artists.push(p.name);
-                                if (role.includes('cover')) coverArtists.push(p.name);
-                              });
-                            }
-                            
-                            const dateStr = item.store_date || item.cover_date;
-                            
-                            return {
-                              id: item.id, 
-                              volumeId: item.volume.id, 
-                              name: `${item.volume.name} #${item.issue_number}`,
-                              issueNumber: item.issue_number, 
-                              isReleased: isReleasedYet(item.store_date, item.cover_date), 
-                              year: dateStr ? dateStr.split('-')[0] : '????', 
-                              publisher: item.volume?.publisher?.name || null,
-                              image: item.image?.medium_url, 
-                              description: desc || "No description available.", 
-                              siteUrl: item.site_detail_url,
-                              writers: [...new Set(writers)].slice(0, 3), 
-                              artists: [...new Set(artists)].slice(0, 3), 
-                              coverArtists: [...new Set(coverArtists)].slice(0, 3),
-                              metadataSource: 'COMICVINE'
-                            };
-                        };
-
-                        const fetchCategory = async (sort: string) => {
-                            let validItems: any[] = [];
-                            let offset = 0;
-                            let apiCallsMade = 0;
-
-                            while (validItems.length < 112 && apiCallsMade < 15) { 
-                                const response = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
-                                    params: {
-                                        api_key: CV_API_KEY, format: 'json', limit: 100, offset: offset, sort: sort,
-                                        field_list: 'id,name,issue_number,store_date,cover_date,image,deck,description,volume,person_credits,site_detail_url'
-                                    },
-                                    headers: { 'User-Agent': 'Omnibus/1.0' }
-                                });
-                                apiCallsMade++;
-
-                                const items = response.data.results || [];
-                                if (items.length === 0) break;
-                                offset += 100;
-
-                                const volIds = [...new Set(items.map((i: any) => i.volume?.id).filter(Boolean))];
-                                let volumesMap: Record<number, any> = {};
-
-                                if (volIds.length > 0) {
-                                    try {
-                                        const chunkedIds = [];
-                                        for (let i = 0; i < volIds.length; i += 50) chunkedIds.push(volIds.slice(i, i + 50));
-
-                                        for (const chunk of chunkedIds) {
-                                            const volIdString = chunk.join('|');
-                                            const volResponse = await axios.get(`https://comicvine.gamespot.com/api/volumes/`, {
-                                                params: { api_key: CV_API_KEY, format: 'json', filter: `id:${volIdString}`, field_list: 'id,publisher,concepts' },
-                                                headers: { 'User-Agent': 'Omnibus/1.0' }
-                                            });
-                                            apiCallsMade++;
-                                            
-                                            if (volResponse.data?.results) {
-                                                const resultsArray = Array.isArray(volResponse.data.results) ? volResponse.data.results : [volResponse.data.results];
-                                                resultsArray.forEach((v: any) => volumesMap[v.id] = v);
-                                            }
-                                            await new Promise(r => setTimeout(r, 500)); 
-                                        }
-                                    } catch (err) {}
-                                }
-
-                                for (const item of items) {
-                                    if (item.volume && volumesMap[item.volume.id]) {
-                                        item.volume.publisher = volumesMap[item.volume.id].publisher;
-                                        item.volume.concepts = volumesMap[item.volume.id].concepts;
-                                    }
-                                    if (isValid(item)) validItems.push(formatItem(item));
-                                    if (validItems.length === 112) break;
-                                }
-                                await new Promise(r => setTimeout(r, 1000));
-                            }
-                            return validItems;
-                        };
-
-                        const [newReleases, popular] = await Promise.all([ 
-                            fetchCategory('store_date:desc'), 
-                            fetchCategory('cover_date:desc') 
-                        ]);
-
-                        await prisma.$transaction([
-                            prisma.systemSetting.upsert({ 
-                                where: { key: 'discover_cache_new' }, 
-                                update: { value: JSON.stringify(newReleases) }, 
-                                create: { key: 'discover_cache_new', value: JSON.stringify(newReleases) } 
-                            }),
-                            prisma.systemSetting.upsert({ 
-                                where: { key: 'discover_cache_popular' }, 
-                                update: { value: JSON.stringify(popular) }, 
-                                create: { key: 'discover_cache_popular', value: JSON.stringify(popular) } 
-                            }),
-                        ]);
-
+                    Logger.log(`[BullMQ] Forwarding Discover Sync to Rust Engine...`, 'info');
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/discover/sync', { method: 'POST', headers: engineHeaders() });
+                        if (!rustResponse.ok) throw new Error(`Rust returned status ${rustResponse.status}`);
+                        Logger.log(`[BullMQ] Rust Engine successfully took over the Discover Sync!`, 'info');
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload Discover Sync to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
                     }
-
-                    await prisma.jobLog.create({
-                        data: { 
-                            jobType: 'DISCOVER_SYNC', 
-                            status: 'COMPLETED', 
-                            durationMs: Date.now() - startTime, 
-                            message: `Successfully rebuilt the Discover cache (New & Popular). Filter enabled: ${filterEnabled}. Manga Mode: ${mangaFilterMode}` 
-                        }
-                    });
                     break;
                 }
 

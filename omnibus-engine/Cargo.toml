@@ -1,0 +1,64 @@
+[package]
+name = "omnibus-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime (replaces the Node.js event loop)
+tokio = { version = "1.35", features = ["full"] }
+# SQLx for PostgreSQL connection
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "chrono"] }
+jwalk = "0.8"
+regex = "1.10"
+uuid = { version = "1.8", features = ["v4"] }
+
+# Dotenv to read the .env file
+dotenvy = "0.15"
+
+# Parallel processing (distributes tasks across all CPU cores)
+rayon = "1.8"
+
+# Image processing and WebP conversion (replaces Sharp)
+image = "0.24"
+webp = "0.2"
+
+# Archive handling (replaces adm-zip). RAR/7z extraction uses the native `unrar`/`unar` CLIs
+# (parity with Node beta.028-030: the library decoders corrupt vintage RAR 2.0 archives).
+zip = { version = "0.6", features = ["deflate", "bzip2"] }
+
+# Error handling and Logging
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.10"
+
+# Web Framework & JSON Parsing
+axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# default-features=false drops reqwest's default-tls (native-tls → openssl-sys), which would
+# otherwise require system OpenSSL (libssl-dev) and break the Linux Docker build. rustls-tls keeps
+# HTTPS working with a pure-Rust TLS stack (matches sqlx's runtime-tokio-rustls).
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls", "stream"] }
+urlencoding = "2.1"
+# Stream combinators (StreamExt::next) for the chunked DDL download in download.rs.
+futures-util = "0.3"
+
+scraper = "0.19"
+base64 = "0.22"
+
+quick-xml = { version = "0.31", features = ["serialize"] }
+
+# Cryptography and Time for AES-256-CBC Database Backups
+aes = "0.8"
+cbc = "0.1"
+cipher = { version = "0.4", features = ["alloc", "block-padding"] }
+sha2 = "0.10"
+pbkdf2 = "0.12"
+rand = "0.8"
+hex = "0.4"
+chrono = "0.4"
+
+[dev-dependencies]
+# test-util enables tokio's paused-clock (`start_paused`) for the rate-limiter tests.
+tokio = { version = "1.35", features = ["full", "test-util"] }

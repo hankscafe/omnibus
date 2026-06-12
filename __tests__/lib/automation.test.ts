@@ -1,137 +1,87 @@
+// __tests__/lib/automation.test.ts
+// automation.ts is now a thin layer: searchAndDownload() enqueues a BullMQ
+// SEARCH_AND_DOWNLOAD job (the Rust engine performs the actual search via
+// queue.ts -> /api/automation/search). The legacy full-Node search
+// (executeSearchAndDownload) was deleted as dead code.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { executeSearchAndDownload } from '@/lib/automation';
-import { GetComicsService } from '@/lib/getcomics';
-import { ProwlarrService } from '@/lib/prowlarr';
-import { DownloadService } from '@/lib/download-clients';
-import { SystemNotifier } from '@/lib/notifications';
+import { searchAndDownload, processAutomationQueue, looseCompareIssue } from '@/lib/automation';
 
-// 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
-    findManyClients: vi.fn(),
-    findManySettings: vi.fn(),
-    findUniqueSetting: vi.fn(), 
-    updateRequest: vi.fn(),
-    findUniqueRequest: vi.fn(),
-    findFirstRequest: vi.fn().mockResolvedValue(null), // <-- ADDED: Mock for Traffic Cop duplicate check
-    log: vi.fn()
+    queueAdd: vi.fn().mockResolvedValue({})
 }));
 
-// 2. Mock Dependencies
-vi.mock('@/lib/db', () => ({
-    prisma: {
-        downloadClient: { findMany: mocks.findManyClients },
-        systemSetting: { 
-            findMany: mocks.findManySettings,
-            findUnique: mocks.findUniqueSetting 
-        },
-        request: { 
-            update: mocks.updateRequest, 
-            findUnique: mocks.findUniqueRequest,
-            findFirst: mocks.findFirstRequest // <-- ADDED: Wire up the mock
-        }
-    }
+// searchAndDownload pulls the queue in via a dynamic import; vi.mock covers that too.
+vi.mock('@/lib/queue', () => ({
+    omnibusQueue: { add: mocks.queueAdd }
 }));
 
-vi.mock('@/lib/getcomics', () => ({ GetComicsService: { search: vi.fn(), scrapeDeepLink: vi.fn() } }));
-vi.mock('@/lib/prowlarr', () => ({ ProwlarrService: { searchComics: vi.fn() } }));
-vi.mock('@/lib/download-clients', () => ({ DownloadService: { addDownload: vi.fn(), downloadDirectFile: vi.fn().mockResolvedValue(true) } }));
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/search-engine', () => ({
-    getCustomAcronyms: vi.fn().mockResolvedValue({}),
-    generateSearchQueries: vi.fn().mockReturnValue(['Batman 2024'])
-}));
-
-describe('Core Logic: Automation Engine', () => {
+describe('Core Logic: Automation (engine handoff)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        
-        // Default DB mocks
-        mocks.findManyClients.mockResolvedValue([{ id: 'client_1', type: 'qbit' }]);
-        mocks.findManySettings.mockResolvedValue([{ key: 'download_path', value: '/downloads' }]);
-        
-        // Default to returning null so it assumes default hosters are enabled
-        mocks.findUniqueSetting.mockResolvedValue(null); 
-        
-        mocks.findUniqueRequest.mockResolvedValue({ id: 'req_1', activeDownloadName: 'Batman 2024', user: { username: 'Bruce' } });
     });
 
-    it('should successfully find a direct download on GetComics and send it to the client', async () => {
-        // 1. Mock GetComics finding the file
-        vi.mocked(GetComicsService.search).mockResolvedValueOnce([{ title: 'Batman #01 (2024)', downloadUrl: 'http://getcomics/123' } as any]);
-        // 2. Mock the deep-link scraper finding a valid premium hoster
-        vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'http://mediafire/file.cbz', isDirect: false, hoster: 'mediafire' });
+    describe('looseCompareIssue()', () => {
+        it('should equate numbers regardless of zero padding', () => {
+            expect(looseCompareIssue('1', '001')).toBe(true);
+            expect(looseCompareIssue('1.5', '01.50')).toBe(true);
+            expect(looseCompareIssue(2, '002')).toBe(true);
+        });
 
-        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
+        it('should respect alpha suffixes', () => {
+            expect(looseCompareIssue('1A', '001a')).toBe(true);
+            expect(looseCompareIssue('1A', '1B')).toBe(false);
+        });
 
-        // Assert it hit the Direct File Downloader, NOT the Torrent downloader
-        expect(DownloadService.downloadDirectFile).toHaveBeenCalledWith(
-            'http://mediafire/file.cbz',
-            'Batman #01 (2024)',
-            '/downloads',
-            'req_1',
-            'mediafire'
-        );
-
-        // Assert it updated the database request status
-        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
-            where: { id: 'req_1' },
-            data: expect.objectContaining({ status: 'DOWNLOADING' })
-        }));
+        it('should not equate different numbers', () => {
+            expect(looseCompareIssue('1', '2')).toBe(false);
+            expect(looseCompareIssue('1.5', '15')).toBe(false);
+        });
     });
 
-    it('should completely skip GetComics and go straight to Prowlarr if all file hosters are disabled', async () => {
-        // Simulate an admin disabling all file hosters by returning an empty array
-        mocks.findUniqueSetting.mockResolvedValueOnce({ value: JSON.stringify([]) });
-        
-        vi.mocked(ProwlarrService.searchComics).mockResolvedValueOnce([
-            { title: 'Batman #01 (2024)', downloadUrl: 'magnet:?xt=123', seeders: 50, protocol: 'torrent', score: 100 } as any
-        ]);
+    describe('searchAndDownload()', () => {
+        it('should enqueue a SEARCH_AND_DOWNLOAD job with the full request payload', async () => {
+            await searchAndDownload('req_1', 'Batman', '2024', 'DC', false, true);
 
-        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
+            expect(mocks.queueAdd).toHaveBeenCalledWith(
+                'SEARCH_AND_DOWNLOAD',
+                {
+                    type: 'SEARCH_AND_DOWNLOAD',
+                    requestId: 'req_1',
+                    name: 'Batman',
+                    year: '2024',
+                    publisher: 'DC',
+                    isManga: false,
+                    skipIndexers: true
+                },
+                expect.objectContaining({ jobId: 'SEARCH_req_1' })
+            );
+        });
 
-        // Assert GetComics was completely bypassed
-        expect(GetComicsService.search).not.toHaveBeenCalled();
-        expect(DownloadService.addDownload).toHaveBeenCalled();
+        it('should space successive searches apart via increasing enqueue delays', async () => {
+            await searchAndDownload('req_a', 'Batman', '2024');
+            await searchAndDownload('req_b', 'Superman', '2024');
+
+            const delayA = mocks.queueAdd.mock.calls[0][2].delay;
+            const delayB = mocks.queueAdd.mock.calls[1][2].delay;
+
+            // Second job must be scheduled at least ~5s after the first
+            expect(delayB - delayA).toBeGreaterThanOrEqual(4000);
+        });
     });
 
-    it('should fallback to Prowlarr if GetComics has no results', async () => {
-        // 1. GetComics returns nothing
-        vi.mocked(GetComicsService.search).mockResolvedValueOnce([]);
-        
-        // 2. Prowlarr returns a healthy torrent
-        vi.mocked(ProwlarrService.searchComics).mockResolvedValueOnce([
-            { title: 'Batman #01 (2024)', downloadUrl: 'magnet:?xt=123', seeders: 50, protocol: 'torrent', score: 100 } as any
-        ]);
+    describe('processAutomationQueue()', () => {
+        it('should enqueue one job per queued automation item', async () => {
+            await processAutomationQueue([
+                { id: 'req_1', name: 'Batman', year: '2024', publisher: 'DC', isManga: false, skipIndexers: false },
+                { id: 'req_2', name: 'Akira', year: '1988', publisher: 'Kodansha', isManga: true, skipIndexers: false }
+            ]);
 
-        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
-
-        // Assert it handed the torrent magnet link to the standard client adder
-        expect(DownloadService.addDownload).toHaveBeenCalledWith(
-            expect.objectContaining({ id: 'client_1' }),
-            'magnet:?xt=123',
-            'Batman #01 (2024)',
-            0,
-            0
-        );
-    });
-
-    it('should stall the request and send a failure notification if the file is found nowhere', async () => {
-        // Neither search engine finds anything
-        vi.mocked(GetComicsService.search).mockResolvedValueOnce([]);
-        vi.mocked(ProwlarrService.searchComics).mockResolvedValueOnce([]);
-
-        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
-
-        // Assert the database was updated to STALLED
-        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
-            where: { id: 'req_1' },
-            data: expect.objectContaining({ status: 'STALLED' })
-        }));
-
-        // Assert the user gets a notification telling them it couldn't be found
-        expect(SystemNotifier.sendAlert).toHaveBeenCalledWith('download_failed', expect.objectContaining({
-            title: 'Batman'
-        }));
+            expect(mocks.queueAdd).toHaveBeenCalledTimes(2);
+            expect(mocks.queueAdd).toHaveBeenCalledWith(
+                'SEARCH_AND_DOWNLOAD',
+                expect.objectContaining({ requestId: 'req_2', name: 'Akira', isManga: true }),
+                expect.objectContaining({ jobId: 'SEARCH_req_2' })
+            );
+        });
     });
 });

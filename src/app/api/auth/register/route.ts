@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     const inputEmail = email.toLowerCase();
     
     const existingUsers: any[] = await prisma.$queryRaw`
-      SELECT id FROM User 
+      SELECT id FROM "User" 
       WHERE LOWER(username) = ${inputUsername} OR LOWER(email) = ${inputEmail} 
       LIMIT 1
     `;

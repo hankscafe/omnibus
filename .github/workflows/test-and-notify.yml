@@ -112,3 +112,38 @@ jobs:
           if [ -n "$DISCORD_WEBHOOK" ]; then
             curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
           fi
+
+  # --- Rust engine: build, lint, and test the omnibus-engine crate ---
+  rust-engine:
+    name: Rust Engine (build · clippy · test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: omnibus-engine
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned so a future stable clippy can't turn `-D warnings` red with no code change.
+          toolchain: "1.96.0"
+          components: clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: omnibus-engine
+
+      - name: Install C build deps (unrar / bzip2 / libwebp)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev pkg-config
+
+      - name: Build
+        run: cargo build
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test

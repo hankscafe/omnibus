@@ -76,7 +76,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
               const remainingMinutes = Math.ceil((attemptData.lockoutUntil - Date.now()) / 60000);
               throw new Error(`Account locked due to too many failed attempts. Try again in ${remainingMinutes} minutes.`);
           }
-          const users: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(username) = ${input} OR LOWER(email) = ${input} LIMIT 1`;
+          const users: any[] = await prisma.$queryRaw`SELECT * FROM "User" WHERE LOWER(username) = ${input} OR LOWER(email) = ${input} LIMIT 1`;
           const user = users[0];
           const handleFailedAttempt = () => {
               attemptData.count += 1;
@@ -135,7 +135,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           if (!user.email) return false;
           Logger.log(`[SSO Debug] Processing sign in for: ${user.email}`, 'debug');
           const inputEmail = user.email.toLowerCase();
-          const dbUsers: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(email) = ${inputEmail} LIMIT 1`;
+          const dbUsers: any[] = await prisma.$queryRaw`SELECT * FROM "User" WHERE LOWER(email) = ${inputEmail} LIMIT 1`;
           let dbUser = dbUsers[0];
 
           // Determine target role & approval based on configuration

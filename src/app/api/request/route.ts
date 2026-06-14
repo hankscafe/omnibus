@@ -629,7 +629,7 @@ export async function DELETE(request: NextRequest) {
                 
                 if (clientConfig) {
                     await DownloadService.removeDownload(clientConfig, activeJob.id);
-                    Logger.log(`[Request API] Terminated active download and wiped files from ${clientConfig.name} for cancelled request ${id}`, 'info');
+                    Logger.log(`[Request API] Terminated active download and wiped files from ${clientConfig.name} for cancelled "${reqRecord.activeDownloadName || id}"`, 'info');
                 }
             }
         } catch (e) {
@@ -651,11 +651,11 @@ export async function DELETE(request: NextRequest) {
             if (job.id === `SEARCH_${id}` || job.data?.requestId === id) {
                 // job.remove() works on waiting jobs. Active jobs will be caught by the status check in automation.ts
                 await job.remove().catch(() => {});
-                Logger.log(`[Request API] Removed pending background job for cancelled request ${id}`, 'info');
+                Logger.log(`[Request API] Removed pending background job for cancelled "${reqRecord.activeDownloadName || id}"`, 'info');
             }
         }
     } catch (e) {
-        Logger.log(`[Request API] Error removing job for ${id}: ${e}`, 'warn');
+        Logger.log(`[Request API] Error removing job for "${reqRecord.activeDownloadName || id}": ${e}`, 'warn');
     }
 
     // 3. SAFE DB-DRIVEN SERIES CLEANUP
@@ -682,7 +682,7 @@ export async function DELETE(request: NextRequest) {
             if (downloadedIssuesCount === 0 && otherActiveReqs === 0) {
                 await prisma.issue.deleteMany({ where: { seriesId: series.id } });
                 await prisma.series.delete({ where: { id: series.id } });
-                Logger.log(`[Request API] Cleaned up empty series placeholder for cancelled volume ${reqRecord.volumeId}`, 'info');
+                Logger.log(`[Request API] Cleaned up empty series placeholder for cancelled "${reqRecord.activeDownloadName || reqRecord.volumeId}"`, 'info');
             }
         }
     }

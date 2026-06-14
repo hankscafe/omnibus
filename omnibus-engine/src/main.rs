@@ -14,12 +14,34 @@ mod engine_config;
 mod discover;
 mod monitor;
 mod download;
+mod log_forward;
 
 use axum::{routing::post, Router, Json, extract::{State, Request}, http::StatusCode, middleware::{self, Next}, response::Response};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Process-wide reqwest clients, built once and reused. Rebuilding a `Client` per request re-creates
+/// the TLS config, DNS cache, and connection pool every time; sharing one keeps HTTP keep-alive alive
+/// across calls to the same host. `reqwest::Client` is `Arc`-backed, so `.clone()` is cheap and shares
+/// the underlying pool. `browser_http_client` carries a browser User-Agent (GetComics/Cloudflare).
+pub(crate) fn shared_http_client() -> reqwest::Client {
+    static C: OnceLock<reqwest::Client> = OnceLock::new();
+    C.get_or_init(|| reqwest::Client::builder().build().expect("build shared reqwest client"))
+        .clone()
+}
+
+pub(crate) fn browser_http_client() -> reqwest::Client {
+    static C: OnceLock<reqwest::Client> = OnceLock::new();
+    C.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .build()
+            .expect("build browser reqwest client")
+    })
+    .clone()
+}
 
 #[derive(Deserialize)]
 struct RepackRequest {
@@ -130,8 +152,10 @@ async fn require_internal_auth(
 }
 
 fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     dotenvy::dotenv().ok();
+    // Installs the global logger: prints to stdout as before AND mirrors lines to the Node app's
+    // unified logger (drained by a task spawned in `run`). RUST_LOG still controls verbosity.
+    log_forward::init();
 
     // Fail fast on a missing/empty DATABASE_URL (parity with Node/Prisma's `env("DATABASE_URL")`,
     // which refuses to start). Silently falling back to a hardcoded localhost DB would mask a
@@ -167,8 +191,8 @@ fn main() -> anyhow::Result<()> {
     };
 
     log::info!(
-        "[Config] Concurrency limits → cpu_cap={} blocking_threads={} scan_workers={} convert_workers={} memory_ceiling_mb={}",
-        cfg.cpu_cap, cfg.blocking_threads, cfg.scan_workers, cfg.convert_workers, cfg.memory_ceiling_mb
+        "[Config] Concurrency limits → cpu_cap={} blocking_threads={} scan_workers={} convert_workers={} db_connections={} memory_ceiling_mb={}",
+        cfg.cpu_cap, cfg.blocking_threads, cfg.scan_workers, cfg.convert_workers, cfg.db_connections, cfg.memory_ceiling_mb
     );
 
     // Size rayon's global pool (used for per-page WebP encoding in the converter) to the CPU cap.
@@ -183,16 +207,45 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
 
-    runtime.block_on(run(db_url))
+    runtime.block_on(run(db_url, cfg.db_connections))
+}
+
+/// Connects to Postgres, retrying with backoff for up to ~90s before giving up. The engine and DB
+/// often share a Docker bridge whose ports take time to start forwarding (e.g. STP forward-delay on
+/// a QNAP virtual switch adds a ~15-30s dead window when a container's interface first joins), and
+/// the DB container may still be starting. Without this, the process would exit on the first failure
+/// and `restart: always` would reset the bridge port — a loop that can never outlast the window.
+async fn connect_with_retry(db_url: &str, max_connections: u32) -> anyhow::Result<PgPool> {
+    const MAX_ATTEMPTS: u32 = 30;
+    const DELAY_SECS: u64 = 3;
+    let mut attempt = 1;
+    loop {
+        log::info!("Connecting to PostgreSQL database (attempt {}/{})...", attempt, MAX_ATTEMPTS);
+        match PgPoolOptions::new().max_connections(max_connections).connect(db_url).await {
+            Ok(pool) => return Ok(pool),
+            Err(e) if attempt < MAX_ATTEMPTS => {
+                log::warn!(
+                    "Database not reachable yet ({}); retrying in {}s (attempt {}/{}).",
+                    e, DELAY_SECS, attempt, MAX_ATTEMPTS
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(DELAY_SECS)).await;
+                attempt += 1;
+            }
+            Err(e) => {
+                log::error!("Database unreachable after {} attempts (~{}s). Giving up.", MAX_ATTEMPTS, MAX_ATTEMPTS as u64 * DELAY_SECS);
+                return Err(e.into());
+            }
+        }
+    }
 }
 
 /// Async entrypoint. The runtime is built manually in `main` so its size honors EngineConfig.
-async fn run(db_url: String) -> anyhow::Result<()> {
-    log::info!("Connecting to PostgreSQL database...");
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&db_url)
-        .await?;
+async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
+    // Start draining buffered log lines to the Node app now that the runtime exists. Any lines
+    // emitted during startup (preflight, the DB-connect retries below) were buffered and flush here.
+    log_forward::spawn_forwarder();
+
+    let pool = connect_with_retry(&db_url, db_connections).await?;
 
     log::info!("✅ Connected to PostgreSQL!");
 
@@ -266,7 +319,7 @@ async fn notify_node(event: &str, description: &str) {
     let node_url = std::env::var("OMNIBUS_NODE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let url = format!("{}/api/internal/notify", node_url.trim_end_matches('/'));
     let body = serde_json::json!({ "event": event, "payload": { "description": description } });
-    match reqwest::Client::new()
+    match shared_http_client()
         .post(&url)
         .header("X-Internal-Secret", &secret)
         .json(&body)
@@ -392,14 +445,14 @@ async fn handle_repack(
                             .execute(&db)
                             .await
                         {
-                            log::error!("[Repack] Repacked {} on disk but failed to update filePath: {:?}", issue_id, e);
+                            log::error!("[Repack] Repacked {} on disk but failed to update its database path: {:?}", file_path, e);
                             db_ok = false;
                         }
                     }
                     if db_ok { success_count += 1; } else { fail_count += 1; }
                 }
-                Ok(Err(e)) => { log::error!("Failed to repack issue {}: {:?}", issue_id, e); fail_count += 1; }
-                Err(e) => { log::error!("[Repack] conversion task panicked for {}: {:?}", issue_id, e); fail_count += 1; }
+                Ok(Err(e)) => { log::error!("Failed to repack {}: {:?}", file_path, e); fail_count += 1; }
+                Err(e) => { log::error!("[Repack] conversion task panicked for {}: {:?}", file_path, e); fail_count += 1; }
             }
         }
 
@@ -449,7 +502,7 @@ async fn handle_scan(
         .await
         {
             Ok(r) if r.rows_affected() == 0 => {
-                log::warn!("[Scanner] Library {} scan already in progress; skipping.", payload.library_id);
+                log::warn!("[Scanner] Library scan for '{}' already in progress; skipping.", payload.library_path);
                 return;
             }
             Err(e) => log::warn!("[Scanner] Non-fatal JobLock error, proceeding without lock: {:?}", e),

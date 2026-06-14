@@ -257,7 +257,7 @@ export function initCronJobs() {
                               } as any
                           });
 
-                          Logger.log(`[Cron] Re-queuing failed request ${req.id} (Attempt ${(req.retryCount || 0) + 1}/3)`, 'info');
+                          Logger.log(`[Cron] Re-queuing failed request "${req.activeDownloadName || req.id}" (Attempt ${(req.retryCount || 0) + 1}/3)`, 'info');
                           
                           // 3. Reconstruct Search Context safely
                           const { searchAndDownload } = await import('@/lib/automation');
@@ -288,7 +288,7 @@ export function initCronJobs() {
                               false
                           );
                       } else if (req) {
-                          Logger.log(`[Cron] Request ${req.id} failed 3 times. Marking as STALLED.`, 'error');
+                          Logger.log(`[Cron] Request "${req.activeDownloadName || req.id}" failed 3 times. Marking as STALLED.`, 'error');
                           await prisma.request.update({
                               where: { id: match.id },
                               data: { status: 'STALLED' }

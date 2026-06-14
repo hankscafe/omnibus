@@ -126,7 +126,7 @@ pub async fn search(
     let max_pages = if is_interactive { interactive_pages } else { automated_pages };
 
     let flare_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#).fetch_optional(db).await?;
-    let client = Client::builder().user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36").build()?;
+    let client = crate::browser_http_client();
 
     let article_sel = Selector::parse("article, .post").unwrap();
     let a_sel = Selector::parse("h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a").unwrap();
@@ -366,7 +366,7 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
     limiter.enforce("getcomics", 2500).await;
 
     let flare_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#).fetch_optional(db).await?;
-    let client = Client::builder().user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36").build()?;
+    let client = crate::browser_http_client();
 
     let html = match fetch_html(&client, db, article_url, flare_url.as_deref()).await {
         Ok(h) => h,

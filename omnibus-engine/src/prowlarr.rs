@@ -1,4 +1,3 @@
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 
@@ -68,7 +67,7 @@ pub async fn search(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, que
         .collect();
 
     let custom_headers = sqlx::query(r#"SELECT key, value FROM "CustomHeader""#).fetch_all(db).await.unwrap_or_default();
-    let client = Client::new();
+    let client = crate::shared_http_client();
 
     // Loop through the fuzzy queries until we find a match!
     for q in queries {

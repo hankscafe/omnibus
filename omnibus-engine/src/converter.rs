@@ -334,9 +334,9 @@ pub async fn process_cbr_sweep(db: PgPool, issue_id: Option<String>) -> anyhow::
                     .bind(&issue_id)
                     .execute(&db).await
                 {
-                    log::error!("[Converter] Converted {} but failed to update filePath: {:?}", issue_id, e);
+                    log::error!("[Converter] Converted {} but failed to update its database path: {:?}", new_path, e);
                     fail += 1;
-                    details.push_str(&format!("[WARN] Converted but DB update failed for issue {}\n", issue_id));
+                    details.push_str(&format!("[WARN] Converted but DB update failed for {}\n", new_path));
                 } else {
                     success += 1;
                 }

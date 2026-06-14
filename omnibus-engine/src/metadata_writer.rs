@@ -409,7 +409,7 @@ pub(crate) async fn write_series_json(db: &PgPool, series_id: &str) -> bool {
             true
         }
         Err(e) => {
-            log::error!("[Writer] Failed to write series.json for {}: {:?}", series_id, e);
+            log::error!("[Writer] Failed to write series.json for '{}': {:?}", name, e);
             false
         }
     }

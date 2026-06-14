@@ -46,28 +46,36 @@ pub async fn run_ghost_check(db: PgPool) -> Result<(i32, i32, String)> {
         let sem = sem.clone();
         join_set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
-            tokio::task::spawn_blocking(move || (id, Path::new(&file_path).exists()))
+            tokio::task::spawn_blocking(move || {
+                let exists = Path::new(&file_path).exists();
+                (id, file_path, exists)
+            })
                 .await
-                .unwrap_or((String::new(), true))
+                .unwrap_or((String::new(), String::new(), true))
         });
     }
 
     let mut total_checked = 0;
-    let mut missing_count = 0;
+    let mut missing_ids: Vec<String> = Vec::new();
 
     while let Some(res) = join_set.join_next().await {
-        if let Ok((id, exists)) = res {
+        if let Ok((id, file_path, exists)) = res {
             total_checked += 1;
             if !exists {
-                missing_count += 1;
-                log::debug!("[Ghost Check Debug] Issue {} file is missing -> marking MISSING", id);
-                if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET status = 'MISSING' WHERE id = $1"#)
-                    .bind(&id)
-                    .execute(&db).await
-                {
-                    log::error!("[Ghost Check] Failed to mark issue {} MISSING: {:?}", id, e);
-                }
+                log::debug!("[Ghost Check Debug] File is missing -> marking MISSING: {}", file_path);
+                missing_ids.push(id);
             }
+        }
+    }
+
+    // One bulk UPDATE instead of one-per-missing-issue.
+    let missing_count = missing_ids.len() as i32;
+    if !missing_ids.is_empty() {
+        if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET status = 'MISSING' WHERE id = ANY($1)"#)
+            .bind(&missing_ids)
+            .execute(&db).await
+        {
+            log::error!("[Ghost Check] Failed to mark {} issues MISSING: {:?}", missing_count, e);
         }
     }
 
@@ -131,21 +139,31 @@ pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
 
     let mut storage_data: Vec<StorageEntry> = Vec::new();
     let mut total_size_bytes: u64 = 0;
+    let mut size_ids: Vec<String> = Vec::new();
+    let mut size_vals: Vec<f64> = Vec::new();
 
     while let Some(res) = join_set.join_next().await {
         if let Ok(entry) = res {
             total_size_bytes += entry.size_bytes;
-
-            // Persist per-series size into the real column Series.size (Float) — Node writes prisma.series.update({ data: { size } }).
-            if let Err(e) = sqlx::query(r#"UPDATE "Series" SET "size" = $1 WHERE id = $2"#)
-                .bind(entry.size_bytes as f64)
-                .bind(&entry.id)
-                .execute(&db).await
-            {
-                log::error!("[Storage Scan] Failed to update size for series {}: {:?}", entry.id, e);
-            }
-
+            size_ids.push(entry.id.clone());
+            size_vals.push(entry.size_bytes as f64);
             storage_data.push(entry);
+        }
+    }
+
+    // Persist per-series sizes in ONE bulk UPDATE (was one query per series) via parallel arrays —
+    // Node writes prisma.series.update({ data: { size } }) per series.
+    if !size_ids.is_empty() {
+        if let Err(e) = sqlx::query(
+            r#"UPDATE "Series" AS s SET "size" = v.size
+               FROM (SELECT unnest($1::text[]) AS id, unnest($2::float8[]) AS size) AS v
+               WHERE s.id = v.id"#,
+        )
+        .bind(&size_ids)
+        .bind(&size_vals)
+        .execute(&db).await
+        {
+            log::error!("[Storage Scan] Failed to bulk-update {} series sizes: {:?}", size_ids.len(), e);
         }
     }
 
@@ -249,36 +267,40 @@ pub async fn run_integrity_scan(db: PgPool) -> Result<(i32, i32, String)> {
                 // Skip files that don't exist — a missing file is the ghost scan's concern, not a
                 // corrupt archive (Node only inspects files that exist). None = skipped, not counted.
                 if !Path::new(&file_path).exists() {
-                    return (id, None);
+                    return (id, file_path, None);
                 }
                 let corrupted = match std::fs::File::open(&file_path) {
                     Ok(file) => zip::ZipArchive::new(file).is_err(),
                     Err(_) => true,
                 };
-                (id, Some(corrupted))
+                (id, file_path, Some(corrupted))
             })
             .await
-            .unwrap_or((String::new(), None))
+            .unwrap_or((String::new(), String::new(), None))
         });
     }
 
     let mut scanned = 0;
-    let mut corrupted_count = 0;
+    let mut corrupted_ids: Vec<String> = Vec::new();
 
     while let Some(res) = join_set.join_next().await {
         // Only count + act on files that were actually tested (Some); missing files (None) are skipped.
-        if let Ok((id, Some(is_corrupted))) = res {
+        if let Ok((id, file_path, Some(is_corrupted))) = res {
             scanned += 1;
             if is_corrupted {
-                corrupted_count += 1;
-                log::debug!("[Integrity Scan Debug] Issue {} archive failed to open -> marking CORRUPTED", id);
-                // Mark as corrupted in the database so the UI can flag it
-                if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET status = 'CORRUPTED' WHERE id = $1"#)
-                    .bind(&id).execute(&db).await
-                {
-                    log::error!("[Integrity Scan] Failed to mark issue {} CORRUPTED: {:?}", id, e);
-                }
+                log::debug!("[Integrity Scan Debug] Archive failed to open -> marking CORRUPTED: {}", file_path);
+                corrupted_ids.push(id);
             }
+        }
+    }
+
+    // One bulk UPDATE instead of one-per-corrupted-issue.
+    let corrupted_count = corrupted_ids.len() as i32;
+    if !corrupted_ids.is_empty() {
+        if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET status = 'CORRUPTED' WHERE id = ANY($1)"#)
+            .bind(&corrupted_ids).execute(&db).await
+        {
+            log::error!("[Integrity Scan] Failed to mark {} issues CORRUPTED: {:?}", corrupted_count, e);
         }
     }
 

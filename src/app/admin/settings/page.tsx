@@ -199,7 +199,7 @@ export default function SettingsPage() {
     getcomics_interactive_pages: "4",
     getcomics_automated_pages: "5",
     engine_max_scan_workers: "", engine_max_convert_workers: "", engine_cpu_cap: "",
-    engine_max_blocking_threads: "", engine_memory_ceiling_mb: ""
+    engine_max_blocking_threads: "", engine_memory_ceiling_mb: "", engine_max_db_connections: ""
   })
 
   const [customProwlarrCategories, setCustomProwlarrCategories] = useState("")
@@ -1747,6 +1747,11 @@ export default function SettingsPage() {
                                     <Label className="text-foreground font-semibold">Memory ceiling (MB)</Label>
                                     <Input type="number" min="0" placeholder="0 = disabled" value={config.engine_memory_ceiling_mb ?? ""} onChange={e => setConfig({...config, engine_memory_ceiling_mb: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
                                     <p className="text-[10px] text-muted-foreground">Soft cap: when set, derates the scan / convert worker counts to fit (~64&nbsp;MB per task).</p>
+                                </div>
+                                <div className="grid gap-1.5">
+                                    <Label className="text-foreground font-semibold">Max DB connections</Label>
+                                    <Input type="number" min="0" placeholder="Auto (from workers)" value={config.engine_max_db_connections ?? ""} onChange={e => setConfig({...config, engine_max_db_connections: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
+                                    <p className="text-[10px] text-muted-foreground">Engine&apos;s PostgreSQL pool size. Auto-derives from the worker counts so parallel jobs don&apos;t starve on connections. Restart required.</p>
                                 </div>
                             </div>
                         </div>

@@ -255,6 +255,27 @@ async fn fetch_comicvine(
         .fetch_all(db)
         .await?;
 
+        // Batch the GLOBAL existing-by-cvId lookups for the whole page into ONE query (was 1 query per
+        // issue — a 100x N+1). Still a global match (an issue can live under a different series), just
+        // resolved in-memory from a per-page HashMap keyed by metadataId.
+        let page_cv_ids: Vec<String> = cv_issues.iter()
+            .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
+            .collect();
+        let mut by_cv: std::collections::HashMap<String, sqlx::postgres::PgRow> = std::collections::HashMap::new();
+        if !page_cv_ids.is_empty() {
+            let rows = sqlx::query(
+                r#"SELECT id, name, "releaseDate", "hasCustomMetadata", genres, "metadataId" FROM "Issue" WHERE "metadataId" = ANY($1) AND "metadataSource" = 'COMICVINE'"#,
+            )
+            .bind(&page_cv_ids)
+            .fetch_all(db)
+            .await?;
+            for row in rows {
+                if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
+                    by_cv.insert(mid, row);
+                }
+            }
+        }
+
         for cv_issue in &cv_issues {
             let issue_num = json_num_string(&cv_issue["issue_number"]).unwrap_or_else(|| "0".to_string());
             let cv_id_str = match cv_issue["id"].as_i64() {
@@ -275,13 +296,9 @@ async fn fetch_comicvine(
             let cv_desc = cv_issue["description"].as_str().or_else(|| cv_issue["deck"].as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
             let cv_cover = cv_issue["image"]["medium_url"].as_str().or_else(|| cv_issue["image"]["small_url"].as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
 
-            // existing-by-cvId is a GLOBAL lookup (matches Node findFirst; can move an issue across series).
-            let existing_by_cv = sqlx::query(
-                r#"SELECT id, name, "releaseDate", "hasCustomMetadata", genres FROM "Issue" WHERE "metadataId" = $1 AND "metadataSource" = 'COMICVINE' LIMIT 1"#,
-            )
-            .bind(&cv_id_str)
-            .fetch_optional(db)
-            .await?;
+            // existing-by-cvId is a GLOBAL lookup (matches Node findFirst; can move an issue across
+            // series), now resolved from the per-page batch instead of a per-issue query.
+            let existing_by_cv = by_cv.get(&cv_id_str);
 
             // existing-by-number is scoped to this series.
             let existing_by_num = existing_issues.iter().find(|r| {
@@ -290,7 +307,7 @@ async fn fetch_comicvine(
             });
 
             // Determine the lock + existing genres from whichever record we'll target.
-            let (is_locked, existing_name, existing_release, existing_genres) = if let Some(r) = &existing_by_cv {
+            let (is_locked, existing_name, existing_release, existing_genres) = if let Some(r) = existing_by_cv {
                 (
                     r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
                     r.try_get::<Option<String>, _>("name").unwrap_or(None),
@@ -317,7 +334,7 @@ async fn fetch_comicvine(
                 existing_genres
             };
 
-            let res = if let Some(r) = &existing_by_cv {
+            let res = if let Some(r) = existing_by_cv {
                 let id: String = r.get("id");
                 sqlx::query(
                     r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"='MATCHED', genres=$7 WHERE id=$8"#,
@@ -601,6 +618,26 @@ async fn fetch_metron(
     .fetch_all(db)
     .await?;
 
+    // Batch the GLOBAL existing-by-metadataId lookups for every issue into ONE query (was 1 query per
+    // issue — an N+1 across the full issue list). Still a global match, resolved from a HashMap.
+    let all_meta_ids: Vec<String> = all_issues.iter()
+        .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
+        .collect();
+    let mut by_meta: std::collections::HashMap<String, sqlx::postgres::PgRow> = std::collections::HashMap::new();
+    if !all_meta_ids.is_empty() {
+        let rows = sqlx::query(
+            r#"SELECT id, name, "releaseDate", "hasCustomMetadata", "metadataId" FROM "Issue" WHERE "metadataId" = ANY($1) AND "metadataSource" = 'METRON'"#,
+        )
+        .bind(&all_meta_ids)
+        .fetch_all(db)
+        .await?;
+        for row in rows {
+            if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
+                by_meta.insert(mid, row);
+            }
+        }
+    }
+
     let mut synced_count = 0;
     let mut latest_date_ms: i64 = 0;
 
@@ -623,19 +660,14 @@ async fn fetch_metron(
         let issue_desc = issue["desc"].as_str().or_else(|| issue["description"].as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
         let issue_cover = issue["image"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
 
-        let existing_by_meta = sqlx::query(
-            r#"SELECT id, name, "releaseDate", "hasCustomMetadata" FROM "Issue" WHERE "metadataId" = $1 AND "metadataSource" = 'METRON' LIMIT 1"#,
-        )
-        .bind(&source_id)
-        .fetch_optional(db)
-        .await?;
+        let existing_by_meta = by_meta.get(&source_id);
 
         let existing_by_num = existing_issues.iter().find(|r| {
             let n: String = r.get("number");
             is_same_issue(&n, &issue_num)
         });
 
-        let (is_locked, existing_name, existing_release) = if let Some(r) = &existing_by_meta {
+        let (is_locked, existing_name, existing_release) = if let Some(r) = existing_by_meta {
             (
                 r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
                 r.try_get::<Option<String>, _>("name").unwrap_or(None),
@@ -654,7 +686,7 @@ async fn fetch_metron(
         let name_val: Option<String> = if is_locked { existing_name } else { Some(issue_name) };
         let release_val: Option<String> = if is_locked { existing_release } else { issue_date.clone() };
 
-        let res = if let Some(r) = &existing_by_meta {
+        let res = if let Some(r) = existing_by_meta {
             let id: String = r.get("id");
             sqlx::query(
                 r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$7"#,

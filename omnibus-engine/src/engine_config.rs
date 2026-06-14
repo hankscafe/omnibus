@@ -20,6 +20,10 @@ pub struct EngineConfig {
     pub cpu_cap: usize,
     pub blocking_threads: usize,
     pub memory_ceiling_mb: u64,
+    /// sqlx pool size. The bounded JoinSets each issue concurrent queries; if the pool is smaller
+    /// than the worker count, tasks acquire a semaphore permit then stall waiting for a connection —
+    /// so this is derived from the worker counts (default) unless overridden.
+    pub db_connections: u32,
 }
 
 /// Logical CPU count, used to derive defaults and clamp ceilings.
@@ -34,7 +38,7 @@ const PER_TASK_MB: u64 = 64;
 impl EngineConfig {
     /// Safe defaults, used when the SystemSetting table is unreadable (e.g. a preflight DB failure).
     pub fn defaults() -> Self {
-        Self::resolve(None, None, None, None, None, cores())
+        Self::resolve(None, None, None, None, None, None, cores())
     }
 
     /// Reads the `engine_*` SystemSetting keys and resolves them into clamped, derated limits.
@@ -43,7 +47,7 @@ impl EngineConfig {
         match sqlx::query(
             r#"SELECT key, value FROM "SystemSetting" WHERE key IN
                ('engine_max_scan_workers','engine_max_convert_workers','engine_cpu_cap',
-                'engine_max_blocking_threads','engine_memory_ceiling_mb')"#,
+                'engine_max_blocking_threads','engine_memory_ceiling_mb','engine_max_db_connections')"#,
         )
         .fetch_all(db)
         .await
@@ -66,6 +70,7 @@ impl EngineConfig {
             num("engine_cpu_cap"),
             num("engine_max_blocking_threads"),
             num("engine_memory_ceiling_mb"),
+            num("engine_max_db_connections"),
             cores(),
         );
 
@@ -84,12 +89,14 @@ impl EngineConfig {
 
     /// Pure resolution: defaults, clamping, and the memory-ceiling deration. Separated from `load` so
     /// it is unit-testable without a database.
+    #[allow(clippy::too_many_arguments)]
     fn resolve(
         scan: Option<u64>,
         convert: Option<u64>,
         cpu: Option<u64>,
         blocking: Option<u64>,
         memory_ceiling_mb: Option<u64>,
+        db_connections: Option<u64>,
         cores: usize,
     ) -> Self {
         let cores = cores.max(1);
@@ -115,7 +122,16 @@ impl EngineConfig {
             convert_workers = convert_workers.min(convert_cap);
         }
 
-        Self { scan_workers, convert_workers, cpu_cap, blocking_threads, memory_ceiling_mb }
+        // Pool large enough that the bounded JoinSets (each a worker issuing concurrent queries) plus
+        // the Axum request handlers don't starve on connections. Derived from the (post-deration)
+        // worker count unless explicitly overridden; clamped to stay well under Postgres' default 100.
+        let db_connections = db_connections
+            .filter(|&n| n > 0)
+            .map(|n| n as u32)
+            .unwrap_or_else(|| (scan_workers.max(convert_workers) as u32) * 2 + 4)
+            .clamp(5, 32);
+
+        Self { scan_workers, convert_workers, cpu_cap, blocking_threads, memory_ceiling_mb, db_connections }
     }
 }
 
@@ -125,49 +141,57 @@ mod tests {
 
     #[test]
     fn defaults_derive_from_cores() {
-        let c = EngineConfig::resolve(None, None, None, None, None, 8);
+        let c = EngineConfig::resolve(None, None, None, None, None, None, 8);
         assert_eq!(c.scan_workers, 8);
         assert_eq!(c.convert_workers, 4);
         assert_eq!(c.cpu_cap, 8);
         assert_eq!(c.blocking_threads, 64);
         assert_eq!(c.memory_ceiling_mb, 0);
+        // Derived from max(scan, convert) * 2 + 4 = 8*2+4 = 20.
+        assert_eq!(c.db_connections, 20);
     }
 
     #[test]
     fn zero_and_unset_fall_back_to_defaults() {
-        let c = EngineConfig::resolve(Some(0), Some(0), Some(0), Some(0), Some(0), 4);
+        let c = EngineConfig::resolve(Some(0), Some(0), Some(0), Some(0), Some(0), Some(0), 4);
         assert_eq!(c.scan_workers, 4);
         assert_eq!(c.convert_workers, 2);
         assert_eq!(c.cpu_cap, 4);
         assert_eq!(c.blocking_threads, 64);
+        // 4*2+4 = 12.
+        assert_eq!(c.db_connections, 12);
     }
 
     #[test]
     fn explicit_values_are_honored_and_clamped() {
-        let c = EngineConfig::resolve(Some(2), Some(3), Some(6), Some(128), None, 8);
+        let c = EngineConfig::resolve(Some(2), Some(3), Some(6), Some(128), None, Some(10), 8);
         assert_eq!(c.scan_workers, 2);
         assert_eq!(c.convert_workers, 3);
         assert_eq!(c.cpu_cap, 6);
         assert_eq!(c.blocking_threads, 128);
+        assert_eq!(c.db_connections, 10);
 
-        // Absurd values are clamped: workers to 4*cores (=16), blocking to 512.
-        let c2 = EngineConfig::resolve(Some(9999), None, Some(9999), Some(9999), None, 4);
+        // Absurd values are clamped: workers to 4*cores (=16), blocking to 512, pool to 32.
+        let c2 = EngineConfig::resolve(Some(9999), None, Some(9999), Some(9999), None, Some(9999), 4);
         assert_eq!(c2.scan_workers, 16);
         assert_eq!(c2.cpu_cap, 16);
         assert_eq!(c2.blocking_threads, 512);
+        assert_eq!(c2.db_connections, 32);
     }
 
     #[test]
     fn memory_ceiling_derates_worker_counts() {
         // 128MB ceiling, 16 cores. Scan tasks: 128/64 = 2. Convert tasks fan pages across the rayon
         // pool (cpu_cap), so 128/(64*16) = 0 → floored to 1. cpu_cap itself is never derated.
-        let c = EngineConfig::resolve(Some(16), Some(16), None, None, Some(128), 16);
+        let c = EngineConfig::resolve(Some(16), Some(16), None, None, Some(128), None, 16);
         assert_eq!(c.scan_workers, 2);
         assert_eq!(c.convert_workers, 1);
         assert_eq!(c.cpu_cap, 16);
+        // Pool derives from the DERATED worker count: max(2,1)*2+4 = 8.
+        assert_eq!(c.db_connections, 8);
 
         // A tiny ceiling still leaves at least 1 worker of each class.
-        let c2 = EngineConfig::resolve(Some(8), Some(8), None, None, Some(10), 8);
+        let c2 = EngineConfig::resolve(Some(8), Some(8), None, None, Some(10), None, 8);
         assert_eq!(c2.scan_workers, 1);
         assert_eq!(c2.convert_workers, 1);
     }

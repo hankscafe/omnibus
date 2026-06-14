@@ -473,7 +473,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
                         .execute(&db)
                         .await
                         {
-                            log::error!("[Scanner Debug] Error blanking ghost issue {}: {:?}", issue_id, e);
+                            log::error!("[Scanner Debug] Error blanking ghost issue '{}': {:?}", file_path, e);
                         }
                     } else {
                         delete_issue(&db, &issue_id).await;
@@ -547,6 +547,12 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             }
         }
     }
+
+    log::info!(
+        "Disk scan found {} new folder(s) and {} new file(s) for existing series.",
+        new_folders.len(),
+        new_issues_existing_series.len()
+    );
 
     let mut series_inserted = 0;
     let mut issues_inserted = 0;

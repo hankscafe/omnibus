@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
                     purged++;
                 }
             }
-            if (purged > 0) Logger.log(`[Retry API] Purged ${purged} conflicting ghost jobs from BullMQ for request: ${id}`, 'info');
+            if (purged > 0) Logger.log(`[Retry API] Purged ${purged} conflicting ghost jobs from BullMQ for "${req.activeDownloadName || id}"`, 'info');
         } catch (queueErr) {
             Logger.log(`[Retry API] Non-fatal error purging jobs: ${queueErr}`, 'warn');
         }
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
         
         // 3. Recovery Fuzzy Search
         if (ddlEnabled && hasEnabledHosters) {
-            Logger.log(`[Retry] No direct link found for ${req.id}, attempting recovery fuzzy search...`, 'info');
+            Logger.log(`[Retry] No direct link found for "${req.activeDownloadName || req.id}", attempting recovery fuzzy search...`, 'info');
             
             const acronyms = await getCustomAcronyms();
             const queries = generateSearchQueries(req.activeDownloadName || "", year, acronyms, isManga); 

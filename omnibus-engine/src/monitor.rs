@@ -84,7 +84,7 @@ async fn insert_skeleton(
     .execute(db).await;
     match res {
         Ok(_) => Some(id),
-        Err(e) => { log::warn!("[Series Monitor] Skeleton insert failed for series {}: {:?}", series_id, e); None }
+        Err(e) => { log::warn!("[Series Monitor] Skeleton insert failed (issue #{}): {:?}", number, e); None }
     }
 }
 

@@ -23,6 +23,7 @@ import { Switch } from "@/components/ui/switch"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
+import MetadataEditorModal from "@/components/metadata-editor-modal"
 
 interface Comic {
   id: string; // Prisma ID
@@ -111,6 +112,7 @@ function LibraryContent() {
 
   const [editing, setEditing] = useState<LibrarySeries | null>(null)
   const [updating, setUpdating] = useState(false)
+  const [metaSeries, setMetaSeries] = useState<LibrarySeries | null>(null)
   const [copied, setCopied] = useState(false);
   
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || "")
@@ -1488,7 +1490,7 @@ function LibraryContent() {
       </Dialog>
       
       <Dialog open={!!editing} onOpenChange={() => !updating && setEditing(null)}>
-        <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
+        <DialogContent className="sm:max-w-[500px] w-[95%] max-h-[90vh] overflow-y-auto bg-background border-border rounded-xl">
             <DialogHeader><DialogTitle>Edit Metadata</DialogTitle></DialogHeader>
             {editing && (
                 <div className="grid gap-4 py-4">
@@ -1521,11 +1523,31 @@ function LibraryContent() {
                         <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border"><Switch id="monitor-switch" checked={editing.monitored || false} onCheckedChange={v => setEditing({...editing, monitored: v})} /><Label htmlFor="monitor-switch" className="cursor-pointer">Monitor Series</Label></div>
                         <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border"><Switch id="manga-switch" checked={editing.isManga || false} onCheckedChange={v => setEditing({...editing, isManga: v})} /><Label htmlFor="manga-switch" className="cursor-pointer">Flag as Manga</Label></div>
                     </div>
+
+                    <Button variant="secondary" className="w-full border border-border hover:bg-muted font-semibold mt-1 h-auto py-2.5 whitespace-normal leading-snug text-center" onClick={() => { setMetaSeries(editing); setEditing(null); }}>
+                        <FileEdit className="w-4 h-4 mr-2 shrink-0" /> Edit Metadata (Description, Universe, Series Group)
+                    </Button>
                 </div>
             )}
             <DialogFooter className="gap-2 sm:gap-2"><Button variant="outline" onClick={() => setEditing(null)} disabled={updating} className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted">Cancel</Button><Button onClick={handleUpdateMetadata} disabled={updating} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold h-12 sm:h-10 w-full sm:w-auto">{updating ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null} Save Changes</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MetadataEditorModal
+          open={!!metaSeries}
+          onOpenChange={(o) => { if (!o) setMetaSeries(null) }}
+          mode="series"
+          series={metaSeries ? {
+              currentPath: metaSeries.path,
+              name: metaSeries.name,
+              publisher: metaSeries.publisher || '',
+              year: metaSeries.year || '',
+              status: metaSeries.status || undefined,
+              monitored: metaSeries.monitored,
+              isManga: metaSeries.isManga,
+          } : undefined}
+          onSaved={() => window.location.reload()}
+      />
       
       <ConfirmationDialog isOpen={confirmOpen} onClose={() => setConfirmOpen(false)} onConfirm={handleConfirmedRefresh} variant="default" title="Refresh Metadata?" description="This will re-fetch the latest data from the provider." confirmText="Refresh" />
       

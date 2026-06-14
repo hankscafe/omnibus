@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
             const safeName = series.name ? series.name.replace(/[<>:"/\\|?*]/g, '').trim() : "Unknown Series";
             const safeYear = series.year ? series.year.toString() : "";
             const safeUniverse = (series as any).universe ? (series as any).universe.replace(/[<>:"/\\|?*]/g, '').trim() : "";
+            const safeSeriesGroup = (series as any).seriesGroup ? (series as any).seriesGroup.replace(/[<>:"/\\|?*]/g, '').trim() : "";
 
             let relFolderPath = folderPattern
                 .replace(/{Publisher}/gi, safePublisher)
@@ -58,6 +59,7 @@ export async function POST(request: NextRequest) {
                 .replace(/{Year}/gi, safeYear)
                 .replace(/{VolumeYear}/gi, safeYear)
                 .replace(/{UniverseName}/gi, safeUniverse)
+                .replace(/{SeriesGroup}/gi, safeSeriesGroup)
                 .replace(/\(\s*\)/g, '')
                 .replace(/\[\s*\]/g, '')
                 .replace(/\s+/g, ' ')
@@ -104,6 +106,7 @@ export async function POST(request: NextRequest) {
                     .replace(/{Issue}/gi, formattedNum || "")
                     .replace(/{IssueTitle}/gi, cleanIssueName.replace(/[<>:"/\\|?*]/g, '').trim()) // <-- ADD THIS
                     .replace(/{UniverseName}/gi, safeUniverse) // <-- ADD THIS
+                    .replace(/{SeriesGroup}/gi, safeSeriesGroup)
                     .replace(/\(\s*\)/g, '')
                     .replace(/\[\s*\]/g, '')
                     .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS

@@ -26,6 +26,15 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         const writers = issue.writers ? JSON.parse(issue.writers).join(', ') : '';
         const artists = issue.artists ? JSON.parse(issue.artists).join(', ') : '';
         const characters = issue.characters ? JSON.parse(issue.characters).join(', ') : '';
+        const joinArr = (raw: any): string => {
+            if (!raw) return '';
+            try { const p = JSON.parse(raw); return Array.isArray(p) ? p.join(', ') : ''; } catch { return ''; }
+        };
+        const coverArtists = joinArr(issue.coverArtists);
+        const colorists = joinArr(issue.colorists);
+        const letterers = joinArr(issue.letterers);
+        const teams = joinArr(issue.teams);
+        const locations = joinArr(issue.locations);
 
         const genreList: string[] = [];
         if ((issue as any).genres) {
@@ -82,9 +91,15 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
   <Universe>${escapeXml(issue.universe || issue.series.universe || '')}</Universe> <!-- ADD THIS LINE -->
   <Genre>${escapeXml(genres)}</Genre>
   <StoryArc>${escapeXml(storyArcs)}</StoryArc>
+  <SeriesGroup>${escapeXml(issue.series.seriesGroup || '')}</SeriesGroup>
   <Writer>${escapeXml(writers)}</Writer>
   <Penciller>${escapeXml(artists)}</Penciller>
+  <Colorist>${escapeXml(colorists)}</Colorist>
+  <Letterer>${escapeXml(letterers)}</Letterer>
+  <CoverArtist>${escapeXml(coverArtists)}</CoverArtist>
   <Characters>${escapeXml(characters)}</Characters>
+  <Teams>${escapeXml(teams)}</Teams>
+  <Locations>${escapeXml(locations)}</Locations>
   <Web>${escapeXml(webUrl)}</Web>
   <Manga>${issue.series.isManga ? 'YesAndRightToLeft' : 'No'}</Manga>
   <ComicVineVolumeId>${(isCvSeries && issue.series.metadataId) ? issue.series.metadataId : ''}</ComicVineVolumeId>

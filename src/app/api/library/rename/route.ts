@@ -60,7 +60,8 @@ export async function POST(request: NextRequest) {
             const safeSeries = sanitize(s.name || "Unknown");
             const safeYear = s.year ? s.year.toString() : "";
             const safeUniverse = (s as any).universe ? sanitize((s as any).universe) : "";
-            
+            const safeSeriesGroup = (s as any).seriesGroup ? sanitize((s as any).seriesGroup) : "";
+
             // FIX: Use activeFolderPattern here
             let relFolderPath = activeFolderPattern
                 .replace(/{Publisher}/gi, safePublisher)
@@ -68,7 +69,8 @@ export async function POST(request: NextRequest) {
                 .replace(/{Year}/gi, safeYear)
                 .replace(/{VolumeYear}/gi, safeYear)
                 .replace(/{UniverseName}/gi, safeUniverse)
-                .replace(/\(\s*\)/g, '') 
+                .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+                .replace(/\(\s*\)/g, '')
                 .replace(/\[\s*\]/g, '') 
                 .replace(/\s+/g, ' ')
                 .trim();
@@ -139,7 +141,8 @@ export async function POST(request: NextRequest) {
             }
 
             const safeUniverse = (s as any).universe ? sanitize((s as any).universe) : "";
-            
+            const safeSeriesGroup = (s as any).seriesGroup ? sanitize((s as any).seriesGroup) : "";
+
             let newFileName = patternToUse
                 .replace(/{Publisher}/gi, s.publisher || 'Unknown')
                 .replace(/{Series}/gi, s.name || 'Unknown')
@@ -149,6 +152,7 @@ export async function POST(request: NextRequest) {
                 .replace(/{Issue}/gi, paddedNum)
                 .replace(/{IssueTitle}/gi, sanitize(cleanIssueName)) // <-- ADD THIS
                 .replace(/{UniverseName}/gi, safeUniverse)
+                .replace(/{SeriesGroup}/gi, safeSeriesGroup)
                 .replace(/\(\s*\)/g, '')
                 .replace(/\[\s*\]/g, '')
                 .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS

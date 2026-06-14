@@ -70,6 +70,9 @@ prisma/schema - BACKUP.prisma
 # Ignore .claude/worktree
 .claude/worktrees/
 .claude/plans/
+.E2E_TESTING.md
+.PARITY_VERIFICATION.md
+.PORTING_AUDIT.md
 
 # Ignore tmp directory in dev environment
 tmp/

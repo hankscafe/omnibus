@@ -25,6 +25,7 @@ struct ScanComicInfo {
     year: Option<String>,
     manga: Option<String>,
     web: Option<String>,
+    series_group: Option<String>,
     comic_vine_volume_id: Option<String>,
     comic_vine_issue_id: Option<String>,
     metron_id: Option<String>,
@@ -649,12 +650,20 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
 
         let series_id = Uuid::new_v4().to_string();
 
+        // Series Group comes only from the file's ComicInfo.xml (ComicVine/Metron don't supply it);
+        // captured here at series creation so {SeriesGroup} folder patterns work for scanned libraries.
+        let series_group = info
+            .as_ref()
+            .and_then(|i| i.series_group.clone())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         // ON CONFLICT DO NOTHING guards the @@unique([metadataSource, metadataId]) constraint —
         // a duplicate matched series is skipped (parity with Node's create-throws-then-skip).
         let insert_res = sqlx::query(
             r#"INSERT INTO "Series"
-               (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "libraryId", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+               (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "seriesGroup", "libraryId", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
                ON CONFLICT DO NOTHING"#,
         )
         .bind(&series_id)
@@ -668,6 +677,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         .bind(cv_id)
         .bind(metron_id)
         .bind(is_manga)
+        .bind(&series_group)
         .bind(&library_id)
         .execute(&db)
         .await;

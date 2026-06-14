@@ -11,6 +11,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { parseComicVineCredits } from '@/lib/utils';
 import { safeParse } from '@/lib/utils/safe-parse';
+import { omnibusQueue } from '@/lib/queue';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -36,9 +37,10 @@ export async function GET(request: Request) {
     const parsedTeams = safeParse((issue as any).teams);
     const parsedLocations = safeParse((issue as any).locations);
 
-    const needsDeepFetch = issue.metadataId && 
-                           !issue.metadataId.startsWith('unmatched_') && 
-                           issue.matchState !== 'DEEP_SYNCED';
+    const needsDeepFetch = issue.metadataId &&
+                           !issue.metadataId.startsWith('unmatched_') &&
+                           issue.matchState !== 'DEEP_SYNCED' &&
+                           !(issue as any).hasCustomMetadata; // a manually curated issue is never re-fetched over
 
     if (needsDeepFetch && issue.metadataId) {
         if (issue.metadataSource === 'METRON') {
@@ -76,14 +78,18 @@ export async function GET(request: Request) {
                 });
 
                 return NextResponse.json({
+                    number: issue.number,
+                    name: issue.name,
+                    releaseDate: issue.releaseDate,
+                    universe: issue.universe,
                     writers: finalWriters,
                     artists: finalArtists,
                     coverArtists: finalCoverArtists,
                     colorists: finalColorists,
                     letterers: finalLetterers,
                     characters: finalCharacters,
-                    genres: parsedGenres, 
-                    storyArcs: finalStoryArcs, 
+                    genres: parsedGenres,
+                    storyArcs: finalStoryArcs,
                     teams: finalTeams,
                     locations: parsedLocations,
                     description: newDescription
@@ -151,14 +157,18 @@ export async function GET(request: Request) {
                         });
 
                         return NextResponse.json({
+                            number: issue.number,
+                            name: issue.name,
+                            releaseDate: issue.releaseDate,
+                            universe: issue.universe,
                             writers: finalWriters,
                             artists: finalArtists,
                             coverArtists: finalCoverArtists,
                             colorists: finalColorists,
                             letterers: finalLetterers,
                             characters: finalCharacters,
-                            genres: finalGenres, 
-                            storyArcs: finalStoryArcs, 
+                            genres: finalGenres,
+                            storyArcs: finalStoryArcs,
                             teams: finalTeams,
                             locations: finalLocations,
                             description: newDescription
@@ -172,14 +182,18 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json({
+        number: issue.number,
+        name: issue.name,
+        releaseDate: issue.releaseDate,
+        universe: issue.universe,
         writers: parsedWriters,
         artists: parsedArtists,
         coverArtists: parsedCoverArtists,
         colorists: parsedColorists,
         letterers: parsedLetterers,
         characters: parsedCharacters,
-        genres: parsedGenres, 
-        storyArcs: parsedStoryArcs, 
+        genres: parsedGenres,
+        storyArcs: parsedStoryArcs,
         teams: parsedTeams,
         locations: parsedLocations,
         description: issue.description
@@ -188,6 +202,70 @@ export async function GET(request: Request) {
     Logger.log(`[Library Issue API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
+}
+
+// Save manually edited issue metadata (the per-issue ComicInfo editor). Marks the issue as
+// custom (locks it from auto-sync + the lazy deep-fetch) and optionally embeds to ComicInfo.xml.
+export async function PATCH(request: Request) {
+    try {
+        const authOptions = await getAuthOptions();
+        const session = await getServerSession(authOptions);
+        if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+
+        const body = await request.json();
+        const issueId = body.issueId;
+        if (!issueId) return NextResponse.json({ error: "Missing issue ID" }, { status: 400 });
+
+        const existing = await prisma.issue.findUnique({ where: { id: issueId }, include: { series: true } });
+        if (!existing) return NextResponse.json({ error: "Issue not found" }, { status: 404 });
+
+        // Multi-value fields arrive from the editor as arrays; persisted as JSON strings.
+        const ARRAY_FIELDS = ['writers', 'artists', 'coverArtists', 'colorists', 'letterers', 'characters', 'genres', 'storyArcs', 'teams', 'locations'];
+        const SCALAR_FIELDS = ['number', 'name', 'description', 'releaseDate', 'universe'];
+
+        const data: any = {};
+        for (const f of SCALAR_FIELDS) {
+            if (body[f] !== undefined) data[f] = body[f] === '' ? null : body[f];
+        }
+        for (const f of ARRAY_FIELDS) {
+            if (body[f] !== undefined) {
+                const arr = Array.isArray(body[f]) ? body[f].map((s: any) => String(s).trim()).filter(Boolean) : [];
+                data[f] = JSON.stringify(arr);
+            }
+        }
+        // Lock against auto-sync overwrite, and stop the GET lazy deep-fetch from clobbering the edit.
+        data.hasCustomMetadata = true;
+        data.matchState = 'DEEP_SYNCED';
+
+        await prisma.issue.update({ where: { id: issueId }, data });
+
+        // Write-to-file decision: an explicit per-edit toggle wins; otherwise the global default.
+        let writeToFile = body.writeToFile;
+        if (writeToFile === undefined) {
+            const setting = await prisma.systemSetting.findUnique({ where: { key: 'metadata_write_comicinfo' } });
+            writeToFile = setting?.value !== 'false'; // default: write
+        }
+
+        if (writeToFile) {
+            try {
+                await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', issueIds: [issueId] }, {
+                    jobId: `EMBED_META_ISSUE_${issueId}_${Date.now()}`
+                });
+                Logger.log(`[Metadata] Queued ComicInfo.xml embed for edited issue: ${existing.series?.name || ''} #${existing.number}`, 'info');
+            } catch (e) {}
+        }
+
+        await AuditLogger.log('UPDATE_ISSUE_METADATA', {
+            issueId,
+            issueName: `${existing.series?.name || ''} #${existing.number}`,
+            wroteToFile: !!writeToFile
+        }, (session.user as any).id);
+
+        return NextResponse.json({ success: true, wroteToFile: !!writeToFile });
+    } catch (error: unknown) {
+        Logger.log(`[Library Issue API] PATCH Error: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    }
 }
 
 export async function DELETE(request: Request) {

@@ -113,6 +113,7 @@ model Series {
   publisher       String?
   folderPath      String
   universe        String?
+  seriesGroup     String?  // ComicInfo <SeriesGroup>; umbrella folder for related series (providers don't supply it — set from ComicInfo.xml or manually)
   monitored       Boolean?
   isManga         Boolean  @default(false)
   size            Float?   @default(0)
@@ -123,6 +124,8 @@ model Series {
   coverUrl        String?
   remoteCoverUrl  String?  // Original ComicVine/Metron cover URL (coverUrl becomes a local path after caching)
   seriesJsonWritten Boolean @default(false) // Omnibus owns the series.json in this folder; foreign files are never overwritten
+  hasCustomMetadata Boolean @default(false) // Series was manually curated in the metadata editor; auto-sync must not overwrite its narrative fields
+  lastMetadataSync DateTime? // Last successful provider sync (UTC); keys incremental fetches (Metron modified_gt)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
 

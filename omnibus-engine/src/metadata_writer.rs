@@ -48,10 +48,11 @@ fn clean_json_array(raw: Option<&str>) -> String {
 
 pub async fn process_embed_job(db: PgPool, payload: EmbedRequest) -> anyhow::Result<(i32, i32, i32)> {
     let base = r#"SELECT i.id, i."filePath", i.number, i.name as issue_name, i.description as issue_desc,
-               i.writers, i.artists, i.characters, i."releaseDate", i.universe as issue_universe,
+               i.writers, i.artists, i.characters, i."coverArtists", i.colorists, i.letterers, i.teams, i.locations,
+               i."releaseDate", i.universe as issue_universe,
                i.genres, i."storyArcs", i."metadataId" as issue_meta_id, i."metadataSource" as issue_meta_source,
                s.id as series_id, s.name as series_name, s.publisher, s.year, s."folderPath",
-               s.universe as series_universe, s."isManga", s."metadataId" as series_meta_id, s."metadataSource" as series_meta_source
+               s.universe as series_universe, s."seriesGroup" as series_group, s."isManga", s."metadataId" as series_meta_id, s."metadataSource" as series_meta_source
         FROM "Issue" i
         JOIN "Series" s ON i."seriesId" = s.id
         WHERE i."filePath" LIKE '%.cbz'"#;
@@ -139,6 +140,11 @@ fn build_comic_info_xml(row: &sqlx::postgres::PgRow) -> String {
     let writers = clean_json_array(g("writers").as_deref());
     let artists = clean_json_array(g("artists").as_deref());
     let characters = clean_json_array(g("characters").as_deref());
+    let cover_artists = clean_json_array(g("coverArtists").as_deref());
+    let colorists = clean_json_array(g("colorists").as_deref());
+    let letterers = clean_json_array(g("letterers").as_deref());
+    let teams = clean_json_array(g("teams").as_deref());
+    let locations = clean_json_array(g("locations").as_deref());
     let summary = strip_html(&g("issue_desc").unwrap_or_default());
 
     let mut genre_list = parse_json_array(g("genres").as_deref());
@@ -149,6 +155,8 @@ fn build_comic_info_xml(row: &sqlx::postgres::PgRow) -> String {
 
     let story_arcs = parse_json_array(g("storyArcs").as_deref())
         .into_iter().filter(|a| a != "NONE").collect::<Vec<_>>().join(", ");
+
+    let series_group = g("series_group").unwrap_or_default();
 
     // <Volume> = series start year (blank when unknown/0). <Year>/<Month>/<Day> from releaseDate, year falling back to Volume.
     let volume = if year != 0 { year.to_string() } else { String::new() };
@@ -206,9 +214,15 @@ fn build_comic_info_xml(row: &sqlx::postgres::PgRow) -> String {
   <Universe>{}</Universe>
   <Genre>{}</Genre>
   <StoryArc>{}</StoryArc>
+  <SeriesGroup>{}</SeriesGroup>
   <Writer>{}</Writer>
   <Penciller>{}</Penciller>
+  <Colorist>{}</Colorist>
+  <Letterer>{}</Letterer>
+  <CoverArtist>{}</CoverArtist>
   <Characters>{}</Characters>
+  <Teams>{}</Teams>
+  <Locations>{}</Locations>
   <Web>{}</Web>
   <Manga>{}</Manga>
   <ComicVineVolumeId>{}</ComicVineVolumeId>
@@ -226,9 +240,15 @@ fn build_comic_info_xml(row: &sqlx::postgres::PgRow) -> String {
         escape_xml(&universe),
         escape_xml(&genres),
         escape_xml(&story_arcs),
+        escape_xml(&series_group),
         escape_xml(&writers),
         escape_xml(&artists),
+        escape_xml(&colorists),
+        escape_xml(&letterers),
+        escape_xml(&cover_artists),
         escape_xml(&characters),
+        escape_xml(&teams),
+        escape_xml(&locations),
         escape_xml(&web_url),
         manga_tag,
         cv_vol_id,

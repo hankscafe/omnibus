@@ -175,6 +175,7 @@ export default function SettingsPage() {
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030", download_path: "", cv_api_key: "",
     metron_user: "", metron_pass: "",
     export_series_json: "false",
+    metadata_write_comicinfo: "true",
     series_ended_months: "18",
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
@@ -964,6 +965,23 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                         </div>
+
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Switch
+                                id="metadata-write-comicinfo"
+                                checked={config.metadata_write_comicinfo !== "false"}
+                                onCheckedChange={(c) => setConfig({...config, metadata_write_comicinfo: c ? "true" : "false"})}
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="metadata-write-comicinfo" className="cursor-pointer font-bold text-base text-foreground">
+                                    Write metadata edits to ComicInfo.xml
+                                </Label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Default for the Edit Metadata dialog: when on, manual edits are embedded back into each comic's <code>ComicInfo.xml</code>. When off, edits are kept in Omnibus only and the files are left untouched (Komga-style). Each edit can still override this with its own toggle.
+                                </p>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
@@ -1593,10 +1611,10 @@ export default function SettingsPage() {
                                 <Input 
                                     value={config.folder_naming_pattern || "{Publisher}/{Series} ({Year})"} 
                                     onChange={e => setConfig({...config, folder_naming_pattern: e.target.value})} 
-                                    placeholder="{Publisher}/{Series} ({Year})" 
+                                    placeholder="{Publisher}/{Series} ({Year})"
                                     className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                                 />
-                                <p className="text-[10px] text-muted-foreground">Use slashes (/) to create sub-folders.</p>
+                                <p className="text-[10px] text-muted-foreground">Use slashes (/) to create sub-folders. Tokens: {`{Publisher} {Series} {Year} {VolumeYear} {UniverseName} {SeriesGroup}`}. {`{SeriesGroup}`} groups related series under one umbrella folder (e.g. {`{SeriesGroup}/{Series} ({Year})`}).</p>
                             </div>
                             
                             <div className="space-y-2">
@@ -1604,10 +1622,10 @@ export default function SettingsPage() {
                                 <Input 
                                     value={config.file_naming_pattern || "{Series} #{Issue}"} 
                                     onChange={e => setConfig({...config, file_naming_pattern: e.target.value})} 
-                                    placeholder="{Series} #{Issue}" 
+                                    placeholder="{Series} #{Issue}"
                                     className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                                 />
-                                <p className="text-[10px] text-muted-foreground">Applied to standard Western comics.</p>
+                                <p className="text-[10px] text-muted-foreground">Applied to standard Western comics. Tokens: {`{Series} {Issue} {IssueTitle} {IssueYear} {Year} {Publisher} {UniverseName} {SeriesGroup}`}.</p>
                             </div>
 
                             <div className="space-y-2 md:col-span-2 lg:col-span-1">
@@ -1637,6 +1655,8 @@ export default function SettingsPage() {
                                             .replace(/{Year}/gi, "2022")
                                             .replace(/{VolumeYear}/gi, "2022")
                                             .replace(/{IssueYear}/gi, "2022")
+                                            .replace(/{UniverseName}/gi, "Earth-616")
+                                            .replace(/{SeriesGroup}/gi, "Spider-Man")
                                             .replace(/\(\s*\)/g, '')
                                             .replace(/\[\s*\]/g, '')
                                             .replace(/\s+/g, ' ')
@@ -1652,6 +1672,8 @@ export default function SettingsPage() {
                                             .replace(/{Year}/gi, "2022")
                                             .replace(/{VolumeYear}/gi, "2022")
                                             .replace(/{IssueYear}/gi, "2022")
+                                            .replace(/{UniverseName}/gi, "Earth-616")
+                                            .replace(/{SeriesGroup}/gi, "Spider-Man")
                                             .replace(/{Issue}/gi, "01")
                                             .replace(/\(\s*\)/g, '')
                                             .replace(/\[\s*\]/g, '')
@@ -1668,6 +1690,8 @@ export default function SettingsPage() {
                                             .replace(/{Year}/gi, "2018")
                                             .replace(/{VolumeYear}/gi, "2018")
                                             .replace(/{IssueYear}/gi, "2018")
+                                            .replace(/{UniverseName}/gi, "")
+                                            .replace(/{SeriesGroup}/gi, "Chainsaw Man")
                                             .replace(/{Issue}/gi, "01")
                                             .replace(/\(\s*\)/g, '')
                                             .replace(/\[\s*\]/g, '')

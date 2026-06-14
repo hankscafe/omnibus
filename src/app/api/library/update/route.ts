@@ -18,7 +18,8 @@ export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id || 'System';
 
-    const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType } = await request.json();
+    const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType, seriesGroup,
+            description, universe, writeToFile, lockMetadata } = await request.json();
 
     // Mylar booktype values — anything else is ignored rather than stored
     const VALID_BOOK_TYPES = ['Print', 'OneShot', 'TPB', 'GN'];
@@ -44,12 +45,27 @@ export async function POST(request: Request) {
     const safePublisher = publisher && publisher !== "Unknown" ? sanitize(publisher) : "Other";
     const safeSeries = sanitize(name || "Unknown Series");
     const safeYear = year ? year.toString() : "";
-    
+
+    // Universe/Series Group aren't edited by the basic modal, so resolve them from the existing
+    // series record — otherwise a folder pattern using {UniverseName}/{SeriesGroup} would have
+    // those subfolders stripped on a routine name/year/publisher edit. seriesGroup may also be
+    // supplied explicitly (the metadata editor) and takes precedence when provided.
+    const existingMetaRow = await prisma.series.findFirst({
+        where: { folderPath: currentPath },
+        select: { universe: true, seriesGroup: true }
+    });
+    const safeUniverse = existingMetaRow?.universe ? sanitize(existingMetaRow.universe) : "";
+    const effectiveSeriesGroup = (seriesGroup !== undefined ? seriesGroup : existingMetaRow?.seriesGroup) || "";
+    const safeSeriesGroup = effectiveSeriesGroup ? sanitize(effectiveSeriesGroup) : "";
+
     let relFolderPath = folderPattern
         .replace(/{Publisher}/gi, safePublisher)
         .replace(/{Series}/gi, safeSeries)
         .replace(/{Year}/gi, safeYear)
-        .replace(/\(\s*\)/g, '') 
+        .replace(/{VolumeYear}/gi, safeYear)
+        .replace(/{UniverseName}/gi, safeUniverse)
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+        .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '') 
         .replace(/\s+/g, ' ')
         .trim();
@@ -96,7 +112,13 @@ export async function POST(request: Request) {
                 metadataSource: existingRecord.metadataSource || 'COMICVINE',
                 libraryId: targetLib.id,
                 status: status || existingRecord.status,
-                bookType: parsedBookType || existingRecord.bookType
+                bookType: parsedBookType || existingRecord.bookType,
+                ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
+                ...(description !== undefined ? { description: description || null } : {}),
+                ...(universe !== undefined ? { universe: universe || null } : {}),
+                // Only the rich metadata editor locks the series against auto-sync; the basic
+                // Edit Info modal (name/year/publisher) leaves sync behavior unchanged.
+                ...(lockMetadata ? { hasCustomMetadata: true } : {})
             }
         });
 
@@ -120,13 +142,21 @@ export async function POST(request: Request) {
             }
         }
 
-        // --- NEW: Trigger instant XML embedding to reflect these manual changes ---
-        try {
-            await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: existingRecord.id }, {
-                jobId: `EMBED_META_${existingRecord.id}_${Date.now()}`
-            });
-            Logger.log(`[Metadata] Queued XML injection for manually edited series: ${cleanName}`, 'info');
-        } catch (e) {}
+        // Embed manual changes into the files' ComicInfo.xml — unless the admin chose "keep in
+        // Omnibus". The per-edit toggle (writeToFile) wins; otherwise the global default applies.
+        let doWrite = writeToFile;
+        if (doWrite === undefined) {
+            const writeSetting = await prisma.systemSetting.findUnique({ where: { key: 'metadata_write_comicinfo' } });
+            doWrite = writeSetting?.value !== 'false'; // default: write
+        }
+        if (doWrite) {
+            try {
+                await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: existingRecord.id }, {
+                    jobId: `EMBED_META_${existingRecord.id}_${Date.now()}`
+                });
+                Logger.log(`[Metadata] Queued XML injection for manually edited series: ${cleanName}`, 'info');
+            } catch (e) {}
+        }
 
     } else if (parsedCvId) {
         await prisma.series.upsert({

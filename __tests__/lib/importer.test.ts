@@ -136,7 +136,7 @@ describe('File System: Importer Engine', () => {
             expect.objectContaining({ seriesIds: expect.any(Array) }),
             expect.objectContaining({
                 jobId: expect.stringContaining('METADATA_SYNC_MATCH_series_1_'),
-                delay: 60000
+                delay: 600000
             })
         );
     });

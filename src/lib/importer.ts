@@ -454,7 +454,11 @@ export const Importer = {
     const seriesYearFromMeta = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
     const seriesNameFromMeta = series?.name || cleanSeriesName;
     const safeUniverse = (series as any)?.universe ? sanitize((series as any).universe) : "";
-         
+    // Series Group is not supplied by ComicVine/Metron — the folder uses the value already stored on
+    // the series record (set by a prior scan or a manual edit). A group found only in this file's
+    // ComicInfo.xml is persisted to the series below so subsequent imports/renames pick it up.
+    const safeSeriesGroup = (series as any)?.seriesGroup ? sanitize((series as any).seriesGroup) : "";
+
     Logger.log(`[Importer Debug] Applying Folder Pattern: "${folderPattern}" | Variables -> Publisher: "${publisherName}", Series: "${seriesNameFromMeta}", Year: "${seriesYearFromMeta}"`, 'debug');
 
     let relFolderPath = folderPattern
@@ -463,7 +467,8 @@ export const Importer = {
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
         .replace(/{VolumeYear}/gi, seriesYearFromMeta.toString())
         .replace(/{UniverseName}/gi, safeUniverse)
-        .replace(/\(\s*\)/g, '') 
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+        .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '') 
         .replace(/\s+/g, ' ')
         .trim();
@@ -543,7 +548,8 @@ export const Importer = {
     
     const issueTitle = xmlMeta?.title || "";
     const universeName = xmlMeta?.universe || "";
-    
+    const seriesGroupName = xmlMeta?.seriesGroup || (series as any)?.seriesGroup || "";
+
     let newFileName = filePatToUse
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
@@ -553,6 +559,7 @@ export const Importer = {
         .replace(/{Issue}/gi, formattedNum)
         .replace(/{IssueTitle}/gi, sanitize(issueTitle))
         .replace(/{UniverseName}/gi, sanitize(universeName))
+        .replace(/{SeriesGroup}/gi, sanitize(seriesGroupName))
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')
         .replace(/\s*-\s*-/g, ' - ') // Collapses double hyphens (e.g., " -  - " becomes " - ")
@@ -623,6 +630,11 @@ export const Importer = {
          const writersStr = xmlMeta?.writers?.length ? JSON.stringify(xmlMeta.writers) : null;
          const artistsStr = xmlMeta?.artists?.length ? JSON.stringify(xmlMeta.artists) : null;
          const charsStr = xmlMeta?.characters?.length ? JSON.stringify(xmlMeta.characters) : null;
+         const coverArtistsStr = xmlMeta?.coverArtists?.length ? JSON.stringify(xmlMeta.coverArtists) : null;
+         const coloristsStr = xmlMeta?.colorists?.length ? JSON.stringify(xmlMeta.colorists) : null;
+         const letterersStr = xmlMeta?.letterers?.length ? JSON.stringify(xmlMeta.letterers) : null;
+         const teamsStr = xmlMeta?.teams?.length ? JSON.stringify(xmlMeta.teams) : null;
+         const locationsStr = xmlMeta?.locations?.length ? JSON.stringify(xmlMeta.locations) : null;
 
          const allSeriesIssues = await prisma.issue.findMany({
              where: { seriesId: series.id }
@@ -644,6 +656,11 @@ export const Importer = {
                      writers: existingIssue.writers && existingIssue.writers !== "[]" ? existingIssue.writers : writersStr,
                      artists: existingIssue.artists && existingIssue.artists !== "[]" ? existingIssue.artists : artistsStr,
                      characters: existingIssue.characters && existingIssue.characters !== "[]" ? existingIssue.characters : charsStr,
+                     coverArtists: (existingIssue as any).coverArtists && (existingIssue as any).coverArtists !== "[]" ? (existingIssue as any).coverArtists : coverArtistsStr,
+                     colorists: (existingIssue as any).colorists && (existingIssue as any).colorists !== "[]" ? (existingIssue as any).colorists : coloristsStr,
+                     letterers: (existingIssue as any).letterers && (existingIssue as any).letterers !== "[]" ? (existingIssue as any).letterers : letterersStr,
+                     teams: (existingIssue as any).teams && (existingIssue as any).teams !== "[]" ? (existingIssue as any).teams : teamsStr,
+                     locations: (existingIssue as any).locations && (existingIssue as any).locations !== "[]" ? (existingIssue as any).locations : locationsStr,
                      metadataId: existingIssue.metadataId?.startsWith('unmatched') ? targetMetaId : existingIssue.metadataId,
                      metadataSource: existingIssue.metadataSource === 'LOCAL' ? targetMetaSource : existingIssue.metadataSource,
                      matchState: existingIssue.matchState === 'UNMATCHED' ? matchState : existingIssue.matchState
@@ -664,15 +681,27 @@ export const Importer = {
                      description: xmlMeta?.summary || null,
                      writers: writersStr,
                      artists: artistsStr,
-                     characters: charsStr
-                 }
+                     characters: charsStr,
+                     coverArtists: coverArtistsStr,
+                     colorists: coloristsStr,
+                     letterers: letterersStr,
+                     teams: teamsStr,
+                     locations: locationsStr
+                 } as any
              });
          }
 
          try {
              await prisma.series.update({
                  where: { id: series.id },
-                 data: { folderPath: destFolder, libraryId: targetLibrary.id }
+                 data: {
+                     folderPath: destFolder,
+                     libraryId: targetLibrary.id,
+                     // Capture a Series Group embedded in the file's ComicInfo.xml so future
+                     // imports/renames can place this series under its umbrella folder. Only
+                     // fills a blank — never clobbers an existing (e.g. manually set) group.
+                     ...((xmlMeta?.seriesGroup && !(series as any).seriesGroup) ? { seriesGroup: xmlMeta.seriesGroup } : {})
+                 }
              });
          } catch (e) { }
       }
@@ -682,15 +711,18 @@ export const Importer = {
               Logger.log("[Importer] Queuing deduplicated metadata sync...", "info");
               const { omnibusQueue } = await import('./queue');
               
-              // 1-minute rolling window to prevent the "Active Execution" blindspot
-              const timeWindow = Math.floor(Date.now() / 60000); 
-              
-              await omnibusQueue.add('METADATA_SYNC', { 
-                  type: 'METADATA_SYNC', 
-                  seriesIds: [series.id] 
+              // 10-minute rolling window: a batch download of many issues of the SAME series collapses
+              // (via the bucketed jobId) into ONE sync instead of one per import — cutting redundant
+              // full-series provider fetches. The matching delay lets the batch finish before it runs.
+              const SYNC_DEDUP_WINDOW_MS = 600000;
+              const timeWindow = Math.floor(Date.now() / SYNC_DEDUP_WINDOW_MS);
+
+              await omnibusQueue.add('METADATA_SYNC', {
+                  type: 'METADATA_SYNC',
+                  seriesIds: [series.id]
               }, {
                   jobId: `METADATA_SYNC_MATCH_${series.id}_${timeWindow}`,
-                  delay: 60000, 
+                  delay: SYNC_DEDUP_WINDOW_MS,
                   removeOnComplete: true,
                   removeOnFail: true
               });

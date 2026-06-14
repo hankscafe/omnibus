@@ -14,13 +14,13 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
     // Resolve target series records.
     let series_list = match &series_ids {
         Some(ids) => {
-            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl" FROM "Series" WHERE id = ANY($1) AND "metadataId" IS NOT NULL"#)
+            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE id = ANY($1) AND "metadataId" IS NOT NULL"#)
                 .bind(ids)
                 .fetch_all(&db)
                 .await?
         }
         None => {
-            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl" FROM "Series" WHERE "metadataId" IS NOT NULL ORDER BY "updatedAt" ASC LIMIT 15"#)
+            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE "metadataId" IS NOT NULL ORDER BY "updatedAt" ASC LIMIT 15"#)
                 .fetch_all(&db)
                 .await?
         }
@@ -28,6 +28,13 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
 
     log::info!("Starting Rust Metadata Sync for {} series...", series_list.len());
     let client = Client::new();
+
+    // A TARGETED sync (series_ids given — i.e. an admin "Refresh Metadata", a bulk refresh, or
+    // post-import enrichment) ALWAYS does a complete fetch: it never skips issue pagination for
+    // "Ended" series and never uses incremental (modified_gt). Only the scheduled maintenance sweep
+    // (series_ids = None) gets the call-reduction optimizations. This guarantees a human-requested
+    // refresh always re-checks every issue, even on a finished series.
+    let full_fetch = series_ids.is_some();
 
     for series in series_list {
         let series_id: String = series.get("id");
@@ -37,6 +44,8 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
         let folder_path: String = series.try_get("folderPath").unwrap_or_default();
         let current_year: i32 = series.try_get("year").unwrap_or(0);
         let current_cover: Option<String> = series.try_get("coverUrl").unwrap_or(None);
+        // ISO timestamp of the last successful sync (UTC) — keys incremental fetches. None = never synced.
+        let last_sync: Option<String> = series.try_get("lastMetadataSync").unwrap_or(None);
 
         log::info!("Syncing metadata for: {} ({} ID: {})", series_name, metadata_source, metadata_id);
 
@@ -44,7 +53,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
             "COMICVINE" => match &cv_api_key {
                 Some(key) if !key.is_empty() => {
                     fetch_comicvine(
-                        &db, &client, key, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover,
+                        &db, &client, key, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover, full_fetch,
                     ).await
                 }
                 Some(_) => {
@@ -59,6 +68,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
             "METRON" => {
                 fetch_metron(
                     &db, &client, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover,
+                    last_sync.as_deref(), full_fetch,
                 ).await
             }
             other => {
@@ -88,7 +98,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
             log::error!("[Metadata] Embed failed for {}: {:?}", series_name, e);
         }
 
-        if let Err(e) = sqlx::query(r#"UPDATE "Series" SET "updatedAt" = NOW() WHERE id = $1"#)
+        if let Err(e) = sqlx::query(r#"UPDATE "Series" SET "updatedAt" = NOW(), "lastMetadataSync" = (NOW() AT TIME ZONE 'UTC') WHERE id = $1"#)
             .bind(&series_id)
             .execute(&db)
             .await
@@ -98,6 +108,19 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
     }
 
     Ok(())
+}
+
+/// True when a series was manually curated in the metadata editor — auto-sync must then leave its
+/// narrative fields (name/publisher/year/description/status/universe) alone and only refresh the
+/// cover + fill blank bookType/remoteCoverUrl.
+async fn series_is_locked(db: &PgPool, series_id: &str) -> bool {
+    sqlx::query_scalar::<_, bool>(r#"SELECT "hasCustomMetadata" FROM "Series" WHERE id=$1"#)
+        .bind(series_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
 }
 
 /// Fetches the ComicVine volume + issues and upserts them into the database.
@@ -113,6 +136,7 @@ async fn fetch_comicvine(
     folder_path: &str,
     current_year: i32,
     current_cover: Option<String>,
+    full_fetch: bool,
 ) -> anyhow::Result<i32> {
     // ---- 1. Volume details ----
     let vol_url = format!("https://comicvine.gamespot.com/api/volume/4050-{}/", metadata_id);
@@ -185,28 +209,57 @@ async fn fetch_comicvine(
     // remoteCoverUrl keeps the original provider URL for external consumers (series.json) —
     // coverUrl becomes a local path. The bookType heuristic only fills a blank (never clobbers
     // a manual categorization). Parity with metadata-fetcher.ts (beta.032-034).
-    if let Err(e) = sqlx::query(
-        r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6,
-           "remoteCoverUrl"=COALESCE($7, "remoteCoverUrl"),
-           "bookType"=COALESCE("bookType", $8)
-           WHERE id=$9"#,
-    )
-    .bind(&name)
-    .bind(&publisher)
-    .bind(year)
-    .bind(&description)
-    .bind(&final_cover)
-    .bind(status)
-    .bind(&image_url)
-    .bind(guessed_book_type)
-    .bind(series_id)
-    .execute(db)
-    .await
-    {
+    // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
+    let update_res = if series_is_locked(db, series_id).await {
+        sqlx::query(
+            r#"UPDATE "Series" SET "coverUrl"=$1,
+               "remoteCoverUrl"=COALESCE($2, "remoteCoverUrl"),
+               "bookType"=COALESCE("bookType", $3)
+               WHERE id=$4"#,
+        )
+        .bind(&final_cover)
+        .bind(&image_url)
+        .bind(guessed_book_type)
+        .bind(series_id)
+        .execute(db)
+        .await
+    } else {
+        sqlx::query(
+            r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6,
+               "remoteCoverUrl"=COALESCE($7, "remoteCoverUrl"),
+               "bookType"=COALESCE("bookType", $8)
+               WHERE id=$9"#,
+        )
+        .bind(&name)
+        .bind(&publisher)
+        .bind(year)
+        .bind(&description)
+        .bind(&final_cover)
+        .bind(status)
+        .bind(&image_url)
+        .bind(guessed_book_type)
+        .bind(series_id)
+        .execute(db)
+        .await
+    };
+    if let Err(e) = update_res {
         log::error!("[Metadata] Failed to update series {}: {:?}", series_name, e);
     }
 
     tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // API-call reduction: an Ended series we already hold in full has no new issues to page, so skip
+    // the entire /issues/ pagination (the bulk of the calls). The cheap volume call above still ran,
+    // so series-level fields are refreshed. count_of_issues comes from the volume; status from end_year.
+    let cv_total = vol_data["count_of_issues"].as_i64().unwrap_or(0);
+    if !full_fetch && status == "Ended" && cv_total > 0 {
+        let local_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
+            .bind(series_id).fetch_one(db).await.unwrap_or(0);
+        if local_count >= cv_total {
+            log::info!("[Metadata] {} is Ended and complete ({}/{}) — skipping ComicVine issue fetch.", series_name, local_count, cv_total);
+            return Ok(0);
+        }
+    }
 
     // ---- 2. Paginated issues ----
     let mut offset: i32 = 0;
@@ -249,7 +302,7 @@ async fn fetch_comicvine(
 
         // Re-fetch the series' issues each page so issues created on earlier pages are visible to isSameIssue.
         let existing_issues = sqlx::query(
-            r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate", genres FROM "Issue" WHERE "seriesId" = $1"#,
+            r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate", genres, description FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(series_id)
         .fetch_all(db)
@@ -264,7 +317,7 @@ async fn fetch_comicvine(
         let mut by_cv: std::collections::HashMap<String, sqlx::postgres::PgRow> = std::collections::HashMap::new();
         if !page_cv_ids.is_empty() {
             let rows = sqlx::query(
-                r#"SELECT id, name, "releaseDate", "hasCustomMetadata", genres, "metadataId" FROM "Issue" WHERE "metadataId" = ANY($1) AND "metadataSource" = 'COMICVINE'"#,
+                r#"SELECT id, name, "releaseDate", "hasCustomMetadata", genres, description, "metadataId" FROM "Issue" WHERE "metadataId" = ANY($1) AND "metadataSource" = 'COMICVINE'"#,
             )
             .bind(&page_cv_ids)
             .fetch_all(db)
@@ -306,13 +359,14 @@ async fn fetch_comicvine(
                 is_same_issue(&n, &issue_num)
             });
 
-            // Determine the lock + existing genres from whichever record we'll target.
-            let (is_locked, existing_name, existing_release, existing_genres) = if let Some(r) = existing_by_cv {
+            // Determine the lock + existing fields from whichever record we'll target.
+            let (is_locked, existing_name, existing_release, existing_genres, existing_desc) = if let Some(r) = existing_by_cv {
                 (
                     r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
                     r.try_get::<Option<String>, _>("name").unwrap_or(None),
                     r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
                     r.try_get::<Option<String>, _>("genres").unwrap_or(None),
+                    r.try_get::<Option<String>, _>("description").unwrap_or(None),
                 )
             } else if let Some(r) = existing_by_num {
                 (
@@ -320,15 +374,20 @@ async fn fetch_comicvine(
                     r.try_get::<Option<String>, _>("name").unwrap_or(None),
                     r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
                     r.try_get::<Option<String>, _>("genres").unwrap_or(None),
+                    r.try_get::<Option<String>, _>("description").unwrap_or(None),
                 )
             } else {
-                (false, None, None, None)
+                (false, None, None, None, None)
             };
 
             let name_val = if is_locked { existing_name } else { cv_name };
             let release_val = if is_locked { existing_release } else { issue_date.clone() };
-            // Only (re)write genres when the volume has them and the issue doesn't yet.
-            let genres_val = if vol_genres_json.is_some() && existing_genres.is_none() {
+            // A locked (manually edited) issue keeps its description; otherwise take the provider's.
+            let desc_val = if is_locked { existing_desc } else { cv_desc.clone() };
+            // When locked keep existing genres; otherwise only (re)write when the volume has them and the issue doesn't yet.
+            let genres_val = if is_locked {
+                existing_genres
+            } else if vol_genres_json.is_some() && existing_genres.is_none() {
                 vol_genres_json.clone()
             } else {
                 existing_genres
@@ -340,7 +399,7 @@ async fn fetch_comicvine(
                     r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"='MATCHED', genres=$7 WHERE id=$8"#,
                 )
                 .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val)
-                .bind(&cv_desc).bind(&cv_cover).bind(&genres_val).bind(&id)
+                .bind(&desc_val).bind(&cv_cover).bind(&genres_val).bind(&id)
                 .execute(db).await
             } else if let Some(r) = existing_by_num {
                 let id: String = r.get("id");
@@ -348,7 +407,7 @@ async fn fetch_comicvine(
                     r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='COMICVINE', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"='MATCHED', genres=$6 WHERE id=$7"#,
                 )
                 .bind(&cv_id_str).bind(&name_val).bind(&release_val)
-                .bind(&cv_desc).bind(&cv_cover).bind(&genres_val).bind(&id)
+                .bind(&desc_val).bind(&cv_cover).bind(&genres_val).bind(&id)
                 .execute(db).await
             } else {
                 let new_id = uuid::Uuid::new_v4().to_string();
@@ -533,6 +592,8 @@ async fn fetch_metron(
     folder_path: &str,
     current_year: i32,
     current_cover: Option<String>,
+    last_sync: Option<&str>,
+    full_fetch: bool,
 ) -> anyhow::Result<i32> {
     let auth = match metron_auth(db).await {
         Some(a) => a,
@@ -587,22 +648,58 @@ async fn fetch_metron(
 
     let final_cover = resolve_cover(client, cover_remote.as_deref(), folder_path, current_cover).await;
 
-    if let Err(e) = sqlx::query(
-        r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6, universe=COALESCE($7, universe),
-           "remoteCoverUrl"=COALESCE($8, "remoteCoverUrl"),
-           "bookType"=COALESCE("bookType", $9)
-           WHERE id=$10"#,
-    )
-    .bind(&name).bind(&publisher).bind(year).bind(&description).bind(&final_cover).bind(status_str).bind(&universe)
-    .bind(&cover_remote).bind(book_type).bind(series_id)
-    .execute(db).await
-    {
+    // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
+    let update_res = if series_is_locked(db, series_id).await {
+        sqlx::query(
+            r#"UPDATE "Series" SET "coverUrl"=$1, universe=COALESCE($2, universe),
+               "remoteCoverUrl"=COALESCE($3, "remoteCoverUrl"),
+               "bookType"=COALESCE("bookType", $4)
+               WHERE id=$5"#,
+        )
+        .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(series_id)
+        .execute(db).await
+    } else {
+        sqlx::query(
+            r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6, universe=COALESCE($7, universe),
+               "remoteCoverUrl"=COALESCE($8, "remoteCoverUrl"),
+               "bookType"=COALESCE("bookType", $9)
+               WHERE id=$10"#,
+        )
+        .bind(&name).bind(&publisher).bind(year).bind(&description).bind(&final_cover).bind(status_str).bind(&universe)
+        .bind(&cover_remote).bind(book_type).bind(series_id)
+        .execute(db).await
+    };
+    if let Err(e) = update_res {
         log::error!("[Metadata] Failed to update Metron series {}: {:?}", series_name, e);
     }
 
+    let local_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
+        .bind(series_id).fetch_one(db).await.unwrap_or(0);
+
+    // API-call reduction: an Ended series we already hold in full has no new issues to page — skip the
+    // issue_list pagination (issue_count from the series detail above; status from status_str). The
+    // cheap series-detail + cover calls already ran, so series-level fields are still refreshed.
+    let metron_total = series_data["issue_count"].as_i64().unwrap_or(0);
+    if !full_fetch && status_str == "Ended" && metron_total > 0 && local_count >= metron_total {
+        log::info!("[Metadata] {} is Ended and complete ({}/{}) — skipping Metron issue fetch.", series_name, local_count, metron_total);
+        return Ok(0);
+    }
+
     // ---- 2. All issues (follow the `next` cursor) ----
+    // Incremental top-up: once we already hold issues and have a prior sync time, ask Metron for only
+    // those modified since (modified_gt — per the project's API best-practices). Full walk when never
+    // synced or locally empty; if Metron ignores the param it just returns everything (still correct —
+    // the recency-ended check below re-bases on local data, not just this run's results).
+    let mut start_url = issue_list_url.clone();
+    if !full_fetch && local_count > 0 {
+        if let Some(since) = last_sync {
+            let sep = if start_url.contains('?') { '&' } else { '?' };
+            start_url = format!("{}{}modified_gt={}", start_url, sep, urlencoding::encode(since));
+            log::debug!("[Metron Debug] Incremental issue fetch since {} for {}", since, series_name);
+        }
+    }
     let mut all_issues: Vec<serde_json::Value> = Vec::new();
-    let mut next_url = Some(issue_list_url.clone());
+    let mut next_url = Some(start_url);
     while let Some(url) = next_url {
         let (_, data) = metron_fetch(db, client, &auth, &url, 15, 3).await?;
         if let Some(arr) = data["results"].as_array() {
@@ -688,18 +785,39 @@ async fn fetch_metron(
 
         let res = if let Some(r) = existing_by_meta {
             let id: String = r.get("id");
-            sqlx::query(
-                r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$7"#,
-            )
-            .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&id)
-            .execute(db).await
+            if is_locked {
+                // Manually edited (hasCustomMetadata): keep name/releaseDate/description and the
+                // creator credits — only re-affirm the cover + match state. NOTE: the unlocked path
+                // resets writers/artists/characters to '[]' because Metron's issue_list carries no
+                // per-issue credits (they're lazy-loaded), which would otherwise wipe a manual edit.
+                sqlx::query(
+                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, "coverUrl"=$3, "matchState"='MATCHED' WHERE id=$4"#,
+                )
+                .bind(series_id).bind(&issue_num).bind(&issue_cover).bind(&id)
+                .execute(db).await
+            } else {
+                sqlx::query(
+                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$7"#,
+                )
+                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&id)
+                .execute(db).await
+            }
         } else if let Some(r) = existing_by_num {
             let id: String = r.get("id");
-            sqlx::query(
-                r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$6"#,
-            )
-            .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&id)
-            .execute(db).await
+            if is_locked {
+                // Link the Metron id but preserve the manually entered name/description/credits.
+                sqlx::query(
+                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', "coverUrl"=$2, "matchState"='MATCHED' WHERE id=$3"#,
+                )
+                .bind(&source_id).bind(&issue_cover).bind(&id)
+                .execute(db).await
+            } else {
+                sqlx::query(
+                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$6"#,
+                )
+                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&id)
+                .execute(db).await
+            }
         } else {
             let new_id = uuid::Uuid::new_v4().to_string();
             sqlx::query(
@@ -718,9 +836,20 @@ async fn fetch_metron(
         }
     }
 
-    if status_str != "Ended" && latest_date_ms > 0 {
+    // Recency-ended re-bases on the latest release date we hold LOCALLY (not just this run's results),
+    // so an incremental (modified_gt) fetch that returned nothing new can't falsely keep a long-stale
+    // series "Ongoing". Falls back to a DB MAX only when this run surfaced no dated issue.
+    let mut effective_latest = latest_date_ms;
+    if effective_latest == 0 {
+        if let Ok(Some(d)) = sqlx::query_scalar::<_, Option<String>>(
+            r#"SELECT MAX("releaseDate") FROM "Issue" WHERE "seriesId" = $1 AND "releaseDate" IS NOT NULL AND "releaseDate" <> ''"#,
+        ).bind(series_id).fetch_one(db).await {
+            if let Some(ms) = parse_date_ms(&d) { effective_latest = ms; }
+        }
+    }
+    if status_str != "Ended" && effective_latest > 0 {
         if let Some((cutoff_ms, months)) = get_series_ended_cutoff(db).await {
-            if latest_date_ms < cutoff_ms {
+            if effective_latest < cutoff_ms {
                 let _ = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(db).await;
                 log::info!("[Metadata] Series \"{}\" marked as Ended after {}+ months without a new issue.", series_name, months);
             }

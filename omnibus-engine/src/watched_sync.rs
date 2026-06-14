@@ -19,6 +19,8 @@ struct ComicInfo {
     publisher: Option<String>,
     manga: Option<String>,
     #[serde(default)]
+    series_group: Option<String>,
+    #[serde(default)]
     writer: Option<String>,
     #[serde(default)]
     penciller: Option<String>,
@@ -249,11 +251,20 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                 }
                 
                 target_lib_id = fallback_lib_id;
+                let series_group_fs = clean_fs_name(&info.series_group.clone().unwrap_or_default());
                 let rel_folder = folder_pattern
                     .replace("{Publisher}", &clean_fs_name(&publisher))
                     .replace("{Series}", &clean_fs_name(&series_name))
-                    .replace("{Year}", &year.to_string());
-                dest_folder = PathBuf::from(&fallback_lib_path).join(rel_folder);
+                    .replace("{Year}", &year.to_string())
+                    .replace("{VolumeYear}", &year.to_string())
+                    .replace("{SeriesGroup}", &series_group_fs);
+                // Build the path one segment at a time, dropping any that resolved to empty (e.g. a
+                // blank {SeriesGroup}) — a leading "" segment would otherwise make join() absolute on Unix.
+                let mut folder = PathBuf::from(&fallback_lib_path);
+                for seg in rel_folder.split(['/', '\\']).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    folder.push(seg);
+                }
+                dest_folder = folder;
             }
 
             let _ = std::fs::create_dir_all(&dest_folder);
@@ -265,8 +276,11 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                 .replace("{Publisher}", &clean_fs_name(&publisher))
                 .replace("{Series}", &clean_fs_name(&series_name))
                 .replace("{Year}", &year.to_string())
+                .replace("{VolumeYear}", &year.to_string())
+                .replace("{IssueYear}", &year.to_string())
                 .replace("{Issue}", &formatted_num)
                 .replace("{IssueTitle}", &clean_fs_name(&info.title.clone().unwrap_or_default()))
+                .replace("{SeriesGroup}", &clean_fs_name(&info.series_group.clone().unwrap_or_default()))
                 .trim().to_string();
 
             let final_dest = dest_folder.join(format!("{}.cbz", new_filename));
@@ -288,14 +302,20 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                     }
                 }
 
+                // Raw (un-sanitized) Series Group for DB storage — only set on a fresh insert; the
+                // ON CONFLICT path touches folderPath only, so an existing group is never clobbered.
+                let series_group_db = info.series_group.clone()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+
                 let _ = sqlx::query(
-                    r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "metadataId", "metadataSource", "matchState", "isManga", "libraryId", "updatedAt")
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, 'MATCHED', $8, $9, NOW())
+                    r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "metadataId", "metadataSource", "matchState", "isManga", "seriesGroup", "libraryId", "updatedAt")
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, 'MATCHED', $8, $9, $10, NOW())
                        ON CONFLICT (id) DO UPDATE SET "folderPath" = EXCLUDED."folderPath", "updatedAt" = NOW()"#
                 )
                 .bind(&series_id).bind(&series_name).bind(&publisher).bind(year)
                 .bind(dest_folder.to_string_lossy().to_string())
-                .bind(&meta_id).bind(&meta_source).bind(is_manga).bind(&target_lib_id)
+                .bind(&meta_id).bind(&meta_source).bind(is_manga).bind(&series_group_db).bind(&target_lib_id)
                 .execute(&db).await;
 
                 let issue_id = uuid::Uuid::new_v4().to_string();

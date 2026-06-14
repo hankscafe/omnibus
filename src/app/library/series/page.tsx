@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import MetadataEditorModal from "@/components/metadata-editor-modal"
 
 function SeriesDetailSkeleton() {
   return (
@@ -60,7 +61,7 @@ function SeriesContent() {
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string}>({
     name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED'
   });
 
@@ -84,6 +85,9 @@ function SeriesContent() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "Print" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [metaModalOpen, setMetaModalOpen] = useState(false);
+  const [metaMode, setMetaMode] = useState<'series' | 'issue'>('series');
+  const [metaIssue, setMetaIssue] = useState<any>(null);
 
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportDescription, setReportDescription] = useState("");
@@ -256,6 +260,8 @@ function SeriesContent() {
                 bookType: data.bookType || null,
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
+                universe: data.universe || null,
+                seriesGroup: data.seriesGroup || null,
                 matchState: data.matchState || 'MATCHED'
             });
 
@@ -1005,6 +1011,13 @@ function SeriesContent() {
                   {isAdmin && (
                       <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" onClick={() => setEditModalOpen(true)}>
                           <Edit className="w-4 h-4 mr-2" /> Edit Info
+                      </Button>
+                  )}
+
+                  {isAdmin && activeIssue?.id && (
+                      <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" onClick={() => { setMetaMode('issue'); setMetaIssue(activeIssue); setMetaModalOpen(true); }}>
+                          <Tags className="w-4 h-4 mr-2" /> Edit Issue Metadata
+                          {activeIssue?.parsedNum != null ? <span className="ml-1 opacity-70">#{activeIssue.parsedNum}</span> : null}
                       </Button>
                   )}
 
@@ -1823,7 +1836,7 @@ function SeriesContent() {
       </Dialog>
 
       <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
-          <DialogContent className="sm:max-w-[450px] bg-background border-border">
+          <DialogContent className="sm:max-w-[520px] w-[95%] max-h-[90vh] overflow-y-auto bg-background border-border">
               <DialogHeader><DialogTitle>Edit Series Info</DialogTitle></DialogHeader>
               <div className="grid gap-4 py-4">
                   <div className="grid gap-2"><Label>Source Folder Path</Label><div className="flex gap-2"><Input readOnly value={seriesInfo.path || folderPath!} className="bg-muted border-border text-xs truncate text-muted-foreground" /><Button variant="secondary" size="icon" onClick={copyToClipboard} className="border border-border hover:bg-muted">{copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}</Button></div></div>
@@ -1882,10 +1895,45 @@ function SeriesContent() {
                           <Label htmlFor="isManga" className="cursor-pointer">Flag as Manga</Label>
                       </div>
                   </div>
+
+                  <Button variant="secondary" className="w-full border border-border hover:bg-muted font-semibold mt-1 h-auto py-2.5 whitespace-normal leading-snug text-center" onClick={() => { setEditModalOpen(false); setMetaMode('series'); setMetaModalOpen(true); }}>
+                      <Tags className="w-4 h-4 mr-2 shrink-0" /> Edit Metadata (Description, Universe, Series Group)
+                  </Button>
               </div>
               <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)} className="border-border hover:bg-muted">Cancel</Button><Button className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
           </DialogContent>
       </Dialog>
+
+      <MetadataEditorModal
+          open={metaModalOpen}
+          onOpenChange={setMetaModalOpen}
+          mode={metaMode}
+          series={metaMode === 'series' ? {
+              currentPath: seriesInfo.path || folderPath || '',
+              name: seriesInfo.name,
+              publisher: seriesInfo.publisher || '',
+              year: seriesInfo.year || '',
+              status: seriesInfo.status || undefined,
+              bookType: seriesInfo.bookType || undefined,
+              monitored: seriesInfo.monitored,
+              isManga: seriesInfo.isManga,
+              description: seriesInfo.description,
+              universe: seriesInfo.universe,
+              seriesGroup: seriesInfo.seriesGroup,
+          } : undefined}
+          issue={metaMode === 'issue' && metaIssue ? {
+              id: metaIssue.id,
+              seriesName: seriesInfo.name,
+              number: metaIssue.parsedNum != null ? String(metaIssue.parsedNum) : (metaIssue.number || ''),
+          } : undefined}
+          onSaved={(r) => {
+              if (metaMode === 'series' && r?.newPath) {
+                  window.location.href = `/library/series?path=${encodeURIComponent(r.newPath)}`;
+              } else {
+                  window.location.reload();
+              }
+          }}
+      />
 
       {/* SPREADSHEET BULK EDITOR MODAL */}
       <Dialog open={bulkEditModalOpen} onOpenChange={setBulkEditModalOpen}>

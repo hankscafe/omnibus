@@ -8,7 +8,7 @@ import os from 'os';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { CACHE_DIR as BASE_CACHE_DIR } from '@/lib/utils/paths';
+import { CACHE_DIR as BASE_CACHE_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 
 // Reader page cache lives in a subfolder of the system cache directory
 const CACHE_DIR = path.join(BASE_CACHE_DIR, 'reader_images');
@@ -98,16 +98,9 @@ export async function GET(request: Request) {
 
   try {
     const libraries = await prisma.library.findMany();
-    
-    // BULLETPROOF PATH CHECK
-    const cleanTarget = filePath.replace(/\\/g, '/').toLowerCase();
-    const isAuthorized = libraries.some(lib => {
-        let cleanRoot = lib.path.replace(/\\/g, '/').toLowerCase();
-        if (!cleanRoot.endsWith('/')) cleanRoot += '/';
-        return cleanTarget === cleanRoot || cleanTarget.startsWith(cleanRoot);
-    });
 
-    if (!isAuthorized) {
+    // Normalize before the containment check so `..` segments can't escape a library root.
+    if (!isPathWithinRoots(filePath, libraries.map(lib => lib.path))) {
       return new NextResponse("Unauthorized path access", { status: 403 });
     }
 

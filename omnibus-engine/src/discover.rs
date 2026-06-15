@@ -282,7 +282,8 @@ pub async fn run_discover_sync(db: PgPool) -> Result<(i32, String)> {
     let primary_source = if get("primary_metadata_source").is_empty() { "COMICVINE" } else { get("primary_metadata_source") };
 
     // Node requires a CV key up front regardless of source (queue.ts throws before the source branch).
-    let cv_api_key = config.get("cv_api_key").cloned().filter(|s| !s.is_empty())
+    let cv_api_key = crate::secret_crypto::decrypt_setting(&db, config.get("cv_api_key").cloned()).await
+        .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("CV_API_KEY").ok().filter(|s| !s.is_empty()))
         .unwrap_or_default();
     if cv_api_key.is_empty() {
@@ -301,7 +302,7 @@ pub async fn run_discover_sync(db: PgPool) -> Result<(i32, String)> {
 
     let (new_releases, popular): (Vec<Value>, Vec<Value>) = if primary_source == "METRON" {
         let metron_user = config.get("metron_user").cloned().unwrap_or_default();
-        let metron_pass = config.get("metron_pass").cloned().unwrap_or_default();
+        let metron_pass = crate::secret_crypto::decrypt_str(&db, config.get("metron_pass").map(|s| s.as_str()).unwrap_or("")).await;
         if metron_user.is_empty() || metron_pass.is_empty() {
             anyhow::bail!("Metron credentials missing for Discover Sync");
         }

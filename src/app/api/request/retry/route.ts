@@ -27,6 +27,12 @@ export async function POST(request: NextRequest) {
         const req = await prisma.request.findUnique({ where: { id } });
         if (!req) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
+        // Ownership gate: only the request's owner (or an admin) may retry it — otherwise any
+        // authenticated user could re-trigger downloads on someone else's request by guessing its id.
+        if (req.userId !== userId && userExists.role !== 'ADMIN') {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+
         // --- NEW: PURGE GHOST JOBS ---
         // Find any delayed/waiting automated jobs in BullMQ related to this specific request and obliterate them
         try {

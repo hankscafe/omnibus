@@ -37,8 +37,8 @@ vi.mock('next-auth/next', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } })
 }));
 
-vi.mock('@/lib/auth', () => ({
-    authOptions: {}
+vi.mock('@/app/api/auth/[...nextauth]/options', () => ({
+    getAuthOptions: vi.fn().mockResolvedValue({})
 }));
 
 vi.mock('@/lib/audit-logger', () => ({

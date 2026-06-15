@@ -1,6 +1,6 @@
 // src/prisma/schema.prisma
 
-// SQLite configuration
+// Database configuration (PostgreSQL)
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -163,16 +163,16 @@ model Issue {
   coverUrl        String?
   writers         String?
   artists         String?
-  coverArtists    String?  // <-- NEW
+  coverArtists    String?
   universe        String?
-  colorists       String?  // <-- NEW
-  letterers       String?  // <-- NEW
+  colorists       String?
+  letterers       String?
   characters      String?
   genres          String?
   storyArcs       String?
-  teams           String?  // <-- NEW
-  locations       String?  // <-- NEW
-  hasCustomMetadata Boolean @default(false) // <-- NEW
+  teams           String?
+  locations       String?
+  hasCustomMetadata Boolean @default(false)
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
@@ -400,6 +400,7 @@ model OpdsKey {
 
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
+  expiresAt  DateTime?
   @@index([userId])
 }
 

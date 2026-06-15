@@ -90,7 +90,21 @@ export async function POST(request: Request) {
             await restoreTable(backup.data.readingListItems, tx.readingListItem);
             await restoreTable(backup.data.issueReports, tx.issueReport);
             await restoreTable(backup.data.digestHistory, tx.digestHistory);
-        }, { timeout: 30000 });
+
+            // Previously-omitted user data + config. FK targets (users/series/issues) are all
+            // restored above; older backups simply lack these keys and restoreTable no-ops on them.
+            await restoreTable(backup.data.hosterAccounts, tx.hosterAccount);
+            await restoreTable(backup.data.apiKeys, tx.apiKey);
+            await restoreTable(backup.data.opdsKeys, tx.opdsKey);
+            await restoreTable(backup.data.koreaderSyncs, tx.koreaderSync);
+            await restoreTable(backup.data.favorites, tx.favorite);
+            await restoreTable(backup.data.reviews, tx.review);
+            await restoreTable(backup.data.bookmarks, tx.bookmark);
+            await restoreTable(backup.data.dailyReadingStats, tx.dailyReadingStat);
+            await restoreTable(backup.data.dailyIssueReads, tx.dailyIssueRead);
+            await restoreTable(backup.data.auditLogs, tx.auditLog);
+            // Generous limit: restore is a one-time op on an idle DB and large libraries are slow.
+        }, { maxWait: 15000, timeout: 600000 });
 
         // --- UPDATED: Safely check if session exists for the audit log ---
         await AuditLogger.log(

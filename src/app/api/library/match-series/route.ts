@@ -11,8 +11,8 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger'; 
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { AuditLogger } from '@/lib/audit-logger';
-import { authOptions } from '@/lib/auth';
-import { getServerSession } from 'next-auth';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getServerSession } from 'next-auth/next';
 import { omnibusQueue } from '@/lib/queue';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
@@ -394,7 +394,7 @@ export async function POST(request: Request) {
         Logger.log(`[Match Series] Failed to queue jobs: ${e.message}`, 'warn');
     }
 
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession(await getAuthOptions());
     const userId = (session?.user as any)?.id;
     if (userId) {
         await AuditLogger.log('MATCH_SERIES', { oldPath: oldFolderPath, newPath: activeFolderPath }, userId);

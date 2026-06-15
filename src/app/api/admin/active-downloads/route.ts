@@ -4,8 +4,12 @@ import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { decryptSecret } from '@/lib/encryption';
 
 export async function GET() {
+  // NOTE: the per-client polling below duplicates DownloadService.getAllActiveDownloads()
+  // (src/lib/download-clients.ts); this route adds the ignored/pending-request UI filtering.
+  // Consolidate onto the service method if the two implementations drift again.
   try {
     const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) {
@@ -20,7 +24,9 @@ export async function GET() {
         if (h.key && h.value) headers[h.key.trim()] = h.value.trim();
     });
 
-    for (const client of clients) {
+    for (const rawClient of clients) {
+        // Credentials are encrypted at rest; decrypt into a local copy before use.
+        const client = { ...rawClient, pass: await decryptSecret(rawClient.pass), apiKey: await decryptSecret(rawClient.apiKey) };
         const cleanUrl = client.url?.replace(/\/$/, "");
         if (!cleanUrl) continue;
 

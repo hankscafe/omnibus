@@ -6,7 +6,7 @@ import { SystemNotifier } from './notifications';
 import { Mailer } from './mailer';
 import { apiClient as axios } from '@/lib/api-client';
 import { isReleasedYet } from '@/lib/utils';
-import { searchAndDownload, looseCompareIssue } from '@/lib/automation';
+import { searchAndDownload } from '@/lib/automation';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
@@ -215,7 +215,7 @@ export function initWorker() {
                                 const issueNumMatch = cleanReqName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?[a-zA-Z]?)/i);
                                 if (issueNumMatch) {
                                     const allSeriesIssues = await prisma.issue.findMany({ where: { seriesId: localSeries.id } });
-                                    const issueSkeleton = allSeriesIssues.find(i => looseCompareIssue(i.number, issueNumMatch[1]));
+                                    const issueSkeleton = allSeriesIssues.find(i => isSameIssue(i.number, issueNumMatch[1]));
                                     if (issueSkeleton && issueSkeleton.releaseDate) {
                                         const parsedIssueYear = issueSkeleton.releaseDate.split('-')[0];
                                         if (parsedIssueYear && /^\d{4}$/.test(parsedIssueYear) && parsedIssueYear !== dynamicYear) {

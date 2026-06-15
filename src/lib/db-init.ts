@@ -2,6 +2,8 @@
 import { prisma } from './db';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
+import { encryptSecret } from './encryption';
+import { SECRET_SETTING_KEYS } from './secret-keys';
 import crypto from 'crypto';
 
 export async function initDatabase() {
@@ -241,6 +243,73 @@ export async function initDatabase() {
         }
     } catch (e) {
         Logger.log(`[DB Init] Legacy List Migration Failed: ${getErrorMessage(e)}`, "error");
+    }
+
+    // 9. Encrypt credential fields at rest (idempotent). Upgrades existing plaintext download-client
+    //    and hoster-account credentials to AES-encrypted form; rows already carrying the enc:v1:
+    //    prefix are skipped, so this is a no-op on every subsequent boot.
+    try {
+        const ENC_PREFIX = 'enc:v1:';
+        const needsEnc = (v: string | null) => !!v && !v.startsWith(ENC_PREFIX);
+
+        const clients = await prisma.downloadClient.findMany();
+        let encClients = 0;
+        for (const c of clients) {
+            if (needsEnc(c.pass) || needsEnc(c.apiKey)) {
+                await prisma.downloadClient.update({
+                    where: { id: c.id },
+                    data: {
+                        ...(needsEnc(c.pass) ? { pass: await encryptSecret(c.pass) } : {}),
+                        ...(needsEnc(c.apiKey) ? { apiKey: await encryptSecret(c.apiKey) } : {}),
+                    }
+                });
+                encClients++;
+            }
+        }
+
+        const hosters = await prisma.hosterAccount.findMany();
+        let encHosters = 0;
+        for (const h of hosters) {
+            if (needsEnc(h.password) || needsEnc(h.apiKey)) {
+                await prisma.hosterAccount.update({
+                    where: { id: h.id },
+                    data: {
+                        ...(needsEnc(h.password) ? { password: await encryptSecret(h.password) } : {}),
+                        ...(needsEnc(h.apiKey) ? { apiKey: await encryptSecret(h.apiKey) } : {}),
+                    }
+                });
+                encHosters++;
+            }
+        }
+
+        if (encClients > 0 || encHosters > 0) {
+            Logger.log(`[DB Init] Encrypted credentials at rest for ${encClients} download client(s) and ${encHosters} hoster account(s).`, "success");
+        }
+    } catch (e) {
+        Logger.log(`[DB Init] Credential encryption migration failed: ${getErrorMessage(e)}`, "error");
+    }
+
+    // 10. Encrypt SystemSetting credential values at rest (idempotent). Reads RAW values via
+    //     $queryRaw to bypass the auto-decrypting Prisma extension; rows already carrying the
+    //     enc:v1: prefix are skipped, so this is a no-op on every subsequent boot.
+    try {
+        let encSettings = 0;
+        for (const key of SECRET_SETTING_KEYS) {
+            const rows = await prisma.$queryRaw<Array<{ value: string }>>`SELECT "value" FROM "SystemSetting" WHERE "key" = ${key}`;
+            const raw = rows[0]?.value;
+            if (raw && !raw.startsWith('enc:v1:')) {
+                const encrypted = await encryptSecret(raw);
+                if (encrypted && encrypted !== raw) {
+                    await prisma.systemSetting.update({ where: { key }, data: { value: encrypted } });
+                    encSettings++;
+                }
+            }
+        }
+        if (encSettings > 0) {
+            Logger.log(`[DB Init] Encrypted ${encSettings} SystemSetting credential value(s) at rest.`, "success");
+        }
+    } catch (e) {
+        Logger.log(`[DB Init] SystemSetting credential encryption migration failed: ${getErrorMessage(e)}`, "error");
     }
 
     // Inside initDatabase(), right before Logger.log("[DB Init] Schema mapping complete.")

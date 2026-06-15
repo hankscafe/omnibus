@@ -1,4 +1,7 @@
 // src/lib/utils/issue-parser.ts
+// NOTE (Node<->Rust parity): isSameIssue mirrors omnibus-engine/src/metadata.rs::is_same_issue and
+// extractIssueNumber mirrors omnibus-engine/src/scanner.rs::issue_number_from_filename. The automated
+// search/scan path runs the Rust copies; interactive/import runs these. Keep the two sides in sync.
 import { Logger } from '@/lib/logger';
 
 export function isSameIssue(num1: string | number, num2: string | number): boolean {

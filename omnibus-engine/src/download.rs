@@ -39,12 +39,55 @@ pub struct StreamResponse {
     pub error: Option<String>,
 }
 
+/// True when an IP is in a range that should never be a download target (loopback, RFC-1918,
+/// link-local, CGNAT, ULA, etc.) — blocks SSRF to internal services.
+fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                || v4.is_broadcast() || v4.is_documentation()
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 0x40) // CGNAT 100.64/10
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+        }
+    }
+}
+
+/// Rejects non-HTTP(S) schemes and hosts that resolve to an internal address before any request is
+/// made. Best-effort (DNS can change before the real connect), but it closes the obvious SSRF paths.
+async fn validate_download_target(url_str: &str) -> Result<()> {
+    let url = reqwest::Url::parse(url_str).map_err(|_| anyhow::anyhow!("Invalid download URL"))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => bail!("Refusing to download from non-HTTP(S) scheme: {other}"),
+    }
+    let host = url.host_str().ok_or_else(|| anyhow::anyhow!("Download URL has no host"))?;
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not resolve download host {host}: {e}"))?;
+    for addr in addrs {
+        if is_blocked_ip(&addr.ip()) {
+            bail!("Refusing to download from internal address ({})", addr.ip());
+        }
+    }
+    Ok(())
+}
+
 pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> {
     let part_path = format!("{}.part", req.dest_path);
     let _ = tokio::fs::remove_file(&part_path).await; // clear any stale partial
     if let Some(parent) = Path::new(&req.dest_path).parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
+
+    // SSRF guard (defense-in-depth): the URL ultimately comes from a search result a privileged user
+    // selected, so reject non-HTTP(S) schemes and hosts that resolve to an internal address.
+    validate_download_target(&req.url).await?;
 
     let client = reqwest::Client::builder().build()?;
 
@@ -141,4 +184,54 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
     };
     tokio::fs::rename(&part_path, &ts_path).await?;
     Ok(ts_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn blocks_internal_ipv4_ranges() {
+        for s in [
+            "127.0.0.1", "10.1.2.3", "192.168.0.1", "172.16.5.5", "172.31.255.255",
+            "169.254.1.1", "0.0.0.0", "100.64.0.1", "100.127.255.255", "255.255.255.255",
+        ] {
+            assert!(is_blocked_ip(&ip(s)), "{s} should be blocked");
+        }
+    }
+
+    #[test]
+    fn allows_public_ipv4() {
+        // 172.15/172.32 are outside the private 172.16-31 block; 100.63/100.128 outside CGNAT.
+        for s in ["8.8.8.8", "1.1.1.1", "104.18.0.1", "172.15.0.1", "172.32.0.1", "100.63.255.255", "100.128.0.0"] {
+            assert!(!is_blocked_ip(&ip(s)), "{s} should be allowed");
+        }
+    }
+
+    #[test]
+    fn blocks_internal_ipv6_allows_public() {
+        assert!(is_blocked_ip(&ip("::1"))); // loopback
+        assert!(is_blocked_ip(&ip("::"))); // unspecified
+        assert!(is_blocked_ip(&ip("fe80::1"))); // link-local
+        assert!(is_blocked_ip(&ip("fc00::1"))); // unique-local
+        assert!(is_blocked_ip(&ip("fd12:3456::1"))); // unique-local
+        assert!(!is_blocked_ip(&ip("2606:4700:4700::1111"))); // public (Cloudflare DNS)
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_bad_scheme_and_internal_literals() {
+        assert!(validate_download_target("ftp://example.com/file").await.is_err());
+        assert!(validate_download_target("file:///etc/passwd").await.is_err());
+        assert!(validate_download_target("not a url").await.is_err());
+        assert!(validate_download_target("http://127.0.0.1/x").await.is_err());
+        assert!(validate_download_target("http://192.168.1.1/x").await.is_err());
+        assert!(validate_download_target("http://[::1]/x").await.is_err());
+        // A public literal IP resolves to itself (no DNS) and is allowed.
+        assert!(validate_download_target("http://1.1.1.1/x").await.is_ok());
+    }
 }

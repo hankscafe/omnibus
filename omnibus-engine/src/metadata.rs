@@ -10,6 +10,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
         .fetch_optional(&db)
         .await?;
+    let cv_api_key = crate::secret_crypto::decrypt_setting(&db, cv_api_key).await;
 
     // Resolve target series records.
     let series_list = match &series_ids {
@@ -474,6 +475,8 @@ async fn metron_auth(db: &PgPool) -> Option<(String, String)> {
         let v: String = row.get("value");
         if k == "metron_user" { user = v; } else if k == "metron_pass" { pass = v; }
     }
+    // metron_pass is stored encrypted at rest (parity with Node); metron_user is not a secret.
+    let pass = crate::secret_crypto::decrypt_setting(db, Some(pass)).await.unwrap_or_default();
     if user.is_empty() || pass.is_empty() || pass == "********" { None } else { Some((user, pass)) }
 }
 

@@ -15,6 +15,7 @@ mod discover;
 mod monitor;
 mod download;
 mod log_forward;
+mod secret_crypto;
 
 use axum::{routing::{get, post}, Router, Json, extract::{State, Request}, http::StatusCode, middleware::{self, Next}, response::Response};
 use serde::{Deserialize, Serialize};
@@ -128,11 +129,79 @@ struct AppState {
     internal_secret: Option<String>,
 }
 
+/// Known throwaway secrets shipped in the example compose files. Treated as "no secret configured"
+/// so a deployer who never overrode them cannot run with a value that is public in the repo.
+fn is_placeholder_secret(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    l.contains("change_me") || l.contains("change_this")
+}
+
+/// True when the engine's bind address is reachable beyond the local host (0.0.0.0, ::, or a LAN
+/// IP). Loopback (127.0.0.1 / ::1 / localhost) is treated as host-only.
+fn is_network_exposed(bind_addr: &str) -> bool {
+    let host = bind_addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(bind_addr);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => !ip.is_loopback(),
+        Err(_) => !host.eq_ignore_ascii_case("localhost"),
+    }
+}
+
+/// Constant-time comparison of the internal-auth secret, so a match position can't be inferred from
+/// response timing. (Length mismatch short-circuits — acceptable for a fixed-length secret.)
+fn secrets_match(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_secrets_are_rejected() {
+        assert!(is_placeholder_secret("change_me_to_a_long_random_string"));
+        assert!(is_placeholder_secret("change_this_to_a_random_secure_string_123!"));
+        assert!(is_placeholder_secret("CHANGE_ME")); // case-insensitive
+        assert!(is_placeholder_secret("prefix_change_this_suffix"));
+        assert!(!is_placeholder_secret("a-genuinely-random-48-char-secret-xyz123"));
+        assert!(!is_placeholder_secret(""));
+    }
+
+    #[test]
+    fn network_exposure_detects_non_loopback_binds() {
+        // Loopback / host-only — safe to run without a secret.
+        assert!(!is_network_exposed("127.0.0.1:8000"));
+        assert!(!is_network_exposed("[::1]:8000"));
+        assert!(!is_network_exposed("localhost:8000"));
+        // Reachable off-host — must have a real secret (engine fails closed otherwise).
+        assert!(is_network_exposed("0.0.0.0:8000"));
+        assert!(is_network_exposed("[::]:8000"));
+        assert!(is_network_exposed("192.168.1.50:8000"));
+        assert!(is_network_exposed("10.0.0.5:8000"));
+    }
+
+    #[test]
+    fn secret_compare_is_exact_and_length_safe() {
+        assert!(secrets_match("hunter2hunter2hunter2", "hunter2hunter2hunter2"));
+        assert!(!secrets_match("hunter2", "hunter3"));
+        assert!(!secrets_match("short", "longer-value")); // differing lengths must not panic
+        assert!(secrets_match("", ""));
+        assert!(!secrets_match("x", ""));
+    }
+}
+
 /// Authenticates Node→engine calls with the shared NEXTAUTH_SECRET (X-Internal-Secret header),
-/// mirroring Node's /api/internal/notify guard in reverse. When the engine has no secret configured
-/// the check is skipped (single-host/dev — the engine binds 127.0.0.1 by default), having warned at
-/// startup. This is defense-in-depth: the engine mutates the DB and binds 0.0.0.0 inside containers,
-/// where the Node ADMIN-session gate on the forwarding routes is the only other protection.
+/// mirroring Node's /api/internal/notify guard in reverse. The engine refuses to START without a
+/// real secret when bound to a non-loopback address (see `run`), so this skip path only applies to a
+/// loopback-only dev bind, where the endpoints aren't reachable off-host anyway.
 async fn require_internal_auth(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -142,7 +211,7 @@ async fn require_internal_auth(
         let ok = req.headers()
             .get("x-internal-secret")
             .and_then(|v| v.to_str().ok())
-            .map(|p| p == secret)
+            .map(|p| secrets_match(p, secret))
             .unwrap_or(false);
         if !ok {
             return Err(StatusCode::UNAUTHORIZED);
@@ -250,11 +319,33 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
     log::info!("✅ Connected to PostgreSQL!");
 
     let limiter = Arc::new(rate_limiter::RateLimiter::new());
-    let internal_secret = std::env::var("NEXTAUTH_SECRET").ok().filter(|s| !s.is_empty());
+
+    // Resolve the bind address up front: whether a missing auth secret is tolerable depends on
+    // whether the engine is reachable off-host.
+    let bind_addr =
+        std::env::var("OMNIBUS_ENGINE_BIND").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
+
+    // Treat empty AND the shipped placeholder values as "unset", so a copy-pasted compose file can't
+    // silently authenticate every request with a token that is public in the repo.
+    let internal_secret = std::env::var("NEXTAUTH_SECRET")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && !is_placeholder_secret(s));
+
     if internal_secret.is_none() {
+        if is_network_exposed(&bind_addr) {
+            // Fail closed: never serve the DB-/filesystem-mutating endpoints unauthenticated on an
+            // interface other devices can reach.
+            log::error!(
+                "NEXTAUTH_SECRET is unset or still a placeholder, but the engine is bound to a \
+                 non-loopback address ({bind_addr}). Refusing to start unauthenticated and \
+                 network-exposed — set NEXTAUTH_SECRET to the same value as the Node app."
+            );
+            anyhow::bail!("NEXTAUTH_SECRET must be set when OMNIBUS_ENGINE_BIND is not loopback");
+        }
         log::warn!(
-            "NEXTAUTH_SECRET is not set — engine HTTP endpoints are UNAUTHENTICATED. Set it (matching \
-             the Node app) so the engine requires the X-Internal-Secret header on every request."
+            "NEXTAUTH_SECRET is not set — engine HTTP endpoints are UNAUTHENTICATED, but the bind \
+             address ({bind_addr}) is loopback-only, so they are not reachable off-host (dev/single-host)."
         );
     }
     let shared_state = Arc::new(AppState { db: pool, limiter, internal_secret });
@@ -287,8 +378,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/health", get(handle_health))
         .merge(api);
 
-    // Bind address is configurable so the engine can listen on 0.0.0.0 inside a container.
-    let bind_addr = std::env::var("OMNIBUS_ENGINE_BIND").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
+    // bind_addr was resolved above (OMNIBUS_ENGINE_BIND; 0.0.0.0 inside a container).
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
     log::info!("🚀 Omnibus Engine listening on http://{}", bind_addr);
     axum::serve(listener, app).await.unwrap();

@@ -4,6 +4,7 @@ import path from 'path';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { isPathWithinRoots } from '@/lib/utils/paths';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
@@ -36,14 +37,7 @@ export async function GET(request: Request) {
     }
     // NATIVE DB FETCH: Get all configured libraries to authorize the path
     const libraries = await prisma.library.findMany();
-    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
-    const targetPath = path.normalize(filePath).toLowerCase();
-
-    const isAuthorized = authorizedRoots.some(root => 
-    targetPath === root || targetPath.startsWith(root + path.sep)
-    );
-
-    if (!isAuthorized) {
+    if (!isPathWithinRoots(filePath, libraries.map(l => l.path))) {
       return new Response("Unauthorized path access", { status: 403 });
     }
 

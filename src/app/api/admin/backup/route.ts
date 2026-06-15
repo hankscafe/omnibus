@@ -68,7 +68,20 @@ export async function GET() {
                     { name: 'readingListItems', model: prisma.readingListItem },
                     { name: 'userTrophies', model: prisma.userTrophy },
                     { name: 'issueReports', model: prisma.issueReport },
-                    { name: 'digestHistory', model: prisma.digestHistory }
+                    { name: 'digestHistory', model: prisma.digestHistory },
+                    // User data + config previously omitted (silent loss on migration/restore).
+                    // jobLogs and jobLocks are intentionally excluded (ephemeral diagnostics /
+                    // runtime locks that regenerate on the target instance).
+                    { name: 'hosterAccounts', model: prisma.hosterAccount },
+                    { name: 'apiKeys', model: prisma.apiKey },
+                    { name: 'opdsKeys', model: prisma.opdsKey },
+                    { name: 'koreaderSyncs', model: prisma.koreaderSync },
+                    { name: 'favorites', model: prisma.favorite },
+                    { name: 'reviews', model: prisma.review },
+                    { name: 'bookmarks', model: prisma.bookmark },
+                    { name: 'dailyReadingStats', model: prisma.dailyReadingStat },
+                    { name: 'dailyIssueReads', model: prisma.dailyIssueRead },
+                    { name: 'auditLogs', model: prisma.auditLog }
                 ];
 
                 let firstTable = true;

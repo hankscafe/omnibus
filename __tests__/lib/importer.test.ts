@@ -60,7 +60,7 @@ vi.mock('@/lib/download-clients', () => ({ DownloadService: { getAllActiveDownlo
 // Prevent heavy libraries from loading
 vi.mock('@/lib/manga-detector', () => ({ detectManga: mocks.detectManga }));
 vi.mock('@/lib/metadata-extractor', () => ({ parseComicInfo: mocks.parseComicInfo }));
-vi.mock('@/lib/converter', () => ({ convertCbrToCbz: mocks.convertCbrToCbz, repackArchive: vi.fn() }));
+vi.mock('@/lib/converter', () => ({ convertCbrToCbz: mocks.convertCbrToCbz }));
 vi.mock('@/lib/metadata-fetcher', () => ({ syncSeriesMetadata: mocks.syncSeriesMetadata }));
 vi.mock('adm-zip', () => ({ default: class AdmZipMock { getEntries() { return []; } } }));
 vi.mock('axios');

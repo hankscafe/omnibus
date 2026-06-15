@@ -399,13 +399,15 @@ pub async fn run_series_monitor(db: PgPool) -> Result<MonitorOutput> {
         let v: String = r.get("value");
         if k == "metron_user" { metron_user = v; } else if k == "metron_pass" { metron_pass = v; }
     }
+    let metron_pass = crate::secret_crypto::decrypt_setting(&db, Some(metron_pass)).await.unwrap_or_default();
     if !metron_user.is_empty() && !metron_pass.is_empty() {
         phase1_metron(&db, &client, &metron_user, &metron_pass, &series, &mut issues, &mut skeletons_created, &mut candidates, &mut notes).await;
     }
 
     // Phase 2 — ComicVine (only when a key is present).
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
-        .fetch_optional(&db).await?.filter(|s: &String| !s.is_empty());
+        .fetch_optional(&db).await?;
+    let cv_api_key = crate::secret_crypto::decrypt_setting(&db, cv_api_key).await.filter(|s| !s.is_empty());
     if let Some(key) = cv_api_key {
         if let Err(e) = phase2_comicvine(&db, &client, &key, &mut issues, &mut skeletons_created, &mut candidates).await {
             notes.push(format!("[Phase 2] ComicVine sync error: {}", e));

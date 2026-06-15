@@ -9,6 +9,7 @@ import { pipeline } from 'stream/promises';
 import { DiscordNotifier } from './discord';
 import { getErrorMessage } from './utils/error';
 import { HosterEngine } from './hosters';
+import { decryptSecret } from './encryption';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 
 async function getNetworkHeaders() {
@@ -21,7 +22,9 @@ async function getNetworkHeaders() {
 }
 
 export const DownloadService = {
-  async addDownload(client: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
+  async addDownload(rawClient: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
+    // Credentials are encrypted at rest; decrypt into a local copy before use.
+    const client = { ...rawClient, pass: await decryptSecret(rawClient.pass), apiKey: await decryptSecret(rawClient.apiKey) };
     const cleanUrl = client.url.replace(/\/$/, '');
     const categoryString = client.category || 'comics';
     const primaryCategory = categoryString.split(',')[0].trim();
@@ -119,7 +122,9 @@ export const DownloadService = {
   },
 
   // --- Method to cancel and wipe active downloads ---
-  async removeDownload(client: any, downloadId: string) {
+  async removeDownload(rawClient: any, downloadId: string) {
+      // Credentials are encrypted at rest; decrypt into a local copy before use.
+      const client = { ...rawClient, pass: await decryptSecret(rawClient.pass), apiKey: await decryptSecret(rawClient.apiKey) };
       const cleanUrl = client.url.replace(/\/$/, '');
       const networkHeaders = await getNetworkHeaders();
       const baseConfig = { headers: { 'User-Agent': 'Omnibus/1.0', ...networkHeaders }, timeout: 15000 };
@@ -411,7 +416,9 @@ export const DownloadService = {
 
     let allDownloads: any[] = [];
 
-    for (const client of clients) {
+    for (const rawClient of clients) {
+      // Credentials are encrypted at rest; decrypt into a local copy before use.
+      const client = { ...rawClient, pass: await decryptSecret(rawClient.pass), apiKey: await decryptSecret(rawClient.apiKey) };
       try {
         const cleanUrl = client.url?.replace(/\/$/, '');
         if (!cleanUrl) continue;

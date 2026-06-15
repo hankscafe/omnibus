@@ -4,7 +4,7 @@
 // queue.ts -> /api/automation/search). The legacy full-Node search
 // (executeSearchAndDownload) was deleted as dead code.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { searchAndDownload, processAutomationQueue, looseCompareIssue } from '@/lib/automation';
+import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
 
 const mocks = vi.hoisted(() => ({
     queueAdd: vi.fn().mockResolvedValue({})
@@ -18,24 +18,6 @@ vi.mock('@/lib/queue', () => ({
 describe('Core Logic: Automation (engine handoff)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-    });
-
-    describe('looseCompareIssue()', () => {
-        it('should equate numbers regardless of zero padding', () => {
-            expect(looseCompareIssue('1', '001')).toBe(true);
-            expect(looseCompareIssue('1.5', '01.50')).toBe(true);
-            expect(looseCompareIssue(2, '002')).toBe(true);
-        });
-
-        it('should respect alpha suffixes', () => {
-            expect(looseCompareIssue('1A', '001a')).toBe(true);
-            expect(looseCompareIssue('1A', '1B')).toBe(false);
-        });
-
-        it('should not equate different numbers', () => {
-            expect(looseCompareIssue('1', '2')).toBe(false);
-            expect(looseCompareIssue('1.5', '15')).toBe(false);
-        });
     });
 
     describe('searchAndDownload()', () => {

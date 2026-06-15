@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
+import { decryptSecret } from '@/lib/encryption';
 import { Logger } from '@/lib/logger';
 import { Mailer } from '@/lib/mailer';
 import { getServerSession } from 'next-auth/next';
@@ -203,7 +204,7 @@ export async function POST(request: Request) {
             loginParams.append('username', user || '');
             
             const realPass = (pass === '********') 
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ""
                 : pass;
 
             loginParams.append('password', realPass || '');
@@ -226,7 +227,7 @@ export async function POST(request: Request) {
         } 
         else if (clientType === 'sab') {
             const realApiKey = (apiKey === '********')
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey ?? null) || ""
                 : apiKey;
 
             const res = await axios.get(`${cleanUrl}/api`, {
@@ -242,7 +243,7 @@ export async function POST(request: Request) {
         }
         else if (clientType === 'nzbget') {
             const realPass = (pass === '********') 
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ""
                 : pass;
             const auth = Buffer.from(`${user || ''}:${realPass || ''}`).toString('base64');
             const res = await axios.post(`${cleanUrl}/jsonrpc`, { method: "version", params: [] }, { headers: { ...headers, Authorization: `Basic ${auth}` }, timeout: 5000 });
@@ -254,7 +255,7 @@ export async function POST(request: Request) {
         }
         else if (clientType === 'deluge') {
             const realPass = (pass === '********') 
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ""
                 : pass;
             const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [realPass || ''], id: 1 }, { headers, timeout: 5000 });
             if (authRes.data && authRes.data.result) {

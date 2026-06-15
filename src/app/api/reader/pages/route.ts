@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+import { isPathWithinRoots } from '@/lib/utils/paths';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -20,20 +21,10 @@ export async function GET(request: Request) {
 
   try {
     const libraries = await prisma.library.findMany();
-    
-    // BULLETPROOF PATH CHECK
-    const cleanTarget = filePath.replace(/\\/g, '/').toLowerCase();
-    
-    const isAuthorized = libraries.some(lib => {
-        let cleanRoot = lib.path.replace(/\\/g, '/').toLowerCase();
-        if (!cleanRoot.endsWith('/')) cleanRoot += '/';
-        const match = cleanTarget === cleanRoot || cleanTarget.startsWith(cleanRoot);
-        if (match) Logger.log(`[Reader Debug] Path authorized via library match: ${lib.name} (${cleanRoot})`, 'debug');
-        return match;
-    });
-    
-    if (!isAuthorized) {
-      Logger.log(`[Reader Debug] Access denied. Path is outside of configured library roots: ${cleanTarget}`, 'warn');
+
+    // Normalize before the containment check so `..` segments can't escape a library root.
+    if (!isPathWithinRoots(filePath, libraries.map(lib => lib.path))) {
+      Logger.log(`[Reader Debug] Access denied. Path is outside of configured library roots: ${filePath}`, 'warn');
       return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
     }
 

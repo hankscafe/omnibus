@@ -17,8 +17,6 @@
 #   4. The ghcr.io/hankscafe/omnibus-engine package must be public (or add GHCR
 #      credentials in Container Station) — new GHCR packages default to private.
 
-version: "3.8"
-
 services:
   db:
     image: postgres:15-alpine

@@ -7,8 +7,8 @@ services:
       POSTGRES_USER: omnibus
       POSTGRES_PASSWORD: omnibus_password
       POSTGRES_DB: omnibus
-    ports:
-      - "5432:5432"
+    # Not published to the host: only the web + engine containers reach Postgres over the compose
+    # network. To use a DB GUI from the host, add `ports: ["127.0.0.1:5432:5432"]` (loopback only).
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,8 +22,7 @@ services:
     image: redis:7-alpine
     container_name: omnibus_redis
     restart: always
-    ports:
-      - "6379:6379"
+    # Not published to the host: only the web container (BullMQ) reaches Redis over the compose network.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -47,14 +46,16 @@ services:
       OMNIBUS_ENGINE_BIND: 0.0.0.0:8000
       # The engine calls back to the Node web app to fire detached-job completion notifications.
       OMNIBUS_NODE_URL: http://web:3000
-      # IMPORTANT: must match the Node app's NEXTAUTH_SECRET, or AES-encrypted DB backups can't be restored.
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change_this_to_a_random_secure_string_123!}
+      # IMPORTANT: must match the Node app's NEXTAUTH_SECRET, or AES-encrypted DB backups can't be
+      # restored. No insecure default — the engine refuses to start network-exposed without a real
+      # secret. Generate one with: openssl rand -base64 48
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET in your .env to a long random string shared by web and engine}
       OMNIBUS_BACKUPS_DIR: /config/backups
       OMNIBUS_CACHE_DIR: /config/cache
       OMNIBUS_WATCHED_DIR: /data/watched
       OMNIBUS_AWAITING_MATCH_DIR: /data/unmatched
-    ports:
-      - "8000:8000"
+    # No host port: the web container reaches the engine at http://omnibus-engine:8000 over the
+    # compose network. Publishing 8000 would expose the DB-/filesystem-mutating engine API to the LAN.
     # The engine scans/converts/embeds files on disk, so it MUST share the SAME config + data
     # volumes as the web app. For a real deploy, replace these named volumes with host bind mounts
     # to your storage (e.g. /mnt/nas/config:/config and /mnt/nas/data:/data).
@@ -83,7 +84,7 @@ services:
       # Reach the Rust engine over the compose network (NOT 127.0.0.1).
       OMNIBUS_ENGINE_URL: http://omnibus-engine:8000
       # Must match the engine's NEXTAUTH_SECRET, or AES-encrypted DB backups can't be restored.
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change_this_to_a_random_secure_string_123!}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET in your .env to a long random string shared by web and engine}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       # Keep these paths identical to the engine so both containers resolve the same files.
       OMNIBUS_BACKUPS_DIR: /config/backups

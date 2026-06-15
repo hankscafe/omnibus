@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Loader2, ChevronLeft, ChevronRight, Plus, Info, Calendar, Paintbrush, PenTool, Image as ImageIcon, ExternalLink, Layers, Download, CheckCircle2, Clock, Users, Globe, Activity, Library, FileCheck, Tags, BookMarked, MapPin, Shield } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
+import { useLibraryOwnership } from "@/hooks/use-library-ownership"
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogHeader } from "@/components/ui/dialog"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
@@ -45,7 +46,6 @@ interface Props {
   refreshSignal?: number;
 }
 
-type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | 'UNRELEASED' | null;
 
 function ComicGridSkeleton({ count = 14 }: { count?: number }) {
   return (
@@ -70,18 +70,8 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   const [isInitialized, setIsInitialized] = useState(false)
 
   const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
-  const [requestedVolumes, setRequestedVolumes] = useState<Set<string>>(new Set())
-  const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
-  
-  const [ownedSeries, setOwnedSeries] = useState<Set<string>>(new Set())
-  const [monitoredSeries, setMonitoredSeries] = useState<Set<string>>(new Set())
-  const [ownedIssues, setOwnedIssues] = useState<Set<string>>(new Set())
-  
-  const [ownedSeriesNames, setOwnedSeriesNames] = useState<Set<string>>(new Set())
-  const [monitoredSeriesNames, setMonitoredSeriesNames] = useState<Set<string>>(new Set())
-  const [ownedIssueNames, setOwnedIssueNames] = useState<Set<string>>(new Set())
-
-  const [activeRequests, setActiveRequests] = useState<any[]>([])
+  // Library ownership + request status, shared with the manual search (see useLibraryOwnership).
+  const { getVolumeStatus, getIssueStatus, setMonitoredSeries, setRequestedVolumes, setRequestedIssues, setActiveRequests } = useLibraryOwnership(refreshSignal);
 
   const [selectedComic, setSelectedComic] = useState<Comic | null>(null)
   const [relatedIssues, setRelatedIssues] = useState<Comic[]>([])
@@ -103,97 +93,6 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
     setCurrentIndex(0);
     localStorage.setItem(`omnibus-grid-limit-${type}`, val);
   };
-
-  useEffect(() => {
-    fetch('/api/library/ids')
-      .then(res => res.json())
-      .then(data => { 
-          if (data) {
-              setOwnedSeries(new Set((data.series || []).map(String)));
-              setMonitoredSeries(new Set((data.monitored || []).map(String)));
-              setOwnedIssues(new Set((data.issues || []).map(String)));
-              
-              setOwnedSeriesNames(new Set((data.seriesNames || []).map((n: string) => n.toLowerCase().trim())));
-              setMonitoredSeriesNames(new Set((data.monitoredNames || []).map((n: string) => n.toLowerCase().trim())));
-              setOwnedIssueNames(new Set((data.issueNames || []).map((n: string) => n.toLowerCase().trim())));
-
-              setActiveRequests(data.requests || []);
-          }
-      })
-      .catch(() => {});
-  }, [refreshSignal]);
-
-  const getVolumeStatus = (volumeId: number | string, name: string): StatusType => {
-      const idStr = String(volumeId);
-      const cleanName = name.toLowerCase().trim();
-      
-      let isOwned = ownedSeries.has(idStr) || ownedSeriesNames.has(cleanName);
-      let isMonitored = monitoredSeries.has(idStr) || monitoredSeriesNames.has(cleanName);
-
-      // --- FIX: Year Strip Fallback (in case CV has a year but Metron doesn't) ---
-      if (!isOwned) {
-          const noYear = cleanName.replace(/\s*\(\d{4}\)/g, '').trim();
-          for (const ownedName of ownedSeriesNames) {
-              if (ownedName.replace(/\s*\(\d{4}\)/g, '').trim() === noYear) {
-                  isOwned = true;
-                  if (monitoredSeriesNames.has(ownedName)) isMonitored = true;
-                  break;
-              }
-          }
-      }
-
-      if (isOwned) return isMonitored ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
-      if (requestedVolumes.has(idStr)) return 'REQUESTED';
-      
-      const activeReqs = activeRequests.filter(r => 
-          String(r.volumeId) === idStr || 
-          (r.activeDownloadName && r.activeDownloadName.toLowerCase().startsWith(cleanName)) ||
-          (r.name && r.name.toLowerCase().startsWith(cleanName))
-      );
-      
-      if (activeReqs.length > 0) {
-          const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
-          if (allCompleted) return isMonitored ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
-          if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
-          return 'REQUESTED';
-      }
-      return null;
-  }
-
-  // --- FIX: Smart string matching properly strips subtitles and forces numbers to align ---
-  const getIssueStatus = (issueId: number | string, volumeId: number | string, issueName: string, isReleased?: boolean, issueNumber?: string, seriesName?: string): StatusType => {
-      const idStr = String(issueId);
-      const volStr = String(volumeId);
-      const cleanName = issueName.toLowerCase().trim();
-
-      let coreName = cleanName;
-      if (seriesName && issueNumber) {
-          const parsedNum = parseFloat(issueNumber);
-          const numToUse = isNaN(parsedNum) ? issueNumber : parsedNum;
-          coreName = `${seriesName} #${numToUse}`.toLowerCase().trim();
-      }
-
-      const isOwned = ownedIssues.has(idStr) || ownedIssueNames.has(cleanName) || ownedIssueNames.has(coreName);
-
-      if (isOwned) return 'ISSUE_OWNED';
-      if (requestedIssues.has(issueName) || requestedIssues.has(coreName)) return 'REQUESTED';
-
-      const req = activeRequests.find(r => 
-          (String(r.volumeId) === volStr && (r.name === issueName || r.name === coreName)) ||
-          (r.name && (r.name.toLowerCase() === cleanName || r.name.toLowerCase() === coreName)) ||
-          (r.activeDownloadName && (r.activeDownloadName.toLowerCase() === cleanName || r.activeDownloadName.toLowerCase() === coreName))
-      );
-      
-      if (req) {
-          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
-          if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
-          if (req.status === 'UNRELEASED' || isReleased === false) return 'UNRELEASED';
-          return 'REQUESTED';
-      }
-      
-      if (isReleased === false) return 'UNRELEASED';
-      return null;
-  }
 
   useEffect(() => {
     if (!isInitialized) return;
@@ -372,7 +271,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
           {comics.map((comic) => {
             const seriesName = comic.volumeName || comic.name.split(' #')[0];
-            const volStatus = getVolumeStatus(comic.volumeId, seriesName);
+            const volStatus = getVolumeStatus(comic.volumeId);
             const issueStatus = comic.issueNumber ? getIssueStatus(comic.id, comic.volumeId, comic.name, comic.isReleased, comic.issueNumber, seriesName) : null;
             
             return (
@@ -452,7 +351,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                             {(() => {
                                 const issueTargetName = selectedComic.isVolume ? `${seriesBaseName} #${selectedComic.issueNumber || "1"}` : selectedComic.name;
                                 
-                              const volStatus = getVolumeStatus(selectedComic.volumeId, seriesBaseName);
+                              const volStatus = getVolumeStatus(selectedComic.volumeId);
                               const issueStatus = getIssueStatus(selectedComic.id, selectedComic.volumeId, issueTargetName, selectedComic.isReleased, selectedComic.issueNumber, seriesBaseName);
                                 
                               const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';

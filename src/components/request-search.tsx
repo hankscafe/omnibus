@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } f
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
+import { useLibraryOwnership } from "@/hooks/use-library-ownership"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
 import { InteractiveSearchModal } from "./interactive-search-modal"
@@ -56,7 +57,6 @@ interface Issue {
   isReleased?: boolean;
 }
 
-type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | 'UNRELEASED' | null;
 
 export function RequestSearch() {
   const { data: session } = useSession()
@@ -78,113 +78,10 @@ export function RequestSearch() {
   const [volumeIssues, setVolumeIssues] = useState<Issue[]>([])
   
   const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
-  const [requestedVolumes, setRequestedVolumes] = useState<Set<string>>(new Set())
-  const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
-  
-  const [ownedSeries, setOwnedSeries] = useState<Set<string>>(new Set())
-  const [monitoredSeries, setMonitoredSeries] = useState<Set<string>>(new Set())
-  const [ownedIssues, setOwnedIssues] = useState<Set<string>>(new Set())
-  
-  // --- FIX: Add State for Cross-Provider Name Fallbacks ---
-  const [ownedSeriesNames, setOwnedSeriesNames] = useState<Set<string>>(new Set())
-  const [monitoredSeriesNames, setMonitoredSeriesNames] = useState<Set<string>>(new Set())
-  const [ownedIssueNames, setOwnedIssueNames] = useState<Set<string>>(new Set())
-
-  const [activeRequests, setActiveRequests] = useState<any[]>([])
+  // Library ownership + request status, shared with the Discover grid (see useLibraryOwnership).
+  const { getVolumeStatus, getIssueStatus, setMonitoredSeries, setRequestedVolumes, setRequestedIssues, setActiveRequests } = useLibraryOwnership();
 
   const { toast } = useToast()
-
-  useEffect(() => {
-        fetch('/api/library/ids')
-            .then(res => res.json())
-            .then(data => {
-                if (data) {
-                    setOwnedSeries(new Set((data.series || []).map(String)));
-                    setMonitoredSeries(new Set((data.monitored || []).map(String)));
-                    setOwnedIssues(new Set((data.issues || []).map(String)));
-                    
-                    // Map normalized names for the fallback mechanism
-                    setOwnedSeriesNames(new Set((data.seriesNames || []).map((n: string) => n.toLowerCase().trim())));
-                    setMonitoredSeriesNames(new Set((data.monitoredNames || []).map((n: string) => n.toLowerCase().trim())));
-                    setOwnedIssueNames(new Set((data.issueNames || []).map((n: string) => n.toLowerCase().trim())));
-
-                    setActiveRequests(data.requests || []);
-                }
-            })
-            .catch(() => {});
-    }, []);
-
-  const getVolumeStatus = (volumeId: number | string, name: string): StatusType => {
-      const idStr = String(volumeId);
-      const cleanName = name.toLowerCase().trim();
-      
-      let isOwned = ownedSeries.has(idStr) || ownedSeriesNames.has(cleanName);
-      let isMonitored = monitoredSeries.has(idStr) || monitoredSeriesNames.has(cleanName);
-
-      // --- FIX: Year Strip Fallback ---
-      if (!isOwned) {
-          const noYear = cleanName.replace(/\s*\(\d{4}\)/g, '').trim();
-          for (const ownedName of ownedSeriesNames) {
-              if (ownedName.replace(/\s*\(\d{4}\)/g, '').trim() === noYear) {
-                  isOwned = true;
-                  if (monitoredSeriesNames.has(ownedName)) isMonitored = true;
-                  break;
-              }
-          }
-      }
-
-      if (isOwned) return isMonitored ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
-      if (requestedVolumes.has(idStr)) return 'REQUESTED';
-      
-      const activeReqs = activeRequests.filter(r => 
-          String(r.volumeId) === idStr || 
-          (r.activeDownloadName && r.activeDownloadName.toLowerCase().startsWith(cleanName)) ||
-          (r.name && r.name.toLowerCase().startsWith(cleanName))
-      );
-      
-      if (activeReqs.length > 0) {
-          const allCompleted = activeReqs.every(r => ['IMPORTED', 'COMPLETED'].includes(r.status));
-          if (allCompleted) return isMonitored ? 'LIBRARY_MONITORED' : 'LIBRARY_UNMONITORED';
-          if (activeReqs.some(r => r.status === 'PENDING_APPROVAL')) return 'PENDING_APPROVAL';
-          return 'REQUESTED';
-      }
-      return null;
-  }
-
-  // --- FIX: Smart string matching properly strips subtitles and forces numbers to align ---
-  const getIssueStatus = (issueId: number | string, volumeId: number | string, issueName: string, isReleased?: boolean, issueNumber?: string, seriesName?: string): StatusType => {
-      const idStr = String(issueId);
-      const volStr = String(volumeId);
-      const cleanName = issueName.toLowerCase().trim();
-
-      let coreName = cleanName;
-      if (seriesName && issueNumber) {
-          const parsedNum = parseFloat(issueNumber);
-          const numToUse = isNaN(parsedNum) ? issueNumber : parsedNum;
-          coreName = `${seriesName} #${numToUse}`.toLowerCase().trim();
-      }
-
-      const isOwned = ownedIssues.has(idStr) || ownedIssueNames.has(cleanName) || ownedIssueNames.has(coreName);
-
-      if (isOwned) return 'ISSUE_OWNED';
-      if (requestedIssues.has(issueName) || requestedIssues.has(coreName)) return 'REQUESTED';
-
-      const req = activeRequests.find(r => 
-          (String(r.volumeId) === volStr && (r.name === issueName || r.name === coreName)) ||
-          (r.name && (r.name.toLowerCase() === cleanName || r.name.toLowerCase() === coreName)) ||
-          (r.activeDownloadName && (r.activeDownloadName.toLowerCase() === cleanName || r.activeDownloadName.toLowerCase() === coreName))
-      );
-      
-      if (req) {
-          if (['IMPORTED', 'COMPLETED'].includes(req.status)) return 'ISSUE_OWNED';
-          if (req.status === 'PENDING_APPROVAL') return 'PENDING_APPROVAL';
-          if (req.status === 'UNRELEASED' || isReleased === false) return 'UNRELEASED';
-          return 'REQUESTED';
-      }
-      
-      if (isReleased === false) return 'UNRELEASED';
-      return null;
-  }
 
   const performSearch = async (e?: React.FormEvent, isLoadMore = false) => {
     if (e) e.preventDefault();
@@ -416,7 +313,7 @@ export function RequestSearch() {
                 <>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 pb-4 px-1">
                   {sortedResults.map((item) => {
-                    const volStatus = getVolumeStatus(item.id, item.name);
+                    const volStatus = getVolumeStatus(item.id);
                     return (
                     <div key={item.id} className="cursor-pointer space-y-2 group flex flex-col" onClick={() => handleSelectSearchResult(item)}>
                       
@@ -490,7 +387,7 @@ export function RequestSearch() {
                           {(() => {
                               const issueTargetName = selectedItem.isVolume ? `${seriesBaseName} #${selectedItem.issueNumber || "1"}` : selectedItem.name;
     
-                              const volStatus = getVolumeStatus(selectedItem.volumeId, seriesBaseName);
+                              const volStatus = getVolumeStatus(selectedItem.volumeId);
                               const issueStatus = getIssueStatus(selectedItem.id, selectedItem.volumeId, issueTargetName, selectedItem.isReleased, selectedItem.issueNumber, seriesBaseName);
                               
                               const isVolOwned = volStatus === 'LIBRARY_MONITORED' || volStatus === 'LIBRARY_UNMONITORED';

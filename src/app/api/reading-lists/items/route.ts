@@ -14,9 +14,9 @@ export async function POST(request: Request) {
 
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { listId, issueId, seriesId, seriesIds, action } = await request.json();
+    const { listId, issueId, seriesId, seriesIds, itemId, action } = await request.json();
 
-    if (!listId || (!issueId && !seriesId && (!seriesIds || seriesIds.length === 0))) {
+    if (!listId || (!issueId && !seriesId && !itemId && (!seriesIds || seriesIds.length === 0))) {
         return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
     }
 
@@ -67,7 +67,13 @@ export async function POST(request: Request) {
       }
 
     } else if (action === 'remove') {
-      if (issueId) {
+      if (itemId) {
+          // Remove a single list entry by its own id — works for owned AND "missing" items (which
+          // have no issueId), and removes exactly that entry even if the issue appears more than once.
+          await prisma.readingListItem.deleteMany({
+            where: { id: itemId, listId }
+          });
+      } else if (issueId) {
           await prisma.readingListItem.deleteMany({
             where: { listId, issueId }
           });

@@ -60,9 +60,12 @@ export async function GET(req: NextRequest) {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const [totalSeries, totalIssues, totalRequests, completed30d, failed30d, totalUsers] = await prisma.$transaction([
-      prisma.request.count(), prisma.issue.count(), prisma.request.count(),
-      prisma.request.count({ where: { status: 'IMPORTED', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.request.count({ where: { status: { in: ['FAILED', 'ERROR'] }, createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.series.count(), prisma.issue.count(), prisma.request.count(),
+      // Successful imports are recorded as COMPLETED (IMPORTED is a legacy status nothing writes now),
+      // so count both — otherwise "monthly growth" is always 0.
+      prisma.request.count({ where: { status: { in: ['IMPORTED', 'COMPLETED'] }, createdAt: { gte: thirtyDaysAgo } } }),
+      // Failed/given-up downloads end up STALLED (FAILED/ERROR are legacy); include it so the metric isn't ~0.
+      prisma.request.count({ where: { status: { in: ['FAILED', 'ERROR', 'STALLED'] }, createdAt: { gte: thirtyDaysAgo } } }),
       prisma.user.count()
     ]);
 

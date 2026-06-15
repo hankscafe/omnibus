@@ -4,6 +4,8 @@ import fs from 'fs-extra';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { CACHE_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import packageJson from '../../package.json';
 
 export interface HealthCheckResult {
     id: string;
@@ -36,6 +38,31 @@ export async function runSystemHealthCheck() {
     } catch(e) {
         Logger.log(`[Health Check Debug] System update check failed or timed out: ${getErrorMessage(e)}`, 'debug');
         results.push({ id: 'system_update', name: 'System Update', status: 'ok', message: 'Up to date (Checked recently)' });
+    }
+
+    // 1b. Web/Engine version drift (hybrid deploy: the two images are released together, so a
+    // mismatch means one container is stale — e.g. only one image got pulled/restarted).
+    Logger.log(`[Health Check Debug] Checking Rust engine version for drift...`, 'debug');
+    try {
+        const webVersion = packageJson.version;
+        const engRes = await fetch(`${ENGINE_URL}/health`, { headers: engineHeaders(), signal: AbortSignal.timeout(5000) });
+        if (engRes.ok) {
+            const eng = await engRes.json();
+            const engineVersion = eng.version;
+            Logger.log(`[Health Check Debug] Engine version: v${engineVersion} (release=${eng.release}); web: v${webVersion}`, 'debug');
+            if (!eng.release) {
+                results.push({ id: 'engine_version', name: 'Engine Version', status: 'ok', message: `Engine is a dev build (v${engineVersion}); drift check skipped.` });
+            } else if (engineVersion === webVersion) {
+                results.push({ id: 'engine_version', name: 'Engine Version', status: 'ok', message: `Web and engine in sync (v${engineVersion})` });
+            } else {
+                results.push({ id: 'engine_version', name: 'Engine Version', status: 'warning', message: `Version mismatch — web is v${webVersion}, engine is v${engineVersion}. Pull the latest images and restart so both match.`, actionLink: '/admin/updates' });
+            }
+        } else {
+            results.push({ id: 'engine_version', name: 'Engine Version', status: 'warning', message: `Could not read the engine version (HTTP ${engRes.status}).` });
+        }
+    } catch(e) {
+        Logger.log(`[Health Check Debug] Engine version check failed: ${getErrorMessage(e)}`, 'debug');
+        results.push({ id: 'engine_version', name: 'Engine Version', status: 'warning', message: 'Engine unreachable — could not verify its version.' });
     }
 
     // 2. ComicVine API Key

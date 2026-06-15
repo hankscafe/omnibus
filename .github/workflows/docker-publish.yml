@@ -274,6 +274,9 @@ jobs:
           push: true
           tags: ${{ steps.meta-engine.outputs.tags }}
           labels: ${{ steps.meta-engine.outputs.labels }}
+          # Bake the release version into the image so /health can report it for drift detection.
+          build-args: |
+            OMNIBUS_VERSION=${{ env.VERSION }}
           # Separate cache scope so the engine and Node images don't evict each other.
           cache-from: type=gha,scope=engine
           cache-to: type=gha,mode=max,scope=engine

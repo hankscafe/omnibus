@@ -426,15 +426,16 @@ function ReadingListsContent() {
     }
   }
 
-  const handleRemoveItem = async (issueId: string) => {
-      if (!activeListId) return;
+  const handleRemoveItem = async (itemId: string) => {
+      if (!activeListId || !itemId) return;
       try {
           const res = await fetch('/api/reading-lists/items', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ listId: activeListId, issueId, action: 'remove' })
+              body: JSON.stringify({ listId: activeListId, itemId, action: 'remove' })
           });
           if (res.ok) fetchLists(activeListId);
+          else toast({ title: "Couldn't remove item", variant: "destructive" });
       } catch (e) {
           toast({ title: "Error", variant: "destructive" });
       }
@@ -791,7 +792,7 @@ function ReadingListsContent() {
                                                             </Button>
                                                         )}
                                                         {(isAdmin || activeList.userId === session?.user?.id) && (
-                                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 hidden sm:flex" onClick={() => handleRemoveItem(issue?.id || item.id)}>
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 hidden sm:flex" onClick={() => handleRemoveItem(item.id)}>
                                                                 <Minus className="w-4 h-4" />
                                                             </Button>
                                                         )}
@@ -894,7 +895,7 @@ function ReadingListsContent() {
                                                                   </Link>
                                                               </Button>
                                                               {(isAdmin || activeList.userId === session?.user?.id) && (
-                                                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 hidden sm:flex" onClick={() => handleRemoveItem(issue.id)}>
+                                                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 hidden sm:flex" onClick={() => handleRemoveItem(item.id)}>
                                                                       <Minus className="w-4 h-4" />
                                                                   </Button>
                                                               )}

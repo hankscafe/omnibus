@@ -16,7 +16,7 @@ mod monitor;
 mod download;
 mod log_forward;
 
-use axum::{routing::post, Router, Json, extract::{State, Request}, http::StatusCode, middleware::{self, Next}, response::Response};
+use axum::{routing::{get, post}, Router, Json, extract::{State, Request}, http::StatusCode, middleware::{self, Next}, response::Response};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -259,7 +259,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
     }
     let shared_state = Arc::new(AppState { db: pool, limiter, internal_secret });
 
-    let app = Router::new()
+    let api = Router::new()
         .route("/api/repack", post(handle_repack))
         .route("/api/scan", post(handle_scan))
         .route("/api/converter/cbr-sweep", post(handle_cbr_sweep))
@@ -280,6 +280,13 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .layer(middleware::from_fn_with_state(shared_state.clone(), require_internal_auth))
         .with_state(shared_state);
 
+    // /health is intentionally UNAUTHENTICATED (liveness + version report): the Node app reads the
+    // running engine version from it for web/engine drift detection, and a container healthcheck can
+    // hit it without the shared secret.
+    let app = Router::new()
+        .route("/health", get(handle_health))
+        .merge(api);
+
     // Bind address is configurable so the engine can listen on 0.0.0.0 inside a container.
     let bind_addr = std::env::var("OMNIBUS_ENGINE_BIND").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
@@ -287,6 +294,19 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
     axum::serve(listener, app).await.unwrap();
 
     Ok(())
+}
+
+/// Unauthenticated liveness + version endpoint. The release version is baked into the image at build
+/// time via the OMNIBUS_VERSION build-arg (set from package.json by CI); a local `cargo run` has no
+/// such env, so it reports the crate version with `release: false` — which the Node health check reads
+/// as a dev build and skips the drift warning for.
+async fn handle_health() -> Json<serde_json::Value> {
+    let baked = std::env::var("OMNIBUS_VERSION").ok().filter(|s| !s.is_empty());
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": baked.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+        "release": baked.is_some(),
+    }))
 }
 
 /// Records a FAILED JobLog so a background-task failure is DB-visible (BullMQ already got its 202,

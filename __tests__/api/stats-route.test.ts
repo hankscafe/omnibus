@@ -21,6 +21,7 @@ vi.mock('../../src/lib/db', () => ({
         // FIX: Provide the missing Prisma models so .count() doesn't crash!
         request: { count: mocks.count },
         issue: { count: mocks.count },
+        series: { count: mocks.count },
         user: { count: mocks.count }
     }
 }));

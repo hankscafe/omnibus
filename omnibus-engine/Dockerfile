@@ -40,6 +40,12 @@ COPY --from=builder /app/target/release/omnibus-engine /usr/local/bin/omnibus-en
 
 # Listen on all interfaces so other containers (the Node web app) can reach the engine.
 ENV OMNIBUS_ENGINE_BIND=0.0.0.0:8000
+
+# Release version baked at build time (CI passes --build-arg OMNIBUS_VERSION=<package.json version>);
+# the engine's /health endpoint reports it so the Node app can detect web/engine version drift.
+ARG OMNIBUS_VERSION=""
+ENV OMNIBUS_VERSION=${OMNIBUS_VERSION}
+
 EXPOSE 8000
 
 CMD ["omnibus-engine"]

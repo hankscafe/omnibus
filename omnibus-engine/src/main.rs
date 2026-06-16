@@ -198,6 +198,23 @@ mod auth_tests {
     }
 }
 
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_version_prefers_baked_file_else_dev() {
+        // A real baked version is reported as a release.
+        assert_eq!(resolve_version(Some("1.1.0-beta.041".into())), ("1.1.0-beta.041".to_string(), true));
+        // Trailing whitespace/newline from the build-time write is trimmed.
+        assert_eq!(resolve_version(Some("1.1.0-beta.041\n".into())), ("1.1.0-beta.041".to_string(), true));
+        // Blank or missing file -> crate version, flagged as a dev build so drift detection is skipped.
+        assert!(!resolve_version(Some(String::new())).1);
+        assert!(!resolve_version(Some("  \n".into())).1);
+        assert!(!resolve_version(None).1);
+    }
+}
+
 /// Authenticates Node→engine calls with the shared NEXTAUTH_SECRET (X-Internal-Secret header),
 /// mirroring Node's /api/internal/notify guard in reverse. The engine refuses to START without a
 /// real secret when bound to a non-loopback address (see `run`), so this skip path only applies to a
@@ -386,16 +403,33 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Path of the release-version marker baked into the image at build time. A FILE — not a runtime env —
+/// is used deliberately: container platforms like QNAP Container Station materialize an image's `ENV`
+/// vars into the container definition and then freeze them, silently pinning a stale version across
+/// image updates. A baked file can't be overridden that way, so the engine always reports the version
+/// it was actually built with.
+const VERSION_FILE: &str = "/etc/omnibus-version";
+
+/// Resolves the reported (version, is_release) from the baked version file's contents. A present,
+/// non-blank value is a real release; missing/blank (a local `cargo run`, or an image built without the
+/// build-arg) falls back to the crate version, flagged as a dev build so the Node health check skips the
+/// drift warning.
+fn resolve_version(baked: Option<String>) -> (String, bool) {
+    match baked.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => (v.to_string(), true),
+        None => (env!("CARGO_PKG_VERSION").to_string(), false),
+    }
+}
+
 /// Unauthenticated liveness + version endpoint. The release version is baked into the image at build
-/// time via the OMNIBUS_VERSION build-arg (set from package.json by CI); a local `cargo run` has no
-/// such env, so it reports the crate version with `release: false` — which the Node health check reads
-/// as a dev build and skips the drift warning for.
+/// time (CI writes the package.json version to `/etc/omnibus-version` via the OMNIBUS_VERSION
+/// build-arg); the Node health check reads it for web/engine drift detection.
 async fn handle_health() -> Json<serde_json::Value> {
-    let baked = std::env::var("OMNIBUS_VERSION").ok().filter(|s| !s.is_empty());
+    let (version, release) = resolve_version(std::fs::read_to_string(VERSION_FILE).ok());
     Json(serde_json::json!({
         "status": "ok",
-        "version": baked.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
-        "release": baked.is_some(),
+        "version": version,
+        "release": release,
     }))
 }
 

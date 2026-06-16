@@ -43,8 +43,11 @@ ENV OMNIBUS_ENGINE_BIND=0.0.0.0:8000
 
 # Release version baked at build time (CI passes --build-arg OMNIBUS_VERSION=<package.json version>);
 # the engine's /health endpoint reports it so the Node app can detect web/engine version drift.
+# Written to a FILE rather than an ENV on purpose: container platforms (e.g. QNAP Container Station)
+# materialize an image's ENV vars into the container definition and freeze them, which silently pins a
+# stale version across image updates. A baked file can't be overridden that way.
 ARG OMNIBUS_VERSION=""
-ENV OMNIBUS_VERSION=${OMNIBUS_VERSION}
+RUN printf '%s' "${OMNIBUS_VERSION}" > /etc/omnibus-version
 
 EXPOSE 8000
 

@@ -81,6 +81,26 @@ fn add_query(vec: &mut Vec<String>, seen: &mut HashSet<String>, val: String) {
     }
 }
 
+/// Drops a trailing descriptive subtitle from a single-issue request name:
+/// "Batman: Gargoyle of Gotham #1: Book One" -> "Batman: Gargoyle of Gotham #1".
+/// Only applies when an issue marker (#/issue/chapter + number) is present, so a genuine TPB request
+/// like "Batman Book One" is left intact. Without this, a subtitle keyword such as "Book"/"Volume"
+/// trips TPB/omnibus detection AND the subtitle words ("book", "one") get enforced as required title
+/// words — which rejects every real single-issue file, since the GetComics uploader never includes the
+/// subtitle. Shared by query generation and relevance filtering so both derive the same core name.
+/// `-?` keeps negative issue numbers (e.g. "Batman #-1") recognized as single issues (beta.023+).
+pub(crate) fn strip_issue_subtitle(name: &str) -> String {
+    static RE_HAS_ISSUE: OnceLock<Regex> = OnceLock::new();
+    static RE_SPLIT: OnceLock<Regex> = OnceLock::new();
+    let re_has_issue = RE_HAS_ISSUE.get_or_init(|| Regex::new(r"(?i)(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+").unwrap());
+    if !re_has_issue.is_match(name) { return name.to_string(); }
+    let re_split = RE_SPLIT.get_or_init(|| Regex::new(r"(?i)^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*.*$").unwrap());
+    match re_split.captures(name) {
+        Some(caps) => caps[1].trim().to_string(),
+        None => name.to_string(),
+    }
+}
+
 pub fn generate_search_queries(
     name: &str,
     year: &str,
@@ -88,14 +108,7 @@ pub fn generate_search_queries(
     prioritize_packs: bool,
     use_packs: bool,
 ) -> Vec<String> {
-    let mut search_name = name.to_string();
-
-    // `-?` keeps negative issue numbers (e.g. "Batman #-1") recognized as single issues (beta.023+).
-    let re_single_issue = Regex::new(r"(?i)(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+").unwrap();
-    if re_single_issue.is_match(name) {
-        let split_re = Regex::new(r"(?i)^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*(.*)$").unwrap();
-        if let Some(caps) = split_re.captures(name) { search_name = caps[1].trim().to_string(); }
-    }
+    let search_name = strip_issue_subtitle(name);
 
     // Two insertion-ordered groups, each de-duped within itself (parity with Node's two Sets).
     let mut primary: Vec<String> = Vec::new();
@@ -310,7 +323,10 @@ pub async fn filter_and_score(
     let junk_words: Vec<String> = junk_words_str.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
     let exclude_groups: Vec<String> = exclude_groups_str.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
 
-    let clean_original = target_query.replace(&[':', '-', '&'][..], " ")
+    // Strip any trailing subtitle ("#1: Book One" -> "#1") so a subtitle keyword doesn't trip
+    // TPB/omnibus detection and subtitle words aren't enforced as required title words.
+    let core_query = strip_issue_subtitle(target_query);
+    let clean_original = core_query.replace(&[':', '-', '&'][..], " ")
         .split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
 
     let stop_words: HashSet<&str> = ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"].into_iter().collect();
@@ -519,6 +535,33 @@ mod tests {
             normalize_edition_title("Batman Vol 1"),
             normalize_edition_title("Batman Annual 1")
         );
+    }
+
+    #[test]
+    fn strips_issue_subtitle_only_when_issue_present() {
+        // Subtitle after an issue number is dropped (the GetComics file never carries it).
+        assert_eq!(strip_issue_subtitle("Batman: Gargoyle of Gotham #1: Book One"), "Batman: Gargoyle of Gotham #1");
+        assert_eq!(strip_issue_subtitle("Wolverine #3: Hunter and Hunted"), "Wolverine #3");
+        assert_eq!(strip_issue_subtitle("Daredevil #1 - The Red Fist Saga"), "Daredevil #1");
+        // No issue marker -> a genuine TPB/subtitle request is left fully intact.
+        assert_eq!(strip_issue_subtitle("Batman: The Long Halloween"), "Batman: The Long Halloween");
+        assert_eq!(strip_issue_subtitle("Batman Book One"), "Batman Book One");
+        // Issue marker but no trailing subtitle -> unchanged (and a pre-number hyphen is preserved).
+        assert_eq!(strip_issue_subtitle("Spider-Man #1"), "Spider-Man #1");
+        assert_eq!(strip_issue_subtitle("Detective Comics #1000"), "Detective Comics #1000");
+    }
+
+    #[test]
+    fn subtitle_with_tpb_keyword_no_longer_forces_omnibus_words() {
+        // Regression for "Batman: Gargoyle of Gotham #1: Book One": before the strip, "book" made the
+        // request look like an omnibus and "book"/"one" became required title words. After stripping the
+        // subtitle the enforced core is just the series name + issue number.
+        let core = strip_issue_subtitle("Batman: Gargoyle of Gotham #1: Book One");
+        let clean = core.replace([':', '-', '&'], " ").split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        let tpb_terms = ["omnibus", "tpb", "compendium", "collection", "hc", "hardcover", "trade paperback", "vol ", "volume ", "book "];
+        assert!(!tpb_terms.iter().any(|t| clean.contains(t)), "subtitle keyword should not survive into clean_original: {clean}");
+        assert!(!clean.contains("one"), "subtitle word 'one' should be gone: {clean}");
+        assert!(clean.contains("gargoyle") && clean.contains("gotham"), "core series name must remain: {clean}");
     }
 
     #[test]

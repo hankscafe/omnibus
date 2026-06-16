@@ -78,6 +78,46 @@ async fn validate_download_target(url_str: &str) -> Result<()> {
     Ok(())
 }
 
+const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+
+/// Lower-cased Content-Type of a response (empty string if absent).
+fn response_content_type(response: &reqwest::Response) -> String {
+    response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok()).unwrap_or("").to_lowercase()
+}
+
+/// Establishes the download stream with up to 3 connection attempts (parity with the Node retry loop),
+/// sending the browser-ish headers plus an optional Cloudflare cookie and an overridable User-Agent.
+async fn establish_stream(
+    client: &reqwest::Client,
+    req: &StreamRequest,
+    cookie: Option<&str>,
+    user_agent: &str,
+) -> Result<reqwest::Response> {
+    let mut last_err = String::new();
+    for attempt in 1..=3 {
+        let mut rb = client.get(&req.url)
+            .header("User-Agent", user_agent)
+            .header("Accept", "application/zip, application/x-rar-compressed, application/octet-stream, */*")
+            .header("Referer", "https://getcomics.org/");
+        if let Some(c) = cookie {
+            rb = rb.header("Cookie", c);
+        }
+        for (k, v) in &req.headers {
+            rb = rb.header(k.as_str(), v.as_str());
+        }
+        match rb.send().await {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                last_err = e.to_string();
+                log::warn!("[Internal DL] Attempt {} failed ({}). Retrying in 3s...", attempt, last_err);
+                if attempt < 3 { tokio::time::sleep(std::time::Duration::from_secs(3)).await; }
+            }
+        }
+    }
+    bail!("Failed to connect after 3 attempts: {}", last_err)
+}
+
 pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> {
     let part_path = format!("{}.part", req.dest_path);
     let _ = tokio::fs::remove_file(&part_path).await; // clear any stale partial
@@ -91,31 +131,34 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
 
     let client = reqwest::Client::builder().build()?;
 
-    // Up to 3 attempts to establish the stream (parity with the Node retry loop).
-    let mut response = None;
-    let mut last_err = String::new();
-    for attempt in 1..=3 {
-        let mut rb = client.get(&req.url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            .header("Accept", "application/zip, application/x-rar-compressed, application/octet-stream, */*")
-            .header("Referer", "https://getcomics.org/");
-        for (k, v) in &req.headers {
-            rb = rb.header(k.as_str(), v.as_str());
-        }
-        match rb.send().await {
-            Ok(r) => { response = Some(r); break; }
-            Err(e) => {
-                last_err = e.to_string();
-                log::warn!("[Internal DL] Attempt {} failed ({}). Retrying in 3s...", attempt, last_err);
-                if attempt < 3 { tokio::time::sleep(std::time::Duration::from_secs(3)).await; }
-            }
+    // First, a plain direct fetch. comicfiles / resolved-hoster URLs — and any getcomics.org link that
+    // isn't actually behind a challenge — serve the file straight away and stream with zero FlareSolverr
+    // overhead.
+    let mut response = establish_stream(&client, &req, None, DEFAULT_UA).await?;
+    let mut content_type = response_content_type(&response);
+
+    // ONLY when a getcomics.org link actually answers with an HTML page — the Cloudflare "Just a
+    // moment…" challenge on the /dls/ main-server links — do we solve it via FlareSolverr and retry with
+    // the cf_clearance cookie + the exact User-Agent it used (the cookie is IP+UA-bound, so FlareSolverr
+    // must share the engine's outbound IP). A non-challenged download never enters this branch.
+    if content_type.contains("text/html") && req.url.contains("getcomics.org") {
+        let flare: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#)
+            .fetch_optional(db).await.ok().flatten().filter(|s: &String| !s.trim().is_empty());
+        match flare {
+            Some(flare_url) => match crate::getcomics::flaresolverr_clearance(&client, &flare_url, &req.url).await {
+                Ok((cookie, ua)) => {
+                    log::info!("[Internal DL] GetComics returned a Cloudflare challenge; solved via FlareSolverr, retrying download.");
+                    let ua = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
+                    response = establish_stream(&client, &req, Some(&cookie), &ua).await?;
+                    content_type = response_content_type(&response);
+                }
+                Err(e) => log::warn!("[Internal DL] FlareSolverr clearance failed ({e})."),
+            },
+            None => log::warn!("[Internal DL] GetComics returned a Cloudflare challenge but no flaresolverr_url is set."),
         }
     }
-    let response = response.ok_or_else(|| anyhow::anyhow!("Failed to connect after 3 attempts: {}", last_err))?;
 
-    // Reject an HTML webpage masquerading as a file (expired/blocked link).
-    let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok()).unwrap_or("").to_lowercase();
+    // Reject an HTML webpage masquerading as a file (expired/blocked link, or an unsolved challenge).
     if content_type.contains("text/html") {
         bail!("Download URL returned an HTML webpage instead of a comic file.");
     }

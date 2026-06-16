@@ -200,7 +200,7 @@ export async function POST(request: NextRequest) {
                 const { url, hoster } = await GetComicsService.scrapeDeepLink(searchResult.downloadUrl);
                 
                 const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
-                let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+                let enabledHosters = ['getcomics', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
                 if (hpSetting?.value) {
                     try {
                         const parsed = JSON.parse(hpSetting.value);

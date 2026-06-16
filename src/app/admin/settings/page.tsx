@@ -135,8 +135,8 @@ export default function SettingsPage() {
   // Hoster States
   const [configuredHosters, setConfiguredHosters] = useState<HosterAccountConfig[]>([])
   const [hosterPriority, setHosterPriority] = useState<{hoster: string, enabled: boolean}[]>([
-      { hoster: 'mediafire', enabled: true },
       { hoster: 'getcomics', enabled: true },
+      { hoster: 'mediafire', enabled: true },
       { hoster: 'mega', enabled: true },
       { hoster: 'pixeldrain', enabled: true },
       { hoster: 'rootz', enabled: true },
@@ -329,8 +329,8 @@ export default function SettingsPage() {
 
             const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
             const defaultHosters = [
-                { hoster: 'mediafire', enabled: true },
                 { hoster: 'getcomics', enabled: true },
+                { hoster: 'mediafire', enabled: true },
                 { hoster: 'mega', enabled: true },
                 { hoster: 'pixeldrain', enabled: true },
                 { hoster: 'rootz', enabled: true },

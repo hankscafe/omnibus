@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
         // Dynamically load enabled hosters from settings
         let hasEnabledHosters = true;
-        let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+        let enabledHosters = ['getcomics', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
         
         if (config.hoster_priority) {
             try {

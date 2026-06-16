@@ -16,7 +16,7 @@ pub struct DeepLinkResult {
 /// `hoster_priority` setting: unset → all defaults; empty array → none; string array → the listed
 /// hosters; object array → those not flagged `enabled:false`.
 pub async fn enabled_hosters(db: &PgPool) -> Vec<String> {
-    let default: Vec<String> = ["mediafire", "getcomics", "mega", "pixeldrain", "rootz", "vikingfile", "terabox", "annas_archive"]
+    let default: Vec<String> = ["getcomics", "mediafire", "mega", "pixeldrain", "rootz", "vikingfile", "terabox", "annas_archive"]
         .iter().map(|s| s.to_string()).collect();
     let hp: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'hoster_priority'"#)
         .fetch_optional(db).await.ok().flatten();
@@ -87,6 +87,36 @@ async fn fetch_html(client: &Client, db: &PgPool, url: &str, flaresolverr: Optio
     Ok(res.text().await?)
 }
 
+/// Extracts the cookie header (cf_clearance et al.) + browser User-Agent from a FlareSolverr
+/// `solution` payload. Returns None if no cookies were present. Pure (no I/O) so it can be unit-tested.
+fn parse_flaresolverr_clearance(data: &serde_json::Value) -> Option<(String, String)> {
+    let solution = data.get("solution")?;
+    let ua = solution.get("userAgent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cookies = solution.get("cookies")?.as_array()?
+        .iter()
+        .filter_map(|c| Some(format!("{}={}", c.get("name")?.as_str()?, c.get("value")?.as_str()?)))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if cookies.is_empty() { return None; }
+    Some((cookies, ua))
+}
+
+/// Solves a Cloudflare challenge for `url` via FlareSolverr and returns (cookie_header, user_agent)
+/// to replay on a direct request. cf_clearance is IP+UA-bound, so the caller MUST send the returned
+/// User-Agent and run with the same outbound IP as FlareSolverr. Used to download Cloudflare-gated
+/// GetComics "main server" links (getcomics.org/dls/…) that a raw fetch can't get past.
+pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str) -> anyhow::Result<(String, String)> {
+    let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
+    let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": 60000 });
+    let res = client.post(&target)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(70))
+        .send().await?;
+    let data: serde_json::Value = res.json().await?;
+    parse_flaresolverr_clearance(&data)
+        .ok_or_else(|| anyhow::anyhow!("FlareSolverr returned no usable cookies"))
+}
+
 /// Searches GetComics across the given queries (parity with getcomics.ts search/performSearch at
 /// beta.035). Baseline relevance filters (series-name word enforcement + ±1-year guard) apply to
 /// BOTH automated and interactive searches; automation additionally applies the strict
@@ -132,7 +162,11 @@ pub async fn search(
     let a_sel = Selector::parse("h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a").unwrap();
 
     // ---- Query context derived from the ORIGINAL name (parity with performSearch's cleanOriginal). ----
-    let clean_original = original_name.replace([':', '-', '&'], " ")
+    // Strip a trailing subtitle ("#1: Book One" -> "#1") first: otherwise a subtitle keyword like "Book"
+    // flips this single-issue request into omnibus mode and forces the subtitle words to be enforced as
+    // required title words, rejecting every real single-issue file.
+    let core_original = crate::search_engine::strip_issue_subtitle(original_name);
+    let clean_original = core_original.replace([':', '-', '&'], " ")
         .split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
     let stop_words: HashSet<&str> = ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"].into_iter().collect();
     let open_variant_keywords = ["variant", "special edition", "director's cut", "directors cut", "facsimile", "black and white", "extended"];
@@ -425,7 +459,7 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
     }
 
     let hp_setting: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'hoster_priority'"#).fetch_optional(db).await?;
-    let mut priority_list = vec!["mediafire".to_string(), "getcomics".to_string(), "mega".to_string(), "pixeldrain".to_string(), "rootz".to_string(), "vikingfile".to_string(), "terabox".to_string()];
+    let mut priority_list = vec!["getcomics".to_string(), "mediafire".to_string(), "mega".to_string(), "pixeldrain".to_string(), "rootz".to_string(), "vikingfile".to_string(), "terabox".to_string()];
     let mut disabled_hosters = Vec::new();
 
     if let Some(val) = hp_setting {
@@ -471,6 +505,26 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Builds the Cookie header + UA the engine replays to get past Cloudflare on a getcomics.org/dls/ download.
+    #[test]
+    fn parses_flaresolverr_clearance_cookies_and_ua() {
+        let data = serde_json::json!({
+            "solution": {
+                "userAgent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120",
+                "cookies": [
+                    { "name": "cf_clearance", "value": "abc123" },
+                    { "name": "__cf_bm", "value": "xyz789" }
+                ]
+            }
+        });
+        let (cookie, ua) = parse_flaresolverr_clearance(&data).unwrap();
+        assert_eq!(cookie, "cf_clearance=abc123; __cf_bm=xyz789");
+        assert_eq!(ua, "Mozilla/5.0 (X11; Linux x86_64) Chrome/120");
+        // No cookies (or no solution) -> None, so the caller falls back to a direct fetch.
+        assert!(parse_flaresolverr_clearance(&serde_json::json!({ "solution": { "cookies": [] } })).is_none());
+        assert!(parse_flaresolverr_clearance(&serde_json::json!({ "status": "error" })).is_none());
+    }
 
     // Pure URL→hoster classifier gating the entire DDL routing.
     #[test]

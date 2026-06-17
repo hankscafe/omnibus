@@ -90,6 +90,33 @@ export async function POST(request: NextRequest) {
             } catch(e) {}
         }
 
+        // 0. Cloudflare-gated GetComics "main server" link (getcomics.org/dls/…). This is a direct
+        // download endpoint, NOT an article page — re-scraping it for hoster buttons is pointless (it
+        // returns the file or a Cloudflare challenge, which is the source of the spurious 500 in the
+        // logs). Re-stream it straight through the engine, which solves Cloudflare via FlareSolverr.
+        // Gated on GetComics being enabled; a failed stream clears the dead link so the next retry runs
+        // a fresh recovery search instead of looping on it.
+        if (req.downloadLink && /getcomics\.org\/dls\//i.test(req.downloadLink) && enabledHosters.includes('getcomics')) {
+            Logger.log(`[Retry] Re-streaming GetComics direct download link via engine: ${req.downloadLink}`, 'info');
+            await prisma.request.update({
+                where: { id },
+                data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, failedLinks: "[]" }
+            });
+            DownloadService.downloadDirectFile(req.downloadLink, safeTitle, config.download_path, req.id, 'getcomics')
+                .then(async (success) => {
+                    if (success) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        await Importer.importRequest(req.id);
+                    }
+                })
+                .catch(async () => {
+                    // The stored /dls/ link failed (expired/blocked) — clear it so the next retry falls
+                    // through to a fresh recovery search rather than looping on a dead link.
+                    await prisma.request.update({ where: { id }, data: { downloadLink: null } }).catch(() => {});
+                });
+            return NextResponse.json({ success: true, message: 'Re-streaming GetComics direct download link via engine.' });
+        }
+
         // 1. GetComics Scrape Retry
         if (req.downloadLink && req.downloadLink.includes('getcomics.org') && !req.downloadLink.match(/\.(cbz|cbr|zip)$/i)) {
             Logger.log(`[Retry] Scraping fresh link for: ${req.downloadLink}`, 'info');

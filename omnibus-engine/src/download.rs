@@ -9,10 +9,47 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+use std::sync::OnceLock;
 use futures_util::StreamExt;
 
 const STALL_SECS: u64 = 45;
 const DEFAULT_MIN_SIZE: u64 = 500_000;
+
+/// How long a FlareSolverr-obtained Cloudflare clearance is reused before re-solving. cf_clearance
+/// usually lasts much longer; a conservative window keeps it fresh while collapsing a burst of downloads
+/// onto a single solve. A stale cookie is also caught at use-time (re-solve on a fresh challenge).
+const CLEARANCE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+struct CachedClearance {
+    cookie: String,
+    user_agent: String,
+    fetched_at: std::time::Instant,
+}
+
+fn clearance_cache() -> &'static Mutex<Option<CachedClearance>> {
+    static CACHE: OnceLock<Mutex<Option<CachedClearance>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Returns a Cloudflare clearance (cookie header, User-Agent), reusing a cached one within the TTL.
+/// The solve runs WHILE HOLDING THE LOCK, so a burst of concurrent GetComics downloads triggers ONE
+/// FlareSolverr solve — the rest wait on the lock and reuse the result — instead of stampeding a
+/// single-browser FlareSolverr into "no usable cookies" / timeouts. `force` re-solves even if a cached
+/// value exists (used when a cached cookie has gone stale).
+async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, force: bool) -> Result<(String, String)> {
+    let mut guard = clearance_cache().lock().await;
+    if !force {
+        if let Some(c) = guard.as_ref() {
+            if c.fetched_at.elapsed() < CLEARANCE_TTL {
+                return Ok((c.cookie.clone(), c.user_agent.clone()));
+            }
+        }
+    }
+    let (cookie, ua) = crate::getcomics::flaresolverr_clearance(client, flare_url, url).await?;
+    *guard = Some(CachedClearance { cookie: cookie.clone(), user_agent: ua.clone(), fetched_at: std::time::Instant::now() });
+    Ok((cookie, ua))
+}
 
 #[derive(Deserialize)]
 pub struct StreamRequest {
@@ -145,12 +182,21 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
         let flare: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#)
             .fetch_optional(db).await.ok().flatten().filter(|s: &String| !s.trim().is_empty());
         match flare {
-            Some(flare_url) => match crate::getcomics::flaresolverr_clearance(&client, &flare_url, &req.url).await {
+            Some(flare_url) => match get_clearance(&client, &flare_url, &req.url, false).await {
                 Ok((cookie, ua)) => {
-                    log::info!("[Internal DL] GetComics returned a Cloudflare challenge; solved via FlareSolverr, retrying download.");
-                    let ua = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
-                    response = establish_stream(&client, &req, Some(&cookie), &ua).await?;
+                    log::info!("[Internal DL] GetComics Cloudflare challenge; replaying FlareSolverr clearance (cached/shared), retrying download.");
+                    let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
+                    response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
                     content_type = response_content_type(&response);
+                    // A cached cookie that's gone stale still answers with a challenge — force one fresh
+                    // solve and retry before giving up.
+                    if content_type.contains("text/html") {
+                        if let Ok((cookie, ua)) = get_clearance(&client, &flare_url, &req.url, true).await {
+                            let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
+                            response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
+                            content_type = response_content_type(&response);
+                        }
+                    }
                 }
                 Err(e) => log::warn!("[Internal DL] FlareSolverr clearance failed ({e})."),
             },

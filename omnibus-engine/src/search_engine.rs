@@ -101,6 +101,22 @@ pub(crate) fn strip_issue_subtitle(name: &str) -> String {
     }
 }
 
+/// Strips a trailing comic/archive file extension so a download filename (e.g. a retry's
+/// activeDownloadName "Wolverine #3 (2024).cbz") doesn't leak "cbz" into the generated queries or the
+/// relevance filter.
+pub(crate) fn strip_file_extension(name: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?i)\.(cbz|cbr|cb7|cbt|zip|rar|7z|pdf|epub)$").unwrap());
+    re.replace(name.trim(), "").trim().to_string()
+}
+
+/// Normalizes a request name for searching: drops a trailing file extension AND a trailing descriptive
+/// subtitle. "Wolverine #3 (2024).cbz" -> "Wolverine #3 (2024)"; "Batman #1: Book One" -> "Batman #1".
+/// Query generation and relevance filtering both route through this so they derive the same core name.
+pub(crate) fn normalize_request_name(name: &str) -> String {
+    strip_issue_subtitle(&strip_file_extension(name))
+}
+
 pub fn generate_search_queries(
     name: &str,
     year: &str,
@@ -108,7 +124,7 @@ pub fn generate_search_queries(
     prioritize_packs: bool,
     use_packs: bool,
 ) -> Vec<String> {
-    let search_name = strip_issue_subtitle(name);
+    let search_name = normalize_request_name(name);
 
     // Two insertion-ordered groups, each de-duped within itself (parity with Node's two Sets).
     let mut primary: Vec<String> = Vec::new();
@@ -323,9 +339,9 @@ pub async fn filter_and_score(
     let junk_words: Vec<String> = junk_words_str.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
     let exclude_groups: Vec<String> = exclude_groups_str.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
 
-    // Strip any trailing subtitle ("#1: Book One" -> "#1") so a subtitle keyword doesn't trip
-    // TPB/omnibus detection and subtitle words aren't enforced as required title words.
-    let core_query = strip_issue_subtitle(target_query);
+    // Normalize ("#1: Book One" -> "#1", "….cbz" -> "…") so a subtitle keyword or a leaked file
+    // extension doesn't trip TPB/omnibus detection or get enforced as a required title word.
+    let core_query = normalize_request_name(target_query);
     let clean_original = core_query.replace(&[':', '-', '&'][..], " ")
         .split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
 
@@ -562,6 +578,20 @@ mod tests {
         assert!(!tpb_terms.iter().any(|t| clean.contains(t)), "subtitle keyword should not survive into clean_original: {clean}");
         assert!(!clean.contains("one"), "subtitle word 'one' should be gone: {clean}");
         assert!(clean.contains("gargoyle") && clean.contains("gotham"), "core series name must remain: {clean}");
+    }
+
+    #[test]
+    fn strips_trailing_file_extension_and_composes_with_subtitle() {
+        // A retry's activeDownloadName carries the file extension; it must not leak into queries.
+        assert_eq!(strip_file_extension("Wolverine #3 (2024).cbz"), "Wolverine #3 (2024)");
+        assert_eq!(strip_file_extension("Batman 001.CBR"), "Batman 001");
+        assert_eq!(strip_file_extension("Saga v1.pdf"), "Saga v1");
+        // No known extension -> untouched (parens and version dots are preserved).
+        assert_eq!(strip_file_extension("Wolverine #3 (2024)"), "Wolverine #3 (2024)");
+        assert_eq!(strip_file_extension("Spawn Vol.1"), "Spawn Vol.1");
+        // Combined normalization drops BOTH a file extension and a trailing subtitle.
+        assert_eq!(normalize_request_name("Wolverine #3 (2024).cbz"), "Wolverine #3 (2024)");
+        assert_eq!(normalize_request_name("Batman: Gargoyle of Gotham #1: Book One.cbz"), "Batman: Gargoyle of Gotham #1");
     }
 
     #[test]

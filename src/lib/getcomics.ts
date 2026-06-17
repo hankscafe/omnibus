@@ -6,7 +6,7 @@ import { getErrorMessage } from './utils/error';
 import { prisma } from './db';
 import { markSystemFlag } from './utils/system-flags';
 import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
-import { stripIssueSubtitle } from './search-engine';
+import { normalizeRequestName } from './search-engine';
 
 // --- NEW: FlareSolverr 403-Bypass Helper ---
 async function fetchGetComicsHtml(url: string) {
@@ -106,10 +106,11 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
   async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string, allowPacksOverride?: boolean) {
     const results: any[] = [];
     
-    // Generate both word arrays for TPB vs Single Issue validation. Strip any trailing subtitle
-    // ("#1: Book One" -> "#1") first so a subtitle keyword doesn't flip this into omnibus mode and the
-    // subtitle words aren't enforced as required title words (parity with the Rust engine).
-    const cleanOriginal = stripIssueSubtitle(originalQuery).replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
+    // Generate both word arrays for TPB vs Single Issue validation. Normalize the name first
+    // ("#1: Book One" -> "#1", "….cbz" -> "…") so a subtitle keyword doesn't flip this into omnibus mode
+    // and a leaked file extension / subtitle word isn't enforced as a required title word (parity with
+    // the Rust engine). The retry/recovery path passes a download FILENAME, so the extension strip matters.
+    const cleanOriginal = normalizeRequestName(originalQuery).replace(/[:\-\&]/g, ' ').replace(/\s+/g, ' ').trim();
     
     const safeQueryWords = safeQuery.toLowerCase().split(' ').filter(w => w.length > 0 && !stopWords.includes(w));
     const originalQueryWords = cleanOriginal.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 0 && !stopWords.includes(w));

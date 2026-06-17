@@ -162,10 +162,10 @@ pub async fn search(
     let a_sel = Selector::parse("h1.post-title a, h2.post-title a, h1 a, h2 a, .post-header a").unwrap();
 
     // ---- Query context derived from the ORIGINAL name (parity with performSearch's cleanOriginal). ----
-    // Strip a trailing subtitle ("#1: Book One" -> "#1") first: otherwise a subtitle keyword like "Book"
-    // flips this single-issue request into omnibus mode and forces the subtitle words to be enforced as
-    // required title words, rejecting every real single-issue file.
-    let core_original = crate::search_engine::strip_issue_subtitle(original_name);
+    // Normalize first ("#1: Book One" -> "#1", "….cbz" -> "…"): otherwise a subtitle keyword like "Book"
+    // flips this single-issue request into omnibus mode, and a leaked file extension ("cbz") or subtitle
+    // word gets enforced as a required title word — rejecting every real single-issue file.
+    let core_original = crate::search_engine::normalize_request_name(original_name);
     let clean_original = core_original.replace([':', '-', '&'], " ")
         .split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
     let stop_words: HashSet<&str> = ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"].into_iter().collect();

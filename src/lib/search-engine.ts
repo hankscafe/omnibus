@@ -29,8 +29,21 @@ export function stripIssueSubtitle(name: string): string {
     return splitMatch ? splitMatch[1].trim() : name;
 }
 
+// Strips a trailing comic/archive file extension so a download FILENAME (e.g. a retry's
+// activeDownloadName "Wolverine #3 (2024).cbz") doesn't leak "cbz" into the generated queries or the
+// relevance filter.
+export function stripFileExtension(name: string): string {
+    return name.replace(/\.(cbz|cbr|cb7|cbt|zip|rar|7z|pdf|epub)$/i, '').trim();
+}
+
+// Normalizes a request name for searching: drops a trailing file extension AND a trailing subtitle.
+// "Wolverine #3 (2024).cbz" -> "Wolverine #3 (2024)"; "Batman #1: Book One" -> "Batman #1".
+export function normalizeRequestName(name: string): string {
+    return stripIssueSubtitle(stripFileExtension(name));
+}
+
 export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false, prioritizePacks: boolean = false, usePacks: boolean = true): string[] {
-    const searchName = stripIssueSubtitle(name);
+    const searchName = normalizeRequestName(name);
 
     const primaryQueries = new Set<string>(); 
     const secondaryQueries = new Set<string>();

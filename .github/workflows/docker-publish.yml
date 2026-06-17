@@ -223,6 +223,44 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test
 
+      # Surface a gate failure to Discord: when this job fails, build-and-push-engine is SKIPPED (so its
+      # own failure ping never fires) and the engine image is NOT rebuilt — without this, only the web
+      # image's success ping would fire and the engine would silently keep reporting the previous version.
+      - name: Send Discord Notification (Engine CI Gate Failed)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
+        run: |
+          COMMIT_SHORT="${GITHUB_SHA:0:7}"
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          PAYLOAD=$(jq -n \
+            --arg title "🔴 Engine CI Gate Failed" \
+            --arg desc "Engine clippy/tests failed on \`${{ github.ref_name }}\` — the engine image was NOT rebuilt and will keep reporting the previous version. (The web image may still publish.)" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg commit "\`$COMMIT_SHORT\`" \
+            --arg run "[View run]($RUN_URL)" \
+            --arg footer "Omnibus Engine • GitHub Actions" \
+            --arg time "$TIMESTAMP" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: 15158332,
+                fields: [
+                  { name: "🌿 Branch", value: $branch, inline: true },
+                  { name: "🔗 Commit", value: $commit, inline: true },
+                  { name: "🔎 Logs", value: $run, inline: false }
+                ],
+                footer: { text: $footer },
+                timestamp: $time
+              }]
+            }' \
+          )
+
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
+
   # --- 4. THE ENGINE PUBLISHER: build & push the Rust engine image ---
   build-and-push-engine:
     needs: test-engine # Wait for the engine lint/test gate
@@ -280,3 +318,83 @@ jobs:
           # Separate cache scope so the engine and Node images don't evict each other.
           cache-from: type=gha,scope=engine
           cache-to: type=gha,mode=max,scope=engine
+
+      # --- ENGINE DISCORD NOTIFICATIONS ---
+      # Independent of the web image's ping so a failed/skipped engine build can't hide behind the web's
+      # "Docker Image Published" success notification — the exact failure mode that left the engine on a
+      # stale version while the web image advanced.
+      - name: Send Discord Notification (Engine Published)
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
+        run: |
+          COMMIT_SHORT="${GITHUB_SHA:0:7}"
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          VERSION="v${{ env.VERSION }}"
+          if [ "${{ github.ref_name }}" = "main" ]; then ENGINE_TAG="latest"; else ENGINE_TAG="${{ github.ref_name }}"; fi
+
+          PAYLOAD=$(jq -n \
+            --arg title "🐳 Engine Image Published" \
+            --arg desc "Omnibus Engine $VERSION has been built and published to GHCR." \
+            --arg version "$VERSION" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg commit "\`$COMMIT_SHORT\`" \
+            --arg pull "\`\`\`docker pull ghcr.io/${{ env.IMAGE_NAME }}-engine:$ENGINE_TAG\`\`\`" \
+            --arg footer "Omnibus Engine $VERSION • Built with GitHub Actions" \
+            --arg time "$TIMESTAMP" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: 3066993,
+                fields: [
+                  { name: "🏷️ Version", value: $version, inline: true },
+                  { name: "🌿 Branch", value: $branch, inline: true },
+                  { name: "🔗 Commit", value: $commit, inline: true },
+                  { name: "💻 Pull Command", value: $pull, inline: false }
+                ],
+                footer: { text: $footer },
+                timestamp: $time
+              }]
+            }' \
+          )
+
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
+
+      - name: Send Discord Notification (Engine Build Failed)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
+        run: |
+          COMMIT_SHORT="${GITHUB_SHA:0:7}"
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          VERSION="v${{ env.VERSION }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          PAYLOAD=$(jq -n \
+            --arg title "🔴 Engine Image Build FAILED" \
+            --arg desc "Omnibus Engine $VERSION failed to build or push. The web image may have shipped without it, leaving the engine on a stale version until this is fixed." \
+            --arg version "$VERSION" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg commit "\`$COMMIT_SHORT\`" \
+            --arg run "[View run]($RUN_URL)" \
+            --arg footer "Omnibus Engine $VERSION • GitHub Actions" \
+            --arg time "$TIMESTAMP" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: 15158332,
+                fields: [
+                  { name: "🏷️ Version", value: $version, inline: true },
+                  { name: "🌿 Branch", value: $branch, inline: true },
+                  { name: "🔗 Commit", value: $commit, inline: true },
+                  { name: "🔎 Logs", value: $run, inline: false }
+                ],
+                footer: { text: $footer },
+                timestamp: $time
+              }]
+            }' \
+          )
+
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK

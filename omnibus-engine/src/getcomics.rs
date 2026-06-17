@@ -55,15 +55,28 @@ async fn mark_cloudflare_flag(db: &PgPool) {
     .await;
 }
 
+/// FlareSolverr solve budget in milliseconds (the `maxTimeout` we send). GetComics' Cloudflare
+/// Turnstile can need far longer than the old 60s to clear, so FlareSolverr was being cut off
+/// mid-solve (cf. Kapowarr #335, which moved to 300s). Default 300_000ms; admin-tunable via the
+/// `flaresolverr_timeout` SystemSetting (in seconds), clamped to 30–600s.
+pub async fn flaresolverr_timeout_ms(db: &PgPool) -> u64 {
+    let secs = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_timeout'"#)
+        .fetch_optional(db).await.ok().flatten()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(300);
+    secs.clamp(30, 600) * 1000
+}
+
 async fn fetch_html(client: &Client, db: &PgPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
     let res = client.get(url).send().await?;
     if res.status() == 403 {
         if let Some(flare_url) = flaresolverr.filter(|f| !f.is_empty()) {
             log::warn!("[GetComics] 403 detected for {}; attempting FlareSolverr bypass...", url);
+            let max_timeout_ms = flaresolverr_timeout_ms(db).await;
             let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-            let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": 60000 });
+            let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": max_timeout_ms });
             log::debug!("[GetComics Debug] FlareSolverr payload: {}", payload);
-            match client.post(&target).json(&payload).send().await {
+            match client.post(&target).json(&payload).timeout(std::time::Duration::from_millis(max_timeout_ms + 15_000)).send().await {
                 Ok(flare_res) => {
                     if let Ok(data) = flare_res.json::<serde_json::Value>().await {
                         if let Some(html) = data["solution"]["response"].as_str() {
@@ -105,16 +118,32 @@ fn parse_flaresolverr_clearance(data: &serde_json::Value) -> Option<(String, Str
 /// to replay on a direct request. cf_clearance is IP+UA-bound, so the caller MUST send the returned
 /// User-Agent and run with the same outbound IP as FlareSolverr. Used to download Cloudflare-gated
 /// GetComics "main server" links (getcomics.org/dls/…) that a raw fetch can't get past.
-pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str) -> anyhow::Result<(String, String)> {
+pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str, max_timeout_ms: u64) -> anyhow::Result<(String, String)> {
     let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-    let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": 60000 });
+    let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": max_timeout_ms });
+    // Wait a bit longer than FlareSolverr's own solve budget so the engine doesn't cut it off early.
     let res = client.post(&target)
         .json(&payload)
-        .timeout(std::time::Duration::from_secs(70))
+        .timeout(std::time::Duration::from_millis(max_timeout_ms + 15_000))
         .send().await?;
     let data: serde_json::Value = res.json().await?;
-    parse_flaresolverr_clearance(&data)
-        .ok_or_else(|| anyhow::anyhow!("FlareSolverr returned no usable cookies"))
+    match parse_flaresolverr_clearance(&data) {
+        Some(c) => Ok(c),
+        None => {
+            // Surface WHY so an unsolved challenge (status=error, no solution) can be told apart from a
+            // solver that returns cookies in an unexpected shape (status=ok but cookies=0) — from the
+            // engine log alone. The full raw response goes to debug for deeper inspection.
+            let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("none");
+            let message = data.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let cookie_count = data.get("solution").and_then(|s| s.get("cookies")).and_then(|c| c.as_array()).map(|a| a.len());
+            log::debug!("[GetComics Debug] FlareSolverr clearance response (no usable cookies): {}",
+                serde_json::to_string(&data).map(|s| s.chars().take(600).collect::<String>()).unwrap_or_default());
+            Err(anyhow::anyhow!(
+                "FlareSolverr returned no usable cookies (status={status}, cookies={cookie_count:?}{})",
+                if message.is_empty() { String::new() } else { format!(", message=\"{message}\"") }
+            ))
+        }
+    }
 }
 
 /// Searches GetComics across the given queries (parity with getcomics.ts search/performSearch at

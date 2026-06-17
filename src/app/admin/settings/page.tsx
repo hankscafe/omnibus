@@ -177,7 +177,7 @@ export default function SettingsPage() {
     export_series_json: "false",
     metadata_write_comicinfo: "true",
     series_ended_months: "18",
-    remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "",
+    remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "", flaresolverr_timeout: "300",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
     filter_foreign_publishers: "",
     filter_junk_words: "", filter_match_ratio: "60", filter_exclude_groups: "",
@@ -371,6 +371,7 @@ export default function SettingsPage() {
         
         if (!newConfig.getcomics_interactive_pages) newConfig.getcomics_interactive_pages = "4";
         if (!newConfig.getcomics_automated_pages) newConfig.getcomics_automated_pages = "5";
+        if (!newConfig.flaresolverr_timeout) newConfig.flaresolverr_timeout = "300";
         
         if (!newConfig.filter_junk_words) newConfig.filter_junk_words = "preview, sample, ashcan, cropped, scanned, fixed, incomplete, damaged, partial, promo, teaser";
         if (!newConfig.filter_match_ratio) newConfig.filter_match_ratio = "60";
@@ -1897,6 +1898,21 @@ export default function SettingsPage() {
                             </Button>
                         </div>
                         <StatusBox result={testResults.flaresolverr} />
+                        <div className="space-y-2 pt-2">
+                            <Label htmlFor="flaresolverr_timeout" className="font-bold text-foreground">Solve Timeout (Seconds)</Label>
+                            <Input
+                                id="flaresolverr_timeout"
+                                type="number"
+                                min="30"
+                                max="600"
+                                value={config.flaresolverr_timeout || "300"}
+                                onChange={(e) => setConfig({ ...config, flaresolverr_timeout: e.target.value })}
+                                className="h-12 sm:h-10 bg-background border-border text-foreground w-full sm:w-32"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                How long FlareSolverr is given to clear a Cloudflare challenge. The newer GetComics challenge can need up to 300s; raise this if downloads still time out. (Default: 300, range 30-600)
+                            </p>
+                        </div>
                     </div>
 
                     <div className="grid gap-2 bg-muted/30 p-4 rounded-lg border border-border">

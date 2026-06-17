@@ -37,7 +37,7 @@ fn clearance_cache() -> &'static Mutex<Option<CachedClearance>> {
 /// FlareSolverr solve — the rest wait on the lock and reuse the result — instead of stampeding a
 /// single-browser FlareSolverr into "no usable cookies" / timeouts. `force` re-solves even if a cached
 /// value exists (used when a cached cookie has gone stale).
-async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, force: bool) -> Result<(String, String)> {
+async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, force: bool, max_timeout_ms: u64) -> Result<(String, String)> {
     let mut guard = clearance_cache().lock().await;
     if !force {
         if let Some(c) = guard.as_ref() {
@@ -46,7 +46,7 @@ async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, for
             }
         }
     }
-    let (cookie, ua) = crate::getcomics::flaresolverr_clearance(client, flare_url, url).await?;
+    let (cookie, ua) = crate::getcomics::flaresolverr_clearance(client, flare_url, url, max_timeout_ms).await?;
     *guard = Some(CachedClearance { cookie: cookie.clone(), user_agent: ua.clone(), fetched_at: std::time::Instant::now() });
     Ok((cookie, ua))
 }
@@ -182,24 +182,27 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
         let flare: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#)
             .fetch_optional(db).await.ok().flatten().filter(|s: &String| !s.trim().is_empty());
         match flare {
-            Some(flare_url) => match get_clearance(&client, &flare_url, &req.url, false).await {
-                Ok((cookie, ua)) => {
-                    log::info!("[Internal DL] GetComics Cloudflare challenge; replaying FlareSolverr clearance (cached/shared), retrying download.");
-                    let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
-                    response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
-                    content_type = response_content_type(&response);
-                    // A cached cookie that's gone stale still answers with a challenge — force one fresh
-                    // solve and retry before giving up.
-                    if content_type.contains("text/html") {
-                        if let Ok((cookie, ua)) = get_clearance(&client, &flare_url, &req.url, true).await {
-                            let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
-                            response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
-                            content_type = response_content_type(&response);
+            Some(flare_url) => {
+                let max_timeout_ms = crate::getcomics::flaresolverr_timeout_ms(db).await;
+                match get_clearance(&client, &flare_url, &req.url, false, max_timeout_ms).await {
+                    Ok((cookie, ua)) => {
+                        log::info!("[Internal DL] GetComics Cloudflare challenge; replaying FlareSolverr clearance (cached/shared), retrying download.");
+                        let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
+                        response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
+                        content_type = response_content_type(&response);
+                        // A cached cookie that's gone stale still answers with a challenge — force one fresh
+                        // solve and retry before giving up.
+                        if content_type.contains("text/html") {
+                            if let Ok((cookie, ua)) = get_clearance(&client, &flare_url, &req.url, true, max_timeout_ms).await {
+                                let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
+                                response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
+                                content_type = response_content_type(&response);
+                            }
                         }
                     }
+                    Err(e) => log::warn!("[Internal DL] FlareSolverr clearance failed ({e})."),
                 }
-                Err(e) => log::warn!("[Internal DL] FlareSolverr clearance failed ({e})."),
-            },
+            }
             None => log::warn!("[Internal DL] GetComics returned a Cloudflare challenge but no flaresolverr_url is set."),
         }
     }

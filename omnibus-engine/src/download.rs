@@ -37,7 +37,7 @@ fn clearance_cache() -> &'static Mutex<Option<CachedClearance>> {
 /// FlareSolverr solve — the rest wait on the lock and reuse the result — instead of stampeding a
 /// single-browser FlareSolverr into "no usable cookies" / timeouts. `force` re-solves even if a cached
 /// value exists (used when a cached cookie has gone stale).
-async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, force: bool, max_timeout_ms: u64) -> Result<(String, String)> {
+async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, force: bool, sc: &crate::getcomics::SolverConfig) -> Result<(String, String)> {
     let mut guard = clearance_cache().lock().await;
     if !force {
         if let Some(c) = guard.as_ref() {
@@ -46,9 +46,47 @@ async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, for
             }
         }
     }
-    let (cookie, ua) = crate::getcomics::flaresolverr_clearance(client, flare_url, url, max_timeout_ms).await?;
+    let (cookie, ua) = crate::getcomics::flaresolverr_clearance(client, flare_url, url, sc).await?;
     *guard = Some(CachedClearance { cookie: cookie.clone(), user_agent: ua.clone(), fetched_at: std::time::Instant::now() });
     Ok((cookie, ua))
+}
+
+/// Joins a response's Set-Cookie headers into one Cookie request-header value ("a=1; b=2"), taking
+/// just the `name=value` before each cookie's attributes. Used by the warm-up below.
+fn collect_set_cookies(resp: &reqwest::Response) -> String {
+    resp.headers().get_all(reqwest::header::SET_COOKIE).iter()
+        .filter_map(|v| v.to_str().ok())
+        .filter_map(|c| c.split(';').next())
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Lever #2 — Cloudflare cookie warm-up. Before paying for a FlareSolverr/Byparr solve, visit the
+/// site origin so Cloudflare's `__cf_bm` bot-management cookie (and an existing `cf_clearance`, when
+/// the host hands one out without a full interactive challenge) is captured, then re-request the gated
+/// URL carrying those cookies + a referer. This clears the *light* challenge variant — the kind a
+/// browser passes invisibly — without involving a solver at all. Best-effort: a hard interactive
+/// Turnstile won't be cleared this way (the engine runs no JS), so the solver fallback still runs when
+/// this doesn't get past it. Returns the retried response (which the caller re-checks for HTML).
+async fn warm_up_and_retry(client: &reqwest::Client, req: &StreamRequest) -> Result<reqwest::Response> {
+    let parsed = reqwest::Url::parse(&req.url)?;
+    let origin = format!("{}://{}/", parsed.scheme(), parsed.host_str().unwrap_or("getcomics.org"));
+    log::info!("[Internal DL] Cloudflare cookie warm-up: visiting {} to seed cf cookies.", origin);
+    let warm_cookies = match client.get(&origin)
+        .header("User-Agent", DEFAULT_UA)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .timeout(std::time::Duration::from_secs(20))
+        .send().await
+    {
+        Ok(r) => collect_set_cookies(&r),
+        Err(e) => { log::debug!("[Internal DL] warm-up origin visit failed: {e}"); String::new() }
+    };
+    if warm_cookies.is_empty() {
+        bail!("warm-up obtained no cookies");
+    }
+    establish_stream(client, req, Some(&warm_cookies), DEFAULT_UA).await
 }
 
 #[derive(Deserialize)]
@@ -174,36 +212,53 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
     let mut response = establish_stream(&client, &req, None, DEFAULT_UA).await?;
     let mut content_type = response_content_type(&response);
 
-    // ONLY when a getcomics.org link actually answers with an HTML page — the Cloudflare "Just a
-    // moment…" challenge on the /dls/ main-server links — do we solve it via FlareSolverr and retry with
-    // the cf_clearance cookie + the exact User-Agent it used (the cookie is IP+UA-bound, so FlareSolverr
-    // must share the engine's outbound IP). A non-challenged download never enters this branch.
+    // When a getcomics.org link answers with an HTML page — the Cloudflare "Just a moment…" challenge
+    // on the /dls/ main-server links — try to get past it. First (lever #2) a cheap cookie warm-up that
+    // clears the light challenge variant with no solver; only if that fails do we pay for a
+    // FlareSolverr/Byparr solve. A non-challenged download never enters this branch.
+    if content_type.contains("text/html") && req.url.contains("getcomics.org") {
+        match warm_up_and_retry(&client, &req).await {
+            Ok(warmed) => {
+                let warmed_ct = response_content_type(&warmed);
+                if !warmed_ct.contains("text/html") {
+                    log::info!("[Internal DL] Cloudflare cookie warm-up cleared the challenge without a solver.");
+                    response = warmed;
+                    content_type = warmed_ct;
+                }
+            }
+            Err(e) => log::debug!("[Internal DL] Cloudflare cookie warm-up did not clear the challenge ({e}); falling back to the solver."),
+        }
+    }
+
+    // Still a challenge after the warm-up → solve it via FlareSolverr/Byparr and retry with the
+    // cf_clearance cookie + the exact User-Agent the solver used (the cookie is IP+UA-bound, so the
+    // solver must share the engine's outbound IP).
     if content_type.contains("text/html") && req.url.contains("getcomics.org") {
         let flare: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#)
             .fetch_optional(db).await.ok().flatten().filter(|s: &String| !s.trim().is_empty());
         match flare {
             Some(flare_url) => {
-                let max_timeout_ms = crate::getcomics::flaresolverr_timeout_ms(db).await;
-                match get_clearance(&client, &flare_url, &req.url, false, max_timeout_ms).await {
+                let sc = crate::getcomics::solver_config(db).await;
+                match get_clearance(&client, &flare_url, &req.url, false, &sc).await {
                     Ok((cookie, ua)) => {
-                        log::info!("[Internal DL] GetComics Cloudflare challenge; replaying FlareSolverr clearance (cached/shared), retrying download.");
+                        log::info!("[Internal DL] GetComics Cloudflare challenge; replaying {} clearance (cached/shared), retrying download.", sc.kind);
                         let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
                         response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
                         content_type = response_content_type(&response);
                         // A cached cookie that's gone stale still answers with a challenge — force one fresh
                         // solve and retry before giving up.
                         if content_type.contains("text/html") {
-                            if let Ok((cookie, ua)) = get_clearance(&client, &flare_url, &req.url, true, max_timeout_ms).await {
+                            if let Ok((cookie, ua)) = get_clearance(&client, &flare_url, &req.url, true, &sc).await {
                                 let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
                                 response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
                                 content_type = response_content_type(&response);
                             }
                         }
                     }
-                    Err(e) => log::warn!("[Internal DL] FlareSolverr clearance failed ({e})."),
+                    Err(e) => log::warn!("[Internal DL] {} clearance failed ({e}).", sc.kind),
                 }
             }
-            None => log::warn!("[Internal DL] GetComics returned a Cloudflare challenge but no flaresolverr_url is set."),
+            None => log::warn!("[Internal DL] GetComics returned a Cloudflare challenge but no solver URL is set."),
         }
     }
 

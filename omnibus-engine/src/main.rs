@@ -868,7 +868,7 @@ async fn handle_search(
     // surface it for manual download (parity with the automation.ts MANUAL_DDL fallback, which is
     // gated on `enabledHosters.includes('getcomics')`).
     if let Some((url, name)) = manual_fallback {
-        if getcomics::is_hoster_enabled(&state.db, "getcomics").await {
+        if getcomics::is_getcomics_enabled(&state.db).await {
             log::warn!("Prowlarr failed for {}. Reverting to GetComics manual DDL fallback.", payload.name);
             return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: Some(ManualDdl { url, name }) });
         }

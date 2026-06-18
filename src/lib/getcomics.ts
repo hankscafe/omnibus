@@ -8,12 +8,64 @@ import { markSystemFlag } from './utils/system-flags';
 import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
 import { normalizeRequestName } from './search-engine';
 
-// --- NEW: FlareSolverr 403-Bypass Helper ---
+// --- Shared hoster-priority helpers (kept in lock-step with the Rust engine's getcomics.rs) ---
+
+/** Default hoster order: the fast GetComics file CDN (comicfiles, `getcomics_direct`) first, then the
+ *  third-party mirrors, with the Cloudflare-gated GetComics "main server" (getcomics.org/dls/…,
+ *  `getcomics_main`) LAST — it needs a FlareSolverr/Byparr solve, so it's a last resort. */
+export const DEFAULT_HOSTER_ORDER = ['getcomics_direct', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive', 'getcomics_main'];
+
+export type HosterPref = { hoster: string, enabled: boolean };
+
+/** Migrate a legacy single `getcomics` entry into `getcomics_direct` (kept in place + enabled flag) +
+ *  `getcomics_main` (appended last, same enabled flag). Idempotent; mirrors Rust migrate_legacy_getcomics. */
+export function migrateHosterPrefs(prefs: HosterPref[]): HosterPref[] {
+    const out = prefs.map(p => ({ ...p }));
+    const i = out.findIndex(p => p.hoster === 'getcomics');
+    if (i !== -1) {
+        const enabled = out[i].enabled;
+        out[i] = { hoster: 'getcomics_direct', enabled };
+        if (!out.some(p => p.hoster === 'getcomics_main')) out.push({ hoster: 'getcomics_main', enabled });
+    }
+    return out;
+}
+
+/** Parse a raw `hoster_priority` setting value into an ordered, migrated pref list. Unset → defaults;
+ *  empty array → none; string array → all enabled; object array → each entry's `enabled` (default true). */
+export function parseHosterPrefs(value?: string | null): HosterPref[] {
+    const defaults = () => DEFAULT_HOSTER_ORDER.map(h => ({ hoster: h, enabled: true }));
+    if (!value) return defaults();
+    try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed)) return defaults();
+        if (parsed.length === 0) return [];
+        const prefs: HosterPref[] = typeof parsed[0] === 'string'
+            ? parsed.map((h: string) => ({ hoster: h, enabled: true }))
+            : parsed.map((p: any) => ({ hoster: p.hoster, enabled: p.enabled !== false }));
+        return migrateHosterPrefs(prefs);
+    } catch { return defaults(); }
+}
+
+/** Enabled hoster names in priority order, migrating the legacy `getcomics` key. Mirrors Rust enabled_hosters. */
+export function enabledHostersFromSetting(value?: string | null): string[] {
+    return parseHosterPrefs(value).filter(p => p.enabled).map(p => p.hoster);
+}
+
+// --- Cloudflare 403-bypass helper (FlareSolverr / Byparr) ---
 async function fetchGetComicsHtml(url: string) {
     let flareUrl = "";
+    let solverType = "flaresolverr";
+    let solveSecs = 300;
     try {
-        const setting = await prisma.systemSetting.findUnique({ where: { key: 'flaresolverr_url' } });
-        if (setting?.value) flareUrl = setting.value.replace(/\/$/, "");
+        const [flareSetting, solverSetting, timeoutSetting] = await Promise.all([
+            prisma.systemSetting.findUnique({ where: { key: 'flaresolverr_url' } }),
+            prisma.systemSetting.findUnique({ where: { key: 'solver_type' } }),
+            prisma.systemSetting.findUnique({ where: { key: 'flaresolverr_timeout' } }),
+        ]);
+        if (flareSetting?.value) flareUrl = flareSetting.value.replace(/\/$/, "");
+        if (solverSetting?.value === 'byparr') solverType = 'byparr';
+        const parsedSecs = parseInt(timeoutSetting?.value || '300', 10);
+        if (!isNaN(parsedSecs)) solveSecs = Math.min(600, Math.max(30, parsedSecs));
     } catch(e) {}
 
     try {
@@ -25,19 +77,22 @@ async function fetchGetComicsHtml(url: string) {
     } catch (err: any) {
         if (err.response?.status === 403) {
             if (flareUrl) {
-                Logger.log(`[GetComics] 403 Forbidden detected. Attempting Cloudflare bypass via FlareSolverr...`, 'warn');
-                Logger.log(`[GetComics Debug] Attempting Cloudflare bypass via FlareSolverr with payload: ${JSON.stringify({ cmd: 'request.get', url: url })}`, 'debug');
+                // FlareSolverr's maxTimeout is in MILLISECONDS; Byparr reads it as SECONDS. The engine's
+                // own HTTP timeout always uses real ms + a 15s margin so it never cuts the solver short.
+                const payloadTimeout = solverType === 'byparr' ? solveSecs : solveSecs * 1000;
+                const httpTimeoutMs = solveSecs * 1000 + 15000;
+                Logger.log(`[GetComics] 403 Forbidden detected. Attempting Cloudflare bypass via ${solverType}...`, 'warn');
                 try {
                     const targetUrl = flareUrl.endsWith('/v1') ? flareUrl : `${flareUrl}/v1`;
                     const flareRes = await axios.post(targetUrl, {
                         cmd: 'request.get',
                         url: url,
-                        maxTimeout: 60000
-                    }, { headers: { 'Content-Type': 'application/json' }, timeout: 65000 });
-                    
+                        maxTimeout: payloadTimeout
+                    }, { headers: { 'Content-Type': 'application/json' }, timeout: httpTimeoutMs });
+
                     if (flareRes.data?.solution?.response) {
-                        Logger.log(`[GetComics] FlareSolverr bypass successful!`, 'success');
-                        Logger.log(`[GetComics Debug] FlareSolverr bypass successful with response length: ${flareRes.data.solution.response.length}`, 'debug');                        return flareRes.data.solution.response;
+                        Logger.log(`[GetComics] ${solverType} bypass successful!`, 'success');
+                        return flareRes.data.solution.response;
                     }
                 } catch (flareErr) {
                      await markSystemFlag('cloudflare_block_time');
@@ -354,12 +409,15 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
             return rawHref; 
           };
 
-          const getHosterFromUrl = (url: string, isMainServerBtn: boolean) => {
-              if (isMainServerBtn) return 'getcomics';
-              
-              // Only whitelist dedicated file-serving domains here (DO NOT ADD GETCOMICS HERE)
-              if (url.includes('comicfiles') || url.includes('comic-files')) return 'getcomics';
-              
+          // Classify a decoded URL into a hoster key. GetComics is split: `getcomics_direct` (comicfiles
+          // CDN — fast, no challenge) vs `getcomics_main` (getcomics.org/dls/… — Cloudflare-gated, needs a
+          // solver). URL checks win over the main-button flag. Kept in lock-step with Rust get_hoster_from_url.
+          const getHosterFromUrl = (rawUrl: string, isMainServerBtn: boolean) => {
+              const url = rawUrl.toLowerCase();
+              // Fast GetComics file CDN — never Cloudflare-gated. Keep high priority.
+              if (url.includes('comicfiles') || url.includes('comic-files')) return 'getcomics_direct';
+              // GetComics' own "main server" endpoint sits behind Cloudflare. Last resort.
+              if (url.includes('/dls/') && url.includes('getcomics')) return 'getcomics_main';
               if (url.includes('mediafire.com')) return 'mediafire';
               if (url.includes('mega.nz') || url.includes('mega.co.nz')) return 'mega';
               if (url.includes('pixeldrain.com')) return 'pixeldrain';
@@ -368,6 +426,8 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
               if (url.includes('vikingfile')) return 'vikingfile';
               if (url.includes('zippyshare.com')) return 'zippyshare';
               if (url.includes('userscloud.com')) return 'userscloud';
+              // A "main server / download now" button we couldn't classify by URL is GetComics' gated path.
+              if (isMainServerBtn) return 'getcomics_main';
               return 'unknown';
           };
 
@@ -401,31 +461,21 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
               const hoster = getHosterFromUrl(decoded, isMainServerBtn);
 
               if (hoster !== 'unknown') {
-                  foundLinks.push({ 
-                      url: decoded, 
-                      isDirect: hoster === 'getcomics', 
-                      hoster 
+                  foundLinks.push({
+                      url: decoded,
+                      isDirect: hoster.startsWith('getcomics'),
+                      hoster
                   });
               }
           });
 
           const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
-          let priorityList = ['getcomics', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'];
-          let disabledHosters: string[] = [];
-
-          if (setting?.value) {
-              try {
-                  const parsed = JSON.parse(setting.value);
-                  if (parsed.length > 0) {
-                      if (typeof parsed[0] === 'string') {
-                          priorityList = parsed;
-                      } else if (typeof parsed[0] === 'object') {
-                          priorityList = parsed.map((p: any) => p.hoster);
-                          disabledHosters = parsed.filter((p: any) => !p.enabled).map((p: any) => p.hoster);
-                      }
-                  }
-              } catch (e) {}
-          }
+          let prefs = parseHosterPrefs(setting?.value);
+          // An explicit empty array means "no preference" here (not "disable all") — fall back to the
+          // default order so a degenerate setting still resolves a link (parity with prior behavior).
+          if (prefs.length === 0) prefs = DEFAULT_HOSTER_ORDER.map(h => ({ hoster: h, enabled: true }));
+          const priorityList = prefs.map(p => p.hoster);
+          const disabledHosters = prefs.filter(p => !p.enabled).map(p => p.hoster);
 
           if (disabledHosters.length > 0) {
               const beforeCount = foundLinks.length;

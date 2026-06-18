@@ -75,6 +75,8 @@ const RECOMMENDED_KEYWORDS = "weekly young, young animal, weekly shonen, monthly
 
 const hosterDisplayNames: Record<string, string> = {
     'mediafire': 'MediaFire',
+    'getcomics_direct': 'GetComics (Direct CDN)',
+    'getcomics_main': 'GetComics (Main Server · Cloudflare)',
     'getcomics': 'GetComics (Direct)',
     'mega': 'Mega',
     'pixeldrain': 'Pixeldrain',
@@ -135,14 +137,15 @@ export default function SettingsPage() {
   // Hoster States
   const [configuredHosters, setConfiguredHosters] = useState<HosterAccountConfig[]>([])
   const [hosterPriority, setHosterPriority] = useState<{hoster: string, enabled: boolean}[]>([
-      { hoster: 'getcomics', enabled: true },
+      { hoster: 'getcomics_direct', enabled: true },
       { hoster: 'mediafire', enabled: true },
       { hoster: 'mega', enabled: true },
       { hoster: 'pixeldrain', enabled: true },
       { hoster: 'rootz', enabled: true },
       { hoster: 'vikingfile', enabled: true },
       { hoster: 'terabox', enabled: true },
-      { hoster: 'annas_archive', enabled: true }
+      { hoster: 'annas_archive', enabled: true },
+      { hoster: 'getcomics_main', enabled: true }
   ])
   const [hosterModalOpen, setHosterModalOpen] = useState(false)
   const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null)
@@ -329,18 +332,19 @@ export default function SettingsPage() {
 
             const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
             const defaultHosters = [
-                { hoster: 'getcomics', enabled: true },
+                { hoster: 'getcomics_direct', enabled: true },
                 { hoster: 'mediafire', enabled: true },
                 { hoster: 'mega', enabled: true },
                 { hoster: 'pixeldrain', enabled: true },
                 { hoster: 'rootz', enabled: true },
                 { hoster: 'vikingfile', enabled: true },
                 { hoster: 'terabox', enabled: true },
-                { hoster: 'annas_archive', enabled: true }
+                { hoster: 'annas_archive', enabled: true },
+                { hoster: 'getcomics_main', enabled: true }
             ];
-            
+
             if (hpSetting?.value) {
-                try { 
+                try {
                     const savedHosters = JSON.parse(hpSetting.value);
                     let mergedHosters: any[] = [];
                     if (savedHosters.length > 0 && typeof savedHosters[0] === 'string') {
@@ -348,10 +352,20 @@ export default function SettingsPage() {
                     } else {
                         mergedHosters = [...savedHosters];
                     }
+                    // Migrate a legacy single `getcomics` entry -> `getcomics_direct` (kept in place) +
+                    // `getcomics_main` (appended last). Keeps existing configs working post-split.
+                    const gi = mergedHosters.findIndex(mh => mh.hoster === 'getcomics');
+                    if (gi !== -1) {
+                        const en = mergedHosters[gi].enabled !== false;
+                        mergedHosters[gi] = { hoster: 'getcomics_direct', enabled: en };
+                        if (!mergedHosters.some(mh => mh.hoster === 'getcomics_main')) {
+                            mergedHosters.push({ hoster: 'getcomics_main', enabled: en });
+                        }
+                    }
                     defaultHosters.forEach(dh => {
                         if (!mergedHosters.some(mh => mh.hoster === dh.hoster)) mergedHosters.push(dh);
                     });
-                    setHosterPriority(mergedHosters); 
+                    setHosterPriority(mergedHosters);
                 } catch(e) {
                     setHosterPriority(defaultHosters);
                 }
@@ -372,6 +386,7 @@ export default function SettingsPage() {
         if (!newConfig.getcomics_interactive_pages) newConfig.getcomics_interactive_pages = "4";
         if (!newConfig.getcomics_automated_pages) newConfig.getcomics_automated_pages = "5";
         if (!newConfig.flaresolverr_timeout) newConfig.flaresolverr_timeout = "300";
+        if (!newConfig.solver_type) newConfig.solver_type = "flaresolverr";
         
         if (!newConfig.filter_junk_words) newConfig.filter_junk_words = "preview, sample, ashcan, cropped, scanned, fixed, incomplete, damaged, partial, promo, teaser";
         if (!newConfig.filter_match_ratio) newConfig.filter_match_ratio = "60";
@@ -1882,10 +1897,27 @@ export default function SettingsPage() {
                     <CardDescription className="text-muted-foreground">Configure custom HTTP headers for all outgoing requests and manage connection timeouts/retries.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    {/* --- FLARESOLVERR UI --- */}
+                    {/* --- CLOUDFLARE SOLVER UI (FlareSolverr / Byparr) --- */}
                     <div className="space-y-4 pb-6 border-b border-border">
-                        <Label className="text-base font-bold text-foreground">Cloudflare Bypass (FlareSolverr)</Label>
-                        <p className="text-[11px] text-muted-foreground mt-1">If GetComics starts blocking your automated searches with a 403 Forbidden error, you can route requests through a FlareSolverr container to bypass the protection.</p>
+                        <Label className="text-base font-bold text-foreground">Cloudflare Bypass (FlareSolverr / Byparr)</Label>
+                        <p className="text-[11px] text-muted-foreground mt-1">When GetComics serves a Cloudflare "Just a moment…" challenge on a download (or a 403 on a search), Omnibus routes the request through a solver to obtain clearance. FlareSolverr is the classic option; <strong>Byparr</strong> is a drop-in alternative (Camoufox-based) that clears the newer interactive Turnstile challenges FlareSolverr frequently times out on.</p>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="solver_type" className="font-bold text-foreground">Solver Backend</Label>
+                            <Select value={config.solver_type || "flaresolverr"} onValueChange={(v) => setConfig({ ...config, solver_type: v })}>
+                                <SelectTrigger id="solver_type" className="h-12 sm:h-10 bg-background border-border text-foreground w-full sm:w-64">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="flaresolverr">FlareSolverr</SelectItem>
+                                    <SelectItem value="byparr">Byparr</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                Both speak the same API on port 8191, so the URL below works for either — point it at whichever container you run (Byparr: <code>ghcr.io/thephaseless/byparr</code>). The solve timeout is sent in the correct unit automatically (FlareSolverr uses milliseconds, Byparr uses seconds).
+                            </p>
+                        </div>
+
                         <div className="flex flex-col sm:flex-row gap-2">
                             <Input
                                 placeholder="http://192.168.1.100:8191"
@@ -1893,8 +1925,8 @@ export default function SettingsPage() {
                                 onChange={e => setConfig({...config, flaresolverr_url: e.target.value})}
                                 className="h-12 sm:h-10 bg-background border-border text-foreground flex-1 font-mono text-sm"
                             />
-                            <Button variant="outline" onClick={() => handleTest('flaresolverr', { flaresolverr_url: config.flaresolverr_url })} disabled={!!testing} className="h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground">
-                                {testing === 'flaresolverr' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test FlareSolverr
+                            <Button variant="outline" onClick={() => handleTest('flaresolverr', { flaresolverr_url: config.flaresolverr_url, solver_type: config.solver_type })} disabled={!!testing} className="h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground">
+                                {testing === 'flaresolverr' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin text-primary"/> : <Zap className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test Solver
                             </Button>
                         </div>
                         <StatusBox result={testResults.flaresolverr} />
@@ -1910,7 +1942,7 @@ export default function SettingsPage() {
                                 className="h-12 sm:h-10 bg-background border-border text-foreground w-full sm:w-32"
                             />
                             <p className="text-[11px] text-muted-foreground mt-1">
-                                How long FlareSolverr is given to clear a Cloudflare challenge. The newer GetComics challenge can need up to 300s; raise this if downloads still time out. (Default: 300, range 30-600)
+                                How long the solver is given to clear a Cloudflare challenge. The newer GetComics challenge can need up to 300s; raise this if downloads still time out. (Default: 300, range 30-600)
                             </p>
                         </div>
                     </div>

@@ -47,6 +47,8 @@ const DISCORD_EVENTS = [
 
 const hosterDisplayNames: Record<string, string> = {
     'mediafire': 'MediaFire',
+    'getcomics_direct': 'GetComics (Direct CDN)',
+    'getcomics_main': 'GetComics (Main Server · Cloudflare)',
     'getcomics': 'GetComics (Direct)',
     'mega': 'Mega',
     'pixeldrain': 'Pixeldrain',

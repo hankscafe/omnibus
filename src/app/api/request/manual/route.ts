@@ -5,7 +5,7 @@ import path from 'path'; // <-- Added path for safe joining
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { DownloadService } from '@/lib/download-clients';
-import { GetComicsService } from '@/lib/getcomics';
+import { GetComicsService, enabledHostersFromSetting } from '@/lib/getcomics';
 import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from '@/lib/utils/error';
@@ -200,21 +200,8 @@ export async function POST(request: NextRequest) {
                 const { url, hoster } = await GetComicsService.scrapeDeepLink(searchResult.downloadUrl);
                 
                 const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
-                let enabledHosters = ['getcomics', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
-                if (hpSetting?.value) {
-                    try {
-                        const parsed = JSON.parse(hpSetting.value);
-                        if (parsed.length > 0) {
-                            if (typeof parsed[0] === 'string') {
-                                enabledHosters = parsed;
-                            } else if (typeof parsed[0] === 'object') {
-                                enabledHosters = parsed.filter((p: any) => p.enabled).map((p: any) => p.hoster);
-                            }
-                        } else {
-                            enabledHosters = [];
-                        }
-                    } catch(e) {}
-                }
+                // Enabled hosters (migrates the legacy `getcomics` key → direct + main).
+                const enabledHosters = enabledHostersFromSetting(hpSetting?.value);
 
                 if (enabledHosters.includes(hoster)) {
                     const safeTitle = searchResult.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();

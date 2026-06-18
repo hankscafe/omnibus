@@ -320,16 +320,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: `Connected to Prowlarr (${res.data.length} indexers).` });
     }
 
-    // --- FLARESOLVERR TEST ---
+    // --- CLOUDFLARE SOLVER TEST (FlareSolverr / Byparr) ---
     if (type === 'flaresolverr') {
         const url = config.flaresolverr_url?.replace(/\/$/, '');
-        if (!url) return NextResponse.json({ success: false, message: 'Missing FlareSolverr URL' });
+        const solverName = config.solver_type === 'byparr' ? 'Byparr' : 'FlareSolverr';
+        if (!url) return NextResponse.json({ success: false, message: `Missing ${solverName} URL` });
 
+        // FlareSolverr's root returns JSON {msg, version}; Byparr's root redirects to its Swagger docs.
         const res = await axios.get(url, { timeout: 10000 });
         if (res.data && res.data.msg) {
             return NextResponse.json({ success: true, message: `FlareSolverr Connected! (v${res.data.version || 'Unknown'})` });
         }
-        return NextResponse.json({ success: true, message: 'FlareSolverr is reachable.' });
+        return NextResponse.json({ success: true, message: `${solverName} is reachable.` });
     }
 
     // --- MAPPING LOGIC ---

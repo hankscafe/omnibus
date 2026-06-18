@@ -12,33 +12,69 @@ pub struct DeepLinkResult {
     pub hoster: String,
 }
 
-/// The set of currently-enabled hosters, mirroring automation.ts `enabledHosters` parsing of the
-/// `hoster_priority` setting: unset → all defaults; empty array → none; string array → the listed
-/// hosters; object array → those not flagged `enabled:false`.
-pub async fn enabled_hosters(db: &PgPool) -> Vec<String> {
-    let default: Vec<String> = ["getcomics", "mediafire", "mega", "pixeldrain", "rootz", "vikingfile", "terabox", "annas_archive"]
-        .iter().map(|s| s.to_string()).collect();
-    let hp: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'hoster_priority'"#)
-        .fetch_optional(db).await.ok().flatten();
-    let Some(val) = hp else { return default; };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&val) else { return default; };
-    let Some(arr) = parsed.as_array() else { return default; };
-    if arr.is_empty() { return Vec::new(); }
-    if arr[0].is_string() {
-        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-    } else if arr[0].is_object() {
-        arr.iter()
-            .filter(|v| v.get("enabled").and_then(|e| e.as_bool()) != Some(false))
-            .filter_map(|v| v.get("hoster").and_then(|h| h.as_str()).map(|s| s.to_string()))
-            .collect()
-    } else {
-        default
+/// One hoster's slot in the priority list (order preserved, plus its enabled flag).
+#[derive(Debug, Clone)]
+pub struct HosterPref {
+    pub hoster: String,
+    pub enabled: bool,
+}
+
+/// Default hoster order: the fast GetComics file CDN (comicfiles, `getcomics_direct`) first, then the
+/// third-party mirrors, with the Cloudflare-gated GetComics "main server" (getcomics.org/dls/…,
+/// `getcomics_main`) LAST — it requires a FlareSolverr/Byparr solve, so it's only used when nothing
+/// else can serve the issue. Mirrors the Node `DEFAULT_HOSTER_ORDER`.
+fn default_hoster_prefs() -> Vec<HosterPref> {
+    ["getcomics_direct", "mediafire", "mega", "pixeldrain", "rootz", "vikingfile", "terabox", "annas_archive", "getcomics_main"]
+        .iter().map(|s| HosterPref { hoster: s.to_string(), enabled: true }).collect()
+}
+
+/// Migrates a legacy single `getcomics` entry into the split scheme: `getcomics_direct` keeps the
+/// original slot + enabled flag, and the gated `getcomics_main` is appended last (same enabled flag)
+/// if absent. Idempotent; configs already on the split scheme pass through untouched. Mirrors the Node
+/// `migrateHosterPrefs`.
+fn migrate_legacy_getcomics(prefs: &mut Vec<HosterPref>) {
+    if let Some(idx) = prefs.iter().position(|p| p.hoster == "getcomics") {
+        let enabled = prefs[idx].enabled;
+        prefs[idx].hoster = "getcomics_direct".to_string();
+        if !prefs.iter().any(|p| p.hoster == "getcomics_main") {
+            prefs.push(HosterPref { hoster: "getcomics_main".to_string(), enabled });
+        }
     }
 }
 
-/// Whether a given hoster is currently enabled — Node's `enabledHosters.includes(hoster)` gate.
-pub async fn is_hoster_enabled(db: &PgPool, hoster: &str) -> bool {
-    enabled_hosters(db).await.iter().any(|h| h == hoster)
+/// Parses the `hoster_priority` setting into an ordered, migrated preference list (mirrors the Node
+/// `enabledHostersFromSetting`/`migrateHosterPrefs` helpers): unset → defaults; empty array → none;
+/// string array → all enabled in that order; object array → each entry's `enabled` flag (default true).
+pub async fn hoster_prefs(db: &PgPool) -> Vec<HosterPref> {
+    let hp: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'hoster_priority'"#)
+        .fetch_optional(db).await.ok().flatten();
+    let Some(val) = hp else { return default_hoster_prefs(); };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&val) else { return default_hoster_prefs(); };
+    let Some(arr) = parsed.as_array() else { return default_hoster_prefs(); };
+    if arr.is_empty() { return Vec::new(); }
+    let mut prefs: Vec<HosterPref> = if arr[0].is_string() {
+        arr.iter().filter_map(|v| v.as_str().map(|s| HosterPref { hoster: s.to_string(), enabled: true })).collect()
+    } else {
+        arr.iter().filter_map(|v| {
+            let h = v.get("hoster").and_then(|h| h.as_str())?.to_string();
+            let enabled = v.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+            Some(HosterPref { hoster: h, enabled })
+        }).collect()
+    };
+    migrate_legacy_getcomics(&mut prefs);
+    prefs
+}
+
+/// The set of currently-enabled hosters, priority order preserved (Node's `enabledHosters`).
+pub async fn enabled_hosters(db: &PgPool) -> Vec<String> {
+    hoster_prefs(db).await.into_iter().filter(|p| p.enabled).map(|p| p.hoster).collect()
+}
+
+/// Whether GetComics is usable as a source at all — either the fast direct CDN (`getcomics_direct`)
+/// or the gated main server (`getcomics_main`) is enabled. The split replaced the single legacy
+/// `getcomics` key, which is still accepted for un-migrated callers.
+pub async fn is_getcomics_enabled(db: &PgPool) -> bool {
+    enabled_hosters(db).await.iter().any(|h| h == "getcomics_direct" || h == "getcomics_main" || h == "getcomics")
 }
 
 /// Records a Cloudflare-block timestamp so the rest of the app can back off / surface it in the UI.
@@ -55,28 +91,51 @@ async fn mark_cloudflare_flag(db: &PgPool) {
     .await;
 }
 
-/// FlareSolverr solve budget in milliseconds (the `maxTimeout` we send). GetComics' Cloudflare
-/// Turnstile can need far longer than the old 60s to clear, so FlareSolverr was being cut off
-/// mid-solve (cf. Kapowarr #335, which moved to 300s). Default 300_000ms; admin-tunable via the
-/// `flaresolverr_timeout` SystemSetting (in seconds), clamped to 30–600s.
-pub async fn flaresolverr_timeout_ms(db: &PgPool) -> u64 {
+/// Which Cloudflare solver the engine talks to. FlareSolverr and Byparr share the `/v1` request
+/// shape, but differ in the `maxTimeout` UNIT: FlareSolverr expects milliseconds, Byparr expects
+/// seconds. `solver_config` encodes that difference so the rest of the engine doesn't have to.
+#[derive(Debug, Clone)]
+pub struct SolverConfig {
+    /// "flaresolverr" | "byparr".
+    pub kind: String,
+    /// Value to place in the `maxTimeout` JSON field (ms for FlareSolverr, seconds for Byparr).
+    pub payload_timeout: u64,
+    /// How long the engine waits for the solver's HTTP response (always real wall-clock ms).
+    pub http_timeout_ms: u64,
+}
+
+/// Reads the solver type + solve budget and derives the per-solver request parameters.
+/// `flaresolverr_timeout` is in seconds (admin-tunable, clamped 30–600); `solver_type` selects the
+/// backend (default `flaresolverr`). GetComics' Cloudflare Turnstile can need far longer than the old
+/// 60s, so the default budget is 300s. For Byparr the payload `maxTimeout` is in SECONDS; for
+/// FlareSolverr it's MILLISECONDS — sending the wrong unit to Byparr would read 300000 as ~83 hours.
+/// The engine's own HTTP timeout always uses real milliseconds + a 15s margin so it never cuts the
+/// solver off before its own budget elapses.
+pub async fn solver_config(db: &PgPool) -> SolverConfig {
     let secs = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_timeout'"#)
         .fetch_optional(db).await.ok().flatten()
         .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(300);
-    secs.clamp(30, 600) * 1000
+        .unwrap_or(300)
+        .clamp(30, 600);
+    let kind = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'solver_type'"#)
+        .fetch_optional(db).await.ok().flatten()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| s == "byparr" || s == "flaresolverr")
+        .unwrap_or_else(|| "flaresolverr".to_string());
+    let payload_timeout = if kind == "byparr" { secs } else { secs * 1000 };
+    SolverConfig { kind, payload_timeout, http_timeout_ms: secs * 1000 + 15_000 }
 }
 
 async fn fetch_html(client: &Client, db: &PgPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
     let res = client.get(url).send().await?;
     if res.status() == 403 {
         if let Some(flare_url) = flaresolverr.filter(|f| !f.is_empty()) {
-            log::warn!("[GetComics] 403 detected for {}; attempting FlareSolverr bypass...", url);
-            let max_timeout_ms = flaresolverr_timeout_ms(db).await;
+            let sc = solver_config(db).await;
+            log::warn!("[GetComics] 403 detected for {}; attempting {} bypass...", url, sc.kind);
             let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-            let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": max_timeout_ms });
-            log::debug!("[GetComics Debug] FlareSolverr payload: {}", payload);
-            match client.post(&target).json(&payload).timeout(std::time::Duration::from_millis(max_timeout_ms + 15_000)).send().await {
+            let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
+            log::debug!("[GetComics Debug] {} payload: {}", sc.kind, payload);
+            match client.post(&target).json(&payload).timeout(std::time::Duration::from_millis(sc.http_timeout_ms)).send().await {
                 Ok(flare_res) => {
                     if let Ok(data) = flare_res.json::<serde_json::Value>().await {
                         if let Some(html) = data["solution"]["response"].as_str() {
@@ -114,17 +173,18 @@ fn parse_flaresolverr_clearance(data: &serde_json::Value) -> Option<(String, Str
     Some((cookies, ua))
 }
 
-/// Solves a Cloudflare challenge for `url` via FlareSolverr and returns (cookie_header, user_agent)
-/// to replay on a direct request. cf_clearance is IP+UA-bound, so the caller MUST send the returned
-/// User-Agent and run with the same outbound IP as FlareSolverr. Used to download Cloudflare-gated
-/// GetComics "main server" links (getcomics.org/dls/…) that a raw fetch can't get past.
-pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str, max_timeout_ms: u64) -> anyhow::Result<(String, String)> {
+/// Solves a Cloudflare challenge for `url` via the configured solver (FlareSolverr or Byparr — they
+/// share the `/v1` request shape; `sc` carries the per-solver `maxTimeout` unit) and returns
+/// (cookie_header, user_agent) to replay on a direct request. cf_clearance is IP+UA-bound, so the
+/// caller MUST send the returned User-Agent and run with the same outbound IP as the solver. Used to
+/// download Cloudflare-gated GetComics "main server" links (getcomics.org/dls/…) a raw fetch can't get past.
+pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<(String, String)> {
     let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-    let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": max_timeout_ms });
-    // Wait a bit longer than FlareSolverr's own solve budget so the engine doesn't cut it off early.
+    let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
+    // Wait a bit longer than the solver's own solve budget so the engine doesn't cut it off early.
     let res = client.post(&target)
         .json(&payload)
-        .timeout(std::time::Duration::from_millis(max_timeout_ms + 15_000))
+        .timeout(std::time::Duration::from_millis(sc.http_timeout_ms))
         .send().await?;
     let data: serde_json::Value = res.json().await?;
     match parse_flaresolverr_clearance(&data) {
@@ -410,18 +470,29 @@ pub async fn search(
     Ok(results)
 }
 
+/// Classifies a decoded download URL into a hoster key. GetComics is split into two:
+/// `getcomics_direct` (the comicfiles CDN — fast, no Cloudflare challenge) and `getcomics_main`
+/// (getcomics.org/dls/… — the "main server" endpoint that sits behind Cloudflare and needs a solver).
+/// URL-based checks win over `is_main_btn` so a "Download Now" button pointing at comicfiles is still
+/// classed direct; a main-server button we can't otherwise classify defaults to the gated path.
+/// Kept in lock-step with the Node `getHosterFromUrl`.
 fn get_hoster_from_url(url: &str, is_main_btn: bool) -> String {
-    if is_main_btn { return "getcomics".to_string(); }
-    if url.contains("comicfiles") || url.contains("comic-files") { return "getcomics".to_string(); }
-    if url.contains("mediafire.com") { return "mediafire".to_string(); }
-    if url.contains("mega.nz") || url.contains("mega.co.nz") { return "mega".to_string(); }
-    if url.contains("pixeldrain.com") { return "pixeldrain".to_string(); }
-    if url.contains("terabox.com") || url.contains("teraboxapp.com") { return "terabox".to_string(); }
-    if url.contains("rootz") { return "rootz".to_string(); }
-    if url.contains("vikingfile") { return "vikingfile".to_string(); }
-    if url.contains("zippyshare.com") { return "zippyshare".to_string(); }
-    if url.contains("userscloud.com") { return "userscloud".to_string(); }
-    
+    let u = url.to_lowercase();
+    // Fast GetComics file CDN — never Cloudflare-gated. Keep high priority.
+    if u.contains("comicfiles") || u.contains("comic-files") { return "getcomics_direct".to_string(); }
+    // GetComics' own "main server" endpoint sits behind Cloudflare. Last resort.
+    if u.contains("/dls/") && u.contains("getcomics") { return "getcomics_main".to_string(); }
+    if u.contains("mediafire.com") { return "mediafire".to_string(); }
+    if u.contains("mega.nz") || u.contains("mega.co.nz") { return "mega".to_string(); }
+    if u.contains("pixeldrain.com") { return "pixeldrain".to_string(); }
+    if u.contains("terabox.com") || u.contains("teraboxapp.com") { return "terabox".to_string(); }
+    if u.contains("rootz") { return "rootz".to_string(); }
+    if u.contains("vikingfile") { return "vikingfile".to_string(); }
+    if u.contains("zippyshare.com") { return "zippyshare".to_string(); }
+    if u.contains("userscloud.com") { return "userscloud".to_string(); }
+    // A "main server / download now" button we couldn't classify by URL is GetComics' gated path.
+    if is_main_btn { return "getcomics_main".to_string(); }
+
     "unknown".to_string()
 }
 
@@ -487,25 +558,12 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
         }
     }
 
-    let hp_setting: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'hoster_priority'"#).fetch_optional(db).await?;
-    let mut priority_list = vec!["getcomics".to_string(), "mediafire".to_string(), "mega".to_string(), "pixeldrain".to_string(), "rootz".to_string(), "vikingfile".to_string(), "terabox".to_string()];
-    let mut disabled_hosters = Vec::new();
-
-    if let Some(val) = hp_setting {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&val) {
-            if let Some(arr) = parsed.as_array() {
-                if !arr.is_empty() {
-                    if arr[0].is_string() {
-                        priority_list = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                    } else if arr[0].is_object() {
-                        priority_list = arr.iter().filter_map(|v| v.get("hoster").and_then(|h| h.as_str()).map(|s| s.to_string())).collect();
-                        disabled_hosters = arr.iter().filter(|v| v.get("enabled").and_then(|e| e.as_bool()) == Some(false))
-                            .filter_map(|v| v.get("hoster").and_then(|h| h.as_str()).map(|s| s.to_string())).collect();
-                    }
-                }
-            }
-        }
-    }
+    // Shared parse + legacy `getcomics` → `getcomics_direct`/`getcomics_main` migration. An explicit
+    // empty array means "no preference" here (not "disable all"), so fall back to the default order.
+    let prefs = hoster_prefs(db).await;
+    let prefs = if prefs.is_empty() { default_hoster_prefs() } else { prefs };
+    let priority_list: Vec<String> = prefs.iter().map(|p| p.hoster.clone()).collect();
+    let disabled_hosters: Vec<String> = prefs.iter().filter(|p| !p.enabled).map(|p| p.hoster.clone()).collect();
 
     let available: Vec<String> = found_links.iter().map(|l| l.hoster.clone()).collect();
     log::info!("[GetComics] Found {} valid links. Available hosters: {}", found_links.len(), available.join(", "));
@@ -558,8 +616,14 @@ mod tests {
     // Pure URL→hoster classifier gating the entire DDL routing.
     #[test]
     fn hoster_classification_from_urls() {
-        assert_eq!(get_hoster_from_url("https://anything.example/x", true), "getcomics"); // main button
-        assert_eq!(get_hoster_from_url("https://comicfiles.ru/file.cbz", false), "getcomics");
+        // A main-server button with an unclassifiable URL is GetComics' Cloudflare-gated path.
+        assert_eq!(get_hoster_from_url("https://anything.example/x", true), "getcomics_main");
+        // getcomics.org/dls/ "main server" links are gated, regardless of the button flag.
+        assert_eq!(get_hoster_from_url("https://getcomics.org/dls/12345/", true), "getcomics_main");
+        assert_eq!(get_hoster_from_url("https://getcomics.org/dls/12345/", false), "getcomics_main");
+        // The comicfiles CDN is the fast, non-gated direct download — even on a main-server button.
+        assert_eq!(get_hoster_from_url("https://comicfiles.ru/file.cbz", false), "getcomics_direct");
+        assert_eq!(get_hoster_from_url("https://comicfiles.ru/file.cbz", true), "getcomics_direct");
         assert_eq!(get_hoster_from_url("https://www.mediafire.com/file/abc", false), "mediafire");
         assert_eq!(get_hoster_from_url("https://mega.nz/file/xyz", false), "mega");
         assert_eq!(get_hoster_from_url("https://mega.co.nz/#!old", false), "mega");
@@ -571,5 +635,49 @@ mod tests {
         assert_eq!(get_hoster_from_url("https://www.zippyshare.com/v/abc", false), "zippyshare");
         assert_eq!(get_hoster_from_url("https://userscloud.com/abc", false), "userscloud");
         assert_eq!(get_hoster_from_url("https://random-host.io/file", false), "unknown");
+    }
+
+    // Legacy single `getcomics` entry splits into direct (in place) + gated main (appended last).
+    #[test]
+    fn migrates_legacy_getcomics_to_split() {
+        let mut prefs = vec![
+            HosterPref { hoster: "getcomics".into(), enabled: true },
+            HosterPref { hoster: "mediafire".into(), enabled: false },
+        ];
+        migrate_legacy_getcomics(&mut prefs);
+        assert_eq!(prefs[0].hoster, "getcomics_direct");
+        assert!(prefs[0].enabled);
+        assert_eq!(prefs.last().unwrap().hoster, "getcomics_main");
+        assert!(prefs.last().unwrap().enabled);
+        // Idempotent: a second pass changes nothing.
+        let before: Vec<_> = prefs.iter().map(|p| (p.hoster.clone(), p.enabled)).collect();
+        migrate_legacy_getcomics(&mut prefs);
+        let after: Vec<_> = prefs.iter().map(|p| (p.hoster.clone(), p.enabled)).collect();
+        assert_eq!(before, after);
+    }
+
+    // The migration preserves the legacy entry's enabled flag on BOTH split keys.
+    #[test]
+    fn migrate_preserves_disabled_getcomics() {
+        let mut prefs = vec![HosterPref { hoster: "getcomics".into(), enabled: false }];
+        migrate_legacy_getcomics(&mut prefs);
+        assert_eq!(prefs[0].hoster, "getcomics_direct");
+        assert!(!prefs[0].enabled);
+        assert_eq!(prefs[1].hoster, "getcomics_main");
+        assert!(!prefs[1].enabled);
+    }
+
+    // A config already on the split scheme is left untouched (no duplicate keys, order preserved).
+    #[test]
+    fn migrate_leaves_split_scheme_untouched() {
+        let mut prefs = vec![
+            HosterPref { hoster: "getcomics_direct".into(), enabled: true },
+            HosterPref { hoster: "mega".into(), enabled: true },
+            HosterPref { hoster: "getcomics_main".into(), enabled: false },
+        ];
+        let before: Vec<_> = prefs.iter().map(|p| (p.hoster.clone(), p.enabled)).collect();
+        migrate_legacy_getcomics(&mut prefs);
+        let after: Vec<_> = prefs.iter().map(|p| (p.hoster.clone(), p.enabled)).collect();
+        assert_eq!(before, after);
     }
 }

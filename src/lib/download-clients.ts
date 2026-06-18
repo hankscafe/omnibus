@@ -196,8 +196,12 @@ export const DownloadService = {
           } catch (mkdirErr: any) {}
 
           let resolvedHoster: any = null;
-          
-          if (hoster && hoster !== 'getcomics' && hoster !== 'unknown') {
+
+          // GetComics links (the direct CDN or the Cloudflare-gated main server) are streamed by the
+          // engine, which handles the warm-up/solver; the HosterEngine only resolves third-party
+          // mirrors. `unknown` is a held/manual link. Legacy `getcomics` kept for un-migrated callers.
+          const isGetComics = hoster === 'getcomics_direct' || hoster === 'getcomics_main' || hoster === 'getcomics';
+          if (hoster && !isGetComics && hoster !== 'unknown') {
               await prisma.request.update({
                   where: { id: requestId },
                   data: { status: 'DOWNLOADING', progress: 0 }

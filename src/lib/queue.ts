@@ -299,33 +299,57 @@ export function initWorker() {
                         if (bestMatch.protocol === 'ddl') {
                             const safeTitle = bestMatch.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
 
-                            // Batch-pack dedup: if another request is already downloading this exact URL,
-                            // attach to it for batch extraction rather than downloading it twice (parity
-                            // with automation.ts duplicateDownload).
+                            // Ranked DDL candidates (one per hoster, best first) from the engine; fall back
+                            // to the single best_match link if the engine didn't supply a list.
+                            const candidates: { url: string, hoster: string }[] =
+                                (Array.isArray(resultData.ddl_candidates) && resultData.ddl_candidates.length > 0)
+                                    ? resultData.ddl_candidates
+                                    : [{ url: bestMatch.downloadUrl, hoster: bestMatch.indexer }];
+
+                            // Batch-pack dedup against the primary link: if another request is already
+                            // downloading it, attach for batch extraction rather than downloading twice
+                            // (parity with automation.ts duplicateDownload).
                             const duplicateDownload = await prisma.request.findFirst({
-                                where: { downloadLink: bestMatch.downloadUrl, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: requestId } }
+                                where: { downloadLink: candidates[0].url, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: requestId } }
                             });
                             if (duplicateDownload) {
-                                Logger.log(`[BullMQ] Batch pack already downloading/downloaded (${bestMatch.downloadUrl}). Queuing ${name} for batch extraction.`, 'info');
-                                await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: bestMatch.downloadUrl } });
+                                Logger.log(`[BullMQ] Batch pack already downloading/downloaded (${candidates[0].url}). Queuing ${name} for batch extraction.`, 'info');
+                                await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: candidates[0].url } });
                                 break;
                             }
 
-                            await prisma.request.update({
-                                where: { id: requestId },
-                                data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: bestMatch.downloadUrl }
-                            });
-
-                            // Added types to parameters to fix explicit any rules
-                            DownloadService.downloadDirectFile(bestMatch.downloadUrl, safeTitle, config.download_path, requestId, bestMatch.indexer)
-                                .then(async (success: boolean) => {
-                                    if (success) {
+                            // Detached download-time fallback: try each hoster in priority order until one
+                            // streams. If they all fail but a Cloudflare-gated getcomics.org/dls/ link was
+                            // among them, hold it as MANUAL_DDL so the user gets a one-click manual download.
+                            (async () => {
+                                for (const cand of candidates) {
+                                    await prisma.request.update({
+                                        where: { id: requestId },
+                                        data: { status: 'DOWNLOADING', progress: 0, activeDownloadName: safeTitle, downloadLink: cand.url }
+                                    });
+                                    let ok = false;
+                                    try {
+                                        ok = await DownloadService.downloadDirectFile(cand.url, safeTitle, config.download_path, requestId, cand.hoster);
+                                    } catch (e: any) {
+                                        Logger.log(`[BullMQ] DDL candidate '${cand.hoster}' threw for ${name}: ${e.message}`, 'warn');
+                                    }
+                                    if (ok) {
                                         await new Promise(r => setTimeout(r, 2000));
                                         const { Importer } = await import('./importer');
                                         await Importer.importRequest(requestId);
+                                        return;
                                     }
-                                })
-                                .catch((e: any) => Logger.log(`[BullMQ] Built-in DDL Stream crashed: ${e.message}`, 'error'));
+                                    if (candidates.length > 1) Logger.log(`[BullMQ] Hoster '${cand.hoster}' failed for ${name}; trying next...`, 'info');
+                                }
+                                // Every candidate failed — surface the gated GetComics link for manual pickup if present.
+                                const gated = candidates.find(c => /getcomics\.org\/dls\//i.test(c.url));
+                                if (gated) {
+                                    await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: gated.url, activeDownloadName: safeTitle } });
+                                    Logger.log(`[BullMQ] All hosters failed for ${name}; holding GetComics link for manual download.`, 'warn');
+                                } else {
+                                    Logger.log(`[BullMQ] All ${candidates.length} hoster candidate(s) failed for ${name}.`, 'error');
+                                }
+                            })().catch((e: any) => Logger.log(`[BullMQ] Built-in DDL fallback crashed: ${e.message}`, 'error'));
 
                         } else {
                             const clients = await prisma.downloadClient.findMany();

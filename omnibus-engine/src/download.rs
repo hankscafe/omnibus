@@ -51,6 +51,15 @@ async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, for
     Ok((cookie, ua))
 }
 
+/// The scheme://host/ origin of a URL (e.g. https://getcomics.org/), falling back to getcomics.org if
+/// it can't be parsed. Used as the HTML page to solve the Cloudflare challenge against, and for the
+/// warm-up visit.
+fn site_origin(url: &str) -> String {
+    reqwest::Url::parse(url).ok()
+        .and_then(|u| u.host_str().map(|h| format!("{}://{}/", u.scheme(), h)))
+        .unwrap_or_else(|| "https://getcomics.org/".to_string())
+}
+
 /// Joins a response's Set-Cookie headers into one Cookie request-header value ("a=1; b=2"), taking
 /// just the `name=value` before each cookie's attributes. Used by the warm-up below.
 fn collect_set_cookies(resp: &reqwest::Response) -> String {
@@ -71,8 +80,7 @@ fn collect_set_cookies(resp: &reqwest::Response) -> String {
 /// Turnstile won't be cleared this way (the engine runs no JS), so the solver fallback still runs when
 /// this doesn't get past it. Returns the retried response (which the caller re-checks for HTML).
 async fn warm_up_and_retry(client: &reqwest::Client, req: &StreamRequest) -> Result<reqwest::Response> {
-    let parsed = reqwest::Url::parse(&req.url)?;
-    let origin = format!("{}://{}/", parsed.scheme(), parsed.host_str().unwrap_or("getcomics.org"));
+    let origin = site_origin(&req.url);
     log::info!("[Internal DL] Cloudflare cookie warm-up: visiting {} to seed cf cookies.", origin);
     let warm_cookies = match client.get(&origin)
         .header("User-Agent", DEFAULT_UA)
@@ -194,6 +202,24 @@ async fn establish_stream(
 }
 
 pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> {
+    // For a getcomics.org /dls/ link, ANY failure to deliver the file automatically — an unsolved
+    // Cloudflare challenge, OR a stalled/empty stream because the solver consumed getcomics' one-shot
+    // signed download in its own browser (cookie-replay can't re-fetch it) — is best handed to the user
+    // as a one-click manual download. Map every such failure to the "manual download required" marker so
+    // Node holds the request as MANUAL_DDL instead of grinding to STALLED. Non-getcomics hosts keep their
+    // original error (retry/stall as before).
+    let is_getcomics = req.url.contains("getcomics.org");
+    match run_stream_download(db, &req).await {
+        Ok(path) => Ok(path),
+        Err(e) if is_getcomics => {
+            log::warn!("[Internal DL] GetComics download couldn't be completed automatically ({e}); holding for manual download.");
+            bail!("GetComics download couldn't be completed automatically; manual download required.")
+        }
+        Err(e) => Err(e),
+    }
+}
+
+async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String> {
     let part_path = format!("{}.part", req.dest_path);
     let _ = tokio::fs::remove_file(&part_path).await; // clear any stale partial
     if let Some(parent) = Path::new(&req.dest_path).parent() {
@@ -209,7 +235,7 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
     // First, a plain direct fetch. comicfiles / resolved-hoster URLs — and any getcomics.org link that
     // isn't actually behind a challenge — serve the file straight away and stream with zero FlareSolverr
     // overhead.
-    let mut response = establish_stream(&client, &req, None, DEFAULT_UA).await?;
+    let mut response = establish_stream(&client, req, None, DEFAULT_UA).await?;
     let mut content_type = response_content_type(&response);
 
     // When a getcomics.org link answers with an HTML page — the Cloudflare "Just a moment…" challenge
@@ -217,7 +243,7 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
     // clears the light challenge variant with no solver; only if that fails do we pay for a
     // FlareSolverr/Byparr solve. A non-challenged download never enters this branch.
     if content_type.contains("text/html") && req.url.contains("getcomics.org") {
-        match warm_up_and_retry(&client, &req).await {
+        match warm_up_and_retry(&client, req).await {
             Ok(warmed) => {
                 let warmed_ct = response_content_type(&warmed);
                 if !warmed_ct.contains("text/html") {
@@ -239,18 +265,25 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
         match flare {
             Some(flare_url) => {
                 let sc = crate::getcomics::solver_config(db).await;
+                // Solve the challenge on the ACTUAL /dls/ URL — it's the only getcomics.org URL that's
+                // Cloudflare-gated (the homepage/browse pages aren't challenged, so solving them yields no
+                // cf_clearance). A capable solver (e.g. the experimental FlareSolverr 3.4.0 branch) clears
+                // it and returns a domain-wide cf_clearance we replay here. CAVEAT: cookie-replay of a
+                // /dls/ download is inherently unreliable — the solver clears the challenge in ITS browser,
+                // and getcomics' one-shot signed link can be consumed by that session, so the replay may
+                // come back empty/stalled. Any such failure falls through to the manual-hold wrapper.
                 match get_clearance(&client, &flare_url, &req.url, false, &sc).await {
                     Ok((cookie, ua)) => {
-                        log::info!("[Internal DL] GetComics Cloudflare challenge; replaying {} clearance (cached/shared), retrying download.", sc.kind);
+                        log::info!("[Internal DL] GetComics Cloudflare challenge solved via {}; replaying the clearance on the download.", sc.kind);
                         let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
-                        response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
+                        response = establish_stream(&client, req, Some(&cookie), &ua_eff).await?;
                         content_type = response_content_type(&response);
                         // A cached cookie that's gone stale still answers with a challenge — force one fresh
                         // solve and retry before giving up.
                         if content_type.contains("text/html") {
                             if let Ok((cookie, ua)) = get_clearance(&client, &flare_url, &req.url, true, &sc).await {
                                 let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
-                                response = establish_stream(&client, &req, Some(&cookie), &ua_eff).await?;
+                                response = establish_stream(&client, req, Some(&cookie), &ua_eff).await?;
                                 content_type = response_content_type(&response);
                             }
                         }
@@ -263,6 +296,8 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
     }
 
     // Reject an HTML webpage masquerading as a file (expired/blocked link, or an unsolved challenge).
+    // For a getcomics.org link the outer wrapper turns this (and any later stall/small-file failure)
+    // into the "manual download required" signal that holds the request as MANUAL_DDL.
     if content_type.contains("text/html") {
         bail!("Download URL returned an HTML webpage instead of a comic file.");
     }

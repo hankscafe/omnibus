@@ -19,25 +19,30 @@ pub struct HosterPref {
     pub enabled: bool,
 }
 
-/// Default hoster order: the fast GetComics file CDN (comicfiles, `getcomics_direct`) first, then the
-/// third-party mirrors, with the Cloudflare-gated GetComics "main server" (getcomics.org/dls/…,
-/// `getcomics_main`) LAST — it requires a FlareSolverr/Byparr solve, so it's only used when nothing
-/// else can serve the issue. Mirrors the Node `DEFAULT_HOSTER_ORDER`.
+/// Default hoster order. Both GetComics variants sit at the TOP — `getcomics_direct` (the comicfiles
+/// CDN) first, then `getcomics_main` (the getcomics.org/dls/ "main server"). The /dls/ direct download
+/// succeeds for the majority of issues; only the subset behind a live Cloudflare challenge falls
+/// through to the download-time manual-hold. It deliberately outranks the third-party mirrors because
+/// those (rootz/vikingfile/terabox) are far less reliable to resolve. This matches the original single
+/// `getcomics`-first ordering. Mirrors the Node `DEFAULT_HOSTER_ORDER`.
 fn default_hoster_prefs() -> Vec<HosterPref> {
-    ["getcomics_direct", "mediafire", "mega", "pixeldrain", "rootz", "vikingfile", "terabox", "annas_archive", "getcomics_main"]
-        .iter().map(|s| HosterPref { hoster: s.to_string(), enabled: true }).collect()
+    // rootz/vikingfile/terabox are listed but DISABLED by default — they're Cloudflare/JS/app-gated and
+    // can't be resolved by scraping, so they're off out of the box (kept toggleable so a user can try).
+    [("getcomics_direct", true), ("getcomics_main", true), ("mediafire", true), ("mega", true),
+     ("pixeldrain", true), ("rootz", false), ("vikingfile", false), ("terabox", false), ("annas_archive", true)]
+        .iter().map(|(h, en)| HosterPref { hoster: h.to_string(), enabled: *en }).collect()
 }
 
 /// Migrates a legacy single `getcomics` entry into the split scheme: `getcomics_direct` keeps the
-/// original slot + enabled flag, and the gated `getcomics_main` is appended last (same enabled flag)
-/// if absent. Idempotent; configs already on the split scheme pass through untouched. Mirrors the Node
-/// `migrateHosterPrefs`.
+/// original slot + enabled flag, and the gated `getcomics_main` is inserted right after it (same
+/// enabled flag, so both stay high-priority — the legacy `getcomics` was first). Idempotent; configs
+/// already on the split scheme pass through untouched. Mirrors the Node `migrateHosterPrefs`.
 fn migrate_legacy_getcomics(prefs: &mut Vec<HosterPref>) {
     if let Some(idx) = prefs.iter().position(|p| p.hoster == "getcomics") {
         let enabled = prefs[idx].enabled;
         prefs[idx].hoster = "getcomics_direct".to_string();
         if !prefs.iter().any(|p| p.hoster == "getcomics_main") {
-            prefs.push(HosterPref { hoster: "getcomics_main".to_string(), enabled });
+            prefs.insert(idx + 1, HosterPref { hoster: "getcomics_main".to_string(), enabled });
         }
     }
 }
@@ -488,15 +493,16 @@ fn get_hoster_from_url(url: &str, is_main_btn: bool) -> String {
     if u.contains("terabox.com") || u.contains("teraboxapp.com") { return "terabox".to_string(); }
     if u.contains("rootz") { return "rootz".to_string(); }
     if u.contains("vikingfile") { return "vikingfile".to_string(); }
-    if u.contains("zippyshare.com") { return "zippyshare".to_string(); }
-    if u.contains("userscloud.com") { return "userscloud".to_string(); }
     // A "main server / download now" button we couldn't classify by URL is GetComics' gated path.
     if is_main_btn { return "getcomics_main".to_string(); }
 
     "unknown".to_string()
 }
 
-pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, article_url: &str) -> anyhow::Result<DeepLinkResult> {
+/// Scrapes an article for download links and returns the ranked candidate list (one link per hoster,
+/// highest-priority first). Returning the full list — not just the top — lets the caller fall back
+/// hoster-by-hoster at download time when the preferred one fails. Empty = no enabled hoster found.
+pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, article_url: &str) -> anyhow::Result<Vec<DeepLinkResult>> {
     limiter.enforce("getcomics", 2500).await;
 
     let flare_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#).fetch_optional(db).await?;
@@ -505,9 +511,10 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
     let html = match fetch_html(&client, db, article_url, flare_url.as_deref()).await {
         Ok(h) => h,
         Err(e) => {
-            // Graceful sentinel (parity with Node's catch-all) so the caller keeps the article URL instead of erroring.
+            // Graceful empty list (parity with Node's catch-all) so the caller falls back to a manual
+            // hold / Prowlarr instead of erroring.
             log::warn!("[GetComics] Failed to scrape deep link {}: {}", article_url, e);
-            return Ok(DeepLinkResult { url: article_url.to_string(), hoster: "unknown".to_string() });
+            return Ok(Vec::new());
         }
     };
     let mut found_links = Vec::new();
@@ -558,35 +565,47 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
         }
     }
 
-    // Shared parse + legacy `getcomics` → `getcomics_direct`/`getcomics_main` migration. An explicit
-    // empty array means "no preference" here (not "disable all"), so fall back to the default order.
+    // Parse + legacy `getcomics` → `getcomics_direct`/`getcomics_main` migration. Only hosters that are
+    // PRESENT and ENABLED in the priority list are eligible — a hoster toggled off, OR absent from the
+    // list entirely, is never tried. An explicit empty array means "no preference", so fall back to the
+    // default order.
     let prefs = hoster_prefs(db).await;
     let prefs = if prefs.is_empty() { default_hoster_prefs() } else { prefs };
-    let priority_list: Vec<String> = prefs.iter().map(|p| p.hoster.clone()).collect();
-    let disabled_hosters: Vec<String> = prefs.iter().filter(|p| !p.enabled).map(|p| p.hoster.clone()).collect();
+    let enabled_order: Vec<String> = prefs.iter().filter(|p| p.enabled).map(|p| p.hoster.clone()).collect();
 
     let available: Vec<String> = found_links.iter().map(|l| l.hoster.clone()).collect();
     log::info!("[GetComics] Found {} valid links. Available hosters: {}", found_links.len(), available.join(", "));
+    log::debug!("[GetComics Debug] Enabled hoster priority: [{}]", enabled_order.join(", "));
 
-    found_links.retain(|l| !disabled_hosters.contains(&l.hoster));
-    if found_links.is_empty() { return Ok(DeepLinkResult { url: article_url.to_string(), hoster: "unknown".to_string() }); }
+    // Keep only links from an explicitly present+enabled hoster (drops both disabled and unlisted ones).
+    found_links.retain(|l| enabled_order.contains(&l.hoster));
+    if found_links.is_empty() { return Ok(Vec::new()); }
 
+    // Sort by enabled-priority position. getcomics_main (the /dls/ main server) sits high by default
+    // because its direct download succeeds for most issues; only the subset behind a live Cloudflare
+    // challenge falls through to the download-time manual-hold.
     found_links.sort_by(|a, b| {
-        let pos_a = priority_list.iter().position(|x| x == &a.hoster).unwrap_or(99);
-        let pos_b = priority_list.iter().position(|x| x == &b.hoster).unwrap_or(99);
+        let pos_a = enabled_order.iter().position(|x| x == &a.hoster).unwrap_or(usize::MAX);
+        let pos_b = enabled_order.iter().position(|x| x == &b.hoster).unwrap_or(usize::MAX);
         pos_a.cmp(&pos_b)
     });
 
-    // Warn if the top-priority enabled hoster wasn't available and we had to fall back (parity with getcomics.ts).
-    let selected = found_links[0].clone();
-    if let Some(top) = priority_list.iter().find(|h| !disabled_hosters.contains(h)) {
-        if &selected.hoster != top {
-            log::warn!("[GetComics] Preferred hoster '{}' not available. Falling back to '{}'.", top, selected.hoster);
+    // De-dupe to one link per hoster (keep the highest-priority occurrence). The caller tries these in
+    // order at download time, so one-per-hoster avoids re-attempting several Cloudflare-gated
+    // getcomics.org/dls/ links (each can cost a 300s solve) while still giving real mirror fallbacks.
+    let mut seen_hosters: HashSet<String> = HashSet::new();
+    let candidates: Vec<DeepLinkResult> = found_links.into_iter()
+        .filter(|l| seen_hosters.insert(l.hoster.clone()))
+        .collect();
+
+    if let (Some(top), Some(pref)) = (candidates.first(), enabled_order.first()) {
+        if &top.hoster != pref {
+            log::warn!("[GetComics] Preferred hoster '{}' not available; top candidate '{}' (+{} fallback(s)).", pref, top.hoster, candidates.len() - 1);
         } else {
-            log::info!("[GetComics] Selected preferred hoster: {}", selected.hoster);
+            log::info!("[GetComics] Selected hoster: {} (+{} fallback(s)).", top.hoster, candidates.len() - 1);
         }
     }
-    Ok(selected)
+    Ok(candidates)
 }
 
 #[cfg(test)]
@@ -632,8 +651,9 @@ mod tests {
         assert_eq!(get_hoster_from_url("https://www.teraboxapp.com/s/abc", false), "terabox");
         assert_eq!(get_hoster_from_url("https://rootz.example/abc", false), "rootz");
         assert_eq!(get_hoster_from_url("https://vikingfile.com/f/abc", false), "vikingfile");
-        assert_eq!(get_hoster_from_url("https://www.zippyshare.com/v/abc", false), "zippyshare");
-        assert_eq!(get_hoster_from_url("https://userscloud.com/abc", false), "userscloud");
+        // zippyshare (defunct) and userscloud (no resolver) are no longer classified.
+        assert_eq!(get_hoster_from_url("https://www.zippyshare.com/v/abc", false), "unknown");
+        assert_eq!(get_hoster_from_url("https://userscloud.com/abc", false), "unknown");
         assert_eq!(get_hoster_from_url("https://random-host.io/file", false), "unknown");
     }
 
@@ -645,10 +665,12 @@ mod tests {
             HosterPref { hoster: "mediafire".into(), enabled: false },
         ];
         migrate_legacy_getcomics(&mut prefs);
+        // getcomics_direct keeps the slot; getcomics_main is inserted right after it (both high-priority).
         assert_eq!(prefs[0].hoster, "getcomics_direct");
         assert!(prefs[0].enabled);
-        assert_eq!(prefs.last().unwrap().hoster, "getcomics_main");
-        assert!(prefs.last().unwrap().enabled);
+        assert_eq!(prefs[1].hoster, "getcomics_main");
+        assert!(prefs[1].enabled);
+        assert_eq!(prefs[2].hoster, "mediafire");
         // Idempotent: a second pass changes nothing.
         let before: Vec<_> = prefs.iter().map(|p| (p.hoster.clone(), p.enabled)).collect();
         migrate_legacy_getcomics(&mut prefs);

@@ -253,7 +253,22 @@ export const DownloadService = {
               });
               if (!streamRes.ok) throw new Error(`Engine stream endpoint returned ${streamRes.status}`);
               const result = await streamRes.json();
-              if (!result.success) throw new Error(result.error || "Engine download failed");
+              if (!result.success) {
+                  // A Cloudflare-gated GetComics /dls/ link the engine couldn't clear automatically
+                  // (the engine emits the distinct "manual download required" marker). Rather than fail
+                  // into a STALLED retry loop on a link only a human can pass, hold it as MANUAL_DDL so
+                  // the admin dashboard surfaces a one-click "Link" to download it in a browser, where
+                  // the Cloudflare challenge can be solved interactively.
+                  if (/manual download required/i.test(result.error || '')) {
+                      Logger.log(`[Internal DL] GetComics link is Cloudflare-gated and couldn't be solved; holding for manual download: ${url}`, 'warn');
+                      await prisma.request.update({
+                          where: { id: requestId },
+                          data: { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: finalFilename }
+                      }).catch(() => {});
+                      return false;
+                  }
+                  throw new Error(result.error || "Engine download failed");
+              }
 
               Logger.log(`[Internal DL] Download complete (engine). Handing off to Importer...`, 'success');
               return true;

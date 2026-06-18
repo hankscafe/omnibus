@@ -10,22 +10,32 @@ import { normalizeRequestName } from './search-engine';
 
 // --- Shared hoster-priority helpers (kept in lock-step with the Rust engine's getcomics.rs) ---
 
-/** Default hoster order: the fast GetComics file CDN (comicfiles, `getcomics_direct`) first, then the
- *  third-party mirrors, with the Cloudflare-gated GetComics "main server" (getcomics.org/dls/…,
- *  `getcomics_main`) LAST — it needs a FlareSolverr/Byparr solve, so it's a last resort. */
-export const DEFAULT_HOSTER_ORDER = ['getcomics_direct', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive', 'getcomics_main'];
+/** Default hoster order. Both GetComics variants sit at the TOP — `getcomics_direct` (comicfiles CDN)
+ *  then `getcomics_main` (getcomics.org/dls/ main server). The /dls/ direct download works for most
+ *  issues (only the subset behind a live Cloudflare challenge falls through to the manual-hold), and it
+ *  outranks the far-less-reliable third-party mirrors. Matches the original `getcomics`-first ordering. */
+export const DEFAULT_HOSTER_ORDER = ['getcomics_direct', 'getcomics_main', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+
+// Listed but OFF by default — Cloudflare/JS/app-gated, not resolvable by scraping (still toggleable).
+export const DEFAULT_DISABLED_HOSTERS = ['rootz', 'vikingfile', 'terabox'];
 
 export type HosterPref = { hoster: string, enabled: boolean };
 
+/** Default hoster prefs: the standard order with the known-unreliable hosters disabled out of the box. */
+export function defaultHosterPrefs(): HosterPref[] {
+    return DEFAULT_HOSTER_ORDER.map(h => ({ hoster: h, enabled: !DEFAULT_DISABLED_HOSTERS.includes(h) }));
+}
+
 /** Migrate a legacy single `getcomics` entry into `getcomics_direct` (kept in place + enabled flag) +
- *  `getcomics_main` (appended last, same enabled flag). Idempotent; mirrors Rust migrate_legacy_getcomics. */
+ *  `getcomics_main` (inserted right after it, same enabled flag, so both stay high-priority — the
+ *  legacy `getcomics` was first). Idempotent; mirrors Rust migrate_legacy_getcomics. */
 export function migrateHosterPrefs(prefs: HosterPref[]): HosterPref[] {
     const out = prefs.map(p => ({ ...p }));
     const i = out.findIndex(p => p.hoster === 'getcomics');
     if (i !== -1) {
         const enabled = out[i].enabled;
         out[i] = { hoster: 'getcomics_direct', enabled };
-        if (!out.some(p => p.hoster === 'getcomics_main')) out.push({ hoster: 'getcomics_main', enabled });
+        if (!out.some(p => p.hoster === 'getcomics_main')) out.splice(i + 1, 0, { hoster: 'getcomics_main', enabled });
     }
     return out;
 }
@@ -33,7 +43,7 @@ export function migrateHosterPrefs(prefs: HosterPref[]): HosterPref[] {
 /** Parse a raw `hoster_priority` setting value into an ordered, migrated pref list. Unset → defaults;
  *  empty array → none; string array → all enabled; object array → each entry's `enabled` (default true). */
 export function parseHosterPrefs(value?: string | null): HosterPref[] {
-    const defaults = () => DEFAULT_HOSTER_ORDER.map(h => ({ hoster: h, enabled: true }));
+    const defaults = defaultHosterPrefs;
     if (!value) return defaults();
     try {
         const parsed = JSON.parse(value);
@@ -424,8 +434,6 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
               if (url.includes('terabox.com') || url.includes('teraboxapp.com')) return 'terabox';
               if (url.includes('rootz')) return 'rootz';
               if (url.includes('vikingfile')) return 'vikingfile';
-              if (url.includes('zippyshare.com')) return 'zippyshare';
-              if (url.includes('userscloud.com')) return 'userscloud';
               // A "main server / download now" button we couldn't classify by URL is GetComics' gated path.
               if (isMainServerBtn) return 'getcomics_main';
               return 'unknown';
@@ -472,17 +480,16 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
           let prefs = parseHosterPrefs(setting?.value);
           // An explicit empty array means "no preference" here (not "disable all") — fall back to the
-          // default order so a degenerate setting still resolves a link (parity with prior behavior).
-          if (prefs.length === 0) prefs = DEFAULT_HOSTER_ORDER.map(h => ({ hoster: h, enabled: true }));
-          const priorityList = prefs.map(p => p.hoster);
-          const disabledHosters = prefs.filter(p => !p.enabled).map(p => p.hoster);
+          // default prefs so a degenerate setting still resolves a link (parity with prior behavior).
+          if (prefs.length === 0) prefs = defaultHosterPrefs();
+          // Only hosters that are PRESENT and ENABLED in the priority list are eligible — a hoster toggled
+          // off, OR absent from the list entirely, is never used (kept in lock-step with the Rust engine).
+          const enabledOrder = prefs.filter(p => p.enabled).map(p => p.hoster);
 
-          if (disabledHosters.length > 0) {
-              const beforeCount = foundLinks.length;
-              foundLinks = foundLinks.filter(l => !disabledHosters.includes(l.hoster));
-              if (foundLinks.length < beforeCount) {
-                  Logger.log(`[GetComics] Ignored ${beforeCount - foundLinks.length} links from disabled hosters.`, 'info');
-              }
+          const beforeCount = foundLinks.length;
+          foundLinks = foundLinks.filter(l => enabledOrder.includes(l.hoster));
+          if (foundLinks.length < beforeCount) {
+              Logger.log(`[GetComics] Ignored ${beforeCount - foundLinks.length} links from disabled/unlisted hosters.`, 'info');
           }
 
           if (foundLinks.length === 0) {
@@ -492,17 +499,15 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           const foundHosterNames = [...new Set(foundLinks.map(l => l.hoster))];
           Logger.log(`[GetComics] Found ${foundLinks.length} valid links. Available Hosters: ${foundHosterNames.join(', ')}`, 'info');
 
-          foundLinks.sort((a, b) => {
-              const idxA = priorityList.indexOf(a.hoster);
-              const idxB = priorityList.indexOf(b.hoster);
-              if (idxA === -1 && idxB === -1) return 0;
-              if (idxA === -1) return 1;
-              if (idxB === -1) return -1;
-              return idxA - idxB;
-          });
+          // Sort by enabled-priority position.
+          const rank = (hoster: string): number => {
+              const idx = enabledOrder.indexOf(hoster);
+              return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+          };
+          foundLinks.sort((a, b) => rank(a.hoster) - rank(b.hoster));
 
           const selectedHoster = foundLinks[0].hoster;
-          const topPriority = priorityList.filter(h => !disabledHosters.includes(h))[0];
+          const topPriority = enabledOrder[0];
 
           if (selectedHoster !== topPriority) {
               Logger.log(`[GetComics] Preferred hoster '${topPriority}' not found. Falling back to next available: '${selectedHoster}'`, 'warn');

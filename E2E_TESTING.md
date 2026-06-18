@@ -179,6 +179,7 @@ Partial port: hoster resolution + the Mega SDK path stay in Node; the engine str
 - [ ] **Importer hand-off:** on completion the Node caller triggers the importer (file imported into the library).
 - [ ] **Mega still in Node:** a `mega.nz` link still downloads via the Node Mega SDK path (engine **not** involved).
 - [ ] **Small-file / HTML guard:** a link returning an HTML error page or a <500 KB file → engine aborts (`HTML webpage` / `suspiciously small`), returns `{success:false}`; Node sets the request `STALLED` and fires a `download_failed` alert.
+- [ ] **Gated GetComics → manual hold:** a `getcomics.org/dls/` link still behind a Cloudflare challenge after the warm-up/solver → engine aborts with the `manual download required` error; Node holds the request as `MANUAL_DDL` (not STALLED), and the admin dashboard shows a one-click **Link** (manual browser download) + **Retry GetComics**.
 - [ ] **Stall-watchdog:** (hard to force) no bytes for 45 s → engine aborts, deletes the `.part`, `{success:false}` → Node STALL + alert.
 - [ ] Direct engine probe: `curl -X POST .../api/download/stream -H "Content-Type: application/json" -H "X-Internal-Secret: <secret>" -d '{"request_id":"t","url":"<direct-cbz-url>","dest_path":"/tmp/test.cbz","ext":"cbz"}'` → `{"success":true,"final_path":…}` and the file exists.
 

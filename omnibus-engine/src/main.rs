@@ -107,12 +107,22 @@ struct SearchResponse {
     // available either: the link is held for human pickup (parity with automation.ts MANUAL_DDL).
     #[serde(skip_serializing_if = "Option::is_none")]
     manual_ddl: Option<ManualDdl>,
+    // Ranked DDL links for the matched GetComics article (one per hoster, best first). Node tries them
+    // in order at download time, falling back to the next hoster if one fails. Empty for torrents/usenet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ddl_candidates: Vec<DdlCandidate>,
 }
 
 #[derive(Serialize)]
 struct ManualDdl {
     url: String,
     name: String,
+}
+
+#[derive(Serialize)]
+struct DdlCandidate {
+    url: String,
+    hoster: String,
 }
 
 #[derive(Serialize)]
@@ -809,7 +819,7 @@ async fn handle_search(
                 get_res.iter().map(|r| search_engine::normalize_edition_title(&r.title)).collect();
             if editions.len() > 1 {
                 log::warn!("Multiple distinct DDL editions found for {}. Stalling for admin review.", payload.name);
-                return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, manual_ddl: None });
+                return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, manual_ddl: None, ddl_candidates: Vec::new() });
             }
         }
     }
@@ -818,6 +828,8 @@ async fn handle_search(
     // A GetComics match whose only hosters are user-disabled is held here, then surfaced as a
     // MANUAL_DDL link if no indexer release wins either (parity with automation.ts fallbackManualUrl).
     let mut manual_fallback: Option<(String, String)> = None;
+    // Ranked DDL links (one per hoster) for the chosen GetComics match — Node tries them in order.
+    let mut ddl_candidates: Vec<DdlCandidate> = Vec::new();
 
     // Priority phase: Direct Downloads first.
     if let Ok(get_res) = get_res_raw {
@@ -830,17 +842,20 @@ async fn handle_search(
                 // Resolve the article to a concrete hoster link. scrape_deep_link already drops
                 // user-disabled hosters; a "unknown" hoster means no enabled hoster can serve this
                 // match — Node holds it for manual pickup and falls through to Prowlarr.
-                let deep_link = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url)
+                let candidates = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url)
                     .await
-                    .unwrap_or(getcomics::DeepLinkResult { url: best_ddl.download_url.clone(), hoster: "unknown".to_string() });
-                if deep_link.hoster != "unknown" {
+                    .unwrap_or_default();
+                if let Some(top) = candidates.first() {
                     log::info!("Successfully matched a Direct Download! Discarding indexer results.");
-                    best_ddl.download_url = deep_link.url;
-                    best_ddl.indexer = deep_link.hoster;
+                    best_ddl.download_url = top.url.clone();
+                    best_ddl.indexer = top.hoster.clone();
+                    ddl_candidates = candidates.iter()
+                        .map(|c| DdlCandidate { url: c.url.clone(), hoster: c.hoster.clone() })
+                        .collect();
                     best_match = Some(best_ddl);
                 } else {
                     log::warn!("[GetComics] Best match for {} has no enabled hoster. Holding manual link and falling back to Prowlarr...", payload.name);
-                    manual_fallback = Some((deep_link.url, best_ddl.title.clone()));
+                    manual_fallback = Some((best_ddl.download_url.clone(), best_ddl.title.clone()));
                 }
             }
         }
@@ -861,7 +876,7 @@ async fn handle_search(
 
     // DDL deep-links are already resolved above; Prowlarr results are torrents/usenet, returned as-is.
     if let Some(best) = best_match {
-        return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, manual_ddl: None });
+        return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, manual_ddl: None, ddl_candidates });
     }
 
     // Nothing auto-downloadable. If we held a GetComics link and GetComics is an enabled hoster,
@@ -870,12 +885,12 @@ async fn handle_search(
     if let Some((url, name)) = manual_fallback {
         if getcomics::is_getcomics_enabled(&state.db).await {
             log::warn!("Prowlarr failed for {}. Reverting to GetComics manual DDL fallback.", payload.name);
-            return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: Some(ManualDdl { url, name }) });
+            return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: Some(ManualDdl { url, name }), ddl_candidates: Vec::new() });
         }
     }
 
     log::warn!("No valid release found for {} after checking all sources.", payload.name);
-    Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: None })
+    Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: None, ddl_candidates: Vec::new() })
 }
 
 async fn handle_interactive_search(

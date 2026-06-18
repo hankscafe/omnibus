@@ -138,14 +138,14 @@ export default function SettingsPage() {
   const [configuredHosters, setConfiguredHosters] = useState<HosterAccountConfig[]>([])
   const [hosterPriority, setHosterPriority] = useState<{hoster: string, enabled: boolean}[]>([
       { hoster: 'getcomics_direct', enabled: true },
+      { hoster: 'getcomics_main', enabled: true },
       { hoster: 'mediafire', enabled: true },
       { hoster: 'mega', enabled: true },
       { hoster: 'pixeldrain', enabled: true },
-      { hoster: 'rootz', enabled: true },
-      { hoster: 'vikingfile', enabled: true },
-      { hoster: 'terabox', enabled: true },
-      { hoster: 'annas_archive', enabled: true },
-      { hoster: 'getcomics_main', enabled: true }
+      { hoster: 'rootz', enabled: false },
+      { hoster: 'vikingfile', enabled: false },
+      { hoster: 'terabox', enabled: false },
+      { hoster: 'annas_archive', enabled: true }
   ])
   const [hosterModalOpen, setHosterModalOpen] = useState(false)
   const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null)
@@ -333,14 +333,14 @@ export default function SettingsPage() {
             const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
             const defaultHosters = [
                 { hoster: 'getcomics_direct', enabled: true },
+                { hoster: 'getcomics_main', enabled: true },
                 { hoster: 'mediafire', enabled: true },
                 { hoster: 'mega', enabled: true },
                 { hoster: 'pixeldrain', enabled: true },
-                { hoster: 'rootz', enabled: true },
-                { hoster: 'vikingfile', enabled: true },
-                { hoster: 'terabox', enabled: true },
-                { hoster: 'annas_archive', enabled: true },
-                { hoster: 'getcomics_main', enabled: true }
+                { hoster: 'rootz', enabled: false },
+                { hoster: 'vikingfile', enabled: false },
+                { hoster: 'terabox', enabled: false },
+                { hoster: 'annas_archive', enabled: true }
             ];
 
             if (hpSetting?.value) {
@@ -353,13 +353,14 @@ export default function SettingsPage() {
                         mergedHosters = [...savedHosters];
                     }
                     // Migrate a legacy single `getcomics` entry -> `getcomics_direct` (kept in place) +
-                    // `getcomics_main` (appended last). Keeps existing configs working post-split.
+                    // `getcomics_main` (inserted right after it, so both stay high-priority). Keeps
+                    // existing configs working post-split.
                     const gi = mergedHosters.findIndex(mh => mh.hoster === 'getcomics');
                     if (gi !== -1) {
                         const en = mergedHosters[gi].enabled !== false;
                         mergedHosters[gi] = { hoster: 'getcomics_direct', enabled: en };
                         if (!mergedHosters.some(mh => mh.hoster === 'getcomics_main')) {
-                            mergedHosters.push({ hoster: 'getcomics_main', enabled: en });
+                            mergedHosters.splice(gi + 1, 0, { hoster: 'getcomics_main', enabled: en });
                         }
                     }
                     defaultHosters.forEach(dh => {
@@ -2682,19 +2683,13 @@ export default function SettingsPage() {
             {editingHoster && (
                 <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
-                        <Label className="text-foreground font-semibold">Account Username (Optional)</Label>
-                        <Input value={editingHoster.username || ""} onChange={e => setEditingHoster({...editingHoster, username: e.target.value})} placeholder="email@example.com" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
-                    </div>
-                    <div className="grid gap-2">
-                        <Label className="text-foreground font-semibold">Account Password (Optional)</Label>
-                        <Input type="password" value={editingHoster.password || ""} onChange={e => setEditingHoster({...editingHoster, password: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
-                    </div>
-                    <div className="grid gap-2">
-                        <Label className="text-foreground font-semibold">API / Session Key (Optional)</Label>
-                        <Input type="password" value={editingHoster.apiKey || ""} onChange={e => setEditingHoster({...editingHoster, apiKey: e.target.value})} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                        <Label className="text-foreground font-semibold">API Key (Optional)</Label>
+                        <Input type="password" value={editingHoster.apiKey || ""} onChange={e => setEditingHoster({...editingHoster, apiKey: e.target.value})} placeholder="Paste your API key" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
                     </div>
                     <p className="text-[10px] text-muted-foreground mt-2">
-                        Providing credentials allows Omnibus to bypass guest bandwidth limits on supported file hosters. Leave blank to attempt anonymous downloads.
+                        {(editingHoster.hoster === 'pixeldrain' || editingHoster.hoster === 'annas_archive')
+                            ? <>An API key authenticates with <strong>{editingHoster.name}</strong> — it bypasses guest bandwidth limits (Pixeldrain) or enables automated downloads (Anna&apos;s Archive member key). Leave blank for anonymous downloads.</>
+                            : <><strong>{editingHoster.name}</strong> doesn&apos;t use credentials in Omnibus — downloads are anonymous, so this field has no effect. Only <strong>Pixeldrain</strong> and <strong>Anna&apos;s Archive</strong> currently use an API key.</>}
                     </p>
                 </div>
             )}

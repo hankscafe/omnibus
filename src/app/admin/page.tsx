@@ -929,12 +929,20 @@ const mappedRequests = requests.map(req => {
                                   )}
                                   {req.status === 'MANUAL_DDL' && (
                                       <div className="flex gap-1.5 w-full sm:w-auto">
-                                          <Button size="sm" variant="outline" asChild className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground" onClick={(e) => e.stopPropagation()}>
-                                              <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Link</a>
+                                          <Button size="sm" variant="outline" asChild title="Open the GetComics download link in your browser to clear the Cloudflare check and download the file" className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground" onClick={(e) => e.stopPropagation()}>
+                                              <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Download Manually</a>
                                           </Button>
-                                          <Button 
-                                              size="sm" 
-                                              variant="outline" 
+                                          <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-10 sm:h-8 text-xs font-bold text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800"
+                                              onClick={(e) => { e.stopPropagation(); setInteractiveSearchReq(req); }}
+                                          >
+                                              <Search className="w-3 h-3 mr-1" /> <span className="hidden sm:inline">Interactive</span> Search
+                                          </Button>
+                                          <Button
+                                              size="sm"
+                                              variant="outline"
                                               className="h-10 sm:h-8 text-xs font-bold text-blue-500 border-blue-200 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800"
                                               onClick={(e) => { e.stopPropagation(); handleRetryRequest(req.id); }}
                                           >

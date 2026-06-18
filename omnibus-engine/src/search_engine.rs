@@ -56,6 +56,40 @@ pub fn normalize_edition_title(t: &str) -> String {
     s.trim().to_string()
 }
 
+/// Recognized automation search sources. Default order = GetComics then Prowlarr (legacy behavior);
+/// Anna's Archive is OFF by default (opt-in + API-key-gated at save time on the Node side).
+pub const KNOWN_SEARCH_SOURCES: [&str; 3] = ["getcomics", "annas_archive", "prowlarr"];
+
+/// Parse the `search_source_priority` setting into an ordered list of ENABLED source keys (mirrors the
+/// hoster-priority parser in getcomics.rs). Accepts a bare string array (all enabled, in order) or an
+/// object array of `{"source","enabled"}`. Unknown source keys and disabled entries are dropped; the
+/// order and first occurrence are preserved. Unset, unparsable, or empty-after-filter falls back to the
+/// default order so automation never ends up with zero sources. This only decides the ORDER and whether
+/// Anna's Archive participates: `getcomics` (via ddl_enabled) and `prowlarr` (via its config) stay
+/// independently gated downstream, so listing them here cannot force a disabled source to run.
+pub fn parse_search_source_order(value: Option<&str>) -> Vec<String> {
+    let default = || vec!["getcomics".to_string(), "prowlarr".to_string()];
+    let Some(val) = value.map(str::trim).filter(|v| !v.is_empty()) else { return default(); };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(val) else { return default(); };
+    let Some(arr) = parsed.as_array() else { return default(); };
+
+    let mut out: Vec<String> = Vec::new();
+    for v in arr {
+        let (source, enabled) = if let Some(s) = v.as_str() {
+            (s.to_string(), true)
+        } else if let Some(s) = v.get("source").and_then(|s| s.as_str()) {
+            (s.to_string(), v.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true))
+        } else {
+            continue;
+        };
+        if enabled && KNOWN_SEARCH_SOURCES.contains(&source.as_str()) && !out.contains(&source) {
+            out.push(source);
+        }
+    }
+
+    if out.is_empty() { default() } else { out }
+}
+
 pub async fn get_custom_acronyms(db: &PgPool) -> anyhow::Result<HashMap<String, String>> {
     let mut ac_map = HashMap::new();
     ac_map.insert("tmnt".to_string(), "teenage mutant ninja turtles".to_string());
@@ -502,6 +536,25 @@ mod tests {
             ScoringRule { term: ".cbz".into(), score: 500 },
             ScoringRule { term: ".cbr".into(), score: -400 },
         ]
+    }
+
+    fn sv(items: &[&str]) -> Vec<String> { items.iter().map(|s| s.to_string()).collect() }
+
+    #[test]
+    fn search_source_order_defaults_and_parses() {
+        // Unset / blank / invalid JSON → default (GetComics then Prowlarr; Anna's Archive off).
+        assert_eq!(parse_search_source_order(None), sv(&["getcomics", "prowlarr"]));
+        assert_eq!(parse_search_source_order(Some("   ")), sv(&["getcomics", "prowlarr"]));
+        assert_eq!(parse_search_source_order(Some("not json")), sv(&["getcomics", "prowlarr"]));
+        // Object array honors order + enabled flags; unknown keys + disabled entries dropped.
+        let json = r#"[{"source":"annas_archive","enabled":true},{"source":"prowlarr","enabled":false},{"source":"getcomics","enabled":true},{"source":"bogus","enabled":true}]"#;
+        assert_eq!(parse_search_source_order(Some(json)), sv(&["annas_archive", "getcomics"]));
+        // Bare string array → all enabled, in order.
+        assert_eq!(parse_search_source_order(Some(r#"["prowlarr","getcomics"]"#)), sv(&["prowlarr", "getcomics"]));
+        // All-disabled → fall back to default (automation never gets zero sources).
+        assert_eq!(parse_search_source_order(Some(r#"[{"source":"getcomics","enabled":false}]"#)), sv(&["getcomics", "prowlarr"]));
+        // Dedup keeps the first occurrence.
+        assert_eq!(parse_search_source_order(Some(r#"["getcomics","getcomics","annas_archive"]"#)), sv(&["getcomics", "annas_archive"]));
     }
 
     #[test]

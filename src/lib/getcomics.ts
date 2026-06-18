@@ -14,7 +14,9 @@ import { normalizeRequestName } from './search-engine';
  *  then `getcomics_main` (getcomics.org/dls/ main server). The /dls/ direct download works for most
  *  issues (only the subset behind a live Cloudflare challenge falls through to the manual-hold), and it
  *  outranks the far-less-reliable third-party mirrors. Matches the original `getcomics`-first ordering. */
-export const DEFAULT_HOSTER_ORDER = ['getcomics_direct', 'getcomics_main', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
+// Anna's Archive is its own search source (search_source_priority), not a GetComics mirror, so it's no
+// longer part of the hoster-mirror priority list. Its download key still lives in a HosterAccount.
+export const DEFAULT_HOSTER_ORDER = ['getcomics_direct', 'getcomics_main', 'mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'];
 
 // Listed but OFF by default — Cloudflare/JS/app-gated, not resolvable by scraping (still toggleable).
 export const DEFAULT_DISABLED_HOSTERS = ['rootz', 'vikingfile', 'terabox'];

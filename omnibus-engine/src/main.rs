@@ -4,6 +4,7 @@ mod metadata;
 mod prowlarr;
 mod search_engine;
 mod getcomics;
+mod annas_archive;
 mod rate_limiter;
 mod metadata_writer;
 mod watched_sync;
@@ -129,6 +130,10 @@ struct DdlCandidate {
 struct InteractiveResponse {
     prowlarr: Vec<prowlarr::ProwlarrResult>,
     getcomics: Vec<prowlarr::ProwlarrResult>,
+    // Anna's Archive results (protocol "ddl", indexer "Anna's Archive"). Empty when the source is
+    // disabled for interactive search (the default) — see annas_archive::is_interactive_enabled.
+    #[serde(default)]
+    annas_archive: Vec<prowlarr::ProwlarrResult>,
 }
 
 struct AppState {
@@ -782,95 +787,121 @@ async fn handle_search(
         queries.insert(0, payload.name.clone());
     }
 
-    // Honor skip_indexers (DDL-only requests): skip the Prowlarr fallback entirely.
-    let (prow_res_raw, get_res_raw) = if skip_indexers {
-        log::info!("skip_indexers set — searching Direct Downloads only.");
-        (Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()),
-         getcomics::search(&state.db, &state.limiter, &queries, false, &payload.name, req_year.as_deref(), series_year.as_deref(), is_manga, Some(use_packs)).await)
-    } else {
-        log::info!("Querying Direct Downloads and Indexers concurrently...");
-        tokio::join!(
-            prowlarr::search(&state.db, &state.limiter, &queries, is_manga),
-            getcomics::search(&state.db, &state.limiter, &queries, false, &payload.name, req_year.as_deref(), series_year.as_deref(), is_manga, Some(use_packs))
-        )
-    };
+    // Resolve the admin-configured source order (default: GetComics → Prowlarr; Anna's Archive opt-in).
+    // skip_indexers (DDL-only requests) drops Prowlarr from the order.
+    let ssp: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'search_source_priority'"#)
+        .fetch_optional(&state.db).await.ok().flatten();
+    let mut source_order = search_engine::parse_search_source_order(ssp.as_deref());
+    if skip_indexers {
+        log::info!("skip_indexers set — excluding Prowlarr from the source order.");
+        source_order.retain(|s| s != "prowlarr");
+    }
+    log::info!("Search source order for {}: [{}]", payload.name, source_order.join(", "));
 
-    // Drop blocklisted releases (previously-failed downloads) before the stall count + scoring (parity
-    // with automation.ts failedItems). A result is blocked if the list contains its title, download
-    // URL, GUID, or info-hash (the latter cover Prowlarr's trackingHash = infoHash||guid||downloadUrl).
-    // NOTE (known minor divergence): this runs AFTER each source already broke out of its per-query
-    // loop on the first relevant result, so — unlike Node, which filters inside the loop — it won't try
-    // the next query if the first query's only matches are all blocklisted (a rare retry/DDL-only edge;
-    // the flow still falls through to Prowlarr below). Same "break on first successful query" trade-off
-    // as the GetComics relevance relocation.
+    let run_get = source_order.iter().any(|s| s == "getcomics");
+    let run_annas = source_order.iter().any(|s| s == "annas_archive");
+    let run_prow = source_order.iter().any(|s| s == "prowlarr");
+
+    // Search every enabled source concurrently; the priority loop below picks the first that yields a
+    // downloadable match.
+    let (get_res_raw, annas_res_raw, prow_res_raw) = tokio::join!(
+        async { if run_get {
+            getcomics::search(&state.db, &state.limiter, &queries, false, &payload.name, req_year.as_deref(), series_year.as_deref(), is_manga, Some(use_packs)).await
+        } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } },
+        async { if run_annas {
+            annas_archive::search(&state.db, &state.limiter, &queries, false, is_manga).await
+        } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } },
+        async { if run_prow {
+            prowlarr::search(&state.db, &state.limiter, &queries, is_manga).await
+        } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } }
+    );
+
+    // Drop blocklisted releases (previously-failed downloads) before stall counting + scoring (parity
+    // with automation.ts failedItems): blocked if the list contains its title, download URL, GUID, or
+    // info-hash (the latter cover Prowlarr's trackingHash = infoHash||guid||downloadUrl).
     let blocklist = payload.failed_links.clone().unwrap_or_default();
     let not_blocked = |r: &prowlarr::ProwlarrResult| -> bool {
         !blocklist.iter().any(|f| {
             f == &r.title || f == &r.download_url || f == &r.guid || r.info_hash.as_deref() == Some(f.as_str())
         })
     };
-    let get_res_raw = get_res_raw.map(|v| v.into_iter().filter(|r| not_blocked(r)).collect::<Vec<_>>());
-    let prow_res_raw = prow_res_raw.map(|v| v.into_iter().filter(|r| not_blocked(r)).collect::<Vec<_>>());
-
-    // Multiple distinct DDL editions for one request → stall for human review (parity with automation.ts).
-    if let Ok(get_res) = &get_res_raw {
-        if get_res.len() > 1 {
-            let editions: std::collections::HashSet<String> =
-                get_res.iter().map(|r| search_engine::normalize_edition_title(&r.title)).collect();
-            if editions.len() > 1 {
-                log::warn!("Multiple distinct DDL editions found for {}. Stalling for admin review.", payload.name);
-                return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, manual_ddl: None, ddl_candidates: Vec::new() });
-            }
-        }
-    }
+    let get_res: Vec<prowlarr::ProwlarrResult> = get_res_raw.unwrap_or_default().into_iter().filter(|r| not_blocked(r)).collect();
+    let annas_res: Vec<prowlarr::ProwlarrResult> = annas_res_raw.unwrap_or_default().into_iter().filter(|r| not_blocked(r)).collect();
+    let prow_res: Vec<prowlarr::ProwlarrResult> = prow_res_raw.unwrap_or_default().into_iter().filter(|r| not_blocked(r)).collect();
 
     let mut best_match: Option<prowlarr::ProwlarrResult> = None;
-    // A GetComics match whose only hosters are user-disabled is held here, then surfaced as a
-    // MANUAL_DDL link if no indexer release wins either (parity with automation.ts fallbackManualUrl).
+    // A GetComics match whose only hosters are user-disabled is held here, then surfaced as a MANUAL_DDL
+    // link if nothing else wins (parity with automation.ts fallbackManualUrl).
     let mut manual_fallback: Option<(String, String)> = None;
-    // Ranked DDL links (one per hoster) for the chosen GetComics match — Node tries them in order.
+    // Ranked DDL links for the chosen match — Node tries them in order at download time.
     let mut ddl_candidates: Vec<DdlCandidate> = Vec::new();
 
-    // Priority phase: Direct Downloads first.
-    if let Ok(get_res) = get_res_raw {
-        if !get_res.is_empty() {
-            // GetComics results are already relevance-filtered per-query in getcomics::search, so here
-            // we only apply the operator's junk/exclude lists + scoring (skip_relevance = true).
-            if let Ok(Some(mut best_ddl)) = search_engine::filter_and_score(
-                &state.db, get_res, &payload.name, is_manga, req_year.clone(), true, Some(use_packs)
-            ).await {
-                // Resolve the article to a concrete hoster link. scrape_deep_link already drops
-                // user-disabled hosters; a "unknown" hoster means no enabled hoster can serve this
-                // match — Node holds it for manual pickup and falls through to Prowlarr.
-                let candidates = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url)
-                    .await
-                    .unwrap_or_default();
-                if let Some(top) = candidates.first() {
-                    log::info!("Successfully matched a Direct Download! Discarding indexer results.");
-                    best_ddl.download_url = top.url.clone();
-                    best_ddl.indexer = top.hoster.clone();
-                    ddl_candidates = candidates.iter()
-                        .map(|c| DdlCandidate { url: c.url.clone(), hoster: c.hoster.clone() })
-                        .collect();
-                    best_match = Some(best_ddl);
-                } else {
-                    log::warn!("[GetComics] Best match for {} has no enabled hoster. Holding manual link and falling back to Prowlarr...", payload.name);
-                    manual_fallback = Some((best_ddl.download_url.clone(), best_ddl.title.clone()));
-                }
-            }
-        }
-    }
+    // Evaluate sources in the configured priority order; the first downloadable match wins.
+    for source in &source_order {
+        match source.as_str() {
+            "getcomics" => {
+                if get_res.is_empty() { continue; }
 
-    if best_match.is_none() {
-        log::info!("No downloadable DDL. Evaluating Prowlarr indexer results...");
-        if let Ok(prow_res) = prow_res_raw {
-            if !prow_res.is_empty() {
-                if let Ok(Some(best_prow)) = search_engine::filter_and_score(
-                    &state.db, prow_res, &payload.name, is_manga, req_year.clone(), false, Some(use_packs)
+                // Multiple distinct GetComics editions for one request → stall for human review. This is
+                // a GetComics-specific ambiguity (curated articles); Anna's Archive routinely returns
+                // many results and is resolved by scoring instead, so the stall doesn't apply there.
+                let editions: std::collections::HashSet<String> =
+                    get_res.iter().map(|r| search_engine::normalize_edition_title(&r.title)).collect();
+                if get_res.len() > 1 && editions.len() > 1 {
+                    log::warn!("Multiple distinct DDL editions found for {}. Stalling for admin review.", payload.name);
+                    return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, manual_ddl: None, ddl_candidates: Vec::new() });
+                }
+
+                // GetComics results are already relevance-filtered in getcomics::search → operator
+                // junk/exclude lists + scoring only (skip_relevance = true).
+                if let Ok(Some(mut best_ddl)) = search_engine::filter_and_score(
+                    &state.db, get_res.clone(), &payload.name, is_manga, req_year.clone(), true, Some(use_packs)
                 ).await {
-                    best_match = Some(best_prow);
+                    // Resolve the article to concrete hoster links; scrape_deep_link drops disabled
+                    // hosters, so an empty list means no enabled hoster can serve this match.
+                    let candidates = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url)
+                        .await.unwrap_or_default();
+                    if let Some(top) = candidates.first() {
+                        log::info!("[GetComics] Matched a Direct Download for {}.", payload.name);
+                        best_ddl.download_url = top.url.clone();
+                        best_ddl.indexer = top.hoster.clone();
+                        ddl_candidates = candidates.iter()
+                            .map(|c| DdlCandidate { url: c.url.clone(), hoster: c.hoster.clone() })
+                            .collect();
+                        best_match = Some(best_ddl);
+                        break;
+                    } else if manual_fallback.is_none() {
+                        log::warn!("[GetComics] Best match for {} has no enabled hoster. Holding the manual link and trying the next source...", payload.name);
+                        manual_fallback = Some((best_ddl.download_url.clone(), best_ddl.title.clone()));
+                    }
                 }
             }
+            "annas_archive" => {
+                if annas_res.is_empty() { continue; }
+                // Anna's Archive results aren't pre-filtered (unlike GetComics) → full relevance scoring.
+                if let Ok(Some(mut best_aa)) = search_engine::filter_and_score(
+                    &state.db, annas_res.clone(), &payload.name, is_manga, req_year.clone(), false, Some(use_packs)
+                ).await {
+                    // The result's download_url is already the resolvable /md5/ link — emit one candidate
+                    // tagged for the existing Node resolver (premium key → stream; keyless → MANUAL_DDL).
+                    log::info!("[Anna's Archive] Matched a result for {}.", payload.name);
+                    ddl_candidates = vec![DdlCandidate { url: best_aa.download_url.clone(), hoster: "annas_archive".to_string() }];
+                    best_aa.indexer = "annas_archive".to_string();
+                    best_match = Some(best_aa);
+                    break;
+                }
+            }
+            "prowlarr" => {
+                if prow_res.is_empty() { continue; }
+                if let Ok(Some(best_prow)) = search_engine::filter_and_score(
+                    &state.db, prow_res.clone(), &payload.name, is_manga, req_year.clone(), false, Some(use_packs)
+                ).await {
+                    log::info!("[Prowlarr] Matched an indexer release for {}.", payload.name);
+                    best_match = Some(best_prow);
+                    break;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -879,12 +910,11 @@ async fn handle_search(
         return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, manual_ddl: None, ddl_candidates });
     }
 
-    // Nothing auto-downloadable. If we held a GetComics link and GetComics is an enabled hoster,
-    // surface it for manual download (parity with the automation.ts MANUAL_DDL fallback, which is
-    // gated on `enabledHosters.includes('getcomics')`).
+    // Nothing auto-downloadable. If we held a GetComics link and GetComics is an enabled hoster, surface
+    // it for manual download (parity with the automation.ts MANUAL_DDL fallback).
     if let Some((url, name)) = manual_fallback {
         if getcomics::is_getcomics_enabled(&state.db).await {
-            log::warn!("Prowlarr failed for {}. Reverting to GetComics manual DDL fallback.", payload.name);
+            log::warn!("No downloadable release for {}. Reverting to the GetComics manual DDL fallback.", payload.name);
             return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: Some(ManualDdl { url, name }), ddl_candidates: Vec::new() });
         }
     }
@@ -903,15 +933,28 @@ async fn handle_interactive_search(
     // query; getcomics::search fans it out into the upstream variant set internally (raw,
     // symbol-cleaned, year-stripped, issue-stripped) and aggregates across all pages with URL dedup.
     let queries = vec![payload.query.clone()];
+    let is_manga = payload.is_manga.unwrap_or(false);
 
-    let (prow_res, get_res) = tokio::join!(
-        prowlarr::search(&state.db, &state.limiter, &queries, payload.is_manga.unwrap_or(false)),
-        getcomics::search(&state.db, &state.limiter, &queries, true, &payload.query, payload.year.as_deref(), payload.year.as_deref(), payload.is_manga.unwrap_or(false), None)
+    // Anna's Archive is key-free for interactive search but OFF by default — only query it when the
+    // admin has opted in. The empty-on-disabled future keeps all three sources in one concurrent join.
+    let annas_enabled = annas_archive::is_interactive_enabled(&state.db).await;
+
+    let (prow_res, get_res, annas_res) = tokio::join!(
+        prowlarr::search(&state.db, &state.limiter, &queries, is_manga),
+        getcomics::search(&state.db, &state.limiter, &queries, true, &payload.query, payload.year.as_deref(), payload.year.as_deref(), is_manga, None),
+        async {
+            if annas_enabled {
+                annas_archive::search(&state.db, &state.limiter, &queries, true, is_manga).await
+            } else {
+                Ok(Vec::new())
+            }
+        }
     );
 
     Json(InteractiveResponse {
         prowlarr: prow_res.unwrap_or_default(),
-        getcomics: get_res.unwrap_or_default()
+        getcomics: get_res.unwrap_or_default(),
+        annas_archive: annas_res.unwrap_or_default(),
     })
 }
 

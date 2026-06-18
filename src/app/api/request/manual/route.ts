@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
             searchName = `${name} #${body.issueNumber}`;
         }
 
-        const skipIndexers = source === 'getcomics';
+        const skipIndexers = source === 'getcomics' || source === 'annas_archive';
 
         const newReq = await prisma.request.create({
           data: {
@@ -245,6 +245,43 @@ export async function POST(request: NextRequest) {
                       data: { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: searchResult.title }
                     });
                 }
+            }
+        }
+        else if (source === 'annas_archive') {
+            // Anna's Archive result: the downloadUrl is already the resolvable /md5/ link, so there's no
+            // article to scrape. Stream it via the existing hoster resolver (premium API key); keyless,
+            // downloadDirectFile holds it as MANUAL_DDL for in-browser pickup.
+            if (searchResult && searchResult.downloadUrl) {
+                const url = searchResult.downloadUrl;
+                const safeTitle = searchResult.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
+                const settings = await prisma.systemSetting.findMany();
+                const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
+
+                const duplicateDownload = await prisma.request.findFirst({
+                    where: { downloadLink: url, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: targetReqId } }
+                });
+                if (duplicateDownload) {
+                    Logger.log(`[Manual Request] Anna's Archive file already downloading (${url}). Queuing for batch extraction.`, 'info');
+                    await prisma.request.update({
+                        where: { id: targetReqId },
+                        data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
+                    });
+                    return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                }
+
+                await prisma.request.update({
+                    where: { id: targetReqId },
+                    data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
+                });
+
+                DownloadService.downloadDirectFile(url, safeTitle, config.download_path, targetReqId, 'annas_archive')
+                    .then(async (success) => {
+                        if (success) {
+                            await new Promise(r => setTimeout(r, 2000));
+                            await Importer.importRequest(targetReqId);
+                        }
+                    })
+                    .catch(e => Logger.log(getErrorMessage(e), 'error'));
             }
         }
     }

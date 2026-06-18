@@ -18,7 +18,8 @@ import {
   Globe,
   AlertTriangle,
   RotateCcw,
-  Target
+  Target,
+  Search
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -86,6 +87,13 @@ const hosterDisplayNames: Record<string, string> = {
     'annas_archive': "Anna's Archive"
 };
 
+// Display names for the automation Search Source priority list (distinct from file hosters above).
+const sourceDisplayNames: Record<string, string> = {
+    'getcomics': 'GetComics (Direct Downloads)',
+    'annas_archive': "Anna's Archive",
+    'prowlarr': 'Indexers (Prowlarr)'
+};
+
 const SYSTEM_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
   { id: "request_approved", label: "Request Approved", desc: "Includes admin username, cover image, and synopsis." },
@@ -144,8 +152,13 @@ export default function SettingsPage() {
       { hoster: 'pixeldrain', enabled: true },
       { hoster: 'rootz', enabled: false },
       { hoster: 'vikingfile', enabled: false },
-      { hoster: 'terabox', enabled: false },
-      { hoster: 'annas_archive', enabled: true }
+      { hoster: 'terabox', enabled: false }
+  ])
+  // Automation search-source order (which source is tried first; separate from hoster-mirror priority).
+  const [searchSourcePriority, setSearchSourcePriority] = useState<{source: string, enabled: boolean}[]>([
+      { source: 'getcomics', enabled: true },
+      { source: 'annas_archive', enabled: false },
+      { source: 'prowlarr', enabled: true }
   ])
   const [hosterModalOpen, setHosterModalOpen] = useState(false)
   const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null)
@@ -202,6 +215,7 @@ export default function SettingsPage() {
     ddl_enabled: "true",
     getcomics_interactive_pages: "4",
     getcomics_automated_pages: "5",
+    annas_archive_interactive_enabled: "false", annas_archive_base_url: "", annas_archive_formats: "cbz,cbr,pdf,epub",
     engine_max_scan_workers: "", engine_max_convert_workers: "", engine_cpu_cap: "",
     engine_max_blocking_threads: "", engine_memory_ceiling_mb: "", engine_max_db_connections: ""
   })
@@ -215,7 +229,7 @@ export default function SettingsPage() {
 
   const currentStateString = JSON.stringify({
       config, configuredLibraries, configuredIndexers, configuredClients,
-      configuredHosters, configuredWebhooks, customHeaders, customAcronyms, hosterPriority, scoringRules
+      configuredHosters, configuredWebhooks, customHeaders, customAcronyms, hosterPriority, searchSourcePriority, scoringRules
   });
 
   const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
@@ -314,7 +328,7 @@ export default function SettingsPage() {
         const newConfig: any = { ...config };
         if (Array.isArray(data.settings)) {
             data.settings.forEach((item: any) => { 
-                if (item.key !== 'omnibus_api_key' && item.key !== 'hoster_priority' && item.key !== 'release_scoring_rules') {
+                if (item.key !== 'omnibus_api_key' && item.key !== 'hoster_priority' && item.key !== 'release_scoring_rules' && item.key !== 'search_source_priority') {
                     newConfig[item.key] = item.value;
                 }
             });
@@ -339,8 +353,7 @@ export default function SettingsPage() {
                 { hoster: 'pixeldrain', enabled: true },
                 { hoster: 'rootz', enabled: false },
                 { hoster: 'vikingfile', enabled: false },
-                { hoster: 'terabox', enabled: false },
-                { hoster: 'annas_archive', enabled: true }
+                { hoster: 'terabox', enabled: false }
             ];
 
             if (hpSetting?.value) {
@@ -366,12 +379,41 @@ export default function SettingsPage() {
                     defaultHosters.forEach(dh => {
                         if (!mergedHosters.some(mh => mh.hoster === dh.hoster)) mergedHosters.push(dh);
                     });
+                    // Anna's Archive is a search source now, not a hoster mirror — drop any legacy entry
+                    // so it no longer shows in the Hoster Priority list (its API key lives in its own section).
+                    mergedHosters = mergedHosters.filter((mh: any) => mh.hoster !== 'annas_archive');
                     setHosterPriority(mergedHosters);
                 } catch(e) {
                     setHosterPriority(defaultHosters);
                 }
             } else {
                 setHosterPriority(defaultHosters);
+            }
+
+            const sspSetting = data.settings.find((s: any) => s.key === 'search_source_priority');
+            const defaultSources = [
+                { source: 'getcomics', enabled: true },
+                { source: 'annas_archive', enabled: false },
+                { source: 'prowlarr', enabled: true }
+            ];
+            if (sspSetting?.value) {
+                try {
+                    const saved = JSON.parse(sspSetting.value);
+                    let merged: any[] = (saved.length > 0 && typeof saved[0] === 'string')
+                        ? saved.map((s: string) => ({ source: s, enabled: true }))
+                        : [...saved];
+                    // Append any newly-added sources missing from a saved config (disabled by default),
+                    // then drop unknown source keys.
+                    defaultSources.forEach(ds => {
+                        if (!merged.some(ms => ms.source === ds.source)) merged.push({ ...ds, enabled: false });
+                    });
+                    merged = merged.filter(ms => defaultSources.some(ds => ds.source === ms.source));
+                    setSearchSourcePriority(merged);
+                } catch (e) {
+                    setSearchSourcePriority(defaultSources);
+                }
+            } else {
+                setSearchSourcePriority(defaultSources);
             }
         }
 
@@ -431,7 +473,8 @@ export default function SettingsPage() {
         settings: {
             ...config,
             hoster_priority: JSON.stringify(hosterPriority),
-            release_scoring_rules: JSON.stringify(scoringRules) 
+            search_source_priority: JSON.stringify(searchSourcePriority),
+            release_scoring_rules: JSON.stringify(scoringRules)
         },
         libraries: configuredLibraries,
         indexers: configuredIndexers, 
@@ -450,8 +493,15 @@ export default function SettingsPage() {
         })
         
         if (res.ok) {
+            const saveData = await res.json().catch(() => ({} as any));
+            // The server may have reverted Anna's Archive automation (the API-key + connection-test gate);
+            // surface the reason. The toggle re-syncs to the persisted state on the next settings load.
+            if (Array.isArray(saveData?.warnings) && saveData.warnings.length > 0) {
+                saveData.warnings.forEach((w: string) =>
+                    toast({ title: "Heads up", description: w, variant: "destructive" }));
+            }
             setInitialStateHash(currentStateString);
-            
+
             if (activeTab === 'filters') {
                 toast({ title: "Settings Saved", description: "Configuration persisted to database. Rebuilding Discover cache..." })
                 fetch('/api/admin/jobs/trigger', {
@@ -538,6 +588,34 @@ export default function SettingsPage() {
       newPriority[index].enabled = !newPriority[index].enabled;
       setHosterPriority(newPriority);
   }
+
+  const moveSearchSource = (index: number, direction: -1 | 1) => {
+      const next = [...searchSourcePriority];
+      const tmp = next[index];
+      next[index] = next[index + direction];
+      next[index + direction] = tmp;
+      setSearchSourcePriority(next);
+  }
+
+  const toggleSearchSourceEnabled = (index: number) => {
+      const next = [...searchSourcePriority];
+      next[index] = { ...next[index], enabled: !next[index].enabled };
+      setSearchSourcePriority(next);
+  }
+
+  // Anna's Archive's premium key is stored as a HosterAccount; managed inline from the AA source section
+  // (it's a search source, so it no longer appears in the generic Hoster Accounts list).
+  const setAnnasKey = (value: string) => {
+      setConfiguredHosters(prev => {
+          const idx = prev.findIndex(h => h.hoster === 'annas_archive');
+          if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], apiKey: value };
+              return next;
+          }
+          return [...prev, { id: `tmp_${Math.random().toString(36).slice(2, 11)}`, name: "Anna's Archive", hoster: 'annas_archive', username: '', password: '', apiKey: value, isActive: true } as any];
+      });
+  };
 
   const openHosterSetup = (hosterName: string) => {
       setEditingHoster({
@@ -1374,6 +1452,51 @@ export default function SettingsPage() {
                     <CardDescription className="text-muted-foreground">Manage priority and add premium credentials for third-party file hosters (like MediaFire or Mega).</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-10">
+
+                    {/* Automation Search Source Priority — which source automation tries first. Distinct
+                        from the Hoster Priority list below, which only picks a file host for a GetComics hit. */}
+                    <div className="space-y-4">
+                        <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground flex items-center gap-2"><Search className="w-5 h-5 text-primary" /> Automation Search Source Priority</h3>
+                        <p className="text-xs text-muted-foreground">For background (automated) downloads, Omnibus tries these sources in order and takes the first match. Reorder or disable them here. This is separate from the <strong>Hoster Priority</strong> list further down, which only chooses which file host to use for a GetComics result.</p>
+
+                        <div className="border border-border rounded-lg bg-muted/20 p-2 space-y-1">
+                            {searchSourcePriority.map((item, idx) => (
+                                <div key={item.source} className={`flex items-center justify-between p-3 bg-background border border-border rounded shadow-sm transition-opacity ${!item.enabled ? 'opacity-50' : ''}`}>
+                                    <div className="flex items-center gap-3">
+                                        <Badge variant="secondary" className="font-mono text-[10px] w-6 justify-center bg-muted">{idx + 1}</Badge>
+                                        <span className={`font-bold ${!item.enabled ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                                            {sourceDisplayNames[item.source] || item.source}
+                                        </span>
+                                        {item.source === 'annas_archive' && (
+                                            <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300 dark:border-amber-700">needs API key</Badge>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-2 mr-2 sm:border-r sm:border-border sm:pr-3">
+                                            <Switch
+                                                checked={item.enabled}
+                                                onCheckedChange={() => toggleSearchSourceEnabled(idx)}
+                                                className="scale-90 sm:scale-100"
+                                            />
+                                            <Label className="text-xs font-bold cursor-pointer hidden sm:block" onClick={() => toggleSearchSourceEnabled(idx)}>
+                                                {item.enabled ? "Enabled" : "Disabled"}
+                                            </Label>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === 0} onClick={() => moveSearchSource(idx, -1)}>
+                                                <ArrowUp className="w-4 h-4" />
+                                            </Button>
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" disabled={idx === searchSourcePriority.length - 1} onClick={() => moveSearchSource(idx, 1)}>
+                                                <ArrowDown className="w-4 h-4" />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">Enabling <strong>Anna's Archive</strong> for automation requires a premium API key and a passing connection test — otherwise it reverts to disabled on save. Interactive search still works without a key (toggle below).</p>
+                    </div>
+
                     
                     <div className="flex items-center space-x-4 bg-muted/30 p-4 rounded-lg border border-border">
                         <Switch 
@@ -1454,6 +1577,73 @@ export default function SettingsPage() {
                         </div>
                     </div>
 
+                    {/* --- Anna's Archive (its own search source, independent of GetComics/Indexers) --- */}
+                    <div className="space-y-4 mt-4 pt-6 border-t border-border">
+                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2"><Server className="w-5 h-5 text-primary" /> Anna's Archive (Search Source)</h3>
+                        <p className="text-xs text-muted-foreground">Anna's Archive is its own search source, separate from GetComics and your Indexers. Interactive search works <strong>without</strong> an API key — gated files are sent to the manual download queue. For automatic downloads, add a premium API key under "Hoster Accounts" below.</p>
+
+                        <div className="flex items-center space-x-4 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Switch
+                                id="annas-interactive-toggle"
+                                checked={config.annas_archive_interactive_enabled === "true"}
+                                onCheckedChange={(c) => setConfig({...config, annas_archive_interactive_enabled: c ? "true" : "false"})}
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1">
+                                <Label htmlFor="annas-interactive-toggle" className="cursor-pointer font-bold text-base text-foreground">Include in Interactive Search</Label>
+                                <p className="text-[11px] text-muted-foreground">When enabled, Interactive Search also queries Anna's Archive and shows its results alongside GetComics and your indexers. (No API key required.)</p>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label htmlFor="annas_archive_base_url" className="font-bold text-foreground">Anna's Archive Base URL</Label>
+                            <Input
+                                id="annas_archive_base_url"
+                                value={config.annas_archive_base_url || ""}
+                                placeholder="https://annas-archive.gl"
+                                onChange={(e) => setConfig({ ...config, annas_archive_base_url: e.target.value })}
+                                className="h-12 sm:h-10 bg-background border-border text-foreground"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">Anna's Archive rotates mirror domains frequently under takedown pressure (the old .org / .se / .li are gone; .gl is current as of mid-2026). If searches fail with a DNS / "no such host" error, set the current working mirror here — see the Anna's Archive Wikipedia page for the live list. Leave blank to use the default (annas-archive.gl).</p>
+                        </div>
+
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label htmlFor="annas_archive_api_key" className="font-bold text-foreground">Premium API Key <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                            <Input
+                                id="annas_archive_api_key"
+                                type="password"
+                                value={configuredHosters.find(h => h.hoster === 'annas_archive')?.apiKey || ""}
+                                placeholder="Required for automated downloads"
+                                onChange={(e) => setAnnasKey(e.target.value)}
+                                className="h-12 sm:h-10 bg-background border-border text-foreground"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">A membership <a href="https://annas-archive.gl/donate" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80">donation</a> grants a fast-download API key. Without one, Anna's Archive works for interactive search only. Use "Test API Key" below to verify it.</p>
+                        </div>
+
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label htmlFor="annas_archive_formats" className="font-bold text-foreground">Comic File Formats</Label>
+                            <Input
+                                id="annas_archive_formats"
+                                value={config.annas_archive_formats || ""}
+                                placeholder="cbz,cbr,pdf,epub"
+                                onChange={(e) => setConfig({ ...config, annas_archive_formats: e.target.value })}
+                                className="h-12 sm:h-10 bg-background border-border text-foreground"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">Comma-separated file extensions to include in Anna's Archive searches. Leave blank for the default (cbz, cbr, pdf, epub).</p>
+                        </div>
+
+                        {!configuredHosters.find(c => c.hoster === 'annas_archive')?.apiKey && (
+                            <div className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                                No Anna's Archive API key is configured. Anna's Archive will work for <strong>interactive search only</strong> — gated files are sent to the manual download queue. Automation requires a premium API key (enter it above).
+                            </div>
+                        )}
+
+                        <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('annas_archive')} disabled={!!testing}>
+                            {testing === 'annas_archive' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test API Key
+                        </Button>
+                        <StatusBox result={testResults.annas_archive} />
+                    </div>
+
                     <div className={`space-y-8 transition-opacity duration-300 pt-6 border-t border-border ${config.ddl_enabled === "false" ? "opacity-50 pointer-events-none" : ""}`}>
                     
                     {/* Priority List */}
@@ -1501,7 +1691,7 @@ export default function SettingsPage() {
                         <p className="text-xs text-muted-foreground mb-4">Add your free or premium credentials to bypass bandwidth limits.</p>
                         
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-                            {['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'].map(type => {
+                            {['mediafire', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox'].map(type => {
                                 const isAdded = configuredHosters.some(c => c.hoster === type);
                                 return (
                                     <Button key={type} variant="outline" className={`h-12 font-bold ${isAdded ? 'border-primary text-primary bg-primary/5' : ''}`} onClick={() => !isAdded && openHosterSetup(type)}>
@@ -1513,10 +1703,10 @@ export default function SettingsPage() {
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {configuredHosters.length === 0 ? (
+                            {configuredHosters.filter(h => h.hoster !== 'annas_archive').length === 0 ? (
                                 <div className="col-span-1 sm:col-span-2 text-center py-10 border-2 border-dashed border-border rounded-xl text-muted-foreground">No hoster accounts configured.</div>
                             ) : (
-                                configuredHosters.map((hoster) => (
+                                configuredHosters.filter(h => h.hoster !== 'annas_archive').map((hoster) => (
                                     <Card key={hoster.id} className="shadow-sm border-border bg-background">
                                         <CardContent className="p-4 space-y-3">
                                             <div className="flex justify-between items-start">

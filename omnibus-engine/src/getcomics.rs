@@ -29,7 +29,7 @@ fn default_hoster_prefs() -> Vec<HosterPref> {
     // rootz/vikingfile/terabox are listed but DISABLED by default — they're Cloudflare/JS/app-gated and
     // can't be resolved by scraping, so they're off out of the box (kept toggleable so a user can try).
     [("getcomics_direct", true), ("getcomics_main", true), ("mediafire", true), ("mega", true),
-     ("pixeldrain", true), ("rootz", false), ("vikingfile", false), ("terabox", false), ("annas_archive", true)]
+     ("pixeldrain", true), ("rootz", false), ("vikingfile", false), ("terabox", false)]
         .iter().map(|(h, en)| HosterPref { hoster: h.to_string(), enabled: *en }).collect()
 }
 

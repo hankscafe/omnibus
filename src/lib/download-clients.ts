@@ -224,6 +224,17 @@ export const DownloadService = {
                       filePath = path.join(getComicsFolder, finalFilename);
                       partFilePath = `${filePath}.part`;
                   }
+              } else if (hoster === 'annas_archive') {
+                  // Anna's Archive without a usable premium key (or a key/quota error) can't be resolved
+                  // automatically — the file sits behind a slow-download CAPTCHA wall only a human can
+                  // pass. Hold the /md5/ link for manual pickup instead of throwing into a STALLED retry
+                  // loop (parity with the Cloudflare-gated GetComics manual-hold below).
+                  Logger.log(`[Internal DL] Anna's Archive link needs a premium API key; holding for manual download: ${url}`, 'warn');
+                  await prisma.request.update({
+                      where: { id: requestId },
+                      data: { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: finalFilename }
+                  }).catch(() => {});
+                  return false;
               } else {
                   throw new Error(`Failed to resolve ${hoster} link: ${resolvedHoster.error}`);
               }

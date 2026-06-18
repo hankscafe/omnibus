@@ -116,7 +116,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
     * 🟠 Requested (Orange with Clock Icon): You have requested this item. Omnibus has added it to the queue and is actively waiting to begin searching for a valid download source.
     * 🟡 Pending Approval (Yellow with Clock Icon): You have requested this item, but your server requires an Admin to manually approve the request before the search begins.
     * 🟣 Unreleased (Purple with Clock Icon): You have subscribed to an issue that hasn't been released to the public yet. Omnibus will download it when it drops.
-* **Smart Requests & Automation:** Send requests directly to your download queue. Omnibus searches GetComics first and directly downloads your request or utilizaes 3rd-party file hosters (based on your priority settings) and then falls back to your connected indexers (Prowlarr).
+* **Smart Requests & Automation:** Send requests directly to your download queue. Omnibus searches your enabled sources in the order you choose — GetComics, Anna's Archive, and your connected indexers (Prowlarr) — and grabs the first match (a direct download or a 3rd-party file hoster, based on your priority settings).
 * **Upcoming Release Tracking:** Monitors your requested ongoing series for new weekly Wednesday releases and automatically grabs them as they are uploaded.
 
 ### Library & Metadata
@@ -328,7 +328,8 @@ Complete, granular control over your instance, your users, and your underlying a
 
 * **High-Performance Architecture:** Built to handle massive terabyte-scale libraries. Features an optimized OPDS feed, asynchronous streaming cipher engines for backups, and B-Tree indexed database lookups.
 * **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
-* **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, Terabox, and Anna's Archive. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
+* **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, and Terabox. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
+* **Anna's Archive Search Source:** Search Anna's Archive (the shadow-library aggregator) as a first-class source alongside GetComics and your indexers. Use it in interactive search (no API key required — gated files drop to the manual queue) or prioritize it as an automated source (requires a premium API key plus a passing connection test). Includes a configurable mirror base URL with automatic failover as Anna's Archive rotates domains.
 * **FlareSolverr Integration:** Route requests through a FlareSolverr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics.
 * **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the AI misses, you can manually input a specific ComicVine Volume ID or Metron Series ID to force a perfect match.
 * **Deep Diagnostics Engine:**

@@ -6,6 +6,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { decryptSecret } from '@/lib/encryption';
 import { Logger } from '@/lib/logger';
 import { Mailer } from '@/lib/mailer';
+import { testAnnasArchiveKey } from '@/lib/annas-test';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
@@ -318,6 +319,15 @@ export async function POST(request: Request) {
       }
 
       return NextResponse.json({ success: true, message: `Connected to Prowlarr (${res.data.length} indexers).` });
+    }
+
+    // --- ANNA'S ARCHIVE (fast_download API key) ---
+    if (type === 'annas_archive') {
+        // The key lives in HosterAccount (encrypted), not SystemSetting.
+        const account = await prisma.hosterAccount.findFirst({ where: { hoster: 'annas_archive', isActive: true } });
+        const key = account?.apiKey ? await decryptSecret(account.apiKey) : "";
+        const result = await testAnnasArchiveKey(key, config.annas_archive_base_url);
+        return NextResponse.json({ success: result.success, message: result.message });
     }
 
     // --- CLOUDFLARE SOLVER TEST (FlareSolverr / Byparr) ---

@@ -21,8 +21,13 @@ export async function resolveAnnasArchive(url: string, account?: any) {
             Logger.log(`[Anna's Archive] Using premium API key for fast download of ${md5}`, 'info');
             Logger.log(`[Anna's Archive Debug] Calling fast_download API endpoint...`, 'debug');
             
-            // Call the fast download API
-            const apiRes = await axios.get(`https://annas-archive.org/api/fast_download`, {
+            // Anna's Archive's fast-download JSON API (members only). The endpoint is
+            // /dyn/api/fast_download.json — the older /api/fast_download path no longer resolves.
+            // Follow whatever mirror the /md5/ link used (its origin); AA rotates domains frequently
+            // (.org/.se/.li are dead; .gl is current as of mid-2026).
+            let apiOrigin = 'https://annas-archive.gl';
+            try { apiOrigin = new URL(url).origin; } catch { /* malformed URL — keep the default mirror */ }
+            const apiRes = await axios.get(`${apiOrigin}/dyn/api/fast_download.json`, {
                 headers: { 'User-Agent': 'Omnibus/1.0' },
                 params: {
                     key: account.apiKey,
@@ -33,15 +38,20 @@ export async function resolveAnnasArchive(url: string, account?: any) {
 
             Logger.log(`[Anna's Archive Debug] API responded with status: ${apiRes.status}`, 'debug');
 
-            // The API returns { "download_url": "..." }
-            if (apiRes.data && apiRes.data.download_url) {
-                Logger.log(`[Anna's Archive Debug] Fast download URL retrieved successfully.`, 'debug');
-                return { 
-                    success: true, 
-                    directUrl: apiRes.data.download_url 
+            // Success → { download_url, account_fast_download_info: { downloads_left, downloads_per_day } }
+            // Failure → { error: "..." } (invalid key, exhausted daily quota, etc.).
+            const data = apiRes.data || {};
+            if (data.download_url) {
+                const left = data.account_fast_download_info?.downloads_left;
+                if (typeof left === 'number') {
+                    Logger.log(`[Anna's Archive] Fast download resolved (${left} download(s) left today).`, 'info');
+                }
+                return {
+                    success: true,
+                    directUrl: data.download_url
                 };
             } else {
-                throw new Error("API did not return a download URL. Check your API key limit.");
+                throw new Error(data.error || "API did not return a download URL. Check your API key or daily limit.");
             }
         }
 

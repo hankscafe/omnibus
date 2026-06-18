@@ -341,11 +341,14 @@ export function initWorker() {
                                     }
                                     if (candidates.length > 1) Logger.log(`[BullMQ] Hoster '${cand.hoster}' failed for ${name}; trying next...`, 'info');
                                 }
-                                // Every candidate failed — surface the gated GetComics link for manual pickup if present.
-                                const gated = candidates.find(c => /getcomics\.org\/dls\//i.test(c.url));
-                                if (gated) {
-                                    await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: gated.url, activeDownloadName: safeTitle } });
-                                    Logger.log(`[BullMQ] All hosters failed for ${name}; holding GetComics link for manual download.`, 'warn');
+                                // Every candidate failed — surface a manually-resolvable link for pickup if
+                                // present: a Cloudflare-gated GetComics /dls/ link, or an Anna's Archive
+                                // /md5/ link a keyless user must pass in-browser (downloadDirectFile already
+                                // holds the latter as MANUAL_DDL; this keeps the log accurate + is a backstop).
+                                const manualHold = candidates.find(c => /getcomics\.org\/dls\//i.test(c.url) || /\/md5\/[a-f0-9]{32}/i.test(c.url));
+                                if (manualHold) {
+                                    await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: manualHold.url, activeDownloadName: safeTitle } });
+                                    Logger.log(`[BullMQ] All hosters failed for ${name}; holding link for manual download.`, 'warn');
                                 } else {
                                     Logger.log(`[BullMQ] All ${candidates.length} hoster candidate(s) failed for ${name}.`, 'error');
                                 }

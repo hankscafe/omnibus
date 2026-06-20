@@ -33,6 +33,7 @@ const DISCORD_EVENTS = [
   { id: "pending_account", label: "Pending Account", desc: "Includes new user's username, email, and registration date." },
   { id: "account_approved", label: "Account Approved", desc: "Alerts when an admin approves a new user account." },
   { id: "system_alert", label: "System Health", desc: "Triggers for disk space warnings or critical errors." },
+  { id: "duplicate_files", label: "Duplicate Files Found", desc: "Alerts when new duplicate comic files are detected anywhere in the library." },
   { id: "update_available", label: "System Update Available", desc: "Alerts when a new version of Omnibus is published to GitHub." },
   { id: "library_cleanup", label: "Library Cleanup", desc: "Triggers when a series is deleted, noting if files were removed from the disk." },
   { id: "metadata_match", label: "Metadata Matched", desc: "Alerts when a series is successfully matched to ComicVine IDs." },

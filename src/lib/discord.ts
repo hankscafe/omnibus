@@ -125,6 +125,12 @@ export const DiscordNotifier = {
           embed.color = 15844367; // Yellow
           break;
 
+        case 'duplicate_files':
+          embed.title = "🔁 Duplicate Files Found";
+          embed.description = payload.description || "New duplicate comic files were detected in the library.";
+          embed.color = 15844367; // Yellow
+          break;
+
         case 'update_available':
           embed.title = "🚀 System Update Available!";
           embed.description = payload.description || `A new version of Omnibus is available on GitHub.`;

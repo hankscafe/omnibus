@@ -102,6 +102,7 @@ const SYSTEM_EVENTS = [
   { id: "pending_account", label: "Pending Account", desc: "Includes new user's username, email, and registration date." },
   { id: "account_approved", label: "Account Approved", desc: "Alerts when an admin approves a new user account." },
   { id: "system_alert", label: "System Health", desc: "Triggers for disk space warnings or critical errors." },
+  { id: "duplicate_files", label: "Duplicate Files Found", desc: "Alerts when new duplicate comic files are detected anywhere in the library." },
   { id: "update_available", label: "System Update Available", desc: "Alerts when a new version of Omnibus is published to GitHub." },
   { id: "library_cleanup", label: "Library Cleanup", desc: "Triggers when a series is deleted, noting if files were removed from the disk." },
   { id: "metadata_match", label: "Metadata Matched", desc: "Alerts when a series is successfully matched to ComicVine IDs." },
@@ -1468,7 +1469,10 @@ export default function SettingsPage() {
                                             {sourceDisplayNames[item.source] || item.source}
                                         </span>
                                         {item.source === 'annas_archive' && (
-                                            <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300 dark:border-amber-700">needs API key</Badge>
+                                            <>
+                                                <Badge variant="outline" className="text-[10px] uppercase font-bold border-orange-500 text-orange-600 bg-orange-50 dark:bg-orange-900/20">Experimental</Badge>
+                                                <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300 dark:border-amber-700">needs API key</Badge>
+                                            </>
                                         )}
                                     </div>
                                     <div className="flex items-center gap-3">
@@ -1579,7 +1583,7 @@ export default function SettingsPage() {
 
                     {/* --- Anna's Archive (its own search source, independent of GetComics/Indexers) --- */}
                     <div className="space-y-4 mt-4 pt-6 border-t border-border">
-                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2"><Server className="w-5 h-5 text-primary" /> Anna's Archive (Search Source)</h3>
+                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2"><Server className="w-5 h-5 text-primary" /> Anna's Archive (Search Source) <Badge variant="outline" className="text-[10px] uppercase font-bold border-orange-500 text-orange-600 bg-orange-50 dark:bg-orange-900/20">Experimental</Badge></h3>
                         <p className="text-xs text-muted-foreground">Anna's Archive is its own search source, separate from GetComics and your Indexers. Interactive search works <strong>without</strong> an API key — gated files are sent to the manual download queue. For automatic downloads, add a premium API key under "Hoster Accounts" below.</p>
 
                         <div className="flex items-center space-x-4 bg-muted/30 p-4 rounded-lg border border-border">

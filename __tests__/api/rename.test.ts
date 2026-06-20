@@ -102,10 +102,17 @@ describe('API Route: Bulk Library Renamer', () => {
         expect(data.success).toBe(true);
         expect(data.filesRenamed).toBe(1); // Now this will successfully pass!
 
+        // The fix relocates files INDIVIDUALLY into the standardized folder — never a destructive
+        // folder-level move with overwrite (which deleted any files already in the target).
         expect(mocks.fsMove).toHaveBeenCalledWith(
+            '/data/comics/messy_folder/Batman 1.cbz',
+            expect.stringContaining(path.normalize('Batman #001.cbz'))
+        );
+        // Regression guard: it must NOT move the whole series directory (the data-loss path).
+        expect(mocks.fsMove).not.toHaveBeenCalledWith(
             '/data/comics/messy_folder',
-            expect.stringContaining(path.normalize('DC Comics/Batman (2016)')),
-            expect.any(Object)
+            expect.anything(),
+            expect.anything()
         );
 
         expect(mocks.issueUpdate).toHaveBeenCalledWith(expect.objectContaining({

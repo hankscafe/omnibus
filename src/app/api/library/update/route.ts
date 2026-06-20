@@ -11,6 +11,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
+import { safeRelocateFolder } from '@/lib/utils/safe-fs';
 
 export async function POST(request: Request) {
   try {
@@ -76,8 +77,12 @@ export async function POST(request: Request) {
 
     if (activePath.toLowerCase() !== newPath.toLowerCase()) {
         if (fs.existsSync(activePath)) {
-            await fs.ensureDir(path.dirname(newPath));
-            await fs.move(activePath, newPath, { overwrite: true });
+            // Merge into the destination without overwriting — NEVER delete a pre-existing target folder
+            // (fs.move with overwrite:true wipes it wholesale). Conflicting files are left in place.
+            const { conflicts } = await safeRelocateFolder(activePath, newPath, libraryRoot);
+            if (conflicts > 0) {
+                Logger.log(`[Library Update] Folder relocate left ${conflicts} conflicting file(s) un-moved in ${activePath}.`, 'warn');
+            }
             activePath = newPath;
         } else {
             activePath = newPath;

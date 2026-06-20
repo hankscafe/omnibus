@@ -5,6 +5,8 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { CACHE_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import { findDuplicateGroups } from '@/lib/duplicate-detector';
+import { SystemNotifier } from '@/lib/notifications';
 import packageJson from '../../package.json';
 
 export interface HealthCheckResult {
@@ -288,6 +290,69 @@ export async function runSystemHealthCheck() {
         results.push({ id: 'backup_status', name: 'Database Backup', status: 'warning', message: 'No backup completed in over 7 days.', actionLink: '/admin/jobs' });
     } else {
         results.push({ id: 'backup_status', name: 'Database Backup', status: 'ok', message: 'Recent backup exists' });
+    }
+
+    // 11. Duplicate Files (library-wide). The per-series page already flags dupes, but only when an
+    // admin opens that specific series — this surfaces every affected series in one dashboard alert,
+    // and pushes a notification (Discord/Telegram/etc., for subscribers of the "Duplicate Files Found"
+    // event) when NEW duplicates appear since the last run.
+    Logger.log(`[Health Check Debug] Scanning for duplicate files across the library...`, 'debug');
+    try {
+        const dupeGroups = await findDuplicateGroups();
+        if (dupeGroups.length > 0) {
+            const perSeries = new Map<string, number>();
+            for (const g of dupeGroups) perSeries.set(g.seriesName, (perSeries.get(g.seriesName) || 0) + 1);
+            const details = Array.from(perSeries.entries())
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([seriesName, count]) => `${seriesName} — ${count} duplicated issue${count > 1 ? 's' : ''}`);
+            results.push({
+                id: 'duplicate_files',
+                name: 'Duplicate Files',
+                status: 'warning',
+                message: `${perSeries.size} series contain duplicate files (${dupeGroups.length} duplicated issue${dupeGroups.length > 1 ? 's' : ''}). Review and clean them up in Diagnostics.`,
+                actionLink: '/admin/diagnostics',
+                details,
+            });
+
+            // Push a notification only when NEW duplicates appear since the last run, so a standing
+            // backlog doesn't re-spam every health cycle. Signature = the set of (series, issue) keys.
+            const currentKeys = dupeGroups.map(g => `${g.seriesId}_${g.issueNumber}`).sort();
+            let previousKeys: string[] = [];
+            try { previousKeys = JSON.parse(config.duplicate_alert_signature || '[]'); } catch { previousKeys = []; }
+            const prevSet = new Set(previousKeys);
+            const newKeys = currentKeys.filter(k => !prevSet.has(k));
+
+            if (newKeys.length > 0) {
+                const newSeries = Array.from(new Set(
+                    dupeGroups.filter(g => !prevSet.has(`${g.seriesId}_${g.issueNumber}`)).map(g => g.seriesName)
+                )).sort();
+                const shown = newSeries.slice(0, 10).join(', ');
+                const more = newSeries.length > 10 ? ` +${newSeries.length - 10} more` : '';
+                Logger.log(`[Health Check] ${newKeys.length} new duplicate(s) detected — sending notification.`, 'info');
+                await SystemNotifier.sendAlert('duplicate_files', {
+                    title: 'Duplicate Files Found',
+                    description: `${perSeries.size} series contain duplicate files (${dupeGroups.length} duplicated issue${dupeGroups.length > 1 ? 's' : ''}). Newly flagged: ${shown}${more}. Review them in Diagnostics → Duplicates.`,
+                }).catch(() => {});
+            }
+
+            await prisma.systemSetting.upsert({
+                where: { key: 'duplicate_alert_signature' },
+                update: { value: JSON.stringify(currentKeys) },
+                create: { key: 'duplicate_alert_signature', value: JSON.stringify(currentKeys) },
+            });
+        } else {
+            results.push({ id: 'duplicate_files', name: 'Duplicate Files', status: 'ok', message: 'No duplicate files detected' });
+            // Reset the signature so a future re-occurrence notifies again.
+            if (config.duplicate_alert_signature && config.duplicate_alert_signature !== '[]') {
+                await prisma.systemSetting.upsert({
+                    where: { key: 'duplicate_alert_signature' },
+                    update: { value: '[]' },
+                    create: { key: 'duplicate_alert_signature', value: '[]' },
+                });
+            }
+        }
+    } catch (e) {
+        Logger.log(`[Health Check Debug] Duplicate file scan failed: ${getErrorMessage(e)}`, 'debug');
     }
 
     let overallStatus: 'HEALTHY' | 'WARNING' | 'DEGRADED' = 'HEALTHY';

@@ -10,6 +10,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { UNMATCHED_DIR } from '@/lib/utils/paths';
+import { findDuplicateGroups } from '@/lib/duplicate-detector';
 
 export const dynamic = 'force-dynamic';
 
@@ -112,38 +113,10 @@ export async function POST(request: Request) {
             return NextResponse.json({ corrupted });
         }
 
-        // --- SCAN: DUPLICATE ISSUES (Left in Node as it is lightweight DB string matching) ---
+        // --- SCAN: DUPLICATE ISSUES (lightweight DB grouping; shared with the dashboard health check) ---
         if (action === 'scan-duplicates') {
             Logger.log("[UI Job] Manual Duplicate scan started", "info");
-            const issues = await prisma.issue.findMany({
-                where: { filePath: { not: null } },
-                include: { series: true }
-            });
-            
-            const dupesMap = new Map<string, any[]>();
-            for (const issue of issues) {
-                if (!issue.filePath || !fs.existsSync(issue.filePath)) continue;
-                const key = `${issue.seriesId}_${issue.number}`;
-                if (!dupesMap.has(key)) dupesMap.set(key, []);
-                dupesMap.get(key)!.push(issue);
-            }
-            
-            const duplicates = [];
-            for (const [key, group] of dupesMap.entries()) {
-                if (group.length > 1) {
-                    duplicates.push({
-                        seriesId: group[0].seriesId,
-                        seriesName: group[0].series.name,
-                        issueNumber: group[0].number,
-                        files: group.map(i => {
-                            let size = 0;
-                            try { size = fs.statSync(i.filePath).size; } catch(e){}
-                            return { id: i.id, path: i.filePath, name: path.basename(i.filePath), size };
-                        })
-                    });
-                }
-            }
-            
+            const duplicates = await findDuplicateGroups();
             return NextResponse.json({ duplicates });
         }
 

@@ -9,11 +9,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
+import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview } from "@/components/smart-match-metadata-dialog"
 
 export default function SmartMatchPage() {
     const [unmatched, setUnmatched] = useState<any[]>([]);
@@ -41,6 +42,17 @@ export default function SmartMatchPage() {
     const [searchProvider, setSearchProvider] = useState("COMICVINE");
     const [metronConfigured, setMetronConfigured] = useState(false);
 
+    // --- NEW: Per-item metadata overrides (Series Group / Universe / identity) applied at match time ---
+    const [metadataOverrides, setMetadataOverrides] = useState<Record<string, SmartMatchOverride>>({});
+    const [metaEditorOpen, setMetaEditorOpen] = useState(false);
+    const [metaEditorTarget, setMetaEditorTarget] = useState<any>(null);
+    const [metaEditorSeed, setMetaEditorSeed] = useState<any>(null);
+    const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
+    const [writeToFileDefault, setWriteToFileDefault] = useState(true);
+    // Bulk Custom-ID: a shared Series Group / Universe applied to every selected item.
+    const [bulkSeriesGroup, setBulkSeriesGroup] = useState("");
+    const [bulkUniverse, setBulkUniverse] = useState("");
+
     const { toast } = useToast();
 
     useEffect(() => {
@@ -51,8 +63,12 @@ export default function SmartMatchPage() {
                     const mUser = data.settings.find((s: any) => s.key === 'metron_user')?.value;
                     const mPass = data.settings.find((s: any) => s.key === 'metron_pass')?.value;
                     const primary = data.settings.find((s: any) => s.key === 'primary_metadata_source')?.value;
+                    const pattern = data.settings.find((s: any) => s.key === 'folder_naming_pattern')?.value;
+                    const writeDefault = data.settings.find((s: any) => s.key === 'metadata_write_comicinfo')?.value;
                     if (mUser && mPass) setMetronConfigured(true);
                     if (primary) setSearchProvider(primary);
+                    if (pattern) setFolderPattern(pattern);
+                    setWriteToFileDefault(writeDefault !== 'false');
                 }
             })
             .catch(() => {});
@@ -142,8 +158,9 @@ export default function SmartMatchPage() {
         try {
             Logger.log(`[Smart Match Debug] Accepting match for "${series.name}". Linking to ${suggestion.metadataSource || 'COMICVINE'} ID: ${suggestion.id}`, 'debug');
             
-            const override = issueOverrides[series.id] || {};
-            
+            const issueOv = issueOverrides[series.id] || {};
+            const meta = metadataOverrides[series.id];
+
             const res = await fetch('/api/library/match-series', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -152,11 +169,19 @@ export default function SmartMatchPage() {
                     cvId: suggestion.id,
                     metadataId: suggestion.id,
                     metadataSource: suggestion.metadataSource || 'COMICVINE',
-                    name: suggestion.name,
-                    year: suggestion.year,
-                    publisher: suggestion.publisher,
-                    exactIssueId: override.issueId || undefined,
-                    exactIssueNumber: override.issueNumber || undefined
+                    // Admin metadata overrides (Edit Metadata) win over the suggestion's values.
+                    name: meta?.name || suggestion.name,
+                    year: meta?.year || suggestion.year,
+                    publisher: meta?.publisher || suggestion.publisher,
+                    ...(meta ? {
+                        universe: meta.universe || undefined,
+                        seriesGroup: meta.seriesGroup || undefined,
+                        description: meta.description || undefined,
+                        writeToFile: meta.writeToFile,
+                        lockMetadata: true,
+                    } : {}),
+                    exactIssueId: issueOv.issueId || undefined,
+                    exactIssueNumber: issueOv.issueNumber || undefined
                 })
             });
 
@@ -290,7 +315,29 @@ export default function SmartMatchPage() {
                 selectedItems.forEach(id => { next[id] = manualMatchResult; });
                 return next;
             });
-            toast({ title: "Custom ID Applied", description: "Matches set for selected items. Click 'Accept Selected' to confirm and save." });
+            // Apply the shared Series Group / Universe (when entered) to every selected item, so a set
+            // of related series can be grouped under one umbrella folder in a single pass.
+            const sg = bulkSeriesGroup.trim();
+            const uni = bulkUniverse.trim();
+            if (sg || uni) {
+                setMetadataOverrides(prev => {
+                    const next = { ...prev };
+                    selectedItems.forEach(id => {
+                        next[id] = {
+                            ...next[id],
+                            name: next[id]?.name || manualMatchResult.name,
+                            year: next[id]?.year || (manualMatchResult.year != null ? String(manualMatchResult.year) : ""),
+                            publisher: next[id]?.publisher || manualMatchResult.publisher,
+                            seriesGroup: sg || next[id]?.seriesGroup || "",
+                            universe: uni || next[id]?.universe || "",
+                            writeToFile: next[id]?.writeToFile ?? writeToFileDefault,
+                            locked: true,
+                        };
+                    });
+                    return next;
+                });
+            }
+            toast({ title: "Custom ID Applied", description: (sg || uni) ? "Matches + metadata set for selected items. Click 'Accept Selected' to save." : "Matches set for selected items. Click 'Accept Selected' to confirm and save." });
         } else if (manualMatchTarget) {
             setSuggestions(prev => ({
                 ...prev,
@@ -298,10 +345,12 @@ export default function SmartMatchPage() {
             }));
             toast({ title: "Match Found", description: "You can now accept the manual match." });
         }
-        
+
         setManualMatchOpen(false);
         setManualMatchResult(null);
         setIsBulkManualMatch(false);
+        setBulkSeriesGroup("");
+        setBulkUniverse("");
     };
 
     const handleDismiss = (id: string) => {
@@ -315,6 +364,24 @@ export default function SmartMatchPage() {
             else next.add(id);
             return next;
         });
+    };
+
+    // Open the per-item metadata editor, seeding from the item's current suggestion / lookup result.
+    const openMetaEditor = (target: any, seedSource: any) => {
+        setMetaEditorTarget(target);
+        setMetaEditorSeed(seedSource ? {
+            name: seedSource.name,
+            year: seedSource.year,
+            publisher: seedSource.publisher,
+            description: seedSource.description,
+        } : null);
+        setMetaEditorOpen(true);
+    };
+
+    const handleMetaSave = (override: SmartMatchOverride) => {
+        if (!metaEditorTarget) return;
+        setMetadataOverrides(prev => ({ ...prev, [metaEditorTarget.id]: override }));
+        toast({ title: "Details saved", description: "Applied when you accept this match." });
     };
 
     if (loading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
@@ -485,6 +552,22 @@ export default function SmartMatchPage() {
                                             </div>
                                         </div>
                                     )}
+
+                                    {/* Custom metadata preview — shows where this match will actually land. */}
+                                    {metadataOverrides[series.id] && (
+                                        <div className="mt-2 pt-2 border-t border-border/60 flex items-start gap-1.5 text-[11px] text-primary" title="Folder this match will be organized into">
+                                            <FolderTree className="w-3.5 h-3.5 mt-px shrink-0" />
+                                            <span className="font-mono break-all leading-snug">
+                                                {buildFolderPreview(folderPattern, {
+                                                    name: metadataOverrides[series.id].name || suggestion?.name,
+                                                    year: metadataOverrides[series.id].year || suggestion?.year,
+                                                    publisher: metadataOverrides[series.id].publisher || suggestion?.publisher,
+                                                    universe: metadataOverrides[series.id].universe,
+                                                    seriesGroup: metadataOverrides[series.id].seriesGroup,
+                                                }) || 'Custom metadata set'}
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* ACTIONS */}
@@ -514,6 +597,16 @@ export default function SmartMatchPage() {
                                         }}
                                     >
                                         <Search className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Custom ID</span>
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className={`flex-1 md:flex-none font-bold border-primary/30 text-primary hover:bg-primary/10 ${metadataOverrides[series.id] ? 'bg-primary/10' : ''}`}
+                                        disabled={!suggestion || suggestion === 'NOT_FOUND' || suggestion === 'ERROR' || isSelectionMode}
+                                        onClick={(e) => { e.stopPropagation(); openMetaEditor(series, suggestion); }}
+                                        title="Fill in Series Group, Universe and other folder-naming details"
+                                    >
+                                        <Pencil className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">{metadataOverrides[series.id] ? 'Edit Details' : 'Edit Metadata'}</span>
                                     </Button>
                                     <Button size="sm" variant="outline" disabled={isSelectionMode} className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={(e) => { e.stopPropagation(); handleDismiss(series.id); }} title="Hide from Matcher">
                                         <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Dismiss</span>
@@ -550,6 +643,8 @@ export default function SmartMatchPage() {
                                 setManualMatchOpen(true);
                                 setManualMatchResult(null);
                                 setManualMatchId("");
+                                setBulkSeriesGroup("");
+                                setBulkUniverse("");
                             }}
                         >
                             <Search className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Set Custom ID</span>
@@ -651,6 +746,40 @@ export default function SmartMatchPage() {
                             </div>
                         )}
 
+                        {/* Single-item: jump into the metadata editor (applies the match, then opens the editor). */}
+                        {manualMatchResult && !isBulkManualMatch && manualMatchTarget && (
+                            <Button
+                                variant="outline"
+                                className={`w-full border-primary/30 text-primary hover:bg-primary/10 font-bold ${metadataOverrides[manualMatchTarget.id] ? 'bg-primary/10' : ''}`}
+                                onClick={() => { handleApplyManualMatch(); openMetaEditor(manualMatchTarget, manualMatchResult); }}
+                            >
+                                <Pencil className="w-4 h-4 mr-2" />
+                                {metadataOverrides[manualMatchTarget.id] ? 'Edit Naming Details' : 'Add Series Group / Universe…'}
+                            </Button>
+                        )}
+
+                        {/* Bulk: a shared Series Group / Universe applied to every selected item on Apply. */}
+                        {manualMatchResult && isBulkManualMatch && (
+                            <div className="space-y-3 mt-2 pt-4 border-t border-border">
+                                <h4 className="font-bold text-sm text-primary flex items-center gap-2">
+                                    <FolderTree className="w-4 h-4" /> Shared Naming (Optional)
+                                </h4>
+                                <p className="text-xs text-muted-foreground leading-tight">
+                                    Group all {selectedItems.size} selected series under one umbrella folder. Applied to each item on Apply.
+                                </p>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="space-y-1">
+                                        <Label className="text-[11px] text-muted-foreground uppercase">Series Group</Label>
+                                        <Input placeholder="e.g. X-Men" value={bulkSeriesGroup} onChange={e => setBulkSeriesGroup(e.target.value)} className="bg-background border-border h-9" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-[11px] text-muted-foreground uppercase">Universe / Imprint</Label>
+                                        <Input placeholder="e.g. Earth-616" value={bulkUniverse} onChange={e => setBulkUniverse(e.target.value)} className="bg-background border-border h-9" />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* --- OPTIONAL ISSUE MAPPING (Only visible if preview loaded) --- */}
                         {manualMatchResult && ((manualMatchTarget?.isRawFile && !isBulkManualMatch) || isBulkManualMatch) && (
                             <div className="space-y-3 mt-2 pt-4 border-t border-border max-h-[35vh] overflow-y-auto pr-2 animate-in fade-in">
@@ -732,6 +861,18 @@ export default function SmartMatchPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* PER-ITEM METADATA EDITOR — fill Series Group / Universe / identity before accepting. */}
+            <SmartMatchMetadataDialog
+                open={metaEditorOpen}
+                onOpenChange={setMetaEditorOpen}
+                targetLabel={metaEditorTarget?.name}
+                seed={metaEditorSeed}
+                folderPattern={folderPattern}
+                initialOverride={metaEditorTarget ? metadataOverrides[metaEditorTarget.id] : undefined}
+                defaultWriteToFile={writeToFileDefault}
+                onSave={handleMetaSave}
+            />
 
         </div>
     )

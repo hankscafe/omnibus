@@ -70,9 +70,13 @@ prisma/schema - BACKUP.prisma
 # Ignore .claude/worktree
 .claude/worktrees/
 .claude/plans/
-.E2E_TESTING.md
-.PARITY_VERIFICATION.md
-.PORTING_AUDIT.md
+
+# Internal planning / status docs + local deploy compose (kept local, untracked)
+ANNAS_ARCHIVE_PLAN.md
+E2E_TESTING.md
+PARITY_VERIFICATION.md
+PORTING_AUDIT.md
+docker-compose.qnap.yml
 
 # Ignore tmp directory in dev environment
 tmp/

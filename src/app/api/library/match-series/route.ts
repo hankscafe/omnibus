@@ -22,7 +22,8 @@ import { UNMATCHED_DIR } from '@/lib/utils/paths';
 export async function POST(request: Request) {
   try {
     const req = (await request.json()) as any;
-    const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber } = req;
+    const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber,
+            universe, seriesGroup, description, lockMetadata, writeToFile } = req;
 
     const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
     const targetSource = metadataSource || 'COMICVINE';
@@ -99,7 +100,11 @@ export async function POST(request: Request) {
 
     const safePublisher = sanitizeFilename(realPublisher);
     const safeName = sanitizeFilename(realName);
-    const safeYear = realYear > 0 ? realYear.toString() : ''; 
+    const safeYear = realYear > 0 ? realYear.toString() : '';
+    // {UniverseName}/{SeriesGroup} are admin-supplied (the Smart Matcher metadata editor) — providers
+    // don't reliably expose them. Sanitized here so they can build folder/file paths like every other token.
+    const safeUniverse = universe ? sanitizeFilename(universe) : '';
+    const safeSeriesGroup = seriesGroup ? sanitizeFilename(seriesGroup) : '';
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
     
@@ -119,8 +124,10 @@ export async function POST(request: Request) {
         .replace(/{Series}/gi, safeName || "Unknown Series")
         .replace(/{Year}/gi, safeYear)
         .replace(/{VolumeYear}/gi, safeYear)
-        .replace(/\(\s*\)/g, '') 
-        .replace(/\[\s*\]/g, '') 
+        .replace(/{UniverseName}/gi, safeUniverse)
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+        .replace(/\(\s*\)/g, '')
+        .replace(/\[\s*\]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -144,7 +151,7 @@ export async function POST(request: Request) {
     });
 
     const updateData = {
-        cvId: targetSource === 'COMICVINE' ? parseInt(targetMetaId) : null, 
+        cvId: targetSource === 'COMICVINE' ? parseInt(targetMetaId) : null,
         metadataId: targetMetaId,
         metadataSource: targetSource,
         matchState: 'MATCHED',
@@ -154,8 +161,15 @@ export async function POST(request: Request) {
         folderPath: newFolderPath,
         isManga: isManga,
         status: status,
-        libraryId: targetLib.id, 
-        coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null
+        libraryId: targetLib.id,
+        coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null,
+        // Admin-supplied descriptive metadata from the Smart Matcher editor. Stored raw (paths use the
+        // sanitized copies above). lockMetadata sets hasCustomMetadata so the post-match provider sync
+        // can't revert the admin's entries — same contract as the rich metadata editor (library/update).
+        ...(universe !== undefined ? { universe: universe || null } : {}),
+        ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
+        ...(description !== undefined ? { description: description || null } : {}),
+        ...(lockMetadata ? { hasCustomMetadata: true } : {})
     };
 
     if (existingRecord) {
@@ -271,6 +285,8 @@ export async function POST(request: Request) {
                         .replace(/{VolumeYear}/gi, safeYear)
                         .replace(/{IssueYear}/gi, issueYear)
                         .replace(/{Issue}/gi, formattedNum)
+                        .replace(/{UniverseName}/gi, safeUniverse)
+                        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
                         .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + finalExt;
                     
                     const oldFilePath = path.join(activeFolderPath, file);
@@ -389,6 +405,16 @@ export async function POST(request: Request) {
         
         if (existingRecord?.id) {
             await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC', seriesIds: [existingRecord.id] }, { jobId: `METADATA_SYNC_MATCH_${existingRecord.id}_${Date.now()}` });
+        }
+
+        // When the admin supplied custom metadata, embed it (SeriesGroup/Universe/Description) into the
+        // files' ComicInfo.xml — unless they turned the per-edit toggle off, in which case fall back to
+        // the global default. Mirrors library/update's EMBED-on-write resolution.
+        if (lockMetadata && existingRecord?.id) {
+            const doWrite = writeToFile !== undefined ? writeToFile : (config.metadata_write_comicinfo !== 'false');
+            if (doWrite) {
+                await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: existingRecord.id }, { jobId: `EMBED_META_MATCH_${existingRecord.id}_${Date.now()}` });
+            }
         }
     } catch (e: any) {
         Logger.log(`[Match Series] Failed to queue jobs: ${e.message}`, 'warn');

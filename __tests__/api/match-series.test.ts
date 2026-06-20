@@ -150,4 +150,59 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         const data = await res.json();
         expect(data.error).toBe('Unauthorized path access');
     });
+
+    it('should substitute admin-supplied {SeriesGroup}/{UniverseName} into the folder and persist + lock them', async () => {
+        mocks.findManySettings.mockResolvedValue([
+            { key: 'folder_naming_pattern', value: '{SeriesGroup}/{Series} ({Year})' }
+        ]);
+
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Batman',
+            metadataId: '4050-1234',
+            name: 'Batman',
+            year: 2016,
+            publisher: 'DC Comics',
+            seriesGroup: 'Batman Family',
+            universe: 'DC Universe',
+            description: 'The Caped Crusader.',
+            lockMetadata: true,
+        }));
+        expect(res.status).toBe(200);
+
+        expect(mocks.createSeries).toHaveBeenCalledTimes(1);
+        const data = mocks.createSeries.mock.calls[0][0].data;
+        // The group becomes a real folder tier — no literal token left behind.
+        expect(data.folderPath).toContain('Batman Family');
+        expect(data.folderPath).toContain('Batman (2016)');
+        expect(data.folderPath).not.toContain('{SeriesGroup}');
+        // ...and the descriptive fields are persisted + the series is locked from auto-sync.
+        expect(data).toMatchObject({
+            seriesGroup: 'Batman Family',
+            universe: 'DC Universe',
+            description: 'The Caped Crusader.',
+            hasCustomMetadata: true,
+        });
+    });
+
+    it('should drop an empty {SeriesGroup} segment when no group is supplied (no literal token, no empty tier)', async () => {
+        mocks.findManySettings.mockResolvedValue([
+            { key: 'folder_naming_pattern', value: '{SeriesGroup}/{Series} ({Year})' }
+        ]);
+
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Batman',
+            metadataId: '4050-1234',
+            name: 'Batman',
+            year: 2016,
+        }));
+        expect(res.status).toBe(200);
+
+        const data = mocks.createSeries.mock.calls[0][0].data;
+        expect(data.folderPath).not.toContain('{SeriesGroup}');
+        expect(data.folderPath).not.toMatch(/\/\//); // no empty leading directory tier
+        expect(data.folderPath).toContain('Batman (2016)');
+        // No override → no lock, no group persisted.
+        expect(data.hasCustomMetadata).toBeUndefined();
+        expect(data.seriesGroup).toBeUndefined();
+    });
 });

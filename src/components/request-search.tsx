@@ -119,7 +119,7 @@ export function RequestSearch() {
   }
 
   const sortedResults = useMemo(() => {
-      let sorted = [...results];
+      const sorted = [...results];
       if (searchSort === 'year_desc') sorted.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
       if (searchSort === 'year_asc') sorted.sort((a, b) => parseInt(a.year || '0') - parseInt(b.year || '0'));
       if (searchSort === 'name_asc') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));

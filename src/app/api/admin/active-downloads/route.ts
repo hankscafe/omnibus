@@ -16,10 +16,10 @@ export async function GET() {
         return NextResponse.json({ success: true, activeDownloads: [] });
     }
 
-    let allDownloads: any[] = [];
+    const allDownloads: any[] = [];
     
     const customHeaders = await prisma.customHeader.findMany();
-    let headers: any = { 'User-Agent': 'Omnibus/1.0' };
+    const headers: any = { 'User-Agent': 'Omnibus/1.0' };
     customHeaders.forEach((h: any) => {
         if (h.key && h.value) headers[h.key.trim()] = h.value.trim();
     });

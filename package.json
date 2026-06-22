@@ -1,12 +1,12 @@
 {
   "name": "omnibus",
-  "version": "1.1.0-beta.050",
+  "version": "1.1.0-beta.051",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "test": "cross-env NODE_OPTIONS=--max-old-space-size=8192 vitest run --pool=forks",
     "test:watch": "vitest"
   },
@@ -66,8 +66,8 @@
     "@vitest/coverage-v8": "^4.1.5",
     "brace-expansion": "5.0.6",
     "cross-env": "^10.1.0",
-    "eslint": "^8.57.0",
-    "eslint-config-next": "15.1.7",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "15.5.18",
     "jsdom": "^29.1.1",
     "node-mocks-http": "^1.17.2",
     "picomatch": "4.0.4",

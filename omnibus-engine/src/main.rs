@@ -18,7 +18,7 @@ mod download;
 mod log_forward;
 mod secret_crypto;
 
-use axum::{routing::{get, post}, Router, Json, extract::{State, Request}, http::StatusCode, middleware::{self, Next}, response::Response};
+use axum::{routing::{get, post}, Router, Json, extract::{State, Request}, http::{StatusCode, header}, middleware::{self, Next}, response::Response};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -386,6 +386,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/repack", post(handle_repack))
         .route("/api/scan", post(handle_scan))
         .route("/api/converter/cbr-sweep", post(handle_cbr_sweep))
+        .route("/api/converter/extract-cover", post(handle_extract_cover))
         .route("/api/watched-sync", post(handle_watched_sync))
         .route("/api/backup", post(handle_backup))
         .route("/api/diagnostics/ghosts", post(handle_ghost_check))
@@ -540,6 +541,86 @@ async fn handle_cbr_sweep(
     });
 
     StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
+struct ExtractCoverRequest {
+    path: String,
+}
+
+/// Lightweight guard for the trusted internal cover endpoint: require an ABSOLUTE path with no `..`
+/// components. Node (the only authenticated caller) already admin-gates the request and range-checks
+/// the path against the library/unmatched roots, then resolves it to absolute before calling. The
+/// engine deliberately does NOT re-derive those roots: it can run from a different working directory
+/// than Node (dev: separate processes; prod: separate containers), so a relative root (e.g. an
+/// unmatched dir) can't be resolved to the same absolute path on both sides — which is exactly what
+/// made an earlier canonicalize-based check reject valid paths. Absolute + no-`..` blocks the obvious
+/// abuses (cwd-relative tricks, traversal) without that cwd dependency, and matches how the other
+/// engine endpoints (scan, download, embed) already trust Node-supplied paths behind the shared secret.
+fn is_absolute_non_traversing(path: &str) -> bool {
+    use std::path::{Component, Path};
+    let p = Path::new(path);
+    p.is_absolute() && !p.components().any(|c| matches!(c, Component::ParentDir))
+}
+
+/// On-demand first-page extraction for the Smart Matcher (hybrid design): the engine reuses the same
+/// multi-format `extract_first_image` the scanner uses — so CBR/RAR/CB7 work, unlike a Node-only
+/// adm-zip path — and returns the RAW page bytes; the Node /api/library/archive-cover route resizes
+/// them with sharp. Synchronous (Node awaits the bytes). Node admin-gates + range-checks the path and
+/// sends it absolute; here we only require absolute + no `..` (see is_absolute_non_traversing).
+async fn handle_extract_cover(
+    Json(req): Json<ExtractCoverRequest>,
+) -> Result<Response, StatusCode> {
+    if !is_absolute_non_traversing(&req.path) {
+        log::warn!("[Cover Extract] Rejected non-absolute or traversing path: {}", req.path);
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // extract_first_image reads the archive and shells out to unrar/unar for RAR — blocking work, so
+    // it runs on the blocking pool to keep the async runtime free.
+    let path = req.path.clone();
+    let extracted = tokio::task::spawn_blocking(move || converter::extract_first_image(std::path::Path::new(&path)))
+        .await
+        .map_err(|e| { log::error!("[Cover Extract] join error: {:?}", e); StatusCode::INTERNAL_SERVER_ERROR })?
+        .map_err(|e| { log::warn!("[Cover Extract] extraction failed for {}: {:?}", req.path, e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    match extracted {
+        Some((bytes, ext)) => {
+            let content_type = match ext.as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                "png" => "image/png",
+                "webp" => "image/webp",
+                "gif" => "image/gif",
+                "bmp" => "image/bmp",
+                _ => "application/octet-stream",
+            };
+            Response::builder()
+                .header(header::CONTENT_TYPE, content_type)
+                .body(axum::body::Body::from(bytes))
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod path_guard_tests {
+    use super::is_absolute_non_traversing;
+
+    #[test]
+    fn requires_absolute_and_rejects_traversal() {
+        // An absolute path (temp_dir is absolute on every platform) is accepted.
+        let abs = std::env::temp_dir().join("series 01.cbz");
+        assert!(is_absolute_non_traversing(&abs.to_string_lossy()));
+
+        // Relative paths are rejected — Node resolves to absolute before calling the engine.
+        assert!(!is_absolute_non_traversing("unmatched/series 01.cbz"));
+        assert!(!is_absolute_non_traversing(""));
+
+        // `..` is rejected even on an otherwise-absolute path.
+        let traversal = std::env::temp_dir().join("..").join("etc");
+        assert!(!is_absolute_non_traversing(&traversal.to_string_lossy()));
+    }
 }
 
 async fn handle_repack(

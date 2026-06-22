@@ -642,7 +642,7 @@ function SeriesContent() {
       setIsMatching(true);
       try {
           const safeYear = item.year ? item.year.toString() : new Date().getFullYear().toString();
-          let safePublisher = item.publisher || "Unknown";
+          const safePublisher = item.publisher || "Unknown";
           
           const res = await fetch('/api/library/match-series', {
               method: 'POST',
@@ -953,17 +953,18 @@ function SeriesContent() {
     return "Read";
   };
 
-  if (!folderPath) return <div className="p-10 text-center text-muted-foreground">No series selected.</div>;
-
   const sortedMatchResults = useMemo(() => {
-    let sorted = [...searchResults];
+    const sorted = [...searchResults];
     if (matchSort === 'year_desc') sorted.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
     if (matchSort === 'year_asc') sorted.sort((a, b) => parseInt(a.year || '0') - parseInt(b.year || '0'));
     if (matchSort === 'name_asc') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (matchSort === 'name_desc') sorted.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
     if (matchSort === 'issues_desc') sorted.sort((a, b) => (b.count || 0) - (a.count || 0));
     return sorted;
-}, [searchResults, matchSort]);
+  }, [searchResults, matchSort]);
+
+  // All hooks must run before any early return so their call order stays stable across renders (Rules of Hooks).
+  if (!folderPath) return <div className="p-10 text-center text-muted-foreground">No series selected.</div>;
   
   return (
     <div className="container mx-auto py-10 px-6 max-w-[1400px] transition-colors duration-300">

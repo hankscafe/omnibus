@@ -444,7 +444,7 @@ export const DownloadService = {
     const networkHeaders = await getNetworkHeaders();
     const baseHeaders = { 'User-Agent': 'Omnibus/1.0', ...networkHeaders };
 
-    let allDownloads: any[] = [];
+    const allDownloads: any[] = [];
 
     for (const rawClient of clients) {
       // Credentials are encrypted at rest; decrypt into a local copy before use.

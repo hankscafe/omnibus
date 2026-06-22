@@ -136,7 +136,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
         uniqueSearches = [...new Set(searches)].filter(s => s.length > 0);
     }
              
-    let aggregatedResults: any[] = [];
+    const aggregatedResults: any[] = [];
     const seenUrls = new Set<string>();
 
     for (const q of uniqueSearches) {
@@ -277,7 +277,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
               wordsToEnforce = safeQueryWords.slice(0, numIndex);
           }
       }
-      for (let w of wordsToEnforce) {
+      for (const w of wordsToEnforce) {
           if (!/^\d+$/.test(w) && !titleLower.includes(w)) {
               isRelevant = false;
               break;
@@ -324,7 +324,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           }
 
           if (isRelevant) {
-              let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
+              const cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
               
               let strippedForNumbers = cleanTor;
               if (!isManga) {
@@ -332,7 +332,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
                   strippedForNumbers = strippedForNumbers.replace(/(?:book\s*\.?)\s*0*\d+(?:\.\d+)?/gi, '');
               }
 
-              let torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+              const torNumMatch = strippedForNumbers.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
               let torNum = torNumMatch ? parseFloat(torNumMatch[1]) : null;
               
               if (torNum === null) {

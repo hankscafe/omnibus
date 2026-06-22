@@ -943,6 +943,7 @@ export default function SmartMatchPage() {
                 initialOverride={metaEditorTarget ? metadataOverrides[metaEditorTarget.id] : undefined}
                 defaultWriteToFile={writeToFileDefault}
                 showIssueCover={!!metaEditorTarget?.isRawFile}
+                archiveFilePath={metaEditorTarget?.isRawFile ? metaEditorTarget.folderPath : undefined}
                 initialIssueCover={metaEditorTarget ? issueOverrides[metaEditorTarget.id]?.coverImageBase64 : undefined}
                 onSave={handleMetaSave}
             />

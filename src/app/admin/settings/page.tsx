@@ -522,7 +522,7 @@ export default function SettingsPage() {
 
   const updateProwlarrCategories = (toggledId?: string, isChecked?: boolean, newCustom?: string) => {
       const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
-      let current = (config.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
+      const current = (config.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
       let activePredefined = current.filter((c: string) => predefinedIds.includes(c));
       
       if (toggledId) {

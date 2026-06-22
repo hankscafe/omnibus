@@ -120,7 +120,7 @@ export async function POST(request: Request) {
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
 
-    let relFolderPath = folderPattern
+    const relFolderPath = folderPattern
         .replace(/{Publisher}/gi, safePublisher || "Other")
         .replace(/{Series}/gi, safeName || "Unknown Series")
         .replace(/{Year}/gi, safeYear)
@@ -133,7 +133,7 @@ export async function POST(request: Request) {
         .trim();
 
     const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
-    let newFolderPath = path.join(targetLib.path, ...folderParts).replace(/\\/g, '/');
+    const newFolderPath = path.join(targetLib.path, ...folderParts).replace(/\\/g, '/');
 
     const pubDir = path.dirname(newFolderPath);
     if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });

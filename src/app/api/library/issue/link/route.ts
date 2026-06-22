@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
         const safeName = series.name ? series.name.replace(/[<>:"/\\|?*]/g, '').trim() : "Unknown Series";
         const safeYear = series.year ? series.year.toString() : "";
         
-        let issueNumStr = targetIssue.number;
+        const issueNumStr = targetIssue.number;
         let formattedNum = issueNumStr;
         if (issueNumStr && !issueNumStr.includes('.') && issueNumStr.length === 1) {
             formattedNum = `0${issueNumStr}`;

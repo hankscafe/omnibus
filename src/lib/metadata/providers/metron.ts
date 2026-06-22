@@ -259,7 +259,7 @@ export class MetronProvider implements IMetadataProvider {
 
         return allIssues.map((issue: any) => {
             const seriesName = typeof issue.series === 'string' ? issue.series : (issue.series?.name || '');
-            let issueName = issue.title || issue.issue_name || issue.issue || '';
+            const issueName = issue.title || issue.issue_name || issue.issue || '';
             
             let fullName = seriesName ? `${seriesName} #${issue.number || '0'}` : `Issue #${issue.number || '0'}`;
             const isGeneric = issueName.match(/^Issue\s*#?\s*\d+$/i) !== null;
@@ -318,7 +318,7 @@ export class MetronProvider implements IMetadataProvider {
             parsedSeriesId = parseInt(issue.series as string);
         }
         
-        let seriesName = issue.series?.name || (typeof issue.series === 'string' ? issue.series : null);
+        const seriesName = issue.series?.name || (typeof issue.series === 'string' ? issue.series : null);
 
         if ((!parsedSeriesId || isNaN(parsedSeriesId)) && seriesName) {
             try {

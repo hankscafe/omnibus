@@ -30,7 +30,7 @@ export async function GET(req: Request) {
     const hasNext = seriesList.length > limit;
     const items = hasNext ? seriesList.slice(0, limit) : seriesList;
 
-    let entries = items.map(s => {
+    const entries = items.map(s => {
         const rawCover = s.coverUrl || (s.folderPath ? `/api/library/cover?path=${encodeURIComponent(s.folderPath)}` : '');
         // FIX: Check if it's already an external HTTP link
         const finalCoverUrl = rawCover.startsWith('http') ? rawCover : (rawCover ? `${baseUrl}${rawCover}` : '');

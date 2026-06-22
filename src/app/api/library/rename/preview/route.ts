@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
             const safeUniverse = (series as any).universe ? (series as any).universe.replace(/[<>:"/\\|?*]/g, '').trim() : "";
             const safeSeriesGroup = (series as any).seriesGroup ? (series as any).seriesGroup.replace(/[<>:"/\\|?*]/g, '').trim() : "";
 
-            let relFolderPath = folderPattern
+            const relFolderPath = folderPattern
                 .replace(/{Publisher}/gi, safePublisher)
                 .replace(/{Series}/gi, safeName)
                 .replace(/{Year}/gi, safeYear)

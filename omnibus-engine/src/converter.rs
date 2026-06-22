@@ -188,6 +188,17 @@ fn validate_extraction(extraction: &NativeExtraction, extracted_images: usize) -
     Ok(())
 }
 
+/// Base directory for extraction temp work. Honors the configured cache dir (OMNIBUS_CACHE_DIR — set
+/// to /config/cache on the container, CACHE_DIR accepted as an alias) so temp files land on the
+/// mounted cache volume, never the container's ephemeral root fs. Defaults to /config/cache to match
+/// the Node app's paths.ts, so a missing env can't silently redirect heavy extraction to /tmp.
+fn extraction_temp_base() -> PathBuf {
+    std::env::var("OMNIBUS_CACHE_DIR")
+        .or_else(|_| std::env::var("CACHE_DIR"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/config/cache"))
+}
+
 /// Fast, native function to extract a CBR/RAR/CB7 and repack it directly to CBZ (ZIP) without re-encoding images.
 pub fn convert_cbr_to_cbz(cbr_path: &Path) -> Result<PathBuf> {
     if !cbr_path.exists() {
@@ -195,11 +206,8 @@ pub fn convert_cbr_to_cbz(cbr_path: &Path) -> Result<PathBuf> {
     }
 
     let cbz_path = cbr_path.with_extension("cbz");
-    // 1. Check for a specific Omnibus cache dir, fallback to OS temp dir if not found
-    let temp_dir_base = std::env::var("OMNIBUS_CACHE_DIR")
-        .or_else(|_| std::env::var("CACHE_DIR"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
+    // Extraction temp lives under the configured cache dir (see extraction_temp_base).
+    let temp_dir_base = extraction_temp_base();
 
     let temp_dir = temp_dir_base.join(format!("omnibus_extraction_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir).context("Failed to create temp directory")?;
@@ -363,12 +371,8 @@ pub fn process_archive(
 ) -> Result<PathBuf> {
     log::info!("Starting processing for: {:?}", source_path.file_name().unwrap_or_default());
 
-    // 1. Create a unique temporary directory
-    // 1. Check for a specific Omnibus cache dir, fallback to OS temp dir if not found
-    let temp_dir_base = std::env::var("OMNIBUS_CACHE_DIR")
-        .or_else(|_| std::env::var("CACHE_DIR"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
+    // 1. Extraction temp lives under the configured cache dir (see extraction_temp_base).
+    let temp_dir_base = extraction_temp_base();
         
     let temp_dir = temp_dir_base.join(format!("omnibus_extraction_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir).context("Failed to create temp directory")?;
@@ -552,6 +556,68 @@ fn extract_zip(source: &Path, dest: &Path) -> Result<()> {
 // is_image_name + the native RAR/7z extractor; no new archive machinery.
 // ============================================================================
 
+/// Picks the first natural-sorted image entry from a newline-separated archive listing (e.g. the
+/// output of `unrar lb`). Skips macOS junk and AppleDouble (._*) sidecars, mirroring first_image_from_zip.
+/// Returns None when the listing holds no image page.
+fn first_image_in_listing(listing: &str) -> Option<String> {
+    let mut images: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            if l.is_empty() { return false; }
+            if l.to_lowercase().contains("__macosx") { return false; }
+            let base = l.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(l);
+            if base.starts_with("._") { return false; }
+            is_image_name(l)
+        })
+        .collect();
+    images.sort_by(|a, b| natural_cmp(a, b));
+    images.first().map(|s| s.to_string())
+}
+
+/// Targeted first-page extraction for RAR-family archives: list the entries, pick the first image, and
+/// extract ONLY that one file — instead of unpacking the whole (often hundreds-of-MB) archive just to
+/// read the cover. `dest_dir` must already exist. Returns Ok(None) when the archive genuinely has no
+/// image page. Returns Err to tell the caller to fall back to a full extraction: unrar is unavailable
+/// or the file isn't a RAR (e.g. a real 7z that needs unar), or a name whose wildcard metacharacters
+/// (`*`/`?`) made unrar match nothing — verified by checking what actually landed.
+fn first_image_from_rar(archive_path: &Path, dest_dir: &Path) -> Result<Option<(Vec<u8>, String)>> {
+    // `lb` lists bare entry paths; stdout is taken even on a non-zero exit (parity with the salvage in
+    // extract_archive_native). An empty listing means "not a unrar-readable RAR" → signal fallback.
+    let listing = Command::new("unrar")
+        .args(["lb", "-p-"])
+        .arg(archive_path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("unrar listing unavailable"))?;
+
+    let target = match first_image_in_listing(&listing) {
+        Some(t) => t,
+        None => return Ok(None), // no image pages — a full extraction wouldn't find any either
+    };
+
+    // Extract just that entry, flattened into dest_dir. `--` ends switch parsing so a name beginning
+    // with '-' isn't read as a flag. The exit code isn't trusted — success is judged by what landed.
+    let _ = Command::new("unrar")
+        .args(["e", "-y", "-o+", "-p-", "-idq", "--"])
+        .arg(archive_path)
+        .arg(&target)
+        .arg(format!("{}{}", dest_dir.display(), std::path::MAIN_SEPARATOR))
+        .output();
+
+    let mut extracted = find_images(dest_dir)?;
+    if extracted.is_empty() {
+        anyhow::bail!("targeted unrar extraction produced no image for {:?}", target);
+    }
+    extracted.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+    let p = &extracted[0];
+    let bytes = fs::read(p)?;
+    let e = p.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+    Ok(Some((bytes, e)))
+}
+
 /// First natural-sorted image page of an archive, as (bytes, lowercase-ext). Handles native zip
 /// (.cbz/.zip and zip-in-disguise) directly and shells the RAR/7z extractor for .cbr/.cb7.
 /// Ok(None) when the archive holds no readable image page.
@@ -564,15 +630,24 @@ pub fn extract_first_image(archive_path: &Path) -> Result<Option<(Vec<u8>, Strin
     }
 
     if ext == "cbr" || ext == "rar" || ext == "cb7" {
-        let temp_base = std::env::var("OMNIBUS_CACHE_DIR")
-            .or_else(|_| std::env::var("CACHE_DIR"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir());
-        let temp_dir = temp_base.join(format!("omnibus_cover_{}", uuid::Uuid::new_v4()));
+        let temp_dir = extraction_temp_base().join(format!("omnibus_cover_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&temp_dir)?;
         let result = (|| -> Result<Option<(Vec<u8>, String)>> {
-            extract_archive_native(archive_path, &temp_dir)?;
-            let mut images = find_images(&temp_dir)?;
+            // Fast path: extract ONLY the first page into its own subdir.
+            let first_dir = temp_dir.join("first");
+            fs::create_dir_all(&first_dir)?;
+            match first_image_from_rar(archive_path, &first_dir) {
+                Ok(found) => return Ok(found),
+                Err(e) => log::debug!(
+                    "[Cover] Targeted first-page extraction unavailable for {:?} ({}); extracting fully.",
+                    archive_path.file_name().unwrap_or_default(), e
+                ),
+            }
+            // Fallback: full native extraction (covers 7z/unar and odd RAR quirks), then the first image.
+            let full_dir = temp_dir.join("full");
+            fs::create_dir_all(&full_dir)?;
+            extract_archive_native(archive_path, &full_dir)?;
+            let mut images = find_images(&full_dir)?;
             images.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
             match images.first() {
                 Some(p) => {
@@ -689,6 +764,21 @@ pub fn first_comic_file(folder: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    #[test]
+    fn first_image_in_listing_picks_first_natural_page_and_skips_junk() {
+        // Out of order, with a non-image, macOS junk, and an AppleDouble sidecar mixed in.
+        let listing = "page10.jpg\nComicInfo.xml\npage2.jpg\n__MACOSX/page1.jpg\n._page1.jpg\npage1.jpg\n";
+        // Natural sort puts page1 before page2 before page10; junk/non-images are filtered out.
+        assert_eq!(first_image_in_listing(listing).as_deref(), Some("page1.jpg"));
+
+        // CRLF line endings (unrar on Windows) are trimmed.
+        assert_eq!(first_image_in_listing("b.png\r\na.png\r\n").as_deref(), Some("a.png"));
+
+        // No image pages → None (caller returns "no cover" rather than falling back).
+        assert_eq!(first_image_in_listing("ComicInfo.xml\nnotes.txt\n"), None);
+        assert_eq!(first_image_in_listing(""), None);
+    }
 
     #[test]
     fn natural_cmp_orders_pages_numerically() {

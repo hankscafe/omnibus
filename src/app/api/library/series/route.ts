@@ -72,7 +72,7 @@ export async function GET(request: Request) {
     }
 
     let isFavorite = false;
-    let progressMap: Record<string, { readProgress: number, isRead: boolean }> = {};
+    const progressMap: Record<string, { readProgress: number, isRead: boolean }> = {};
     
     if (userId && seriesRecord) {
         const favorite = await prisma.favorite.findUnique({ where: { userId_seriesId: { userId: userId, seriesId: seriesRecord.id } } });
@@ -88,9 +88,9 @@ export async function GET(request: Request) {
         }
     }
 
-    let downloadedIssues: any[] = [];
-    let missingIssues: any[] = [];
-    let duplicatesList: any[] = [];
+    const downloadedIssues: any[] = [];
+    const missingIssues: any[] = [];
+    const duplicatesList: any[] = [];
 
     if (seriesRecord) {
         let existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });

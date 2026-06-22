@@ -211,6 +211,34 @@ pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str,
     }
 }
 
+/// Interactive query fan-out (parity with performSearch's uniqueSearches): for each query, generate
+/// the raw form, a symbol-cleaned form, a trailing-year-stripped form, a trailing-issue-stripped form,
+/// AND a zero-padding-stripped form — de-duplicated in order. The de-pad matters because the modal
+/// pads issue numbers to 3 digits ("Wolverine 003 2024") while GetComics titles single issues as
+/// "#3", so a literal "003" WordPress search misses the post; searching the un-padded "3" form too
+/// (4-digit years left intact) makes the real issue surface. The padded form is still searched, so
+/// posts titled "#003" are covered as well.
+pub(crate) fn interactive_query_variants(queries: &[String]) -> Vec<String> {
+    let re_trailing_year = regex::Regex::new(r"\s\d{4}$").unwrap();
+    let re_trailing_issue = regex::Regex::new(r"\s#?\d+(?:\.\d+)?$").unwrap();
+    let re_pad = regex::Regex::new(r"\b0+(\d{1,3})\b").unwrap();
+    let clean_sym = |s: &str| s.replace([':', '-', '&'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    let depad = |s: &str| re_pad.replace_all(s, "$1").to_string();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut list: Vec<String> = Vec::new();
+    for q in queries {
+        let no_year = re_trailing_year.replace(q, "").trim().to_string();
+        let no_issue = re_trailing_issue.replace(&no_year, "").trim().to_string();
+        for base in [q.to_string(), clean_sym(q), no_year.clone(), clean_sym(&no_year), no_issue.clone(), clean_sym(&no_issue)] {
+            for cand in [base.clone(), depad(&base)] {
+                let c = cand.trim().to_string();
+                if !c.is_empty() && seen.insert(c.clone()) { list.push(c); }
+            }
+        }
+    }
+    list
+}
+
 /// Searches GetComics across the given queries (parity with getcomics.ts search/performSearch at
 /// beta.035). Baseline relevance filters (series-name word enforcement + ±1-year guard) apply to
 /// BOTH automated and interactive searches; automation additionally applies the strict
@@ -284,23 +312,10 @@ pub async fn search(
         .map(|s| s.to_string())
         .collect();
 
-    // Interactive: fan each incoming query out into the upstream variant set (performSearch's
-    // uniqueSearches): raw, symbol-cleaned, trailing-year-stripped, trailing-issue-stripped.
+    // Interactive: fan each incoming query out into the upstream variant set (+ a de-padded form so a
+    // "003" request still matches GetComics' "#3" post titles). See interactive_query_variants.
     let query_list: Vec<String> = if is_interactive {
-        let re_trailing_year = regex::Regex::new(r"\s\d{4}$").unwrap();
-        let re_trailing_issue = regex::Regex::new(r"\s#?\d+(?:\.\d+)?$").unwrap();
-        let clean_sym = |s: &str| s.replace([':', '-', '&'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut list: Vec<String> = Vec::new();
-        for q in queries {
-            let no_year = re_trailing_year.replace(q, "").trim().to_string();
-            let no_issue = re_trailing_issue.replace(&no_year, "").trim().to_string();
-            for cand in [q.to_string(), clean_sym(q), no_year.clone(), clean_sym(&no_year), no_issue.clone(), clean_sym(&no_issue)] {
-                let c = cand.trim().to_string();
-                if !c.is_empty() && seen.insert(c.clone()) { list.push(c); }
-            }
-        }
-        list
+        interactive_query_variants(queries)
     } else {
         queries.to_vec()
     };
@@ -472,6 +487,28 @@ pub async fn search(
         }
     }
 
+    // Interactive: float the requested issue + year to the TOP of the whole aggregate. The per-query
+    // sort only orders within one query, and the name-only broad variant injects other issues, so the
+    // exact match would otherwise be buried among "Wolverine #1/#2/#4…" posts.
+    if is_interactive {
+        let sort_year = crate::search_engine::find_title_year(&clean_original)
+            .or_else(|| series_year.map(|s| s.to_string()))
+            .or_else(|| dynamic_year.map(|s| s.to_string()));
+        results.sort_by(|a, b| {
+            if let Some(rn) = req_num {
+                let am = crate::search_engine::extract_title_number(&a.title.to_lowercase(), is_manga) == Some(rn);
+                let bm = crate::search_engine::extract_title_number(&b.title.to_lowercase(), is_manga) == Some(rn);
+                if am != bm { return bm.cmp(&am); }
+            }
+            if let Some(ry) = &sort_year {
+                let ah = a.title.contains(ry.as_str());
+                let bh = b.title.contains(ry.as_str());
+                if ah != bh { return bh.cmp(&ah); }
+            }
+            a.title.len().cmp(&b.title.len())
+        });
+    }
+
     Ok(results)
 }
 
@@ -611,6 +648,18 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The modal pads issue numbers ("003") but GetComics titles them "#3" — the fan-out must also
+    // search the de-padded form so the real post matches, while keeping the padded form for "#003" posts.
+    #[test]
+    fn interactive_variants_depad_issue_but_keep_year() {
+        let v = interactive_query_variants(&["Wolverine 003 2024".to_string()]);
+        assert!(v.contains(&"Wolverine 003 2024".to_string()), "padded form kept: {:?}", v);
+        assert!(v.contains(&"Wolverine 3 2024".to_string()), "de-padded form added: {:?}", v);
+        assert!(v.contains(&"Wolverine 003".to_string()), "year-stripped form: {:?}", v);
+        assert!(v.contains(&"Wolverine".to_string()), "name-only broad form: {:?}", v);
+        // "Wolverine 3 2024" being present already proves 003→3 de-padded while the 2024 year stays intact.
+    }
 
     // Builds the Cookie header + UA the engine replays to get past Cloudflare on a getcomics.org/dls/ download.
     #[test]

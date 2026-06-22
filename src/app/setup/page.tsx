@@ -138,7 +138,7 @@ export default function SetupWizard() {
   // --- THE FIX: Category Update Logic for the Wizard ---
   const updateProwlarrCategories = (toggledId?: string, isChecked?: boolean, newCustom?: string) => {
       const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
-      let current = (formData.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
+      const current = (formData.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
       let activePredefined = current.filter((c: string) => predefinedIds.includes(c));
       
       // Update toggles

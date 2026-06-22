@@ -30,7 +30,7 @@ interface Props {
 const getOptimizedSearchQuery = (rawQuery: string, year?: string) => {
     if (!rawQuery) return "";
     
-    let query = String(rawQuery);
+    const query = String(rawQuery);
     
     // 1. Strip out subtitles (anything after a colon) to broaden indexer results
     let clean = query.split(':')[0].trim();

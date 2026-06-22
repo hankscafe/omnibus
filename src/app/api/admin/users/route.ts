@@ -40,7 +40,7 @@ export async function PATCH(req: NextRequest) {
 
     const oldUser = await prisma.user.findUnique({ where: { id } });
 
-    let updateData: any = {};
+    const updateData: any = {};
     if (isApproved !== undefined) updateData.isApproved = isApproved;
     if (role !== undefined) updateData.role = role;
     if (autoApproveRequests !== undefined) updateData.autoApproveRequests = autoApproveRequests;

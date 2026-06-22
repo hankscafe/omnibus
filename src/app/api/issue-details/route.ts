@@ -45,7 +45,7 @@ export async function GET(request: Request) {
         if (isIssue) {
             const details = await metron.getIssueDetails(id);
             
-            let issueTitle = details.name ? String(details.name) : ""; 
+            const issueTitle = details.name ? String(details.name) : ""; 
             let volName = details.seriesName;
             let issueDesc = details.description;
             const issueNum = details.issueNumber;

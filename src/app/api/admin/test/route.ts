@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     type = body.type || 'unknown';
     const { config } = body;
 
-    let headers: any = {
+    const headers: any = {
         'User-Agent': 'Omnibus/1.0',
         'Content-Type': 'application/json'
     };

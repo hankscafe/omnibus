@@ -65,7 +65,7 @@ export async function GET(request: Request) {
     const pendingVolIdsList = pendingRequests.map(r => r.volumeId);
     const pendingVolIds = new Set<string>(pendingVolIdsList);
 
-    let where: any = { AND: [] };
+    const where: any = { AND: [] };
 
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });

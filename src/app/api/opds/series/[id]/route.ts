@@ -41,7 +41,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         return numA - numB;
     });
 
-    let entries = sortedIssues.map(issue => {
+    const entries = sortedIssues.map(issue => {
         const rawCover = issue.coverUrl || (series.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '');
         const finalCoverUrl = rawCover.startsWith('http') ? rawCover : (rawCover ? `${baseUrl}${rawCover}` : '');
         

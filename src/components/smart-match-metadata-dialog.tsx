@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
-import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload } from "lucide-react"
+import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload, Loader2 } from "lucide-react"
 
 // The metadata an admin can pin to an unmatched item before accepting it. Stored per-item on the
 // Smart Matcher page and merged into the /api/library/match-series request on Accept.
@@ -51,6 +51,8 @@ interface Props {
   defaultWriteToFile?: boolean
   /** Show the per-issue cover picker (loose files become a single issue). */
   showIssueCover?: boolean
+  /** The loose file's path; used to fetch a preview of the comic's own (archive) cover art. */
+  archiveFilePath?: string
   /** Current issue cover data URL (from the item's issue override), to re-edit. */
   initialIssueCover?: string
   onSave: (override: SmartMatchOverride) => void
@@ -82,7 +84,7 @@ export function buildFolderPreview(
 
 export default function SmartMatchMetadataDialog({
   open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true,
-  showIssueCover = false, initialIssueCover, onSave,
+  showIssueCover = false, archiveFilePath, initialIssueCover, onSave,
 }: Props) {
   const { toast } = useToast()
   const [name, setName] = useState("")
@@ -95,6 +97,12 @@ export default function SmartMatchMetadataDialog({
   // Admin-chosen covers as data URLs; null = use the provider/automatic cover.
   const [coverDataUrl, setCoverDataUrl] = useState<string | null>(null)
   const [issueCoverDataUrl, setIssueCoverDataUrl] = useState<string | null>(null)
+  // The comic's own cover art, pulled from the archive's first page (data URL) for preview + reuse.
+  const [archiveCoverDataUrl, setArchiveCoverDataUrl] = useState<string | null>(null)
+  const [archiveCoverLoading, setArchiveCoverLoading] = useState(false)
+  // Opt-in (default off): on → the issue cover is the comic's own art (uploaded or archive), locked
+  // from auto-sync; off → the metadata provider supplies the issue cover (today's behavior).
+  const [useArchiveCover, setUseArchiveCover] = useState(false)
 
   // Re-seed each time the dialog opens (a new target / fresh override). Prefer the existing override,
   // then the suggestion seed, then blank.
@@ -108,10 +116,38 @@ export default function SmartMatchMetadataDialog({
     setDescription(initialOverride?.description ?? seed?.description ?? "")
     setWriteToFile(initialOverride?.writeToFile ?? defaultWriteToFile)
     setCoverDataUrl(initialOverride?.coverImageBase64 ?? null)
+    // A previously-chosen issue cover means the opt-in was on; seed it back into the upload slot.
     setIssueCoverDataUrl(initialIssueCover ?? null)
+    setUseArchiveCover(!!initialIssueCover)
     // Intentionally seed on open only — editing fields shouldn't reset them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // Fetch the comic's own cover (archive first page) when the dialog opens for a loose file. Stored as
+  // a data URL so it serves the preview AND rides the existing issueCoverImageBase64 save path verbatim.
+  useEffect(() => {
+    if (!open || !showIssueCover || !archiveFilePath) {
+      setArchiveCoverDataUrl(null); setArchiveCoverLoading(false); return
+    }
+    let cancelled = false
+    const controller = new AbortController()
+    setArchiveCoverDataUrl(null); setArchiveCoverLoading(true)
+    fetch(`/api/library/archive-cover?path=${encodeURIComponent(archiveFilePath)}`, { signal: controller.signal })
+      .then(async res => {
+        if (!res.ok) return null // 415 for CBR/RAR, 404 if no images — fall back to the provider cover.
+        const blob = await res.blob()
+        return await new Promise<string | null>(resolve => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => resolve(null)
+          reader.readAsDataURL(blob)
+        })
+      })
+      .then(dataUrl => { if (!cancelled) setArchiveCoverDataUrl(dataUrl) })
+      .catch(() => { if (!cancelled) setArchiveCoverDataUrl(null) })
+      .finally(() => { if (!cancelled) setArchiveCoverLoading(false) })
+    return () => { cancelled = true; controller.abort() }
+  }, [open, showIssueCover, archiveFilePath])
 
   const preview = buildFolderPreview(folderPattern, { name, year, publisher, universe, seriesGroup })
 
@@ -139,7 +175,8 @@ export default function SmartMatchMetadataDialog({
       seriesGroup: seriesGroup.trim(),
       description,
       coverImageBase64: coverDataUrl || undefined,
-      issueCoverImageBase64: issueCoverDataUrl || undefined,
+      // Opt-in only: uploaded image wins, else the archive cover; off → the provider supplies it.
+      issueCoverImageBase64: useArchiveCover ? (issueCoverDataUrl || archiveCoverDataUrl || undefined) : undefined,
       writeToFile,
       locked: true,
     })
@@ -220,30 +257,53 @@ export default function SmartMatchMetadataDialog({
             </div>
           </div>
 
-          {/* Issue cover — loose files become one issue; written to that issue's cover + locked. */}
+          {/* Issue cover (loose files become one issue). Off by default: the provider supplies the cover.
+              Toggle on to use the comic's own cover art — the archive's first page, or an upload. */}
           {showIssueCover && (
             <div className="grid gap-1.5">
               <Label className="text-xs flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Issue Cover</Label>
+
+              <div className="flex items-center gap-3 bg-muted/40 p-2.5 rounded-lg border border-border">
+                <Switch id="sm-use-archive-cover" checked={useArchiveCover} onCheckedChange={setUseArchiveCover} />
+                <Label htmlFor="sm-use-archive-cover" className="cursor-pointer text-xs leading-snug">
+                  Use the comic&apos;s own cover art
+                  <span className="block text-[11px] font-normal text-muted-foreground">
+                    {useArchiveCover
+                      ? "Saved as this issue's cover on import and locked from auto-sync."
+                      : "Off — the metadata provider's issue cover is used."}
+                  </span>
+                </Label>
+              </div>
+
               <div className="flex items-start gap-3">
-                <div className="w-[72px] h-[108px] shrink-0 rounded bg-muted border border-border overflow-hidden flex items-center justify-center">
-                  {issueCoverDataUrl
-                    ? <img src={issueCoverDataUrl} alt="Issue cover" className="w-full h-full object-cover" />
-                    : <ImageIcon className="w-6 h-6 text-muted-foreground/40" />}
+                <div className={`w-[72px] h-[108px] shrink-0 rounded bg-muted border border-border overflow-hidden flex items-center justify-center transition-opacity ${useArchiveCover ? "" : "opacity-40"}`}>
+                  {archiveCoverLoading
+                    ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50" />
+                    : (issueCoverDataUrl || archiveCoverDataUrl)
+                      ? <img src={(issueCoverDataUrl || archiveCoverDataUrl) as string} alt="Issue cover" className="w-full h-full object-cover" />
+                      : <ImageIcon className="w-6 h-6 text-muted-foreground/40" />}
                 </div>
                 <div className="flex flex-col gap-2 min-w-0">
+                  {/* Uploading also flips the toggle on — the admin clearly wants their own cover. */}
                   <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary/30 text-primary text-xs font-bold cursor-pointer hover:bg-primary/10 w-fit">
-                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => pickImage(e, setIssueCoverDataUrl)} />
-                    <Upload className="w-3.5 h-3.5" /> {issueCoverDataUrl ? "Replace image" : "Choose image"}
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => pickImage(e, url => { setIssueCoverDataUrl(url); setUseArchiveCover(true) })} />
+                    <Upload className="w-3.5 h-3.5" /> {issueCoverDataUrl ? "Replace image" : "Upload your own"}
                   </label>
-                  {issueCoverDataUrl && (
+                  {issueCoverDataUrl && archiveCoverDataUrl && (
                     <button type="button" onClick={() => setIssueCoverDataUrl(null)} className="text-[11px] text-muted-foreground hover:text-foreground w-fit underline">
-                      Use the provider's issue cover instead
+                      Use the archive&apos;s cover instead
                     </button>
                   )}
                   <p className="text-[11px] text-muted-foreground leading-snug">
-                    {issueCoverDataUrl
-                      ? "Saved as this issue's cover on import and locked from auto-sync."
-                      : "The cover for this single file's issue. Provider's issue cover is used if left blank."}
+                    {!useArchiveCover
+                      ? "The metadata provider supplies this issue's cover."
+                      : issueCoverDataUrl
+                        ? "Your uploaded image is used for this issue."
+                        : archiveCoverLoading
+                          ? "Reading the cover from the comic…"
+                          : archiveCoverDataUrl
+                            ? "Using the cover pulled from the comic archive."
+                            : "No cover could be read from the archive — upload one, or turn this off to use the provider's."}
                   </p>
                 </div>
               </div>

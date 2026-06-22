@@ -56,7 +56,7 @@ export async function GET(request: Request) {
         const authHeader = `Basic ${Buffer.from(`${config.metron_user}:${config.metron_pass}`).toString('base64')}`;
         
         let nextUrl: string | null = `https://metron.cloud/api/issue/?store_date_range_after=${startDateStr}&store_date_range_before=${endDateStr}`;
-        let allIssues: any[] = [];
+        const allIssues: any[] = [];
 
         Logger.log(`[Global Calendar] Fetching Metron Releases: ${nextUrl}`, 'info');
 

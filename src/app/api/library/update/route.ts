@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     const effectiveSeriesGroup = (seriesGroup !== undefined ? seriesGroup : existingMetaRow?.seriesGroup) || "";
     const safeSeriesGroup = effectiveSeriesGroup ? sanitize(effectiveSeriesGroup) : "";
 
-    let relFolderPath = folderPattern
+    const relFolderPath = folderPattern
         .replace(/{Publisher}/gi, safePublisher)
         .replace(/{Series}/gi, safeSeries)
         .replace(/{Year}/gi, safeYear)
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
         .trim();
 
     const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
-    let newPath = path.join(libraryRoot, ...folderParts).replace(/\\/g, '/');
+    const newPath = path.join(libraryRoot, ...folderParts).replace(/\\/g, '/');
     let activePath = currentPath.replace(/\\/g, '/');
 
     if (activePath.toLowerCase() !== newPath.toLowerCase()) {

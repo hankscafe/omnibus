@@ -566,7 +566,7 @@ fn first_image_in_listing(listing: &str) -> Option<String> {
         .filter(|l| {
             if l.is_empty() { return false; }
             if l.to_lowercase().contains("__macosx") { return false; }
-            let base = l.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(l);
+            let base = l.rsplit(['/', '\\']).next().unwrap_or(l);
             if base.starts_with("._") { return false; }
             is_image_name(l)
         })

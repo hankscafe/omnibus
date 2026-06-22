@@ -11,12 +11,14 @@ use serde_json::{json, Value};
 use regex::Regex;
 use std::sync::OnceLock;
 
-/// Default manga-publisher list (parity with queue.ts DEFAULT_MANGA_PUBLISHERS).
+/// Default manga-publisher list, kept in parity with the manga detector (manga_detector.rs /
+/// src/lib/manga-detector.ts). Flags manga in the Discover feed when no `manga_publishers` override is set.
 const DEFAULT_MANGA_PUBLISHERS: &[&str] = &[
     "viz media", "kodansha", "yen press", "seven seas", "shueisha", "shogakukan", "tokyopop",
     "dark horse manga", "vertical", "ghost ship", "denpa", "fakku", "j-novel club", "sublime",
-    "kuma", "ize press", "square enix", "hakusensha", "lezhin", "suiseisha", "nihon bungeisha",
-    "takeshobo", "futabasha", "kadokawa", "akita shoten",
+    "kuma", "ize press", "square enix", "hakusensha", "lezhin", "kadokawa", "futabasha", "houbunsha",
+    "takeshobo", "mag garden", "akita shoten", "shonen gahosha", "nihon bungeisha", "coamix",
+    "gee-whiz", "suiseisha", "ascii media works", "ichijinsha", "project-h", "irodori", "eros comix",
 ];
 
 const MANGA_CONCEPTS: &[&str] = &["manga", "shonen", "seinen", "shojo", "josei", "manhwa", "manhua", "webtoon"];
@@ -64,6 +66,27 @@ fn dedup_take3(v: Vec<String>) -> Vec<String> {
     v.into_iter().filter(|x| seen.insert(x.clone())).take(3).collect()
 }
 
+/// True when `needle` appears in `haystack` as a whole word — bounded by string edges or non-ASCII-
+/// alphanumeric characters — so a blocklist keyword like "love" doesn't match "lovely"/"glove", and
+/// "man" doesn't match "manga". Both arguments must already be lowercased. Shared by the Anna's Archive
+/// content filter (crate::discover::contains_word).
+pub(crate) fn contains_word(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() { return false; }
+    let hb = haystack.as_bytes();
+    let nlen = needle.len();
+    let mut from = 0;
+    while let Some(rel) = haystack[from..].find(needle) {
+        let i = from + rel;
+        let before_ok = i == 0 || !hb[i - 1].is_ascii_alphanumeric();
+        let after = i + nlen;
+        let after_ok = after >= hb.len() || !hb[after].is_ascii_alphanumeric();
+        if before_ok && after_ok { return true; }
+        from = i + 1;
+        if from >= haystack.len() { break; }
+    }
+    false
+}
+
 struct DiscoverConfig {
     cv_api_key: String,
     filter_enabled: bool,
@@ -87,9 +110,16 @@ impl DiscoverConfig {
                 log::debug!("[Discover Sync Debug] Filtered out \"{}\" due to blocked publisher: {}", vol_name, pub_name);
                 return false;
             }
-            if !self.blocked_keywords.is_empty() && self.blocked_keywords.iter().any(|bk| vol_name.contains(bk.as_str())) {
-                log::debug!("[Discover Sync Debug] Filtered out \"{}\" due to blocked keyword", vol_name);
-                return false;
+            if !self.blocked_keywords.is_empty() {
+                // Scan the title + deck + (HTML-stripped) description: adult content often has an
+                // innocuous title but an explicit synopsis, and all three fields are already fetched.
+                let deck = item.get("deck").and_then(|v| v.as_str()).unwrap_or("");
+                let desc = item.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let haystack = format!("{} {} {}", vol_name, deck, strip_html_tags(desc)).to_lowercase();
+                if self.blocked_keywords.iter().any(|bk| contains_word(&haystack, bk)) {
+                    log::debug!("[Discover Sync Debug] Filtered out \"{}\" due to blocked keyword", vol_name);
+                    return false;
+                }
             }
         }
 
@@ -451,6 +481,16 @@ pub async fn run_discover_sync(db: PgPool) -> Result<(i32, String)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn contains_word_respects_boundaries() {
+        assert!(contains_word("adult swim", "adult"));
+        assert!(contains_word("a hentai title", "hentai"));
+        assert!(contains_word("young animal weekly", "young animal"));
+        assert!(!contains_word("lovely glove", "love")); // substring, not a whole word
+        assert!(!contains_word("manhattan", "man"));      // "man" must not match "manga"/"manhattan"
+        assert!(!contains_word("anything", ""));
+    }
+
     fn cfg(mode: &str, filter_enabled: bool) -> DiscoverConfig {
         DiscoverConfig {
             cv_api_key: "k".to_string(),
@@ -483,6 +523,19 @@ mod tests {
         // With the filter off, the blocklist is ignored.
         let off = cfg("SHOW_ALL", false);
         assert!(off.is_valid(&item("Evil Comics Inc", "Adult", &[])));
+    }
+
+    #[test]
+    fn is_valid_scans_deck_and_description_for_keywords() {
+        let c = cfg("SHOW_ALL", true); // blocked_keywords = ["adult"]
+        // Clean title, but the blocked keyword is in the (HTML) description -> filtered.
+        let mut hit = item("Good", "Innocent Title", &[]);
+        hit["description"] = json!("A perfectly <b>adult</b> themed synopsis.");
+        assert!(!c.is_valid(&hit));
+        // No blocked keyword in title/deck/description -> allowed.
+        let mut clean = item("Good", "Innocent Title", &[]);
+        clean["description"] = json!("A wholesome all-ages story.");
+        assert!(c.is_valid(&clean));
     }
 
     #[test]

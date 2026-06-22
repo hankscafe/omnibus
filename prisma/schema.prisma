@@ -45,6 +45,7 @@ model User {
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
   opdsKeys            OpdsKey[]
   koreaderSyncs       KoreaderSync[]
+  readerPreferences   ReaderPreference[]
 }
 
 model ApiKey {
@@ -135,6 +136,7 @@ model Series {
   collectionItems CollectionItem[]
   issueReports    IssueReport[]
   reviews         Review[]
+  readerPreferences ReaderPreference[]
 
   libraryId       String?
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
@@ -274,6 +276,22 @@ model ReadProgress {
   @@unique([userId, issueId]) 
   @@index([userId])
   @@index([issueId])
+}
+
+// Per-user, per-series reader settings (reading mode, scale, brightness, etc.) so a user's choices —
+// especially manga RTL — survive page reloads and carry across issues of the same series.
+model ReaderPreference {
+  id        String   @id @default(cuid())
+  userId    String
+  seriesId  String
+  settings  Json
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  series    Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, seriesId])
+  @@index([userId])
 }
 
 model Favorite {

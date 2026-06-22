@@ -72,6 +72,22 @@ pub async fn is_interactive_enabled(db: &PgPool) -> bool {
         .fetch_optional(db).await.ok().flatten().as_deref() == Some("true")
 }
 
+/// The admin content blocklist (filter_keywords + filter_publishers), lowercased, applied to AA result
+/// titles when the global content filter (filter_enabled) is on — parity with the Discover filter, which
+/// AA previously lacked entirely. AA exposes no separate rating/publisher field, so both lists are matched
+/// against the title (the best signal available). Returns empty (no filtering) when the filter is off.
+async fn content_blocklist(db: &PgPool) -> Vec<String> {
+    let enabled = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'filter_enabled'"#)
+        .fetch_optional(db).await.ok().flatten().as_deref() == Some("true");
+    if !enabled { return Vec::new(); }
+    let vals: Vec<String> = sqlx::query_scalar::<_, String>(
+        r#"SELECT value FROM "SystemSetting" WHERE key IN ('filter_keywords', 'filter_publishers')"#)
+        .fetch_all(db).await.unwrap_or_default();
+    vals.iter()
+        .flat_map(|v| v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect::<Vec<_>>())
+        .collect()
+}
+
 /// Strip the lazy-load HTML comment markers AA wraps each result card in, so a raw-HTTP parse sees the
 /// cards (parity with the milahu/CrazyZard/aapy scrapers, which all do this blunt global replace).
 fn uncomment(html: &str) -> String {
@@ -157,6 +173,7 @@ pub async fn search(
 ) -> anyhow::Result<Vec<ProwlarrResult>> {
     let base = base_url(db).await;
     let allowed_formats = formats(db).await;
+    let blocklist = content_blocklist(db).await;
 
     let interactive_pages: i32 = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'annas_archive_interactive_pages'"#)
         .fetch_optional(db).await?.and_then(|v| v.trim().parse().ok()).unwrap_or(1);
@@ -243,6 +260,15 @@ pub async fn search(
 
             for (md5, title, full_text) in cards {
                 if !seen.insert(md5.clone()) { continue; }
+                // Content filter (when the admin's global filter is on): AA has no rating field, so match
+                // the adult/keyword blocklist against the title — the only signal available here.
+                if !blocklist.is_empty() {
+                    let title_lower = title.to_lowercase();
+                    if blocklist.iter().any(|b| crate::discover::contains_word(&title_lower, b)) {
+                        log::debug!("[Anna's Archive] Filtered \"{}\" (matched content blocklist).", title);
+                        continue;
+                    }
+                }
                 // Parse metadata from the card text MINUS the title, so a format word in the title isn't
                 // misread as the file format.
                 let meta = full_text.replacen(&title, " ", 1);

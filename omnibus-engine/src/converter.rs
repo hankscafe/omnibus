@@ -546,6 +546,145 @@ fn extract_zip(source: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// Cover extraction — pull the first page out of an archive into <folder>/cover.<ext>
+// so unmatched / un-synced series still get a real cover. Reuses natural_cmp +
+// is_image_name + the native RAR/7z extractor; no new archive machinery.
+// ============================================================================
+
+/// First natural-sorted image page of an archive, as (bytes, lowercase-ext). Handles native zip
+/// (.cbz/.zip and zip-in-disguise) directly and shells the RAR/7z extractor for .cbr/.cb7.
+/// Ok(None) when the archive holds no readable image page.
+pub fn extract_first_image(archive_path: &Path) -> Result<Option<(Vec<u8>, String)>> {
+    let ext = archive_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+    let sig = read_file_signature(archive_path);
+
+    if ext == "cbz" || ext == "zip" || is_zip_signature(&sig) {
+        return first_image_from_zip(archive_path);
+    }
+
+    if ext == "cbr" || ext == "rar" || ext == "cb7" {
+        let temp_base = std::env::var("OMNIBUS_CACHE_DIR")
+            .or_else(|_| std::env::var("CACHE_DIR"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let temp_dir = temp_base.join(format!("omnibus_cover_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir)?;
+        let result = (|| -> Result<Option<(Vec<u8>, String)>> {
+            extract_archive_native(archive_path, &temp_dir)?;
+            let mut images = find_images(&temp_dir)?;
+            images.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+            match images.first() {
+                Some(p) => {
+                    let bytes = fs::read(p)?;
+                    let e = p.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+                    Ok(Some((bytes, e)))
+                }
+                None => Ok(None),
+            }
+        })();
+        let _ = fs::remove_dir_all(&temp_dir);
+        return result;
+    }
+
+    Ok(None)
+}
+
+/// First image entry (natural-sorted, skipping macOS junk) read out of a zip-based archive.
+fn first_image_from_zip(archive_path: &Path) -> Result<Option<(Vec<u8>, String)>> {
+    let file = File::open(archive_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+
+    let mut names: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(i) {
+            if entry.is_dir() { continue; }
+            let name = entry.name().to_string();
+            if name.to_lowercase().contains("__macosx") { continue; }
+            let base = name.rsplit('/').next().unwrap_or(&name);
+            if base.starts_with("._") { continue; }
+            if is_image_name(&name) { names.push(name); }
+        }
+    }
+    names.sort_by(|a, b| natural_cmp(a, b));
+
+    match names.first() {
+        Some(first) => {
+            let mut entry = archive.by_name(first)?;
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf)?;
+            let e = Path::new(first).extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            Ok(Some((buf, e)))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Ensures `<folder>` has a usable cover. If one already exists (custom upload, a packed cover, or a
+/// prior extraction) its path is returned untouched; otherwise the first page of `archive_path` is
+/// written to `<folder>/cover.<ext>`. Best-effort — returns None on any failure. Only writes formats
+/// the cover route can serve (jpg/png/webp); anything else is skipped.
+pub fn ensure_folder_cover(folder: &Path, archive_path: &Path) -> Option<PathBuf> {
+    const EXISTING: &[&str] = &[
+        "cover.jpg", "cover.jpeg", "cover.png", "cover.webp",
+        "folder.jpg", "Cover.jpg", "Cover.png", "folder.png",
+    ];
+    for pc in EXISTING {
+        let p = folder.join(pc);
+        if p.exists() { return Some(p); }
+    }
+
+    let (bytes, ext) = match extract_first_image(archive_path) {
+        Ok(Some(v)) => v,
+        Ok(None) => return None,
+        Err(e) => {
+            log::debug!("[Cover] Extraction failed for {:?}: {}", archive_path.file_name().unwrap_or_default(), e);
+            return None;
+        }
+    };
+
+    let dest = match ext.as_str() {
+        "jpg" | "jpeg" => folder.join("cover.jpg"),
+        "png" => folder.join("cover.png"),
+        "webp" => folder.join("cover.webp"),
+        other => {
+            log::debug!("[Cover] First page is .{} (unservable) in {:?}; skipping.", other, archive_path.file_name().unwrap_or_default());
+            return None;
+        }
+    };
+
+    match std::fs::write(&dest, &bytes) {
+        Ok(_) => {
+            log::info!("[Cover] Extracted archive cover for {:?}", folder.file_name().unwrap_or_default());
+            Some(dest)
+        }
+        Err(e) => {
+            log::debug!("[Cover] Failed to write {:?}: {}", dest, e);
+            None
+        }
+    }
+}
+
+/// The lowest natural-sorted comic archive directly inside `folder` (epub is skipped — its cover lives
+/// in OPF metadata, not as a page). Used to pick which file a series cover is pulled from.
+pub fn first_comic_file(folder: &Path) -> Option<PathBuf> {
+    let mut comics: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = fs::read_dir(folder) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if matches!(ext.to_lowercase().as_str(), "cbz" | "cbr" | "zip" | "rar" | "cb7") {
+                        comics.push(path);
+                    }
+                }
+            }
+        }
+    }
+    comics.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+    comics.into_iter().next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,5 +736,52 @@ mod tests {
         // No listing (unar/zip path) -> nothing to validate.
         let unar = NativeExtraction { expected_pages: None, unrar_exit_detail: None };
         assert!(validate_extraction(&unar, 0).is_ok());
+    }
+
+    #[test]
+    fn extract_first_image_picks_first_page_and_skips_comicinfo() {
+        let dir = std::env::temp_dir().join(format!("omnibus_cov_first_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("test.cbz");
+        {
+            let f = File::create(&zip_path).unwrap();
+            let mut zw = ZipWriter::new(f);
+            let opt = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            // Intentionally out of natural order + a ComicInfo.xml that must be ignored.
+            zw.start_file("page10.jpg", opt).unwrap(); zw.write_all(b"TEN").unwrap();
+            zw.start_file("ComicInfo.xml", opt).unwrap(); zw.write_all(b"<x/>").unwrap();
+            zw.start_file("page2.jpg", opt).unwrap(); zw.write_all(b"TWO").unwrap();
+            zw.start_file("page1.jpg", opt).unwrap(); zw.write_all(b"ONE").unwrap();
+            zw.finish().unwrap();
+        }
+        let (bytes, ext) = extract_first_image(&zip_path).unwrap().expect("an image page");
+        assert_eq!(ext, "jpg");
+        assert_eq!(bytes, b"ONE"); // page1 wins via natural sort
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_folder_cover_keeps_an_existing_cover() {
+        let dir = std::env::temp_dir().join(format!("omnibus_cov_skip_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("cover.jpg"), b"existing").unwrap();
+        // A bogus archive path must not even be opened, because a cover already exists.
+        let got = ensure_folder_cover(&dir, Path::new("does_not_exist.cbz"));
+        assert_eq!(got, Some(dir.join("cover.jpg")));
+        assert_eq!(fs::read(dir.join("cover.jpg")).unwrap(), b"existing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_comic_file_picks_lowest_and_ignores_noncomics() {
+        let dir = std::env::temp_dir().join(format!("omnibus_first_comic_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Series 010.cbz"), b"").unwrap();
+        fs::write(dir.join("Series 002.cbz"), b"").unwrap();
+        fs::write(dir.join("cover.jpg"), b"").unwrap(); // not a comic
+        fs::write(dir.join("notes.txt"), b"").unwrap();
+        let got = first_comic_file(&dir).unwrap();
+        assert_eq!(got.file_name().unwrap().to_string_lossy(), "Series 002.cbz");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -125,6 +125,7 @@ model Series {
   remoteCoverUrl  String?  // Original ComicVine/Metron cover URL (coverUrl becomes a local path after caching)
   seriesJsonWritten Boolean @default(false) // Omnibus owns the series.json in this folder; foreign files are never overwritten
   hasCustomMetadata Boolean @default(false) // Series was manually curated in the metadata editor; auto-sync must not overwrite its narrative fields
+  hasCustomCover  Boolean @default(false) // Admin uploaded a custom cover.jpg; extraction + provider-sync must never overwrite it
   lastMetadataSync DateTime? // Last successful provider sync (UTC); keys incremental fetches (Metron modified_gt)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
@@ -173,6 +174,7 @@ model Issue {
   teams           String?
   locations       String?
   hasCustomMetadata Boolean @default(false)
+  hasCustomCover  Boolean @default(false) // Admin set a custom issue cover (in the Smart Matcher); sync must not overwrite coverUrl
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt

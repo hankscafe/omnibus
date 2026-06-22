@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
-import { FileText, FileX, FolderTree, Check } from "lucide-react"
+import { useToast } from "@/components/ui/use-toast"
+import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload } from "lucide-react"
 
 // The metadata an admin can pin to an unmatched item before accepting it. Stored per-item on the
 // Smart Matcher page and merged into the /api/library/match-series request on Accept.
@@ -18,6 +19,10 @@ export interface SmartMatchOverride {
   universe?: string
   seriesGroup?: string
   description?: string
+  /** A data-URL cover image the admin chose; written to <folder>/cover.jpg on import + locked. */
+  coverImageBase64?: string
+  /** A data-URL issue cover (loose files only); written to the issue's cover + locked on import. */
+  issueCoverImageBase64?: string
   writeToFile?: boolean
   locked?: boolean
 }
@@ -27,6 +32,8 @@ interface Seed {
   year?: string | number
   publisher?: string
   description?: string
+  /** The provider's cover thumbnail (suggestion.image), shown as the current cover. */
+  image?: string
 }
 
 interface Props {
@@ -42,6 +49,10 @@ interface Props {
   initialOverride?: SmartMatchOverride
   /** Global default for the write-to-ComicInfo.xml toggle (metadata_write_comicinfo). */
   defaultWriteToFile?: boolean
+  /** Show the per-issue cover picker (loose files become a single issue). */
+  showIssueCover?: boolean
+  /** Current issue cover data URL (from the item's issue override), to re-edit. */
+  initialIssueCover?: string
   onSave: (override: SmartMatchOverride) => void
 }
 
@@ -70,8 +81,10 @@ export function buildFolderPreview(
 }
 
 export default function SmartMatchMetadataDialog({
-  open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true, onSave,
+  open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true,
+  showIssueCover = false, initialIssueCover, onSave,
 }: Props) {
+  const { toast } = useToast()
   const [name, setName] = useState("")
   const [year, setYear] = useState("")
   const [publisher, setPublisher] = useState("")
@@ -79,6 +92,9 @@ export default function SmartMatchMetadataDialog({
   const [seriesGroup, setSeriesGroup] = useState("")
   const [description, setDescription] = useState("")
   const [writeToFile, setWriteToFile] = useState(defaultWriteToFile)
+  // Admin-chosen covers as data URLs; null = use the provider/automatic cover.
+  const [coverDataUrl, setCoverDataUrl] = useState<string | null>(null)
+  const [issueCoverDataUrl, setIssueCoverDataUrl] = useState<string | null>(null)
 
   // Re-seed each time the dialog opens (a new target / fresh override). Prefer the existing override,
   // then the suggestion seed, then blank.
@@ -91,11 +107,28 @@ export default function SmartMatchMetadataDialog({
     setSeriesGroup(initialOverride?.seriesGroup ?? "")
     setDescription(initialOverride?.description ?? seed?.description ?? "")
     setWriteToFile(initialOverride?.writeToFile ?? defaultWriteToFile)
+    setCoverDataUrl(initialOverride?.coverImageBase64 ?? null)
+    setIssueCoverDataUrl(initialIssueCover ?? null)
     // Intentionally seed on open only — editing fields shouldn't reset them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const preview = buildFolderPreview(folderPattern, { name, year, publisher, universe, seriesGroup })
+
+  // Reads the picked file into a data URL via `setUrl` (shared by the series + issue cover pickers).
+  const pickImage = (e: React.ChangeEvent<HTMLInputElement>, setUrl: (v: string) => void) => {
+    const file = e.target.files?.[0]
+    e.target.value = "" // allow re-picking the same file
+    if (!file) return
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Choose an image under 15MB.", variant: "destructive" })
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => setUrl(reader.result as string)
+    reader.onerror = () => toast({ title: "Couldn't read image", variant: "destructive" })
+    reader.readAsDataURL(file)
+  }
 
   const handleSave = () => {
     onSave({
@@ -105,6 +138,8 @@ export default function SmartMatchMetadataDialog({
       universe: universe.trim(),
       seriesGroup: seriesGroup.trim(),
       description,
+      coverImageBase64: coverDataUrl || undefined,
+      issueCoverImageBase64: issueCoverDataUrl || undefined,
       writeToFile,
       locked: true,
     })
@@ -154,6 +189,66 @@ export default function SmartMatchMetadataDialog({
             <Label className="text-xs">Summary / Description</Label>
             <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={4} className="bg-background border-border" />
           </div>
+
+          {/* Series cover — written to <folder>/cover.jpg + locked on import. */}
+          <div className="grid gap-1.5">
+            <Label className="text-xs flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Series Cover</Label>
+            <div className="flex items-start gap-3">
+              <div className="w-[72px] h-[108px] shrink-0 rounded bg-muted border border-border overflow-hidden flex items-center justify-center">
+                {coverDataUrl || seed?.image
+                  ? <img src={coverDataUrl || seed?.image} alt="Series cover" className="w-full h-full object-cover" />
+                  : <ImageIcon className="w-6 h-6 text-muted-foreground/40" />}
+              </div>
+              <div className="flex flex-col gap-2 min-w-0">
+                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary/30 text-primary text-xs font-bold cursor-pointer hover:bg-primary/10 w-fit">
+                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => pickImage(e, setCoverDataUrl)} />
+                  <Upload className="w-3.5 h-3.5" /> {coverDataUrl ? "Replace image" : "Choose image"}
+                </label>
+                {coverDataUrl && (
+                  <button type="button" onClick={() => setCoverDataUrl(null)} className="text-[11px] text-muted-foreground hover:text-foreground w-fit underline">
+                    Use the {seed?.image ? "provider" : "automatic"} cover instead
+                  </button>
+                )}
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  {coverDataUrl
+                    ? "Saved as the series cover on import and locked from auto-sync."
+                    : seed?.image
+                      ? "Using the provider's cover. Upload to override it."
+                      : "No provider cover — upload one, or the comic's first page is used."}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Issue cover — loose files become one issue; written to that issue's cover + locked. */}
+          {showIssueCover && (
+            <div className="grid gap-1.5">
+              <Label className="text-xs flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Issue Cover</Label>
+              <div className="flex items-start gap-3">
+                <div className="w-[72px] h-[108px] shrink-0 rounded bg-muted border border-border overflow-hidden flex items-center justify-center">
+                  {issueCoverDataUrl
+                    ? <img src={issueCoverDataUrl} alt="Issue cover" className="w-full h-full object-cover" />
+                    : <ImageIcon className="w-6 h-6 text-muted-foreground/40" />}
+                </div>
+                <div className="flex flex-col gap-2 min-w-0">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary/30 text-primary text-xs font-bold cursor-pointer hover:bg-primary/10 w-fit">
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => pickImage(e, setIssueCoverDataUrl)} />
+                    <Upload className="w-3.5 h-3.5" /> {issueCoverDataUrl ? "Replace image" : "Choose image"}
+                  </label>
+                  {issueCoverDataUrl && (
+                    <button type="button" onClick={() => setIssueCoverDataUrl(null)} className="text-[11px] text-muted-foreground hover:text-foreground w-fit underline">
+                      Use the provider's issue cover instead
+                    </button>
+                  )}
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    {issueCoverDataUrl
+                      ? "Saved as this issue's cover on import and locked from auto-sync."
+                      : "The cover for this single file's issue. Provider's issue cover is used if left blank."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Live folder-path preview — exactly mirrors the path match-series will create. */}
           <div className="grid gap-1.5">

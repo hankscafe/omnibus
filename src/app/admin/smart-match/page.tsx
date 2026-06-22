@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -30,7 +30,7 @@ export default function SmartMatchPage() {
 
     const [exactIssueId, setExactIssueId] = useState("");
     const [exactIssueNumber, setExactIssueNumber] = useState("");
-    const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string }>>({});
+    const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string, coverImageBase64?: string }>>({});
     const [manualMatchResult, setManualMatchResult] = useState<any>(null);
     
     // --- NEW: Multi-Select & Bulk Processing State ---
@@ -177,16 +177,23 @@ export default function SmartMatchPage() {
                         universe: meta.universe || undefined,
                         seriesGroup: meta.seriesGroup || undefined,
                         description: meta.description || undefined,
+                        coverImageBase64: meta.coverImageBase64 || undefined,
                         writeToFile: meta.writeToFile,
                         lockMetadata: true,
                     } : {}),
                     exactIssueId: issueOv.issueId || undefined,
-                    exactIssueNumber: issueOv.issueNumber || undefined
+                    exactIssueNumber: issueOv.issueNumber || undefined,
+                    issueCoverImageBase64: issueOv.coverImageBase64 || undefined
                 })
             });
 
             if (res.ok) {
-                toast({ title: "Matched Successfully!", description: `${suggestion.name} has been linked and organized.` });
+                const result = await res.json().catch(() => ({}));
+                if (result.conflicts > 0) {
+                    toast({ title: "Matched with conflicts", description: `${suggestion.name} was linked, but ${result.conflicts} duplicate file(s) were left in place (not overwritten). Check the logs.`, variant: "destructive" });
+                } else {
+                    toast({ title: "Matched Successfully!", description: `${suggestion.name} has been linked and organized.` });
+                }
                 setUnmatched(prev => prev.filter(s => s.id !== series.id));
                 return true;
             } else {
@@ -374,14 +381,44 @@ export default function SmartMatchPage() {
             year: seedSource.year,
             publisher: seedSource.publisher,
             description: seedSource.description,
+            image: seedSource.image,
         } : null);
         setMetaEditorOpen(true);
     };
 
     const handleMetaSave = (override: SmartMatchOverride) => {
         if (!metaEditorTarget) return;
-        setMetadataOverrides(prev => ({ ...prev, [metaEditorTarget.id]: override }));
+        const target = metaEditorTarget;
+        setMetadataOverrides(prev => ({ ...prev, [target.id]: override }));
+        // For a loose file (one issue), keep the issue cover in the issue-override store so it flows to
+        // match-series and stays in sync with the Custom-ID Issue Mapping picker.
+        if (target.isRawFile) {
+            setIssueOverrides(prev => ({
+                ...prev,
+                [target.id]: {
+                    issueNumber: prev[target.id]?.issueNumber || "",
+                    issueId: prev[target.id]?.issueId || "",
+                    coverImageBase64: override.issueCoverImageBase64,
+                }
+            }));
+        }
         toast({ title: "Details saved", description: "Applied when you accept this match." });
+    };
+
+    // Read a per-issue cover image into the item's override (applied to that issue on Accept).
+    const handleIssueCoverPick = (id: string, file: File | undefined) => {
+        if (!file) return;
+        if (file.size > 15 * 1024 * 1024) {
+            toast({ title: "Image too large", description: "Choose an image under 15MB.", variant: "destructive" });
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => setIssueOverrides(prev => ({
+            ...prev,
+            [id]: { issueNumber: prev[id]?.issueNumber || "", issueId: prev[id]?.issueId || "", coverImageBase64: reader.result as string }
+        }));
+        reader.onerror = () => toast({ title: "Couldn't read image", variant: "destructive" });
+        reader.readAsDataURL(file);
     };
 
     if (loading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
@@ -664,17 +701,17 @@ export default function SmartMatchPage() {
 
             {/* MANUAL MATCH DIALOG */}
             <Dialog open={manualMatchOpen} onOpenChange={setManualMatchOpen}>
-                <DialogContent className="sm:max-w-md bg-background border-border rounded-xl w-[95%]">
-                    <DialogHeader>
+                <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col bg-background border-border rounded-xl w-[95%]">
+                    <DialogHeader className="shrink-0">
                         <DialogTitle>Manual Match</DialogTitle>
                         <DialogDescription>
-                            {isBulkManualMatch 
+                            {isBulkManualMatch
                                 ? `Enter the exact ID to apply to the ${selectedItems.size} selected items.`
                                 : `Enter the exact ID for ${manualMatchTarget?.name}.`}
                         </DialogDescription>
                     </DialogHeader>
-                    
-                    <div className="py-2 space-y-4">
+
+                    <div className="py-2 pr-3 space-y-4 flex-1 min-h-0 overflow-y-auto">
                         {metronConfigured && (
                             <div className="space-y-2">
                                 <Label>Metadata Source</Label>
@@ -782,7 +819,7 @@ export default function SmartMatchPage() {
 
                         {/* --- OPTIONAL ISSUE MAPPING (Only visible if preview loaded) --- */}
                         {manualMatchResult && ((manualMatchTarget?.isRawFile && !isBulkManualMatch) || isBulkManualMatch) && (
-                            <div className="space-y-3 mt-2 pt-4 border-t border-border max-h-[35vh] overflow-y-auto pr-2 animate-in fade-in">
+                            <div className="space-y-3 mt-2 pt-4 border-t border-border animate-in fade-in">
                                 <h4 className="font-bold text-sm text-primary flex items-center gap-2">
                                     <FileText className="w-4 h-4" /> Issue Mapping (Auto-Filled)
                                 </h4>
@@ -792,30 +829,51 @@ export default function SmartMatchPage() {
                                 
                                 {/* Single Match View */}
                                 {!isBulkManualMatch && manualMatchTarget && (
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-1">
-                                            <Label className="text-[11px] text-muted-foreground uppercase">Issue Number</Label>
-                                            <Input 
-                                                placeholder="e.g. 1" 
-                                                value={issueOverrides[manualMatchTarget.id]?.issueNumber ?? exactIssueNumber} 
-                                                onChange={e => {
-                                                    setExactIssueNumber(e.target.value);
-                                                    setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueNumber: e.target.value } }));
-                                                }} 
-                                                className="bg-background border-border h-9" 
-                                            />
+                                    <div className="space-y-3">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-1">
+                                                <Label className="text-[11px] text-muted-foreground uppercase">Issue Number</Label>
+                                                <Input
+                                                    placeholder="e.g. 1"
+                                                    value={issueOverrides[manualMatchTarget.id]?.issueNumber ?? exactIssueNumber}
+                                                    onChange={e => {
+                                                        setExactIssueNumber(e.target.value);
+                                                        setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueNumber: e.target.value } }));
+                                                    }}
+                                                    className="bg-background border-border h-9"
+                                                />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-[11px] text-muted-foreground uppercase">Exact Issue ID</Label>
+                                                <Input
+                                                    placeholder="Optional"
+                                                    value={issueOverrides[manualMatchTarget.id]?.issueId ?? exactIssueId}
+                                                    onChange={e => {
+                                                        setExactIssueId(e.target.value);
+                                                        setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueId: e.target.value } }));
+                                                    }}
+                                                    className="bg-background border-border h-9"
+                                                />
+                                            </div>
                                         </div>
                                         <div className="space-y-1">
-                                            <Label className="text-[11px] text-muted-foreground uppercase">Exact Issue ID</Label>
-                                            <Input 
-                                                placeholder="Optional" 
-                                                value={issueOverrides[manualMatchTarget.id]?.issueId ?? exactIssueId} 
-                                                onChange={e => {
-                                                    setExactIssueId(e.target.value);
-                                                    setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueId: e.target.value } }));
-                                                }} 
-                                                className="bg-background border-border h-9" 
-                                            />
+                                            <Label className="text-[11px] text-muted-foreground uppercase">Issue Cover (optional)</Label>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-12 h-16 shrink-0 rounded bg-muted border border-border overflow-hidden flex items-center justify-center">
+                                                    {issueOverrides[manualMatchTarget.id]?.coverImageBase64
+                                                        ? <img src={issueOverrides[manualMatchTarget.id]?.coverImageBase64} className="w-full h-full object-cover" alt="Issue cover" />
+                                                        : <ImageIcon className="w-4 h-4 text-muted-foreground/40" />}
+                                                </div>
+                                                <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-primary/30 text-primary text-xs font-bold cursor-pointer hover:bg-primary/10">
+                                                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => { handleIssueCoverPick(manualMatchTarget.id, e.target.files?.[0]); e.currentTarget.value = ''; }} />
+                                                    <Upload className="w-3.5 h-3.5" /> {issueOverrides[manualMatchTarget.id]?.coverImageBase64 ? 'Replace' : 'Choose'}
+                                                </label>
+                                                {issueOverrides[manualMatchTarget.id]?.coverImageBase64 && (
+                                                    <button type="button" onClick={() => setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], coverImageBase64: undefined } }))} className="text-[11px] text-muted-foreground hover:text-foreground underline">
+                                                        Clear
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -827,24 +885,37 @@ export default function SmartMatchPage() {
                                     
                                     return (
                                         <div key={id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 p-2.5 border border-border rounded-lg bg-muted/20 items-center">
-                                            <div className="sm:col-span-6 truncate text-xs font-medium text-foreground" title={item.name}>
+                                            <div className="sm:col-span-5 truncate text-xs font-medium text-foreground" title={item.name}>
                                                 {item.name}
                                             </div>
-                                            <div className="sm:col-span-3">
-                                                <Input 
-                                                    placeholder="Issue #" 
-                                                    value={issueOverrides[id]?.issueNumber || ""} 
-                                                    onChange={e => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], issueNumber: e.target.value, issueId: prev[id]?.issueId || "" } }))} 
-                                                    className="h-8 text-xs bg-background border-border" 
+                                            <div className="sm:col-span-2">
+                                                <Input
+                                                    placeholder="Issue #"
+                                                    value={issueOverrides[id]?.issueNumber || ""}
+                                                    onChange={e => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], issueNumber: e.target.value, issueId: prev[id]?.issueId || "" } }))}
+                                                    className="h-8 text-xs bg-background border-border"
                                                 />
                                             </div>
                                             <div className="sm:col-span-3">
-                                                <Input 
-                                                    placeholder="Issue ID" 
-                                                    value={issueOverrides[id]?.issueId || ""} 
-                                                    onChange={e => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], issueId: e.target.value, issueNumber: prev[id]?.issueNumber || "" } }))} 
-                                                    className="h-8 text-xs bg-background border-border" 
+                                                <Input
+                                                    placeholder="Issue ID"
+                                                    value={issueOverrides[id]?.issueId || ""}
+                                                    onChange={e => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], issueId: e.target.value, issueNumber: prev[id]?.issueNumber || "" } }))}
+                                                    className="h-8 text-xs bg-background border-border"
                                                 />
+                                            </div>
+                                            <div className="sm:col-span-2 flex items-center gap-1.5">
+                                                <label className="relative w-8 h-8 shrink-0 rounded border border-border overflow-hidden cursor-pointer flex items-center justify-center bg-muted hover:border-primary/50" title={issueOverrides[id]?.coverImageBase64 ? "Replace issue cover" : "Set issue cover"}>
+                                                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => { handleIssueCoverPick(id, e.target.files?.[0]); e.currentTarget.value = ''; }} />
+                                                    {issueOverrides[id]?.coverImageBase64
+                                                        ? <img src={issueOverrides[id]?.coverImageBase64} className="w-full h-full object-cover" alt="" />
+                                                        : <Upload className="w-3.5 h-3.5 text-muted-foreground" />}
+                                                </label>
+                                                {issueOverrides[id]?.coverImageBase64 && (
+                                                    <button type="button" onClick={() => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], coverImageBase64: undefined } }))} className="text-muted-foreground hover:text-foreground" title="Clear">
+                                                        <X className="w-3.5 h-3.5" />
+                                                    </button>
+                                                )}
                                             </div>
                                         </div>
                                     );
@@ -853,7 +924,7 @@ export default function SmartMatchPage() {
                         )}
                     </div>
                     
-                    <DialogFooter className="gap-2 sm:gap-0 mt-2">
+                    <DialogFooter className="gap-2 sm:gap-0 mt-2 shrink-0">
                         <Button variant="outline" onClick={() => { setManualMatchOpen(false); setManualMatchResult(null); }} className="border-border hover:bg-muted text-foreground">Cancel</Button>
                         <Button onClick={handleApplyManualMatch} disabled={!manualMatchResult} className="bg-green-600 text-white hover:bg-green-700 font-bold">
                             <Check className="w-4 h-4 mr-2" /> Apply Match
@@ -871,6 +942,8 @@ export default function SmartMatchPage() {
                 folderPattern={folderPattern}
                 initialOverride={metaEditorTarget ? metadataOverrides[metaEditorTarget.id] : undefined}
                 defaultWriteToFile={writeToFileDefault}
+                showIssueCover={!!metaEditorTarget?.isRawFile}
+                initialIssueCover={metaEditorTarget ? issueOverrides[metaEditorTarget.id]?.coverImageBase64 : undefined}
                 onSave={handleMetaSave}
             />
 

@@ -193,6 +193,7 @@ export default function SettingsPage() {
     metron_user: "", metron_pass: "",
     export_series_json: "false",
     metadata_write_comicinfo: "true",
+    cover_source: "metadata",
     series_ended_months: "18",
     remote_path_mapping: "", local_path_mapping: "", flaresolverr_url: "", flaresolverr_timeout: "300",
     filter_enabled: "false", filter_publishers: "", filter_keywords: "",
@@ -1077,6 +1078,29 @@ export default function SettingsPage() {
                                     Default for the Edit Metadata dialog: when on, manual edits are embedded back into each comic's <code>ComicInfo.xml</code>. When off, edits are kept in Omnibus only and the files are left untouched (Komga-style). Each edit can still override this with its own toggle.
                                 </p>
                             </div>
+                        </div>
+
+                        {/* Cover art source */}
+                        <div className="bg-muted/30 p-4 rounded-lg border border-border space-y-3">
+                            <div className="grid gap-1">
+                                <Label className="font-bold text-base text-foreground">Cover Art Source</Label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Where series covers come from. The first page of a comic can be extracted into <code>cover.jpg</code> so even un-matched books get a real cover. An admin's uploaded cover always wins. Changing this won't re-cover series that already have one.
+                                </p>
+                            </div>
+                            <Select
+                                value={config.cover_source || "metadata"}
+                                onValueChange={(v) => setConfig({...config, cover_source: v})}
+                            >
+                                <SelectTrigger className="w-full sm:w-[380px] h-12 sm:h-10 bg-muted/50 border-border text-foreground font-bold">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="metadata">Metadata provider, archive fills gaps (default)</SelectItem>
+                                    <SelectItem value="archive">Comic archive first page, provider fills gaps</SelectItem>
+                                    <SelectItem value="metadata_only">Metadata provider only (no archive extraction)</SelectItem>
+                                </SelectContent>
+                            </Select>
                         </div>
                     </div>
 

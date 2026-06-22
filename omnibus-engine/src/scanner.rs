@@ -791,6 +791,61 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         issues_inserted += 1;
     }
 
+    // ---------------------------------------------------------
+    // 5C. COVER BACKFILL → give cover-less series a real first-page cover
+    // ---------------------------------------------------------
+    // Unmatched / un-synced series never reach the provider sync's resolve_cover, so they'd otherwise
+    // show the placeholder. Pull the first page of their lowest archive into <folder>/cover.<ext>.
+    // Idempotent + cheap on re-scans: skips series that already have a coverUrl or a custom cover.
+    let cover_source = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'cover_source'"#)
+        .fetch_optional(&db).await.ok().flatten().unwrap_or_else(|| "metadata".to_string());
+
+    if cover_source != "metadata_only" {
+        let cover_targets = sqlx::query(
+            r#"SELECT id, "folderPath" FROM "Series"
+               WHERE "libraryId" = $1 AND "hasCustomCover" = false
+                 AND ("coverUrl" IS NULL OR "coverUrl" = '')"#,
+        )
+        .bind(&library_id)
+        .fetch_all(&db)
+        .await
+        .unwrap_or_default();
+
+        if !cover_targets.is_empty() {
+            log::info!("[Cover] Backfilling covers for {} series without one.", cover_targets.len());
+            let cover_sem = Arc::new(Semaphore::new(cfg.scan_workers));
+            let mut cover_set: JoinSet<Option<(String, String)>> = JoinSet::new();
+            for row in cover_targets {
+                let id: String = row.get("id");
+                let folder: String = row.get("folderPath");
+                let sem = cover_sem.clone();
+                cover_set.spawn(async move {
+                    let _permit = sem.acquire_owned().await.ok();
+                    tokio::task::spawn_blocking(move || {
+                        let folder_path = Path::new(&folder);
+                        let first = crate::converter::first_comic_file(folder_path)?;
+                        let cover = crate::converter::ensure_folder_cover(folder_path, &first)?;
+                        Some((id, format!("/api/library/cover?path={}", urlencoding::encode(&cover.to_string_lossy()))))
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                });
+            }
+            let mut covered = 0;
+            while let Some(res) = cover_set.join_next().await {
+                if let Ok(Some((id, url))) = res {
+                    if sqlx::query(r#"UPDATE "Series" SET "coverUrl" = $1 WHERE id = $2"#)
+                        .bind(&url).bind(&id).execute(&db).await.is_ok()
+                    {
+                        covered += 1;
+                    }
+                }
+            }
+            if covered > 0 { log::info!("[Cover] Backfilled {} archive cover(s).", covered); }
+        }
+    }
+
     let duration = start_time.elapsed();
     log::info!(
         "⚡ Scan complete in {:?}! Added {} Series and {} Issues.",

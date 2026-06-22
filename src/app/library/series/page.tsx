@@ -12,7 +12,7 @@ import {
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
-  MapPin, Shield, FolderSearch
+  MapPin, Shield, FolderSearch, Upload, RotateCcw
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -61,9 +61,11 @@ function SeriesContent() {
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string}>({
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED'
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean}>({
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false
   });
+
+  const [coverUploading, setCoverUploading] = useState(false);
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
   const [metronConfigured, setMetronConfigured] = useState(false);
@@ -244,9 +246,10 @@ function SeriesContent() {
             setMissingIssues(data.missingIssues || []);
             setDuplicates(data.duplicates || []);
             
-            setSeriesInfo({ 
-                name: data.seriesName || data.name || "Unknown Series", 
-                cover: data.coverUrl, 
+            setSeriesInfo({
+                name: data.seriesName || data.name || "Unknown Series",
+                cover: data.coverUrl,
+                hasCustomCover: data.hasCustomCover || false,
                 cvId: data.cvId,
                 metadataId: data.metadataId,
                 metadataSource: data.metadataSource || 'COMICVINE',
@@ -393,10 +396,11 @@ function SeriesContent() {
           setDownloadedIssues(data.downloadedIssues || []);
           setMissingIssues(data.missingIssues || []);
           
-          setSeriesInfo(prev => ({ 
+          setSeriesInfo(prev => ({
               ...prev,
-              name: data.seriesName || data.name || prev.name, 
-              cover: data.coverUrl !== undefined ? data.coverUrl : prev.cover, 
+              name: data.seriesName || data.name || prev.name,
+              cover: data.coverUrl !== undefined ? data.coverUrl : prev.cover,
+              hasCustomCover: data.hasCustomCover !== undefined ? data.hasCustomCover : prev.hasCustomCover,
               cvId: data.cvId !== undefined ? data.cvId : prev.cvId,
               metadataId: data.metadataId !== undefined ? data.metadataId : prev.metadataId,
               metadataSource: data.metadataSource || prev.metadataSource,
@@ -539,8 +543,63 @@ function SeriesContent() {
             body: JSON.stringify({ seriesId: seriesInfo.id })
         });
     } catch (e) {
-        setSeriesInfo(prev => ({ ...prev, isFavorite: currentStatus })); 
+        setSeriesInfo(prev => ({ ...prev, isFavorite: currentStatus }));
         toast({ title: "Error", description: "Failed to update favorites.", variant: "destructive" });
+    }
+  };
+
+  // Admin: upload a custom cover (writes <folder>/cover.jpg + locks it from auto-sync/extraction).
+  const handleCoverFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // let the same file be re-picked later
+    if (!file || !seriesInfo.path) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Please choose an image under 15MB.", variant: "destructive" });
+      return;
+    }
+    setCoverUploading(true);
+    try {
+      const imageBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Could not read the image file."));
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch('/api/library/cover-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPath: seriesInfo.path, imageBase64 })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setSeriesInfo(prev => ({ ...prev, cover: data.coverUrl, hasCustomCover: true }));
+      setActiveIssue(null); // show the new series cover, not an issue cover
+      toast({ title: "Cover updated", description: "Your custom cover has been saved." });
+    } catch (err) {
+      toast({ title: "Upload failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
+  // Admin: drop the custom cover so the next scan/sync re-resolves it (archive or provider).
+  const handleRevertCover = async () => {
+    if (!seriesInfo.path) return;
+    setCoverUploading(true);
+    try {
+      const res = await fetch('/api/library/cover-upload', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPath: seriesInfo.path })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Revert failed');
+      setSeriesInfo(prev => ({ ...prev, cover: null, hasCustomCover: false }));
+      toast({ title: "Reverted to automatic", description: "The cover will be regenerated on the next scan or metadata refresh." });
+    } catch (err) {
+      toast({ title: "Revert failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
     }
   };
 
@@ -946,6 +1005,22 @@ function SeriesContent() {
                               </Badge>
                           ) : null}
                       </div>
+
+                      {/* Admin: change / revert the series cover */}
+                      {isAdmin && (
+                          <div className="absolute bottom-2 right-2 z-30 flex items-center gap-1.5">
+                              <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">
+                                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleCoverFile} disabled={coverUploading} />
+                                  {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                                  <span>Cover</span>
+                              </label>
+                              {seriesInfo.hasCustomCover && !coverUploading && (
+                                  <button onClick={handleRevertCover} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors" title="Revert to automatic cover">
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                  </button>
+                              )}
+                          </div>
+                      )}
                   </div>
                   
                   <div className="text-center md:text-left space-y-1">

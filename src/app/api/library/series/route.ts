@@ -235,8 +235,9 @@ export async function GET(request: Request) {
       universe: seriesRecord?.universe || null,
       seriesGroup: (seriesRecord as any)?.seriesGroup || null,
       matchState: seriesRecord?.matchState || 'UNMATCHED',
-      path: folderPath, 
-      coverUrl: finalSeriesCoverUrl, 
+      path: folderPath,
+      coverUrl: finalSeriesCoverUrl,
+      hasCustomCover: (seriesRecord as any)?.hasCustomCover || false,
       downloadedIssues, 
       missingIssues,
       duplicates: duplicatesList

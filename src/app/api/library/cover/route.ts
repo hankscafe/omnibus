@@ -109,15 +109,17 @@ export async function GET(request: NextRequest) {
     }
 
     const stat = fs.statSync(realTarget);
+    const contentTypeFor = (ext: string) => ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+
     if (stat.isDirectory()) {
-        const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
+        const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
         for (const pc of possibleCovers) {
             const coverPath = path.join(realTarget, pc);
             if (fs.existsSync(coverPath)) {
                 const buffer = fs.readFileSync(coverPath);
                 const ext = path.extname(pc).toLowerCase();
-                return new NextResponse(buffer, { 
-                    headers: { 'Content-Type': ext === '.png' ? 'image/png' : 'image/jpeg', 'Cache-Control': 'public, max-age=86400' } 
+                return new NextResponse(buffer, {
+                    headers: { 'Content-Type': contentTypeFor(ext), 'Cache-Control': 'public, max-age=86400' }
                 });
             }
         }
@@ -126,12 +128,12 @@ export async function GET(request: NextRequest) {
 
     const ext = path.extname(realTarget).toLowerCase();
     const buffer = fs.readFileSync(realTarget);
-    
-    return new NextResponse(buffer, { 
-        headers: { 
-            'Content-Type': ext === '.png' ? 'image/png' : 'image/jpeg',
+
+    return new NextResponse(buffer, {
+        headers: {
+            'Content-Type': contentTypeFor(ext),
             'Cache-Control': 'public, max-age=86400'
-        } 
+        }
     });
     
   } catch (error) {

@@ -12,16 +12,22 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
         .await?;
     let cv_api_key = crate::secret_crypto::decrypt_setting(&db, cv_api_key).await;
 
+    // Global cover-source preference: 'metadata' (provider wins, default) | 'archive' (keep an
+    // extracted/local cover, don't overwrite with the provider) | 'metadata_only'. A custom-uploaded
+    // cover (hasCustomCover) always wins regardless of this.
+    let cover_source: String = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'cover_source'"#)
+        .fetch_optional(&db).await.ok().flatten().unwrap_or_else(|| "metadata".to_string());
+
     // Resolve target series records.
     let series_list = match &series_ids {
         Some(ids) => {
-            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE id = ANY($1) AND "metadataId" IS NOT NULL"#)
+            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", "hasCustomCover", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE id = ANY($1) AND "metadataId" IS NOT NULL"#)
                 .bind(ids)
                 .fetch_all(&db)
                 .await?
         }
         None => {
-            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE "metadataId" IS NOT NULL ORDER BY "updatedAt" ASC LIMIT 15"#)
+            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", "hasCustomCover", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE "metadataId" IS NOT NULL ORDER BY "updatedAt" ASC LIMIT 15"#)
                 .fetch_all(&db)
                 .await?
         }
@@ -45,6 +51,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
         let folder_path: String = series.try_get("folderPath").unwrap_or_default();
         let current_year: i32 = series.try_get("year").unwrap_or(0);
         let current_cover: Option<String> = series.try_get("coverUrl").unwrap_or(None);
+        let has_custom_cover: bool = series.try_get("hasCustomCover").unwrap_or(false);
         // ISO timestamp of the last successful sync (UTC) — keys incremental fetches. None = never synced.
         let last_sync: Option<String> = series.try_get("lastMetadataSync").unwrap_or(None);
 
@@ -54,7 +61,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
             "COMICVINE" => match &cv_api_key {
                 Some(key) if !key.is_empty() => {
                     fetch_comicvine(
-                        &db, &client, key, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover, full_fetch,
+                        &db, &client, key, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover, full_fetch, has_custom_cover, &cover_source,
                     ).await
                 }
                 Some(_) => {
@@ -69,7 +76,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
             "METRON" => {
                 fetch_metron(
                     &db, &client, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover,
-                    last_sync.as_deref(), full_fetch,
+                    last_sync.as_deref(), full_fetch, has_custom_cover, &cover_source,
                 ).await
             }
             other => {
@@ -138,6 +145,8 @@ async fn fetch_comicvine(
     current_year: i32,
     current_cover: Option<String>,
     full_fetch: bool,
+    has_custom_cover: bool,
+    cover_source: &str,
 ) -> anyhow::Result<i32> {
     // ---- 1. Volume details ----
     let vol_url = format!("https://comicvine.gamespot.com/api/volume/4050-{}/", metadata_id);
@@ -205,7 +214,7 @@ async fn fetch_comicvine(
         }
     };
 
-    let final_cover = resolve_cover(client, image_url.as_deref(), folder_path, current_cover).await;
+    let final_cover = resolve_cover(client, image_url.as_deref(), folder_path, current_cover, has_custom_cover, cover_source).await;
 
     // remoteCoverUrl keeps the original provider URL for external consumers (series.json) —
     // coverUrl becomes a local path. The bookType heuristic only fills a blank (never clobbers
@@ -303,7 +312,7 @@ async fn fetch_comicvine(
 
         // Re-fetch the series' issues each page so issues created on earlier pages are visible to isSameIssue.
         let existing_issues = sqlx::query(
-            r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate", genres, description FROM "Issue" WHERE "seriesId" = $1"#,
+            r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate", genres, description, "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(series_id)
         .fetch_all(db)
@@ -361,13 +370,15 @@ async fn fetch_comicvine(
             });
 
             // Determine the lock + existing fields from whichever record we'll target.
-            let (is_locked, existing_name, existing_release, existing_genres, existing_desc) = if let Some(r) = existing_by_cv {
+            let (is_locked, existing_name, existing_release, existing_genres, existing_desc, has_custom_cover, existing_cover) = if let Some(r) = existing_by_cv {
                 (
                     r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
                     r.try_get::<Option<String>, _>("name").unwrap_or(None),
                     r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
                     r.try_get::<Option<String>, _>("genres").unwrap_or(None),
                     r.try_get::<Option<String>, _>("description").unwrap_or(None),
+                    r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                    r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
                 )
             } else if let Some(r) = existing_by_num {
                 (
@@ -376,15 +387,19 @@ async fn fetch_comicvine(
                     r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
                     r.try_get::<Option<String>, _>("genres").unwrap_or(None),
                     r.try_get::<Option<String>, _>("description").unwrap_or(None),
+                    r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                    r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
                 )
             } else {
-                (false, None, None, None, None)
+                (false, None, None, None, None, false, None)
             };
 
             let name_val = if is_locked { existing_name } else { cv_name };
             let release_val = if is_locked { existing_release } else { issue_date.clone() };
             // A locked (manually edited) issue keeps its description; otherwise take the provider's.
             let desc_val = if is_locked { existing_desc } else { cv_desc.clone() };
+            // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
+            let cover_val = if has_custom_cover { existing_cover } else { cv_cover.clone() };
             // When locked keep existing genres; otherwise only (re)write when the volume has them and the issue doesn't yet.
             let genres_val = if is_locked {
                 existing_genres
@@ -400,7 +415,7 @@ async fn fetch_comicvine(
                     r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"='MATCHED', genres=$7 WHERE id=$8"#,
                 )
                 .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val)
-                .bind(&desc_val).bind(&cv_cover).bind(&genres_val).bind(&id)
+                .bind(&desc_val).bind(&cover_val).bind(&genres_val).bind(&id)
                 .execute(db).await
             } else if let Some(r) = existing_by_num {
                 let id: String = r.get("id");
@@ -408,7 +423,7 @@ async fn fetch_comicvine(
                     r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='COMICVINE', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"='MATCHED', genres=$6 WHERE id=$7"#,
                 )
                 .bind(&cv_id_str).bind(&name_val).bind(&release_val)
-                .bind(&desc_val).bind(&cv_cover).bind(&genres_val).bind(&id)
+                .bind(&desc_val).bind(&cover_val).bind(&genres_val).bind(&id)
                 .execute(db).await
             } else {
                 let new_id = uuid::Uuid::new_v4().to_string();
@@ -597,6 +612,8 @@ async fn fetch_metron(
     current_cover: Option<String>,
     last_sync: Option<&str>,
     full_fetch: bool,
+    has_custom_cover: bool,
+    cover_source: &str,
 ) -> anyhow::Result<i32> {
     let auth = match metron_auth(db).await {
         Some(a) => a,
@@ -649,7 +666,7 @@ async fn fetch_metron(
     // Metron's series_type is authoritative for the Mylar booktype, but never clobber a manual one.
     let book_type = map_series_type(&series_data["series_type"]);
 
-    let final_cover = resolve_cover(client, cover_remote.as_deref(), folder_path, current_cover).await;
+    let final_cover = resolve_cover(client, cover_remote.as_deref(), folder_path, current_cover, has_custom_cover, cover_source).await;
 
     // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
     let update_res = if series_is_locked(db, series_id).await {
@@ -712,7 +729,7 @@ async fn fetch_metron(
     }
 
     let existing_issues = sqlx::query(
-        r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate" FROM "Issue" WHERE "seriesId" = $1"#,
+        r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate", "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
     )
     .bind(series_id)
     .fetch_all(db)
@@ -767,24 +784,30 @@ async fn fetch_metron(
             is_same_issue(&n, &issue_num)
         });
 
-        let (is_locked, existing_name, existing_release) = if let Some(r) = existing_by_meta {
+        let (is_locked, existing_name, existing_release, has_custom_cover, existing_cover) = if let Some(r) = existing_by_meta {
             (
                 r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
                 r.try_get::<Option<String>, _>("name").unwrap_or(None),
                 r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
+                r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
             )
         } else if let Some(r) = existing_by_num {
             (
                 r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
                 r.try_get::<Option<String>, _>("name").unwrap_or(None),
                 r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
+                r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
             )
         } else {
-            (false, None, None)
+            (false, None, None, false, None)
         };
 
         let name_val: Option<String> = if is_locked { existing_name } else { Some(issue_name) };
         let release_val: Option<String> = if is_locked { existing_release } else { issue_date.clone() };
+        // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
+        let cover_val: Option<String> = if has_custom_cover { existing_cover } else { issue_cover.clone() };
 
         let res = if let Some(r) = existing_by_meta {
             let id: String = r.get("id");
@@ -796,13 +819,13 @@ async fn fetch_metron(
                 sqlx::query(
                     r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, "coverUrl"=$3, "matchState"='MATCHED' WHERE id=$4"#,
                 )
-                .bind(series_id).bind(&issue_num).bind(&issue_cover).bind(&id)
+                .bind(series_id).bind(&issue_num).bind(&cover_val).bind(&id)
                 .execute(db).await
             } else {
                 sqlx::query(
                     r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$7"#,
                 )
-                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&id)
+                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(&id)
                 .execute(db).await
             }
         } else if let Some(r) = existing_by_num {
@@ -812,13 +835,13 @@ async fn fetch_metron(
                 sqlx::query(
                     r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', "coverUrl"=$2, "matchState"='MATCHED' WHERE id=$3"#,
                 )
-                .bind(&source_id).bind(&issue_cover).bind(&id)
+                .bind(&source_id).bind(&cover_val).bind(&id)
                 .execute(db).await
             } else {
                 sqlx::query(
                     r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$6"#,
                 )
-                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&id)
+                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(&id)
                 .execute(db).await
             }
         } else {
@@ -885,18 +908,26 @@ fn map_series_type(v: &serde_json::Value) -> Option<&'static str> {
 
 /// Downloads the cover to `<folder>/cover.<ext>` and returns the `/api/library/cover` URL,
 /// falling back to an existing cover file or the prior cover. Parity with metadata-fetcher.ts.
-async fn resolve_cover(client: &Client, image_url: Option<&str>, folder_path: &str, current_cover: Option<String>) -> Option<String> {
+async fn resolve_cover(client: &Client, image_url: Option<&str>, folder_path: &str, current_cover: Option<String>, has_custom_cover: bool, cover_source: &str) -> Option<String> {
     let mut fallback = image_url.map(|s| s.to_string()).or(current_cover);
 
+    let mut local_cover_exists = false;
     if !folder_path.trim().is_empty() {
         let _ = std::fs::create_dir_all(folder_path);
-        for pc in ["cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "Cover.jpg", "Cover.png", "folder.png"] {
+        for pc in ["cover.jpg", "cover.jpeg", "cover.png", "cover.webp", "folder.jpg", "Cover.jpg", "Cover.png", "folder.png"] {
             let p = Path::new(folder_path).join(pc);
             if p.exists() {
                 fallback = Some(format!("/api/library/cover?path={}", urlencoding::encode(&p.to_string_lossy())));
+                local_cover_exists = true;
                 break;
             }
         }
+    }
+
+    // A custom-uploaded cover is never overwritten. In 'archive' mode an existing local/extracted cover
+    // also wins over the provider — keep it and skip the download.
+    if has_custom_cover || (cover_source == "archive" && local_cover_exists) {
+        return fallback;
     }
 
     if let Some(url) = image_url {

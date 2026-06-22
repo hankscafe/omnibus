@@ -13,7 +13,7 @@ import {
   AlertTriangle, Users, CheckCircle2, Activity, XCircle, 
   Settings, Trophy, Calendar, FileText, ExternalLink, Clock, Trash2,
   ThumbsUp, ThumbsDown, ImageIcon, EyeOff, Sparkles, ShieldAlert, BarChart3,
-  Check, Search, Rocket, Library
+  Check, Search, Rocket, Library, UploadCloud, Mail
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -23,6 +23,7 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { getErrorMessage } from "@/lib/utils/error"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
+import { ManualUploadDialog } from "@/components/manual-upload-dialog"
 
 // Skeleton for individual Stat Cards
 function StatSkeleton() {
@@ -101,6 +102,7 @@ export default function AdminPage() {
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   
   const [interactiveSearchReq, setInteractiveSearchReq] = useState<any>(null)
+  const [uploadReq, setUploadReq] = useState<any>(null)
 
   const [selectedQueueItems, setSelectedQueueItems] = useState<Set<string>>(new Set());
   const [isBulkQueueProcessing, setIsBulkQueueProcessing] = useState(false);
@@ -365,8 +367,25 @@ export default function AdminPage() {
             setRequests(prev => prev.filter(r => r.id !== requestToDelete.id));
             setDeleteConfirmOpen(false);
         } else throw new Error("Failed to delete");
-    } catch (error: unknown) { toast({ title: "Error", description: getErrorMessage(error), variant: "destructive" }); } 
+    } catch (error: unknown) { toast({ title: "Error", description: getErrorMessage(error), variant: "destructive" }); }
     finally { setIsDeleting(false); setRequestToDelete(null); }
+  }
+
+  // After a successful upload from a MANUAL_DDL row, auto-dismiss that request: its file is now on the
+  // server (headed for import via watched-sync), so the "Needs Admin" entry is done. Mirrors the trash
+  // button's DELETE, minus the confirmation prompt.
+  const handleManualUploadComplete = async (requestId?: string) => {
+    if (requestId) {
+      try {
+        const res = await fetch(`/api/admin/requests?id=${requestId}`, { method: 'DELETE' });
+        if (res.ok) setRequests(prev => prev.filter(r => r.id !== requestId));
+        else toast({ title: "Uploaded — but couldn't clear the request", description: "Remove it manually with the trash button.", variant: "destructive" });
+      } catch (error: unknown) {
+        toast({ title: "Uploaded — but couldn't clear the request", description: getErrorMessage(error), variant: "destructive" });
+      }
+    }
+    setUploadReq(null);
+    fetchAll();
   }
 
 const mappedRequests = requests.map(req => {
@@ -642,6 +661,13 @@ const mappedRequests = requests.map(req => {
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Review user reports for broken files.</p>
                   </div>
                 </Link>
+                <Link href="/admin/upload" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><UploadCloud className="w-5 h-5 text-primary" /></div>
+                  <div className="pt-0.5">
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Manual Upload</h5>
+                    <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Upload files to Watched or Unmatched.</p>
+                  </div>
+                </Link>
               </div>
 
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
@@ -667,6 +693,13 @@ const mappedRequests = requests.map(req => {
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">View activity and debug issues.</p>
                   </div>
                 </Link>
+                <Link href="/admin/updates" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-primary/10 p-2 rounded-md group-hover:bg-primary/20 transition-colors"><Rocket className="w-5 h-5 text-primary" /></div>
+                  <div className="pt-0.5">
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">System Updates</h5>
+                    <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Check version and release history.</p>
+                  </div>
+                </Link>
               </div>
 
               <div className="p-2 sm:p-4 space-y-1 sm:space-y-2">
@@ -690,6 +723,13 @@ const mappedRequests = requests.map(req => {
                   <div className="pt-0.5">
                     <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Trophies</h5>
                     <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Manage platform achievements.</p>
+                  </div>
+                </Link>
+                <Link href="/admin/email-templates" className="flex items-start gap-3 group hover:bg-muted/50 p-3 rounded-md transition-colors">
+                  <div className="bg-muted p-2 rounded-md group-hover:bg-muted/80 transition-colors"><Mail className="w-5 h-5 text-primary" /></div>
+                  <div className="pt-0.5">
+                    <h5 className="text-sm sm:text-base font-bold leading-none group-hover:text-primary transition-colors text-foreground">Email Templates</h5>
+                    <p className="text-[11px] sm:text-xs text-muted-foreground leading-snug mt-1.5">Customize outbound email content.</p>
                   </div>
                 </Link>
               </div>
@@ -931,6 +971,15 @@ const mappedRequests = requests.map(req => {
                                       <div className="flex gap-1.5 w-full sm:w-auto">
                                           <Button size="sm" variant="outline" asChild title="Open the GetComics download link in your browser to clear the Cloudflare check and download the file" className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground" onClick={(e) => e.stopPropagation()}>
                                               <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Download Manually</a>
+                                          </Button>
+                                          <Button
+                                              size="sm"
+                                              variant="outline"
+                                              title="Upload the file you downloaded manually — it will be imported automatically"
+                                              className="h-10 sm:h-8 text-xs font-bold text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:bg-green-900/20 dark:border-green-800"
+                                              onClick={(e) => { e.stopPropagation(); setUploadReq(req); }}
+                                          >
+                                              <UploadCloud className="w-3 h-3 mr-1" /> <span className="hidden sm:inline">Upload</span> File
                                           </Button>
                                           <Button
                                               size="sm"
@@ -1183,6 +1232,15 @@ const mappedRequests = requests.map(req => {
           requestId={interactiveSearchReq.id}
         />
       )}
+
+      <ManualUploadDialog
+        open={!!uploadReq}
+        onOpenChange={(o) => { if (!o) setUploadReq(null); }}
+        defaultDestination="watched"
+        lockDestination
+        requestId={uploadReq?.id}
+        onComplete={() => { handleManualUploadComplete(uploadReq?.id); }}
+      />
     </div>
   )
 }

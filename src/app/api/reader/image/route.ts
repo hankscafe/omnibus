@@ -9,6 +9,9 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { CACHE_DIR as BASE_CACHE_DIR, isPathWithinRoots } from '@/lib/utils/paths';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 
 // Reader page cache lives in a subfolder of the system cache directory
 const CACHE_DIR = path.join(BASE_CACHE_DIR, 'reader_images');
@@ -102,6 +105,14 @@ export async function GET(request: Request) {
     // Normalize before the containment check so `..` segments can't escape a library root.
     if (!isPathWithinRoots(filePath, libraries.map(lib => lib.path))) {
       return new NextResponse("Unauthorized path access", { status: 403 });
+    }
+
+    // Per-library access: the file must live under a library the user has been granted (admins bypass).
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const accessiblePaths = await getAccessibleLibraryPaths((session?.user as any)?.id, (session?.user as any)?.role);
+    if (!canAccessPath(accessiblePaths, filePath)) {
+      return new NextResponse("You don't have access to this library.", { status: 403 });
     }
 
     const isZip = filePath.toLowerCase().match(/\.(cbz|epub|zip)$/);

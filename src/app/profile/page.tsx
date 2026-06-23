@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { TierBadge } from "@/components/tier-badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -868,6 +869,7 @@ export default function ProfilePage() {
                 <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-foreground sm:text-white drop-shadow-lg">{profile?.user?.username}</h1>
                 <div className="flex items-center justify-center sm:justify-start gap-2 bg-background/80 sm:bg-transparent backdrop-blur-sm sm:backdrop-blur-none py-1 sm:py-0 px-3 sm:px-0 rounded-full w-fit mx-auto sm:mx-0">
                     <Badge className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold uppercase tracking-wider text-[10px]">{profile?.user?.role}</Badge>
+                    {session?.user && <TierBadge user={session.user as any} />}
                     <span className="text-xs text-muted-foreground sm:text-slate-200 font-medium sm:drop-shadow-md">Member since {new Date(profile?.user?.createdAt).getFullYear()}</span>
                 </div>
             </div>

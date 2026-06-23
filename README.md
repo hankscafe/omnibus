@@ -28,13 +28,32 @@ Self-hosting audiobooks, eBooks, and comic books has always presented a challeng
 
 After using [ReadMeABook](https://github.com/kikootwo/ReadMeABook), I wanted a similar solution specifically tailored for comics. Comic indexers and tracking sites can be notoriously tricky due to inconsistent naming conventions and release formats (e.g., single issues vs. volumes vs. massive character collections). Using ReadMeABook's clean aesthetic as a starting point, I used AI to help build a comic-focused equivalent. What started as a simple request tool eventually evolved into a full-fledged library manager, metadata indexer, and web reader.
 
-Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omnibus is designed to be lightweight, performant, and responsive across all your devices. Whether you are managing a massive archive of .cbz files, hunting down missing issues of your favorite run, or just looking for a clean, distraction-free web reader, Omnibus brings your entire comic universe under one roof.
+Built with Next.js 15, Tailwind v4, Prisma, a dedicated high-performance Rust engine, and a zero-config SQLite database (with optional PostgreSQL for large libraries), Omnibus is designed to be lightweight, performant, and responsive across all your devices. Whether you are managing a massive archive of .cbz files, hunting down missing issues of your favorite run, or just looking for a clean, distraction-free web reader, Omnibus brings your entire comic universe under one roof.
 
 While I know AI-assisted ("vibe-coded") projects can sometimes be met with skepticism, I genuinely enjoyed the process of watching this come together into a highly usable tool. If you run into issues, have suggestions, or want to contribute, please let me know! I gladly welcome any help or insights to make Omnibus even better.
 
 ---
 
+## Recent Highlights (June 2026)
+
+The last several releases added a lot. The biggest things to be aware of:
+
+* **Hybrid Rust Engine:** Performance-critical work — archive conversion, cover extraction, downloads, and Watched-folder syncing — now runs on a dedicated high-performance Rust engine alongside the Next.js app, with full behavior parity.
+* **PostgreSQL Support:** SQLite remains the zero-config default, but larger libraries can now run on PostgreSQL. A guided SQLite&nbsp;→&nbsp;Postgres migration path is documented in [UPGRADING.md](UPGRADING.md).
+* **Encrypted Credentials at Rest:** All stored API keys, client passwords, and secrets are now encrypted in the database, alongside hardened engine and deployment authentication.
+* **Cover Art Management:** Automatic cover extraction from the first archive page, a configurable cover source, and admin custom-cover uploads (locked so metadata syncs won't overwrite them).
+* **Comic Metadata Editor + Series Groups:** Edit series and per-issue metadata directly in the UI (optionally written back into `ComicInfo.xml`), and group related runs with the new `{SeriesGroup}` and `{UniverseName}` naming variables.
+* **Smart Matcher Upgrades:** Manual metadata editing, bulk matching, dual-provider (ComicVine + Metron) lookups, archive-extracted covers, and overwrite-safety guards.
+* **Manual File Upload:** Drop comic files into your **Watched** or **Unmatched** folder straight from the browser — no server filesystem access required. Built to recover Cloudflare-gated downloads you had to fetch by hand.
+* **Anna's Archive Source:** Search Anna's Archive as a first-class source alongside GetComics and your indexers (interactive, or automated with a premium API key).
+* **Resilient GetComics Downloads:** A selectable Cloudflare solver (FlareSolverr **or** Byparr), automatic hoster fallback, and a manual-download hold for gated links.
+* **Library-Wide Duplicate Alerts:** The health dashboard now flags duplicate files across your entire library.
+* **Reader Enhancements:** Pinch-to-zoom and per-series reading preferences that persist per title, plus stronger manga/NSFW Discover filters.
+
+---
+
 ## Table of Contents
+- [Recent Highlights](#recent-highlights-june-2026)
 - [About Omnibus](#about-omnibus)
 - [Features & Navigation](#features--navigation)
   - [Authentication & Security](#authentication--security)
@@ -136,11 +155,15 @@ A meticulously organized, highly performant view of your physical files, built t
 
 * **Embedded Metadata (ComicInfo.xml):** Omnibus doesn't just read metadata—it writes it. Omnibus can automatically generate and embed standard `ComicInfo.xml` files directly into your `.cbz` archives, ensuring your metadata travels with your files.
 * **Dual Metadata Engines:** Choose between ComicVine (default) or Metron.Cloud as your primary metadata source. Omnibus reads embedded ComicInfo.xml files inside your archives and seamlessly syncs with your selected provider to pull high-res covers, synopses, and creator credits. (Note: Metron integration also powers the forward-looking Release Calendar!)
+* **In-App Metadata Editor:** Edit series-level and per-issue metadata (title, year, publisher, summary, creators, and more) right in the browser. Changes can optionally be written straight back into each archive's `ComicInfo.xml`, and a sync-lock keeps your manual edits from being overwritten by the next provider refresh.
+* **Series Groups & Universes:** Organize related runs with the `{SeriesGroup}` and `{UniverseName}` naming variables — perfect for shelving a multi-title crossover event or an entire publisher universe together.
+* **Cover Art Management:** Omnibus extracts a cover from the first page of each archive, lets you choose your preferred cover source, and allows admins to upload a custom cover for any series (locked so automated syncs never overwrite it).
 * **Advanced Search Syntax:** Use prefix modifiers in the search bar (e.g., `character:"Spider-Man"`, `team:"X-Men"`, `arc:"Secret Wars"`) to pinpoint exact crossovers and appearances across your entire collection.
 * **Multi-Library Routing:** Map distinct folders for standard Comics and Manga. Omnibus automatically detects Manga based on publishers, AniList cross-referencing, and tags to route them to the correct directory.
 * **Automated File Standardization:** Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
 * **"Watched" Folder Auto-Ingestion:** Automate your library building by dropping loose `.cbz`, `.cbr`, `.zip`, and `.rar` files into a designated `watched` folder. Omnibus runs a scheduled background job to detect these files, read their `ComicInfo.xml` metadata, convert legacy formats, standardize the filenames, and perfectly sort them into your main library.
 * **"Awaiting Match" Drop Queue:** If dropped files lack the necessary metadata for auto-ingestion, they are safely routed to an `unmatched` directory. Admins can review these loose files in the Smart Matcher UI, apply the correct metadata with one click, and seamlessly inject them into the main library.
+* **Manual File Upload:** No filesystem access to your server? Admins can upload single or multiple comic files directly from the browser into the **Watched** folder (auto-imported and matched) or the **Unmatched** folder (held for the Smart Matcher) — the easiest way to hand off files you downloaded by hand, including Cloudflare-gated releases.
 * **Deep Filtering & Sorting:** Filter by Publisher, Genre, Format, Era (1980s, 1990s, etc.), and Read Status.
   * Try the "Surprise Me" button for a randomized library shuffle when you don't know what to read!
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.
@@ -197,6 +220,7 @@ A completely custom, zero-friction reading experience built natively into the br
 * **Smart Preloading:** Silently caches the next several pages in the background so you never experience loading spinners while reading.
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
 * **Live Image Adjustments:** Adjust brightness and contrast overlays independently of your device settings for late-night reading sessions.
+* **Pinch-to-Zoom & Per-Series Preferences:** Pinch (or scroll-wheel) to zoom and pan high-detail pages, and save reading preferences — direction, layout, and fit — on a per-series basis so each title reopens exactly the way you like it.
 * **Progressive Web App (PWA) & Offline Reading:** Install Omnibus to your home screen as a PWA. Users can click the "Offline" button in the Web Reader to silently cache an entire issue to their device's local storage, allowing them to read flawlessly without an active internet connection.
 
 ### External Readers & OPDS Support
@@ -330,12 +354,13 @@ Complete, granular control over your instance, your users, and your underlying a
 * **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
 * **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, and Terabox. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
 * **Anna's Archive Search Source:** Search Anna's Archive (the shadow-library aggregator) as a first-class source alongside GetComics and your indexers. Use it in interactive search (no API key required — gated files drop to the manual queue) or prioritize it as an automated source (requires a premium API key plus a passing connection test). Includes a configurable mirror base URL with automatic failover as Anna's Archive rotates domains.
-* **FlareSolverr Integration:** Route requests through a FlareSolverr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics.
-* **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the AI misses, you can manually input a specific ComicVine Volume ID or Metron Series ID to force a perfect match.
+* **Selectable Cloudflare Solver:** Route requests through a FlareSolverr **or** Byparr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics, with a configurable solve timeout. When a link stays gated, Omnibus holds it for manual download — and you can hand the file back via Manual File Upload.
+* **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the AI misses, you can manually input a specific ComicVine Volume ID or Metron Series ID to force a perfect match. Includes bulk processing for whole folders at once, an inline metadata editor (Series Group / Universe and per-issue covers included), archive-extracted cover previews, and overwrite-safety guards so a re-match never clobbers existing files.
 * **Deep Diagnostics Engine:**
   * Ghost Records: Find and purge database entries pointing to files you deleted outside of Omnibus.
   * Orphaned Files: Find comic files sitting on your hard drive that Omnibus hasn't indexed, saving you wasted disk space.
   * Archive Integrity: Scan your .cbz files to detect corrupted or incomplete zip archives.
+  * Duplicate Files: Detect duplicate issues across your entire library and surface them as a dashboard health alert so you can reclaim wasted space.
 * **Real-Time System Health Dashboard:** A comprehensive, automated diagnostic engine that continuously monitors your server's vitals in the background. It proactively checks for:
   * **API & Network Blocks:** Detects Cloudflare 403s (alerting you to use FlareSolverr) and monitors rate limits for ComicVine, Metron, and third-party hosters to gracefully pause and retry metadata syncing.
   * **Storage Safety:** Calculates available drive space and actively prevents new downloads if your disk is critically full.

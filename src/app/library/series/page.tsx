@@ -132,6 +132,7 @@ function SeriesContent() {
 
   const isAdmin = session?.user?.role === 'ADMIN';
   const canDownload = isAdmin || (session?.user as any)?.canDownload;
+  const canRequest = isAdmin || (session?.user as any)?.canRequest;
 
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
@@ -450,6 +451,10 @@ function SeriesContent() {
   }
 
   const handleRequestMissing = async (issue: any) => {
+        if (!canRequest) {
+            toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
+            return;
+        }
         let compositeName = `${seriesInfo.name} #${issue.parsedNum}`;
         if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${issue.parsedNum}`)) {
             compositeName += `: ${issue.name}`;

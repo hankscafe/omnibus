@@ -13,6 +13,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { LibraryScanner } from '@/lib/library-scanner';
+import { getAccessibleLibraryIds } from '@/lib/library-access';
 
 export async function GET(request: Request) {
   try {
@@ -66,6 +67,10 @@ export async function GET(request: Request) {
     const pendingVolIds = new Set<string>(pendingVolIdsList);
 
     const where: any = { AND: [] };
+
+    // Per-library access: non-admins only see series in their granted libraries (admins bypass).
+    const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+    if (accessibleLibs !== 'ALL') where.AND.push({ libraryId: { in: accessibleLibs } });
 
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
     if (libraryFilterParam === 'MANGA') where.AND.push({ isManga: true });

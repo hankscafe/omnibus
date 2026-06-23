@@ -19,6 +19,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { OmnibusLogo } from "@/components/omnibus-logo"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
+import { TierBadge } from "@/components/tier-badge"
 
 // --- INTERNAL NOTIFICATION COMPONENT ---
 function NotificationBell() {
@@ -348,9 +349,12 @@ export function SiteHeader() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-64 sm:w-56 mt-2 sm:mt-0 p-2 sm:p-1 bg-popover border-border rounded-xl sm:rounded-md shadow-xl">
                         <DropdownMenuLabel className="font-normal p-3 sm:p-2">
-                            <div className="flex flex-col space-y-1">
+                            <div className="flex flex-col space-y-1.5">
                                 <p className="text-base sm:text-sm font-bold leading-none">{session.user?.name}</p>
-                                <p className="text-xs sm:text-[10px] uppercase font-bold tracking-wider text-muted-foreground">{session.user?.role}</p>
+                                <div className="flex items-center gap-2">
+                                    <p className="text-xs sm:text-[10px] uppercase font-bold tracking-wider text-muted-foreground">{session.user?.role}</p>
+                                    {session.user && <TierBadge user={session.user as any} />}
+                                </div>
                             </div>
                         </DropdownMenuLabel>
                         <DropdownMenuSeparator className="bg-border" />

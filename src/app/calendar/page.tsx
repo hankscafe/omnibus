@@ -34,6 +34,7 @@ interface UpcomingIssue {
 export default function CalendarPage() {
     const { data: session, status } = useSession();
     const isAdmin = session?.user?.role === 'ADMIN';
+    const canRequest = isAdmin || (session?.user as any)?.canRequest;
 
     const [activeTab, setActiveTab] = useState("my-pulls");
     const [metronConfigured, setMetronConfigured] = useState<boolean | null>(null);
@@ -158,7 +159,11 @@ export default function CalendarPage() {
     const handleRequest = async (id: number | string, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, metadataSource: string = 'COMICVINE', monitorOnly: boolean = false, releaseDate?: string) => {
         const exactIssueName = name; 
         const targetKey = type === 'volume' ? `vol-${id}` : `iss-${exactIssueName}`;
-        
+
+        if (!canRequest) {
+            toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
+            return;
+        }
         setRequestingTarget(targetKey);
         try {
             const res = await fetch('/api/request', {

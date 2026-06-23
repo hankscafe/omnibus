@@ -312,6 +312,46 @@ export async function initDatabase() {
         Logger.log(`[DB Init] SystemSetting credential encryption migration failed: ${getErrorMessage(e)}`, "error");
     }
 
+    // 11. One-time backfill for the new `canRequest` gate. Pre-existing users could always make
+    //     requests, so grant them canRequest=true to preserve that ability; users created AFTER this
+    //     runs default to canRequest=false ("Civilian") via the schema default + the creation paths.
+    //     A SystemSetting sentinel ensures this executes exactly once (so an admin who later demotes a
+    //     user to Civilian isn't re-granted on the next boot).
+    try {
+        const CANREQUEST_SENTINEL = 'perm_canrequest_backfilled';
+        const alreadyDone = await prisma.systemSetting.findUnique({ where: { key: CANREQUEST_SENTINEL } });
+        if (!alreadyDone) {
+            const res = await prisma.user.updateMany({ data: { canRequest: true } });
+            await prisma.systemSetting.create({ data: { key: CANREQUEST_SENTINEL, value: new Date().toISOString() } });
+            Logger.log(`[DB Init] Backfilled canRequest=true for ${res.count} existing user(s).`, "success");
+        }
+    } catch (e) {
+        Logger.log(`[DB Init] canRequest backfill failed: ${getErrorMessage(e)}`, "error");
+    }
+
+    // 12. One-time backfill for per-library access. Before this feature every user saw every library, so
+    //     grant all current users access to every library to preserve that. New users created afterward are
+    //     seeded with the default Comics library at creation time. Sentinel-guarded to run exactly once, and
+    //     only once libraries actually exist (fresh installs create libraries later via the setup wizard).
+    try {
+        const LIBRARY_SENTINEL = 'perm_library_backfilled';
+        const libDone = await prisma.systemSetting.findUnique({ where: { key: LIBRARY_SENTINEL } });
+        if (!libDone) {
+            const allLibs = await prisma.library.findMany({ select: { id: true } });
+            if (allLibs.length > 0) {
+                const allUsers = await prisma.user.findMany({ select: { id: true } });
+                const rows = allUsers.flatMap(u => allLibs.map(l => ({ userId: u.id, libraryId: l.id })));
+                if (rows.length > 0) {
+                    await prisma.userLibraryAccess.createMany({ data: rows, skipDuplicates: true });
+                }
+                await prisma.systemSetting.create({ data: { key: LIBRARY_SENTINEL, value: new Date().toISOString() } });
+                Logger.log(`[DB Init] Backfilled library access for ${allUsers.length} user(s) across ${allLibs.length} library(ies).`, "success");
+            }
+        }
+    } catch (e) {
+        Logger.log(`[DB Init] Library access backfill failed: ${getErrorMessage(e)}`, "error");
+    }
+
     // Inside initDatabase(), right before Logger.log("[DB Init] Schema mapping complete.")
     const logLevelSetting = await prisma.systemSetting.findUnique({ where: { key: 'system_log_level' } });
     if (logLevelSetting?.value) {

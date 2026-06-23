@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { getAccessibleLibraryIds } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,11 +17,19 @@ export async function GET(request: Request) {
 
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+        // Per-library access: hide list items whose linked issue is in a library the user can't access.
+        // Metadata-only items (no linked issue yet) are kept — they're reading-order placeholders, not content.
+        const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+        const itemAccessWhere = accessibleLibs === 'ALL'
+            ? {}
+            : { OR: [{ issueId: null }, { issue: { series: { libraryId: { in: accessibleLibs } } } }] };
+
         let lists = await prisma.readingList.findMany({
             where: { OR: [ { userId: userId }, { isGlobal: true }, { userId: null } ] },
             include: {
                 user: { select: { username: true } }, // Important for the UI to display the creator of Global lists
                 items: {
+                    where: itemAccessWhere,
                     orderBy: { order: 'asc' },
                     include: { issue: { include: { series: true } } }
                 }
@@ -78,6 +87,7 @@ export async function GET(request: Request) {
                 include: {
                     user: { select: { username: true } },
                     items: {
+                        where: itemAccessWhere,
                         orderBy: { order: 'asc' },
                         include: { issue: { include: { series: true } } }
                     }

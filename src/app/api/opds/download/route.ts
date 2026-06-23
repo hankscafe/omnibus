@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,10 +29,16 @@ export async function GET(req: Request) {
     if (!issueId) return new Response("Missing issue ID", { status: 400 });
 
     try {
-        const issue = await prisma.issue.findUnique({ where: { id: issueId } });
+        const issue = await prisma.issue.findUnique({ where: { id: issueId }, include: { series: { select: { libraryId: true } } } });
 
         if (!issue || !issue.filePath || !fs.existsSync(issue.filePath)) {
             return new Response("File not found on server", { status: 404 });
+        }
+
+        // Per-library access: the issue's series must be in a library the user has been granted (admins bypass).
+        const accessibleLibs = await getAccessibleLibraryIds(auth.user?.id, auth.user?.role);
+        if (!canAccessLibraryId(accessibleLibs, issue.series?.libraryId)) {
+            return new Response("Forbidden: you do not have access to this library.", { status: 403 });
         }
 
         const stat = fs.statSync(issue.filePath);

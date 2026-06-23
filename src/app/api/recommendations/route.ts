@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { getAccessibleLibraryIds, seriesAccessWhere } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,9 @@ export async function GET(request: Request) {
     const userId = (session?.user as any)?.id;
 
     if (!userId) return NextResponse.json({ series: [], basedOn: null });
+
+    // Per-library access: only recommend series from libraries the user has been granted.
+    const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
 
     try {
         const lastRead = await prisma.readProgress.findFirst({
@@ -35,7 +39,8 @@ export async function GET(request: Request) {
         const recommendations = await prisma.series.findMany({
             where: {
                 id: { not: lastRead.issue.seriesId },
-                issues: { 
+                ...seriesAccessWhere(accessibleLibs),
+                issues: {
                     some: { 
                         filePath: { not: null }, // <-- STRICT CHECK
                         OR: targetTags.map(tag => ({ 

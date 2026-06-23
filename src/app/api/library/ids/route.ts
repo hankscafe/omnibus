@@ -5,6 +5,9 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getAccessibleLibraryIds, seriesAccessWhere, nestedSeriesAccessWhere } from '@/lib/library-access';
 
 const globalForCache = globalThis as unknown as {
     libraryIdsCache: any;
@@ -13,20 +16,25 @@ const globalForCache = globalThis as unknown as {
 
 export async function GET() {
   try {
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
+    const isAll = accessibleLibs === 'ALL';
+
     const now = Date.now();
-    // Keep the existing 30-second memory cache
-    if (globalForCache.libraryIdsCache && globalForCache.libraryIdsCacheTime && now - globalForCache.libraryIdsCacheTime < 30000) {
+    // Per-library access: only admins (who see everything) share the 30s cache; scoped users compute fresh.
+    if (isAll && globalForCache.libraryIdsCache && globalForCache.libraryIdsCacheTime && now - globalForCache.libraryIdsCacheTime < 30000) {
         return NextResponse.json(globalForCache.libraryIdsCache);
     }
 
     const [series, issues, requests] = await Promise.all([
-        prisma.series.findMany({ 
-            where: { issues: { some: { filePath: { not: null } } }, metadataId: { not: null } },
+        prisma.series.findMany({
+            where: { issues: { some: { filePath: { not: null } } }, metadataId: { not: null }, ...seriesAccessWhere(accessibleLibs) },
             select: { cvId: true, metadataId: true, monitored: true, name: true }
         }),
-        prisma.issue.findMany({ 
-            where: { filePath: { not: null }, metadataId: { not: null } },
-            select: { cvId: true, metadataId: true, number: true, series: { select: { name: true } } } 
+        prisma.issue.findMany({
+            where: { filePath: { not: null }, metadataId: { not: null }, ...nestedSeriesAccessWhere(accessibleLibs) },
+            select: { cvId: true, metadataId: true, number: true, series: { select: { name: true } } }
         }),
         prisma.request.findMany({ 
             select: { volumeId: true, status: true, activeDownloadName: true } 
@@ -61,8 +69,10 @@ export async function GET() {
         }))
     };
 
-    globalForCache.libraryIdsCache = payload;
-    globalForCache.libraryIdsCacheTime = now;
+    if (isAll) {
+        globalForCache.libraryIdsCache = payload;
+        globalForCache.libraryIdsCacheTime = now;
+    }
 
     return NextResponse.json(payload);
   } catch (error) {

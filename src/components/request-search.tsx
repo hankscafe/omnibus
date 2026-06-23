@@ -60,6 +60,8 @@ interface Issue {
 
 export function RequestSearch() {
   const { data: session } = useSession()
+  // Admins, or users granted the Request permission, may make requests. Civilians cannot.
+  const canRequest = (session?.user as any)?.role === 'ADMIN' || !!(session?.user as any)?.canRequest
   const [open, setOpen] = useState(false)
   const [homeQuery, setHomeQuery] = useState("")
   const [searchSort, setSearchSort] = useState("relevance")
@@ -184,6 +186,10 @@ export function RequestSearch() {
   }, [selectedItem?.id, selectedItem?.isVolume]);
 
   const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, monitorOnly: boolean = false, metadataSource: string = 'COMICVINE') => {
+    if (!canRequest) {
+        toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
+        return;
+    }
     if (!name || name === "Unknown" || name === "undefined") {
         toast({ title: "Request Failed", description: "Missing valid series name. Try interactive search.", variant: "destructive" });
         return;

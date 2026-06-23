@@ -4,6 +4,7 @@ import { validateApiKey } from '@/lib/api-auth';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { escapeXml } from '@/lib/utils/xml';
+import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +34,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     });
 
     if (!series) return new Response('Not Found', { status: 404 });
+
+    // Per-library access: non-admins only see series in libraries they've been granted.
+    const accessibleLibs = await getAccessibleLibraryIds(auth.user?.id, auth.user?.role);
+    if (!canAccessLibraryId(accessibleLibs, series.libraryId)) {
+        return new Response('Forbidden', { status: 403 });
+    }
 
     const sortedIssues = series.issues.sort((a, b) => {
         // Added the '-' character to the regex to preserve negative numbers

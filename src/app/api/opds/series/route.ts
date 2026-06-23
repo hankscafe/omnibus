@@ -4,6 +4,7 @@ import { validateApiKey } from '@/lib/api-auth';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { escapeXml } from '@/lib/utils/xml';
+import { getAccessibleLibraryIds, seriesAccessWhere } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,8 +21,10 @@ export async function GET(req: Request) {
     const limit = 50;
     const skip = (page - 1) * limit;
 
-    // Fetch Series with Pagination
+    // Fetch Series with Pagination (per-library access: non-admins only see granted libraries)
+    const accessibleLibs = await getAccessibleLibraryIds(auth.user?.id, auth.user?.role);
     const seriesList = await prisma.series.findMany({
+        where: seriesAccessWhere(accessibleLibs),
         skip,
         take: limit + 1,
         orderBy: { name: 'asc' }

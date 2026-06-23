@@ -7,6 +7,7 @@ import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,9 +21,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
     const issueId = resolvedParams.issueId;
     const pageIndex = parseInt(resolvedParams.pageIndex);
 
-    const issue = await prisma.issue.findUnique({ where: { id: issueId } });
+    const issue = await prisma.issue.findUnique({ where: { id: issueId }, include: { series: { select: { libraryId: true } } } });
     if (!issue || !issue.filePath || !fs.existsSync(issue.filePath)) {
         return new Response('Not Found', { status: 404 });
+    }
+
+    // Per-library access: the issue's series must be in a library the user has been granted (admins bypass).
+    const accessibleLibs = await getAccessibleLibraryIds(auth.user?.id, auth.user?.role);
+    if (!canAccessLibraryId(accessibleLibs, issue.series?.libraryId)) {
+        return new Response('Forbidden', { status: 403 });
     }
 
     try {

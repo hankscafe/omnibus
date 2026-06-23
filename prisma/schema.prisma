@@ -18,6 +18,7 @@ model User {
   role                String    @default("USER") // "ADMIN" or "USER"
   isApproved          Boolean   @default(false)
   autoApproveRequests Boolean   @default(false)
+  canRequest          Boolean   @default(false)
   canDownload         Boolean   @default(false)
   canCreateGlobalLists  Boolean   @default(false)
   avatar              String?
@@ -46,6 +47,7 @@ model User {
   opdsKeys            OpdsKey[]
   koreaderSyncs       KoreaderSync[]
   readerPreferences   ReaderPreference[]
+  libraryAccess       UserLibraryAccess[]
 }
 
 model ApiKey {
@@ -100,6 +102,22 @@ model Library {
   isDefault Boolean  @default(false)
 
   series    Series[]
+  userAccess UserLibraryAccess[]
+}
+
+// Per-user library grants. A non-admin user sees only libraries they have a row for (absence = no access).
+// Admins bypass this entirely (see getAccessibleLibraryIds). New users are seeded with the default Comics
+// library; pre-existing users were backfilled with all libraries (see db-init step 12).
+model UserLibraryAccess {
+  id        String  @id @default(cuid())
+  userId    String
+  libraryId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  library   Library @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, libraryId])
+  @@index([userId])
+  @@index([libraryId])
 }
 
 model Series {

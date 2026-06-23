@@ -42,7 +42,7 @@ describe('External Integration: OPDS Page Streaming Extension (PSE)', () => {
         vi.clearAllMocks();
         
         // Default valid auth
-        mocks.validateApiKey.mockResolvedValue({ valid: true, user: { role: 'USER' } } as any);
+        mocks.validateApiKey.mockResolvedValue({ valid: true, user: { id: 'u1', role: 'ADMIN' } } as any);
         
         // Default valid issue
         mocks.findUniqueIssue.mockResolvedValue({ id: 'iss_1', filePath: '/comics/batman.cbz' });

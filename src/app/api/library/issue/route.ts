@@ -12,6 +12,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { parseComicVineCredits } from '@/lib/utils';
 import { safeParse } from '@/lib/utils/safe-parse';
 import { omnibusQueue } from '@/lib/queue';
+import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -21,10 +22,19 @@ export async function GET(request: Request) {
 
   try {
     const issue = await prisma.issue.findUnique({
-        where: { id }
+        where: { id },
+        include: { series: { select: { libraryId: true } } }
     });
 
     if (!issue) return NextResponse.json({ error: "Issue not found" }, { status: 404 });
+
+    // Per-library access: the issue's series must be in a library the user has been granted (admins bypass).
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
+    if (!canAccessLibraryId(accessibleLibs, issue.series?.libraryId)) {
+        return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
+    }
 
     const parsedWriters = safeParse(issue.writers);
     const parsedArtists = safeParse(issue.artists);

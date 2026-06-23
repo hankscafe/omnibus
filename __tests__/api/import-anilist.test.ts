@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/db', () => ({
     prisma: {
+        user: { findUnique: mocks.userFindUnique },
         series: { findMany: mocks.seriesFindMany },
         request: { findFirst: mocks.requestFindFirst, create: mocks.requestCreate },
         readingList: { deleteMany: mocks.readingListDeleteMany, create: mocks.readingListCreate },
@@ -37,6 +38,8 @@ global.fetch = vi.fn();
 describe('API Route: AniList Import', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        // Requester has the Request permission so auto-request-missing proceeds (gated in Phase 1).
+        mocks.userFindUnique.mockResolvedValue({ role: 'ADMIN', canRequest: true });
     });
 
     it('should fuzzy match AniList titles to local series and queue missing ones', async () => {

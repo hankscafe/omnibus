@@ -13,6 +13,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { safeParse } from '@/lib/utils/safe-parse';
+import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -42,6 +43,12 @@ export async function GET(request: Request) {
     });
 
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
+
+    // Per-library access: the folder must live under a library the user has been granted (admins bypass).
+    const accessiblePaths = await getAccessibleLibraryPaths(userId, (session?.user as any)?.role);
+    if (!canAccessPath(accessiblePaths, folderPath)) {
+        return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
+    }
 
     let seriesRecord = await prisma.series.findFirst({ 
         where: { folderPath: folderPath } 

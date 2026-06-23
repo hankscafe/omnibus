@@ -352,6 +352,29 @@ export async function initDatabase() {
         Logger.log(`[DB Init] Library access backfill failed: ${getErrorMessage(e)}`, "error");
     }
 
+    // 13. Flag the primary Comics library as "default access" so new users keep getting it by default now
+    //     that the default is admin-controlled (preserves the prior getDefaultLibraryIds behavior).
+    //     Sentinel-guarded; runs once, only after libraries exist.
+    try {
+        const DEFAULT_ACCESS_SENTINEL = 'lib_default_access_backfilled';
+        const daDone = await prisma.systemSetting.findUnique({ where: { key: DEFAULT_ACCESS_SENTINEL } });
+        if (!daDone) {
+            const libs = await prisma.library.findMany({ select: { id: true, isManga: true, isDefault: true } });
+            if (libs.length > 0) {
+                const comics = libs.filter(l => !l.isManga);
+                const flagged = comics.filter(l => l.isDefault);
+                const ids = (flagged.length ? flagged : comics).map(l => l.id);
+                if (ids.length > 0) {
+                    await prisma.library.updateMany({ where: { id: { in: ids } }, data: { defaultAccess: true } });
+                }
+                await prisma.systemSetting.create({ data: { key: DEFAULT_ACCESS_SENTINEL, value: new Date().toISOString() } });
+                Logger.log(`[DB Init] Flagged ${ids.length} Comics library(ies) as default-access for new users.`, "success");
+            }
+        }
+    } catch (e) {
+        Logger.log(`[DB Init] Default-access flag backfill failed: ${getErrorMessage(e)}`, "error");
+    }
+
     // Inside initDatabase(), right before Logger.log("[DB Init] Schema mapping complete.")
     const logLevelSetting = await prisma.systemSetting.findUnique({ where: { key: 'system_log_level' } });
     if (logLevelSetting?.value) {

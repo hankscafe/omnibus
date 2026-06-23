@@ -65,11 +65,15 @@ export function canAccessPath(paths: string[] | 'ALL', filePath: string | null |
   });
 }
 
-/** Default-access libraries for a NEW user: the default Comics library (non-manga). */
+/** Libraries a NEW user is seeded with = those an admin flagged `defaultAccess` (managed in Settings).
+ *  Falls back to the primary Comics library only when nothing is flagged yet (pre-migration / fresh setup),
+ *  so a new user is never left with an empty library by accident. */
 export async function getDefaultLibraryIds(): Promise<string[]> {
-  const libs = await prisma.library.findMany({ where: { isManga: false }, select: { id: true, isDefault: true } });
-  const defaults = libs.filter((l) => l.isDefault);
-  return (defaults.length ? defaults : libs).map((l) => l.id);
+  const flagged = await prisma.library.findMany({ where: { defaultAccess: true }, select: { id: true } });
+  if (flagged.length > 0) return flagged.map((l) => l.id);
+  const comics = await prisma.library.findMany({ where: { isManga: false }, select: { id: true, isDefault: true } });
+  const def = comics.filter((l) => l.isDefault);
+  return (def.length ? def : comics).map((l) => l.id);
 }
 
 /** Replace a user's library grants with exactly `libraryIds` (Apply Tier + admin checkboxes). */

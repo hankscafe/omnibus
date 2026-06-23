@@ -100,6 +100,7 @@ model Library {
   path      String   @unique
   isManga   Boolean  @default(false)
   isDefault Boolean  @default(false)
+  defaultAccess Boolean @default(false) // Auto-granted to all users; new users are seeded with these libraries.
 
   series    Series[]
   userAccess UserLibraryAccess[]

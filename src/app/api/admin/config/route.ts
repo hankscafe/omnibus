@@ -263,7 +263,21 @@ export async function POST(request: Request) {
             Logger.setLevel(settings.system_log_level);
         }
 
-        if (libraries) await syncTable(tx.library, libraries);
+        if (libraries) {
+            // Capture which libraries were "default access" before the save so we only act on the
+            // false→true transition (and brand-new default-access libraries) — never re-granting a
+            // library an admin has manually revoked from a user.
+            const beforeLibs = await tx.library.findMany({ select: { id: true, defaultAccess: true } });
+            const wasDefault = new Map(beforeLibs.map((l: any) => [l.id, l.defaultAccess]));
+            await syncTable(tx.library, libraries);
+            const nowDefault = await tx.library.findMany({ where: { defaultAccess: true }, select: { id: true } });
+            const newlyDefault = nowDefault.filter((l: any) => wasDefault.get(l.id) !== true).map((l: any) => l.id);
+            if (newlyDefault.length > 0) {
+                const allUsers = await tx.user.findMany({ select: { id: true } });
+                const rows = allUsers.flatMap((u: any) => newlyDefault.map((libId: string) => ({ userId: u.id, libraryId: libId })));
+                if (rows.length > 0) await tx.userLibraryAccess.createMany({ data: rows, skipDuplicates: true });
+            }
+        }
         if (downloadClients) await syncTable(tx.downloadClient, encDownloadClients);
         if (hosterAccounts) await syncTable(tx.hosterAccount, encHosterAccounts); 
         if (indexers) await syncTable(tx.indexer, indexers);

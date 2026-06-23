@@ -29,7 +29,7 @@ async function getEncryptionKey() {
     return crypto.createHash('sha256').update(String(secret)).digest();
 }
 
-export async function encrypt2FA(text: string | null): Promise<string | null> {
+export async function encryptSecret(text: string | null): Promise<string | null> {
     if (!text) return text;
     if (text.startsWith(PREFIX)) return text; 
 
@@ -43,7 +43,7 @@ export async function encrypt2FA(text: string | null): Promise<string | null> {
     return `${PREFIX}${iv.toString('hex')}:${encrypted}`;
 }
 
-export async function decrypt2FA(text: string | null): Promise<string | null> {
+export async function decryptSecret(text: string | null): Promise<string | null> {
     if (!text) return text;
     if (!text.startsWith(PREFIX)) return text; 
 
@@ -60,7 +60,12 @@ export async function decrypt2FA(text: string | null): Promise<string | null> {
         
         return decrypted;
     } catch (error) {
-        Logger.log("[Encryption] Failed to decrypt 2FA secret. DATABASE_ENCRYPTION_KEY or NEXTAUTH_SECRET may have changed.", 'error');
+        Logger.log("[Encryption] Failed to decrypt a stored secret. DATABASE_ENCRYPTION_KEY or NEXTAUTH_SECRET may have changed.", 'error');
         throw new Error("Decryption failed");
     }
 }
+
+// Back-compat aliases — the 2FA secret store predates this generic helper. New code should
+// import encryptSecret/decryptSecret directly; these keep the original 2FA call sites working.
+export const encrypt2FA = encryptSecret;
+export const decrypt2FA = decryptSecret;

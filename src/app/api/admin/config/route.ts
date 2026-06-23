@@ -8,6 +8,8 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { syncSchedules } from '@/lib/queue';
 import { CACHE_DIR, LOGS_DIR, BACKUPS_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
+import { encryptSecret } from '@/lib/encryption';
+import { SECRET_SETTING_KEYS } from '@/lib/secret-keys';
 
 const SENSITIVE_KEYS = [
     'cv_api_key', 
@@ -144,13 +146,32 @@ export async function POST(request: Request) {
         }
     }
 
+    // Encrypt credential fields at rest before persisting. '********' means "unchanged" (the GET
+    // masks secrets), so it is left in place for syncTable to drop, preserving the stored value.
+    const encryptRows = async (rows: any[] | undefined, fields: string[]): Promise<any> => {
+        if (!Array.isArray(rows)) return rows;
+        return Promise.all(rows.map(async (row: any) => {
+            const copy = { ...row };
+            for (const f of fields) {
+                if (copy[f] && copy[f] !== '********') copy[f] = await encryptSecret(copy[f]);
+            }
+            return copy;
+        }));
+    };
+    const encDownloadClients = await encryptRows(downloadClients, ['pass', 'apiKey']);
+    const encHosterAccounts = await encryptRows(hosterAccounts, ['password', 'apiKey']);
+
     await prisma.$transaction(async (tx) => {
         
         if (settings) {
             for (const [key, value] of Object.entries(settings)) {
                 if (value === '********') continue;
 
-                const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value ?? "");
+                let stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value ?? "");
+                // Encrypt credential settings at rest; reads are auto-decrypted (db.ts extension).
+                if (SECRET_SETTING_KEYS.has(key) && stringValue) {
+                    stringValue = (await encryptSecret(stringValue)) ?? stringValue;
+                }
                 await tx.systemSetting.upsert({
                     where: { key },
                     update: { value: stringValue },
@@ -200,8 +221,8 @@ export async function POST(request: Request) {
         }
 
         if (libraries) await syncTable(tx.library, libraries);
-        if (downloadClients) await syncTable(tx.downloadClient, downloadClients);
-        if (hosterAccounts) await syncTable(tx.hosterAccount, hosterAccounts); 
+        if (downloadClients) await syncTable(tx.downloadClient, encDownloadClients);
+        if (hosterAccounts) await syncTable(tx.hosterAccount, encHosterAccounts);
         if (indexers) await syncTable(tx.indexer, indexers);
         
         if (customHeaders) {

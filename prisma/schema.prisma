@@ -18,6 +18,7 @@ model User {
   role                String    @default("USER") // "ADMIN" or "USER"
   isApproved          Boolean   @default(false)
   autoApproveRequests Boolean   @default(false)
+  canRequest          Boolean   @default(false)
   canDownload         Boolean   @default(false)
   canCreateGlobalLists  Boolean   @default(false)
   avatar              String?
@@ -45,6 +46,8 @@ model User {
   createdApiKeys      ApiKey[]  @relation("ApiKeysCreatedBy")
   opdsKeys            OpdsKey[]
   koreaderSyncs       KoreaderSync[]
+  readerPreferences   ReaderPreference[]
+  libraryAccess       UserLibraryAccess[]
 }
 
 model ApiKey {
@@ -97,8 +100,25 @@ model Library {
   path      String   @unique
   isManga   Boolean  @default(false)
   isDefault Boolean  @default(false)
+  defaultAccess Boolean @default(false) // Auto-granted to all users; new users are seeded with these libraries.
 
   series    Series[]
+  userAccess UserLibraryAccess[]
+}
+
+// Per-user library grants. A non-admin user sees only libraries they have a row for (absence = no access).
+// Admins bypass this entirely (see getAccessibleLibraryIds). New users are seeded with the default Comics
+// library; pre-existing users were backfilled with all libraries (see db-init step 12).
+model UserLibraryAccess {
+  id        String  @id @default(cuid())
+  userId    String
+  libraryId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  library   Library @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, libraryId])
+  @@index([userId])
+  @@index([libraryId])
 }
 
 model Series {
@@ -113,6 +133,7 @@ model Series {
   publisher       String?
   folderPath      String
   universe        String?
+  seriesGroup     String?  // ComicInfo <SeriesGroup>; umbrella folder for related series (providers don't supply it — set from ComicInfo.xml or manually)
   monitored       Boolean?
   isManga         Boolean  @default(false)
   size            Float?   @default(0)
@@ -123,6 +144,9 @@ model Series {
   coverUrl        String?
   remoteCoverUrl  String?  // Original ComicVine/Metron cover URL (coverUrl becomes a local path after caching)
   seriesJsonWritten Boolean @default(false) // Omnibus owns the series.json in this folder; foreign files are never overwritten
+  hasCustomMetadata Boolean @default(false) // Series was manually curated in the metadata editor; auto-sync must not overwrite its narrative fields
+  hasCustomCover  Boolean @default(false) // Admin uploaded a custom cover.jpg; extraction + provider-sync must never overwrite it
+  lastMetadataSync DateTime? // Last successful provider sync (UTC); keys incremental fetches (Metron modified_gt)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
 
@@ -131,6 +155,7 @@ model Series {
   collectionItems CollectionItem[]
   issueReports    IssueReport[]
   reviews         Review[]
+  readerPreferences ReaderPreference[]
 
   libraryId       String?
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
@@ -160,16 +185,17 @@ model Issue {
   coverUrl        String?
   writers         String?
   artists         String?
-  coverArtists    String?  // <-- NEW
+  coverArtists    String?
   universe        String?
-  colorists       String?  // <-- NEW
-  letterers       String?  // <-- NEW
+  colorists       String?
+  letterers       String?
   characters      String?
   genres          String?
   storyArcs       String?
-  teams           String?  // <-- NEW
-  locations       String?  // <-- NEW
-  hasCustomMetadata Boolean @default(false) // <-- NEW
+  teams           String?
+  locations       String?
+  hasCustomMetadata Boolean @default(false)
+  hasCustomCover  Boolean @default(false) // Admin set a custom issue cover (in the Smart Matcher); sync must not overwrite coverUrl
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
@@ -269,6 +295,22 @@ model ReadProgress {
   @@unique([userId, issueId]) 
   @@index([userId])
   @@index([issueId])
+}
+
+// Per-user, per-series reader settings (reading mode, scale, brightness, etc.) so a user's choices —
+// especially manga RTL — survive page reloads and carry across issues of the same series.
+model ReaderPreference {
+  id        String   @id @default(cuid())
+  userId    String
+  seriesId  String
+  settings  String   // JSON blob — SQLite has no native Json type (rust-engine/Postgres uses Json); callers JSON.stringify on write, JSON.parse on read
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  series    Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, seriesId])
+  @@index([userId])
 }
 
 model Favorite {
@@ -397,6 +439,7 @@ model OpdsKey {
 
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
+  expiresAt  DateTime?
   @@index([userId])
 }
 

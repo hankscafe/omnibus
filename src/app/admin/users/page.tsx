@@ -5,7 +5,7 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff, Mail, Globe } from "lucide-react"
+import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff, Mail, Globe, Send, Wand2, Library } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -17,6 +17,9 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getErrorMessage } from "@/lib/utils/error"
+import { PERMISSION_TIERS, tierFlags, tierFromUser, type TierName } from "@/lib/permission-tiers"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu"
+import { TIER_BADGE_CLASS } from "@/components/tier-badge"
 
 export default function AdminUsersPage() {
   useEffect(() => {
@@ -26,6 +29,7 @@ export default function AdminUsersPage() {
   const [copied, setCopied] = useState(false);
   const { data: session } = useSession()
   const [users, setUsers] = useState<any[]>([])
+  const [libraries, setLibraries] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState<string | null>(null)
 
@@ -50,8 +54,9 @@ export default function AdminUsersPage() {
   const [isCreating, setIsCreating] = useState(false)
   const [newUser, setNewUser] = useState({
       username: '', email: '', password: '', role: 'USER',
-      isApproved: true, autoApproveRequests: false, canDownload: false, canCreateGlobalLists: false
+      isApproved: true, canRequest: false, autoApproveRequests: false, canDownload: false, canCreateGlobalLists: false
   })
+  const [newUserTier, setNewUserTier] = useState<TierName>('Civilian')
   
   const { toast } = useToast()
 
@@ -66,6 +71,9 @@ export default function AdminUsersPage() {
     try {
       const res = await fetch('/api/admin/users')
       if (res.ok) setUsers(await res.json())
+
+      const libRes = await fetch('/api/admin/libraries')
+      if (libRes.ok) setLibraries(await libRes.json())
       
       // --- NEW: Fetch OIDC Settings to determine if we show the warning banner ---
       const configRes = await fetch('/api/admin/config')
@@ -98,6 +106,51 @@ export default function AdminUsersPage() {
         const data = await res.json()
         toast({ title: "User Updated", description: "Changes saved successfully." })
         setUsers(prev => prev.map(u => u.id === id ? data.user : u))
+      } else throw new Error("Update failed")
+    } catch (error: unknown) {
+      toast({ title: "Update Failed", description: getErrorMessage(error), variant: "destructive" })
+    } finally {
+      setUpdating(null)
+    }
+  }
+
+  // Apply a themed tier: PATCHes the whole flag bundle from PERMISSION_TIERS in one request.
+  const handleApplyTier = async (id: string, tier: TierName) => {
+    setUpdating(id)
+    try {
+      const preset = PERMISSION_TIERS.find(t => t.name === tier)
+      if (!preset) return
+      const res = await fetch('/api/admin/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, ...preset.flags, tier })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        toast({ title: `Applied "${tier}"`, description: "Permission tier updated." })
+        setUsers(prev => prev.map(u => u.id === id ? data.user : u))
+      } else throw new Error("Update failed")
+    } catch (error: unknown) {
+      toast({ title: "Update Failed", description: getErrorMessage(error), variant: "destructive" })
+    } finally {
+      setUpdating(null)
+    }
+  }
+
+  // Toggle a single library grant for a user (admins bypass library access entirely).
+  const handleToggleLibrary = async (user: any, libraryId: string, checked: boolean) => {
+    const current: string[] = (user.libraryAccess || []).map((a: any) => a.libraryId)
+    const next = checked ? Array.from(new Set([...current, libraryId])) : current.filter(x => x !== libraryId)
+    setUpdating(user.id)
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: user.id, libraryIds: next })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setUsers(prev => prev.map(u => u.id === user.id ? data.user : u))
       } else throw new Error("Update failed")
     } catch (error: unknown) {
       toast({ title: "Update Failed", description: getErrorMessage(error), variant: "destructive" })
@@ -207,11 +260,12 @@ export default function AdminUsersPage() {
       }
       setIsCreating(true);
       try {
-          const res = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newUser) });
+          const res = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...newUser, tier: newUserTier }) });
           if (res.ok) {
               toast({ title: "User Created", description: `${newUser.username} has been added.` });
               setCreateModalOpen(false);
-              setNewUser({ username: '', email: '', password: '', role: 'USER', isApproved: true, autoApproveRequests: false, canDownload: false, canCreateGlobalLists: false });
+              setNewUser({ username: '', email: '', password: '', role: 'USER', isApproved: true, canRequest: false, autoApproveRequests: false, canDownload: false, canCreateGlobalLists: false });
+              setNewUserTier('Civilian');
               fetchUsers();
           } else throw new Error("Failed to create user");
       } catch (error: unknown) {
@@ -259,26 +313,25 @@ export default function AdminUsersPage() {
           <table className="w-full text-sm text-left">
             <thead className="bg-muted/50 border-b border-border text-muted-foreground font-medium uppercase text-xs">
               <tr>
-                <th className="px-6 py-4">User</th>
-                <th className="px-6 py-4">Role</th>
-                <th className="px-6 py-4 text-center">Login Approved</th>
-                <th className="px-6 py-4 text-center">Auto-Approve</th>
-                <th className="px-6 py-4 text-center">Downloads</th>
-                <th className="px-6 py-4 text-center">Global Lists</th>
-                <th className="px-6 py-4 text-center">Actions</th>
+                <th className="px-4 py-3">User</th>
+                <th className="px-4 py-3">Role</th>
+                <th className="px-4 py-3">Tier &amp; Libraries</th>
+                <th className="px-4 py-3 text-center">Approved</th>
+                <th className="px-4 py-3 text-center">Permissions</th>
+                <th className="px-4 py-3 text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {users.map((user) => (
                 <tr key={user.id} className="hover:bg-muted/30 transition-colors">
-                  <td className="px-6 py-4">
+                  <td className="px-4 py-3">
                     <div className="font-bold text-foreground flex items-center gap-2">
                       {user.username}
                       {user.id === session?.user?.id && <Badge variant="secondary" className="text-[10px] bg-primary/10 text-primary border-primary/20">You</Badge>}
                     </div>
                     <div className="text-xs text-muted-foreground">{user.email}</div>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-4 py-3">
                     <Select disabled={updating === user.id} value={user.role} onValueChange={(val) => handleUpdateUser(user.id, 'role', val)}>
                         <SelectTrigger className="w-[110px] h-8 text-xs bg-background border-border"><SelectValue /></SelectTrigger>
                         <SelectContent className="bg-popover border-border">
@@ -287,11 +340,55 @@ export default function AdminUsersPage() {
                         </SelectContent>
                     </Select>
                   </td>
-                  <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id || (user.id === session?.user?.id)} checked={user.isApproved} onCheckedChange={(val) => handleUpdateUser(user.id, 'isApproved', val)} /></td>
-                  <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} /></td>
-                  <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.canDownload} onCheckedChange={(val) => handleUpdateUser(user.id, 'canDownload', val)} /></td>
-                  <td className="px-6 py-4 text-center"><Switch disabled={updating === user.id} checked={user.canCreateGlobalLists} onCheckedChange={(val) => handleUpdateUser(user.id, 'canCreateGlobalLists', val)} /></td>
-                  <td className="px-6 py-4">
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col items-start gap-1.5">
+                      <Badge variant="outline" className={`text-[10px] font-bold ${TIER_BADGE_CLASS[tierFromUser(user)] || ''}`}>{tierFromUser(user)}</Badge>
+                      {user.role === 'ADMIN' ? (
+                        <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Library className="w-3 h-3" /> All libraries</span>
+                      ) : (
+                        <>
+                          <Select disabled={updating === user.id} value="" onValueChange={(val) => handleApplyTier(user.id, val as TierName)}>
+                            <SelectTrigger className="w-[120px] h-7 text-[11px] bg-background border-border"><span className="flex items-center gap-1 text-muted-foreground"><Wand2 className="w-3 h-3" /> Apply tier</span></SelectTrigger>
+                            <SelectContent className="bg-popover border-border">
+                              {PERMISSION_TIERS.map(t => (
+                                <SelectItem key={t.name} value={t.name} className="text-xs focus:bg-primary/10 focus:text-primary">{t.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="sm" disabled={updating === user.id} className="h-7 w-[120px] justify-start text-[11px] text-muted-foreground border-border font-normal">
+                                <Library className="w-3 h-3 mr-1" /> Libs ({(user.libraryAccess || []).length}/{libraries.length})
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent className="bg-popover border-border">
+                              <DropdownMenuLabel>Library access</DropdownMenuLabel>
+                              <DropdownMenuSeparator />
+                              {libraries.map(lib => {
+                                const granted = new Set((user.libraryAccess || []).map((a: any) => a.libraryId))
+                                return (
+                                  <DropdownMenuCheckboxItem key={lib.id} checked={granted.has(lib.id)} onCheckedChange={(c) => handleToggleLibrary(user, lib.id, !!c)} onSelect={(e) => e.preventDefault()}>
+                                    {lib.name}{lib.isManga ? ' (Manga)' : ''}
+                                  </DropdownMenuCheckboxItem>
+                                )
+                              })}
+                              {libraries.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">No libraries configured.</div>}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-center"><Switch disabled={updating === user.id || (user.id === session?.user?.id)} checked={user.isApproved} onCheckedChange={(val) => handleUpdateUser(user.id, 'isApproved', val)} /></td>
+                  <td className="px-4 py-3">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 min-w-[180px]">
+                      <label className="flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground"><span>Request</span><Switch disabled={updating === user.id} checked={!!user.canRequest} onCheckedChange={(val) => handleUpdateUser(user.id, 'canRequest', val)} /></label>
+                      <label className="flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground"><span>Auto</span><Switch disabled={updating === user.id || !user.canRequest} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} /></label>
+                      <label className="flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground"><span>Download</span><Switch disabled={updating === user.id} checked={user.canDownload} onCheckedChange={(val) => handleUpdateUser(user.id, 'canDownload', val)} /></label>
+                      <label className="flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground"><span>Global</span><Switch disabled={updating === user.id} checked={user.canCreateGlobalLists} onCheckedChange={(val) => handleUpdateUser(user.id, 'canCreateGlobalLists', val)} /></label>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-2">
                         <Button variant="outline" size="sm" disabled={user.id === session?.user?.id} onClick={() => handleImpersonate(user.id, user.username)} className="h-8 text-xs font-bold shrink-0 border-border hover:bg-muted text-foreground" title="Login as this user">
                             <Eye className="w-3.5 h-3.5 mr-1.5" /> Login As
@@ -333,6 +430,7 @@ export default function AdminUsersPage() {
                     {user.id === session?.user?.id && <Badge variant="secondary" className="text-[10px] uppercase tracking-wider bg-primary/10 text-primary border-primary/20">You</Badge>}
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5">{user.email}</div>
+                  <Badge variant="outline" className={`mt-1.5 text-[10px] font-bold ${TIER_BADGE_CLASS[tierFromUser(user)] || ''}`}>{tierFromUser(user)}</Badge>
                 </div>
                 <Select disabled={updating === user.id || (user.id === session?.user?.id)} value={user.role} onValueChange={(val) => handleUpdateUser(user.id, 'role', val)}>
                     <SelectTrigger className="w-[100px] h-9 text-xs font-bold bg-background border-border shadow-sm"><SelectValue /></SelectTrigger>
@@ -352,12 +450,66 @@ export default function AdminUsersPage() {
                   <Switch disabled={updating === user.id || (user.id === session?.user?.id)} checked={user.isApproved} onCheckedChange={(val) => handleUpdateUser(user.id, 'isApproved', val)} className="scale-110" />
                 </div>
                 
+                {user.role !== 'ADMIN' && (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Wand2 className="w-4 h-4 text-muted-foreground" />
+                      <Label className="font-semibold text-sm text-foreground">Apply Tier</Label>
+                    </div>
+                    <Select disabled={updating === user.id} value="" onValueChange={(val) => handleApplyTier(user.id, val as TierName)}>
+                      <SelectTrigger className="w-[130px] h-9 text-xs bg-background border-border"><span className="text-muted-foreground">Choose tier…</span></SelectTrigger>
+                      <SelectContent className="bg-popover border-border">
+                        {PERMISSION_TIERS.map(t => (
+                          <SelectItem key={t.name} value={t.name} className="text-xs focus:bg-primary/10 focus:text-primary">{t.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {user.role !== 'ADMIN' && (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Library className="w-4 h-4 text-muted-foreground" />
+                      <Label className="font-semibold text-sm text-foreground">Libraries</Label>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" disabled={updating === user.id} className="h-9 text-xs border-border font-normal">
+                          {(user.libraryAccess || []).length}/{libraries.length} granted
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="bg-popover border-border">
+                        <DropdownMenuLabel>Library access</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {libraries.map(lib => {
+                          const granted = new Set((user.libraryAccess || []).map((a: any) => a.libraryId))
+                          return (
+                            <DropdownMenuCheckboxItem key={lib.id} checked={granted.has(lib.id)} onCheckedChange={(c) => handleToggleLibrary(user, lib.id, !!c)} onSelect={(e) => e.preventDefault()}>
+                              {lib.name}{lib.isManga ? ' (Manga)' : ''}
+                            </DropdownMenuCheckboxItem>
+                          )
+                        })}
+                        {libraries.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">No libraries configured.</div>}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Send className="w-4 h-4 text-muted-foreground" />
+                    <Label className="font-semibold text-sm text-foreground">Can Request</Label>
+                  </div>
+                  <Switch disabled={updating === user.id} checked={!!user.canRequest} onCheckedChange={(val) => handleUpdateUser(user.id, 'canRequest', val)} className="scale-110" />
+                </div>
+
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Activity className="w-4 h-4 text-muted-foreground" />
                     <Label className="font-semibold text-sm text-foreground">Auto-Approve Requests</Label>
                   </div>
-                  <Switch disabled={updating === user.id} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} className="scale-110" />
+                  <Switch disabled={updating === user.id || !user.canRequest} checked={user.autoApproveRequests} onCheckedChange={(val) => handleUpdateUser(user.id, 'autoApproveRequests', val)} className="scale-110" />
                 </div>
                 
                 <div className="flex items-center justify-between">
@@ -441,8 +593,20 @@ export default function AdminUsersPage() {
                         </Select>
                     </div>
                 </div>
+                {newUser.role !== 'ADMIN' && (
+                  <div className="grid gap-2">
+                    <Label className="text-foreground">Permission Tier</Label>
+                    <Select value={newUserTier} onValueChange={(val) => { setNewUserTier(val as TierName); setNewUser(prev => ({ ...prev, ...tierFlags(val as TierName) })); }}>
+                      <SelectTrigger className="h-12 sm:h-10 bg-muted/50 border-border text-foreground"><SelectValue /></SelectTrigger>
+                      <SelectContent className="bg-popover border-border">
+                        {PERMISSION_TIERS.map(t => <SelectItem key={t.name} value={t.name} className="text-xs focus:bg-primary/10 focus:text-primary">{t.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground leading-snug">{PERMISSION_TIERS.find(t => t.name === newUserTier)?.description}</p>
+                  </div>
+                )}
             </div>
-            <DialogFooter className="gap-2 sm:gap-0">
+            <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
                 <Button variant="outline" className="h-12 sm:h-10 w-full sm:w-auto border-border hover:bg-muted text-foreground" onClick={() => setCreateModalOpen(false)}>Cancel</Button>
                 <Button onClick={handleCreateUser} disabled={isCreating} className="h-12 sm:h-10 w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
                     {isCreating ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2 animate-spin" /> : <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />} Create User

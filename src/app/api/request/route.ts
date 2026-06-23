@@ -200,7 +200,17 @@ export async function POST(request: NextRequest) {
     }
 
     const skipIndexers = directSource === 'getcomics';
-    const initialStatus = token.autoApproveRequests ? 'PENDING' : 'PENDING_APPROVAL';
+    // Gate: only users granted the Request permission (or admins) may create requests. Fresh DB lookup
+    // so a revoked/granted permission takes effect immediately rather than waiting for a new JWT.
+    const requester = await prisma.user.findUnique({
+      where: { id: (token.id || token.sub) as string },
+      select: { role: true, canRequest: true, autoApproveRequests: true },
+    });
+    const requesterIsAdmin = requester?.role === 'ADMIN';
+    if (!requesterIsAdmin && !requester?.canRequest) {
+      return NextResponse.json({ error: "You don't have permission to make requests. Ask an admin to grant you the Request permission." }, { status: 403 });
+    }
+    const initialStatus = (requesterIsAdmin || requester?.autoApproveRequests) ? 'PENDING' : 'PENDING_APPROVAL';
 
     const safePublisher = publisher || "Unknown";
     const isManga = await detectManga({ name, publisher: { name: safePublisher }, year: parseInt(year) });

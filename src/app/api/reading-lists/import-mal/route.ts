@@ -17,6 +17,10 @@ export async function POST(request: Request) {
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     try {
+        // Gate auto-requesting behind the Request permission. The reading list itself still imports;
+        // only the creation of requests for missing items is suppressed for users without permission.
+        const requester = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, canRequest: true } });
+        const mayRequest = requester?.role === 'ADMIN' || !!requester?.canRequest;
         const { username, requestMissing, isGlobal } = await request.json();
         if (!username) return NextResponse.json({ error: 'MyAnimeList username is required' }, { status: 400 });
 
@@ -90,7 +94,7 @@ export async function POST(request: Request) {
                 if (match) {
                     Logger.log(`[MAL Import Debug] SUCCESS -> Matched MAL "${displayTitle}" to local database series [ID: ${match.id}] ("${match.name}")`, 'debug');
                     matchedSeriesIds.add(match.id);
-                } else if (requestMissing && displayTitle) {
+                } else if (requestMissing && mayRequest && displayTitle) {
                     Logger.log(`[MAL Import Debug] FAILED -> No local match found for "${displayTitle}". Auto-requesting...`, 'debug');
                     const existingReq = await prisma.request.findFirst({
                         where: { activeDownloadName: displayTitle, userId: userId }

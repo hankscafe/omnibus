@@ -5,6 +5,9 @@ declare module "next-auth" {
     user: {
       id: string;
       role: string;
+      canRequest?: boolean;
+      autoApproveRequests?: boolean;
+      canDownload?: boolean;
       canCreateGlobalLists?: boolean;
     } & DefaultSession["user"];
   }
@@ -12,6 +15,9 @@ declare module "next-auth" {
   interface User extends DefaultUser {
     id: string;
     role: string;
+    canRequest?: boolean;
+    autoApproveRequests?: boolean;
+    canDownload?: boolean;
     canCreateGlobalLists?: boolean;
   }
 }
@@ -20,6 +26,9 @@ declare module "next-auth/jwt" {
   interface JWT {
     id: string;
     role: string;
+    canRequest?: boolean;
+    autoApproveRequests?: boolean;
+    canDownload?: boolean;
     canCreateGlobalLists?: boolean;
   }
 }

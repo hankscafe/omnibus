@@ -24,11 +24,15 @@ vi.mock('@/lib/db', () => ({
     prisma: {
         systemSetting: { findMany: mocks.systemSettingFindMany },
         $queryRaw: mocks.queryRaw,
-        user: { 
-            create: mocks.userCreate, 
-            update: mocks.userUpdate, 
-            findFirst: mocks.userFindFirst 
-        }
+        $transaction: vi.fn().mockResolvedValue([]),
+        user: {
+            create: mocks.userCreate,
+            update: mocks.userUpdate,
+            findFirst: mocks.userFindFirst
+        },
+        // Library seeding for new SSO users (Phase 2) touches these.
+        library: { findMany: vi.fn().mockResolvedValue([]) },
+        userLibraryAccess: { deleteMany: vi.fn(), createMany: vi.fn() }
     }
 }));
 

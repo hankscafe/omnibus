@@ -7,7 +7,7 @@ import { ComicGrid } from '@/components/comic-grid';
 
 // 1. Mock NextAuth
 vi.mock('next-auth/react', () => ({
-    useSession: () => ({ data: { user: { role: 'USER' } } })
+    useSession: () => ({ data: { user: { role: 'USER', canRequest: true } } })
 }));
 
 // 2. Mock UI Dependencies

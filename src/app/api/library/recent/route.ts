@@ -4,11 +4,17 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getAccessibleLibraryIds, seriesAccessWhere } from '@/lib/library-access';
 
 export async function GET() {
     try {
+        const authOptions = await getAuthOptions();
+        const session = await getServerSession(authOptions);
+        const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
         const recentSeries = await prisma.series.findMany({
-            where: { issues: { some: { filePath: { not: null } } } }, // <-- STRICT CHECK
+            where: { issues: { some: { filePath: { not: null } } }, ...seriesAccessWhere(accessibleLibs) }, // <-- STRICT CHECK + per-library access
             orderBy: { id: 'desc' },
             take: 7,
             include: { 

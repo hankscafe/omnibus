@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { getAccessibleLibraryIds, canAccessLibraryId, nestedSeriesAccessWhere } from '@/lib/library-access';
 
 export async function POST(request: Request) {
   try {
@@ -14,9 +15,9 @@ export async function POST(request: Request) {
 
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { listId, issueId, seriesId, seriesIds, action } = await request.json();
+    const { listId, issueId, seriesId, seriesIds, itemId, action } = await request.json();
 
-    if (!listId || (!issueId && !seriesId && (!seriesIds || seriesIds.length === 0))) {
+    if (!listId || (!issueId && !seriesId && !itemId && (!seriesIds || seriesIds.length === 0))) {
         return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
     }
 
@@ -26,6 +27,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // Per-library access: a non-admin may only add content from libraries they've been granted.
+    const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+
     if (action === 'add') {
       const lastItem = await prisma.readingListItem.findFirst({
         where: { listId },
@@ -34,15 +38,19 @@ export async function POST(request: Request) {
       let nextOrder = lastItem ? lastItem.order + 1 : 0;
 
       if (issueId) {
+          const target = await prisma.issue.findUnique({ where: { id: issueId }, include: { series: { select: { libraryId: true } } } });
+          if (!canAccessLibraryId(accessibleLibs, target?.series?.libraryId)) {
+              return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
+          }
           await prisma.readingListItem.create({
               data: { listId, issueId, order: nextOrder, title: "" }
           });
           return NextResponse.json({ success: true, message: `Added issue to reading list.` });
       } else {
-          // Add all issues from one or more series
+          // Add all issues from one or more series (filtered to libraries the user can access)
           const idsToProcess = seriesIds || [seriesId];
           const issues = await prisma.issue.findMany({
-              where: { seriesId: { in: idsToProcess } },
+              where: { seriesId: { in: idsToProcess }, ...nestedSeriesAccessWhere(accessibleLibs) },
               include: { series: true }
           });
 
@@ -67,7 +75,13 @@ export async function POST(request: Request) {
       }
 
     } else if (action === 'remove') {
-      if (issueId) {
+      if (itemId) {
+          // Remove a single list entry by its own id — works for owned AND "missing" items (which
+          // have no issueId), and removes exactly that entry even if the issue appears more than once.
+          await prisma.readingListItem.deleteMany({
+            where: { id: itemId, listId }
+          });
+      } else if (issueId) {
           await prisma.readingListItem.deleteMany({
             where: { listId, issueId }
           });

@@ -6,6 +6,7 @@ import { Mailer } from '@/lib/mailer';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { grantAllLibraries, setUserLibraryAccess, getDefaultLibraryIds } from '@/lib/library-access';
 
 export async function POST(request: Request) {
   const ip = request.headers.get('x-forwarded-for') || 'unknown';
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
     const inputEmail = email.toLowerCase();
     
     const existingUsers: any[] = await prisma.$queryRaw`
-      SELECT id FROM User 
+      SELECT id FROM "User" 
       WHERE LOWER(username) = ${inputUsername} OR LOWER(email) = ${inputEmail} 
       LIMIT 1
     `;
@@ -114,11 +115,16 @@ export async function POST(request: Request) {
                 role: "ADMIN",
                 isApproved: true,
                 autoApproveRequests: true,
+                canRequest: true,
                 canDownload: true,
                 canCreateGlobalLists: true
             }
         });
     }
+
+    // Seed library access: the first user (admin) gets all libraries; everyone else the default Comics library.
+    if (isFirstUser) await grantAllLibraries(newUser.id);
+    else await setUserLibraryAccess(newUser.id, await getDefaultLibraryIds());
 
     // 6. Send Notifications for New Users (Admins excluded)
     if (!isFirstUser) {

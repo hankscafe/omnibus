@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getAccessibleLibraryIds } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,10 @@ export async function GET(request: Request) {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+        // Per-library access: non-admins only see calendar entries from libraries they've been granted.
+        const accessibleLibs = await getAccessibleLibraryIds((session.user as any).id, (session.user as any).role);
+        const seriesAccess = accessibleLibs !== 'ALL' ? { libraryId: { in: accessibleLibs } } : {};
 
         const { searchParams } = new URL(request.url);
         const weekOffsetParam = searchParams.get('weekOffset');
@@ -58,7 +63,7 @@ export async function GET(request: Request) {
         const upcoming = await prisma.issue.findMany({
             where: {
                 releaseDate: { gte: startDateStr, lte: endDateStr },
-                series: { monitored: true }
+                series: { monitored: true, ...seriesAccess }
             },
             include: { series: { select: { name: true, folderPath: true, coverUrl: true, publisher: true } } },
             orderBy: { releaseDate: 'asc' }

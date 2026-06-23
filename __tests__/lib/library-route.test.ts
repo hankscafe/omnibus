@@ -31,7 +31,7 @@ const createReq = (queryParam: string) => {
 describe('API Route: Library Advanced Search', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mocks.getServerSession.mockResolvedValue({ user: { id: 'user_1' } });
+        mocks.getServerSession.mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } });
         mocks.countSeries.mockResolvedValue(1);
         mocks.findManySeries.mockResolvedValue([{ id: '1', issues: [], favorites: [] }]);
     });

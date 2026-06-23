@@ -32,7 +32,7 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 // --- Types ---
-interface LibraryConfig { id: string; name: string; path: string; isManga: boolean; isDefault: boolean; }
+interface LibraryConfig { id: string; name: string; path: string; isManga: boolean; isDefault: boolean; defaultAccess: boolean; }
 interface IndexerConfig { id: number; name: string; priority: number; seedTime: number; seedRatio: number; rss: boolean; protocol: string; }
 interface CustomHeader { id?: string; key: string; value: string; }
 interface AcronymConfig { id?: string; key: string; value: string; }
@@ -491,7 +491,7 @@ export default function SettingsPage() {
 
   const addLibrary = () => {
     setConfiguredLibraries([...configuredLibraries, {
-        id: `tmp_${Date.now()}`, name: "", path: "", isManga: false, isDefault: configuredLibraries.length === 0
+        id: `tmp_${Date.now()}`, name: "", path: "", isManga: false, isDefault: configuredLibraries.length === 0, defaultAccess: configuredLibraries.length === 0
     }]);
   }
   const removeLibrary = (id: string) => setConfiguredLibraries(configuredLibraries.filter(l => l.id !== id));
@@ -1530,6 +1530,10 @@ export default function SettingsPage() {
                                         <div className="flex items-center gap-2">
                                             <Switch checked={lib.isDefault} onCheckedChange={v => v && setLibraryDefault(lib.id, lib.isManga)} className="scale-110 sm:scale-100" />
                                             <Label className="cursor-pointer font-bold text-sm text-foreground">Default for Auto-Import</Label>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Switch checked={!!lib.defaultAccess} onCheckedChange={v => updateLibrary(lib.id, 'defaultAccess', v)} className="scale-110 sm:scale-100" />
+                                            <Label className="cursor-pointer font-bold text-sm text-foreground" title="Every user is automatically granted access to this library, and new users are seeded with it.">Auto-grant to all users</Label>
                                         </div>
                                     </div>
                                 </div>

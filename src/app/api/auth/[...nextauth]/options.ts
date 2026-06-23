@@ -7,6 +7,7 @@ import { cookies } from "next/headers";
 import { decrypt2FA } from "@/lib/encryption";
 import crypto from "crypto";
 import { Logger } from "@/lib/logger";
+import { grantAllLibraries, setUserLibraryAccess, getDefaultLibraryIds } from "@/lib/library-access";
 
 // --- SECURITY SAFEGUARD ---
 const defaultSecret = 'change_this_to_a_random_secure_string_123!';
@@ -76,7 +77,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
               const remainingMinutes = Math.ceil((attemptData.lockoutUntil - Date.now()) / 60000);
               throw new Error(`Account locked due to too many failed attempts. Try again in ${remainingMinutes} minutes.`);
           }
-          const users: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(username) = ${input} OR LOWER(email) = ${input} LIMIT 1`;
+          const users: any[] = await prisma.$queryRaw`SELECT * FROM "User" WHERE LOWER(username) = ${input} OR LOWER(email) = ${input} LIMIT 1`;
           const user = users[0];
           const handleFailedAttempt = () => {
               attemptData.count += 1;
@@ -135,7 +136,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           if (!user.email) return false;
           Logger.log(`[SSO Debug] Processing sign in for: ${user.email}`, 'debug');
           const inputEmail = user.email.toLowerCase();
-          const dbUsers: any[] = await prisma.$queryRaw`SELECT * FROM User WHERE LOWER(email) = ${inputEmail} LIMIT 1`;
+          const dbUsers: any[] = await prisma.$queryRaw`SELECT * FROM "User" WHERE LOWER(email) = ${inputEmail} LIMIT 1`;
           let dbUser = dbUsers[0];
 
           // Determine target role & approval based on configuration
@@ -169,17 +170,21 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                 username: user.name || user.email.split('@')[0], 
                 email: user.email, 
                 password: '', 
-                role: targetRole, 
-                isApproved: isApproved, 
-                autoApproveRequests: targetRole === "ADMIN", 
+                role: targetRole,
+                isApproved: isApproved,
+                autoApproveRequests: targetRole === "ADMIN",
+                canRequest: targetRole === "ADMIN",
                 canDownload: targetRole === "ADMIN",
                 canCreateGlobalLists: targetRole === "ADMIN"
               } 
             });
             const firstUserInDb = await prisma.user.findFirst({ orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true } });
             if (firstUserInDb?.id === dbUser.id && targetRole !== "ADMIN") {
-                dbUser = await prisma.user.update({ where: { id: dbUser.id }, data: { role: "ADMIN", isApproved: true, autoApproveRequests: true, canDownload: true, canCreateGlobalLists: true } });
+                dbUser = await prisma.user.update({ where: { id: dbUser.id }, data: { role: "ADMIN", isApproved: true, autoApproveRequests: true, canRequest: true, canDownload: true, canCreateGlobalLists: true } });
             }
+            // Seed library access for the brand-new SSO user (admins get all; others the default Comics library).
+            if (dbUser.role === 'ADMIN') await grantAllLibraries(dbUser.id);
+            else await setUserLibraryAccess(dbUser.id, await getDefaultLibraryIds());
           } else {
               // Update role if groups shifted
               if ((oidcAdminGroup || oidcUserGroup) && dbUser.role !== targetRole) {
@@ -189,6 +194,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                           role: targetRole,
                           isApproved: isApproved,
                           autoApproveRequests: targetRole === "ADMIN" ? true : dbUser.autoApproveRequests,
+                          canRequest: targetRole === "ADMIN" ? true : dbUser.canRequest,
                           canDownload: targetRole === "ADMIN" ? true : dbUser.canDownload,
                           canCreateGlobalLists: targetRole === "ADMIN" ? true : dbUser.canCreateGlobalLists,
                       }
@@ -200,6 +206,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           user.id = dbUser.id;
           (user as any).role = dbUser.role;
           (user as any).autoApproveRequests = dbUser.autoApproveRequests;
+          (user as any).canRequest = dbUser.canRequest;
           (user as any).canDownload = dbUser.canDownload;
           (user as any).canCreateGlobalLists = dbUser.canCreateGlobalLists;
           user.image = dbUser.avatar; 
@@ -215,6 +222,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           token.id = user.id;
           token.role = (user as any).role;
           token.autoApproveRequests = (user as any).autoApproveRequests;
+          token.canRequest = (user as any).canRequest;
           token.canDownload = (user as any).canDownload;
           token.canCreateGlobalLists = (user as any).canCreateGlobalLists;
           token.picture = user.image;
@@ -270,14 +278,14 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                 const targetUser = await prisma.user.findUnique({ where: { id: impersonateId } });
                 if (targetUser) {
                     token.id = targetUser.id; token.role = targetUser.role; token.autoApproveRequests = targetUser.autoApproveRequests;
-                    token.canDownload = targetUser.canDownload; token.canCreateGlobalLists = targetUser.canCreateGlobalLists; token.picture = targetUser.avatar; token.isImpersonating = true;
+                    token.canRequest = targetUser.canRequest; token.canDownload = targetUser.canDownload; token.canCreateGlobalLists = targetUser.canCreateGlobalLists; token.picture = targetUser.avatar; token.isImpersonating = true;
                 }
             }
         } else if (!impersonateId && token.isImpersonating) {
             const adminUser = await prisma.user.findUnique({ where: { id: token.originalAdminId as string } });
             if (adminUser) {
                 token.id = adminUser.id; token.role = adminUser.role; token.autoApproveRequests = adminUser.autoApproveRequests;
-                token.canDownload = adminUser.canDownload; token.canCreateGlobalLists = adminUser.canCreateGlobalLists; token.picture = adminUser.avatar; token.isImpersonating = false;
+                token.canRequest = adminUser.canRequest; token.canDownload = adminUser.canDownload; token.canCreateGlobalLists = adminUser.canCreateGlobalLists; token.picture = adminUser.avatar; token.isImpersonating = false;
             }
         }
         return token as any;
@@ -287,6 +295,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         if (session?.user) {
           (session.user as any).id = token.id; (session.user as any).role = token.role;
           (session.user as any).autoApproveRequests = token.autoApproveRequests; (session.user as any).canDownload = token.canDownload;
+          (session.user as any).canRequest = token.canRequest;
           (session.user as any).canCreateGlobalLists = token.canCreateGlobalLists;
           (session.user as any).isImpersonating = token.isImpersonating;
           let pic = token.picture as string | null;

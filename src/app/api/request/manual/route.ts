@@ -38,7 +38,12 @@ export async function POST(request: NextRequest) {
     Logger.log(`[Manual Request] User ${token.name} initiated request for: ${name}`, 'info');
     Logger.log(`[Manual Request Debug] Payload received: type=${type}, source=${source}, searchResultTitle=${searchResult?.title}`, 'debug');
 
-    const isAutoApprove = token.role === 'ADMIN' || token.autoApproveRequests;
+    // Gate: only users granted the Request permission (or admins) may create requests.
+    const requesterIsAdmin = userExists.role === 'ADMIN';
+    if (!requesterIsAdmin && !userExists.canRequest) {
+      return NextResponse.json({ error: "You don't have permission to make requests. Ask an admin to grant you the Request permission." }, { status: 403 });
+    }
+    const isAutoApprove = requesterIsAdmin || userExists.autoApproveRequests;
     let initialStatus = isAutoApprove ? 'DOWNLOADING' : 'PENDING_APPROVAL';
 
     if (source === 'flag_admin') {

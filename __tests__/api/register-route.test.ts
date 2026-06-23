@@ -17,11 +17,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         $queryRaw: mocks.queryRaw,
+        $transaction: vi.fn().mockResolvedValue([]),
         user: {
             create: mocks.userCreate,
             findFirst: mocks.userFindFirst,
             update: mocks.userUpdate
-        }
+        },
+        // Library seeding on registration (Phase 2) touches these.
+        library: { findMany: vi.fn().mockResolvedValue([]) },
+        userLibraryAccess: { deleteMany: vi.fn(), createMany: vi.fn() }
     }
 }));
 
@@ -60,6 +64,8 @@ describe('API Route: POST /api/auth/register', () => {
         mocks.userCreate.mockResolvedValueOnce({ id: 'user_1', username: 'AdminUser' });
         // 3. Simulate this user being the oldest (first) in the DB
         mocks.userFindFirst.mockResolvedValueOnce({ id: 'user_1' });
+        // 4. The promotion update returns the promoted admin (consumed by library seeding).
+        mocks.userUpdate.mockResolvedValueOnce({ id: 'user_1', username: 'AdminUser', role: 'ADMIN', isApproved: true });
         
         const res = await POST(req);
         expect(res.status).toBe(200);

@@ -13,6 +13,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { safeParse } from '@/lib/utils/safe-parse';
+import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -43,6 +44,12 @@ export async function GET(request: Request) {
 
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
 
+    // Per-library access: the folder must live under a library the user has been granted (admins bypass).
+    const accessiblePaths = await getAccessibleLibraryPaths(userId, (session?.user as any)?.role);
+    if (!canAccessPath(accessiblePaths, folderPath)) {
+        return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
+    }
+
     let seriesRecord = await prisma.series.findFirst({ 
         where: { folderPath: folderPath } 
     });
@@ -72,7 +79,7 @@ export async function GET(request: Request) {
     }
 
     let isFavorite = false;
-    let progressMap: Record<string, { readProgress: number, isRead: boolean }> = {};
+    const progressMap: Record<string, { readProgress: number, isRead: boolean }> = {};
     
     if (userId && seriesRecord) {
         const favorite = await prisma.favorite.findUnique({ where: { userId_seriesId: { userId: userId, seriesId: seriesRecord.id } } });
@@ -88,9 +95,9 @@ export async function GET(request: Request) {
         }
     }
 
-    let downloadedIssues: any[] = [];
-    let missingIssues: any[] = [];
-    let duplicatesList: any[] = [];
+    const downloadedIssues: any[] = [];
+    const missingIssues: any[] = [];
+    const duplicatesList: any[] = [];
 
     if (seriesRecord) {
         let existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
@@ -226,14 +233,18 @@ export async function GET(request: Request) {
       metadataSource: seriesRecord?.metadataSource || 'COMICVINE',
       seriesName: seriesRecord?.name?.trim() || path.basename(folderPath).replace(/\s\(\d{4}\)$/, ""),
       publisher: seriesRecord?.publisher || null, 
-      year: seriesRecord?.year || null, 
+      year: seriesRecord?.year || null,
       status: seriesRecord?.status || null,
       bookType: seriesRecord?.bookType || null,
       monitored: seriesRecord?.monitored || false,
       isManga: seriesRecord?.isManga || false,
+      description: seriesRecord?.description || null,
+      universe: seriesRecord?.universe || null,
+      seriesGroup: (seriesRecord as any)?.seriesGroup || null,
       matchState: seriesRecord?.matchState || 'UNMATCHED',
-      path: folderPath, 
-      coverUrl: finalSeriesCoverUrl, 
+      path: folderPath,
+      coverUrl: finalSeriesCoverUrl,
+      hasCustomCover: (seriesRecord as any)?.hasCustomCover || false,
       downloadedIssues, 
       missingIssues,
       duplicates: duplicatesList

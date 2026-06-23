@@ -4,6 +4,9 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getAccessibleLibraryIds } from '@/lib/library-access';
 
 export async function GET(request: Request) {
   try {
@@ -43,8 +46,12 @@ export async function GET(request: Request) {
               select: { volumeId: true, activeDownloadName: true, status: true }
           });
 
+          // Per-library access: only badge issues "in library" if they live in a library the user can access.
+          const authOptions = await getAuthOptions();
+          const session = await getServerSession(authOptions);
+          const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
           const existingIssues = await prisma.issue.findMany({
-              where: { series: { metadataId: { in: volumeIds } } },
+              where: { series: { metadataId: { in: volumeIds }, ...(accessibleLibs !== 'ALL' ? { libraryId: { in: accessibleLibs } } : {}) } },
               select: { number: true, series: { select: { metadataId: true } } }
           });
 

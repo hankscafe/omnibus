@@ -13,6 +13,12 @@ export async function POST(request: Request) {
         
         const userId = (session.user as any).id;
 
+        // Flagging an unmatched list item for admin download is still a request — gate it.
+        const requester = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, canRequest: true } });
+        if (requester?.role !== 'ADMIN' && !requester?.canRequest) {
+            return NextResponse.json({ error: "You don't have permission to make requests." }, { status: 403 });
+        }
+
         const { cvId, name, image, searchLink, metadataSource } = await request.json();
 
         // No more guessing! Every field here is confirmed by the Prisma logs.

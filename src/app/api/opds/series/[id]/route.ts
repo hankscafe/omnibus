@@ -4,6 +4,7 @@ import { validateApiKey } from '@/lib/api-auth';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { escapeXml } from '@/lib/utils/xml';
+import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
     if (!series) return new Response('Not Found', { status: 404 });
 
+    // Per-library access: non-admins only see series in libraries they've been granted.
+    const accessibleLibs = await getAccessibleLibraryIds(auth.user?.id, auth.user?.role);
+    if (!canAccessLibraryId(accessibleLibs, series.libraryId)) {
+        return new Response('Forbidden', { status: 403 });
+    }
+
     const sortedIssues = series.issues.sort((a, b) => {
         // Added the '-' character to the regex to preserve negative numbers
         const numA = parseFloat(a.number.replace(/[^0-9.-]/g, '')) || 0;
@@ -41,7 +48,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         return numA - numB;
     });
 
-    let entries = sortedIssues.map(issue => {
+    const entries = sortedIssues.map(issue => {
         const rawCover = issue.coverUrl || (series.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '');
         const finalCoverUrl = rawCover.startsWith('http') ? rawCover : (rawCover ? `${baseUrl}${rawCover}` : '');
         

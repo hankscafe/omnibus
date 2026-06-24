@@ -12,7 +12,7 @@ import {
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
-  MapPin, Shield, FolderSearch
+  MapPin, Shield, FolderSearch, Upload, RotateCcw
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import MetadataEditorModal from "@/components/metadata-editor-modal"
 
 function SeriesDetailSkeleton() {
   return (
@@ -60,9 +61,11 @@ function SeriesContent() {
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, matchState?: string}>({
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED'
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean}>({
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false
   });
+
+  const [coverUploading, setCoverUploading] = useState(false);
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
   const [metronConfigured, setMetronConfigured] = useState(false);
@@ -84,6 +87,9 @@ function SeriesContent() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "Print" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [metaModalOpen, setMetaModalOpen] = useState(false);
+  const [metaMode, setMetaMode] = useState<'series' | 'issue'>('series');
+  const [metaIssue, setMetaIssue] = useState<any>(null);
 
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportDescription, setReportDescription] = useState("");
@@ -126,6 +132,7 @@ function SeriesContent() {
 
   const isAdmin = session?.user?.role === 'ADMIN';
   const canDownload = isAdmin || (session?.user as any)?.canDownload;
+  const canRequest = isAdmin || (session?.user as any)?.canRequest;
 
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
@@ -240,9 +247,10 @@ function SeriesContent() {
             setMissingIssues(data.missingIssues || []);
             setDuplicates(data.duplicates || []);
             
-            setSeriesInfo({ 
-                name: data.seriesName || data.name || "Unknown Series", 
-                cover: data.coverUrl, 
+            setSeriesInfo({
+                name: data.seriesName || data.name || "Unknown Series",
+                cover: data.coverUrl,
+                hasCustomCover: data.hasCustomCover || false,
                 cvId: data.cvId,
                 metadataId: data.metadataId,
                 metadataSource: data.metadataSource || 'COMICVINE',
@@ -256,6 +264,8 @@ function SeriesContent() {
                 bookType: data.bookType || null,
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
+                universe: data.universe || null,
+                seriesGroup: data.seriesGroup || null,
                 matchState: data.matchState || 'MATCHED'
             });
 
@@ -387,10 +397,11 @@ function SeriesContent() {
           setDownloadedIssues(data.downloadedIssues || []);
           setMissingIssues(data.missingIssues || []);
           
-          setSeriesInfo(prev => ({ 
+          setSeriesInfo(prev => ({
               ...prev,
-              name: data.seriesName || data.name || prev.name, 
-              cover: data.coverUrl !== undefined ? data.coverUrl : prev.cover, 
+              name: data.seriesName || data.name || prev.name,
+              cover: data.coverUrl !== undefined ? data.coverUrl : prev.cover,
+              hasCustomCover: data.hasCustomCover !== undefined ? data.hasCustomCover : prev.hasCustomCover,
               cvId: data.cvId !== undefined ? data.cvId : prev.cvId,
               metadataId: data.metadataId !== undefined ? data.metadataId : prev.metadataId,
               metadataSource: data.metadataSource || prev.metadataSource,
@@ -440,6 +451,10 @@ function SeriesContent() {
   }
 
   const handleRequestMissing = async (issue: any) => {
+        if (!canRequest) {
+            toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
+            return;
+        }
         let compositeName = `${seriesInfo.name} #${issue.parsedNum}`;
         if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${issue.parsedNum}`)) {
             compositeName += `: ${issue.name}`;
@@ -533,8 +548,63 @@ function SeriesContent() {
             body: JSON.stringify({ seriesId: seriesInfo.id })
         });
     } catch (e) {
-        setSeriesInfo(prev => ({ ...prev, isFavorite: currentStatus })); 
+        setSeriesInfo(prev => ({ ...prev, isFavorite: currentStatus }));
         toast({ title: "Error", description: "Failed to update favorites.", variant: "destructive" });
+    }
+  };
+
+  // Admin: upload a custom cover (writes <folder>/cover.jpg + locks it from auto-sync/extraction).
+  const handleCoverFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // let the same file be re-picked later
+    if (!file || !seriesInfo.path) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Please choose an image under 15MB.", variant: "destructive" });
+      return;
+    }
+    setCoverUploading(true);
+    try {
+      const imageBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Could not read the image file."));
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch('/api/library/cover-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPath: seriesInfo.path, imageBase64 })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setSeriesInfo(prev => ({ ...prev, cover: data.coverUrl, hasCustomCover: true }));
+      setActiveIssue(null); // show the new series cover, not an issue cover
+      toast({ title: "Cover updated", description: "Your custom cover has been saved." });
+    } catch (err) {
+      toast({ title: "Upload failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
+  // Admin: drop the custom cover so the next scan/sync re-resolves it (archive or provider).
+  const handleRevertCover = async () => {
+    if (!seriesInfo.path) return;
+    setCoverUploading(true);
+    try {
+      const res = await fetch('/api/library/cover-upload', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPath: seriesInfo.path })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Revert failed');
+      setSeriesInfo(prev => ({ ...prev, cover: null, hasCustomCover: false }));
+      toast({ title: "Reverted to automatic", description: "The cover will be regenerated on the next scan or metadata refresh." });
+    } catch (err) {
+      toast({ title: "Revert failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
     }
   };
 
@@ -577,7 +647,7 @@ function SeriesContent() {
       setIsMatching(true);
       try {
           const safeYear = item.year ? item.year.toString() : new Date().getFullYear().toString();
-          let safePublisher = item.publisher || "Unknown";
+          const safePublisher = item.publisher || "Unknown";
           
           const res = await fetch('/api/library/match-series', {
               method: 'POST',
@@ -888,17 +958,18 @@ function SeriesContent() {
     return "Read";
   };
 
-  if (!folderPath) return <div className="p-10 text-center text-muted-foreground">No series selected.</div>;
-
   const sortedMatchResults = useMemo(() => {
-    let sorted = [...searchResults];
+    const sorted = [...searchResults];
     if (matchSort === 'year_desc') sorted.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
     if (matchSort === 'year_asc') sorted.sort((a, b) => parseInt(a.year || '0') - parseInt(b.year || '0'));
     if (matchSort === 'name_asc') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (matchSort === 'name_desc') sorted.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
     if (matchSort === 'issues_desc') sorted.sort((a, b) => (b.count || 0) - (a.count || 0));
     return sorted;
-}, [searchResults, matchSort]);
+  }, [searchResults, matchSort]);
+
+  // All hooks must run before any early return so their call order stays stable across renders (Rules of Hooks).
+  if (!folderPath) return <div className="p-10 text-center text-muted-foreground">No series selected.</div>;
   
   return (
     <div className="container mx-auto py-10 px-6 max-w-[1400px] transition-colors duration-300">
@@ -940,6 +1011,22 @@ function SeriesContent() {
                               </Badge>
                           ) : null}
                       </div>
+
+                      {/* Admin: change / revert the series cover */}
+                      {isAdmin && (
+                          <div className="absolute bottom-2 right-2 z-30 flex items-center gap-1.5">
+                              <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">
+                                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleCoverFile} disabled={coverUploading} />
+                                  {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                                  <span>Cover</span>
+                              </label>
+                              {seriesInfo.hasCustomCover && !coverUploading && (
+                                  <button onClick={handleRevertCover} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors" title="Revert to automatic cover">
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                  </button>
+                              )}
+                          </div>
+                      )}
                   </div>
                   
                   <div className="text-center md:text-left space-y-1">
@@ -1005,6 +1092,13 @@ function SeriesContent() {
                   {isAdmin && (
                       <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" onClick={() => setEditModalOpen(true)}>
                           <Edit className="w-4 h-4 mr-2" /> Edit Info
+                      </Button>
+                  )}
+
+                  {isAdmin && activeIssue?.id && (
+                      <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" onClick={() => { setMetaMode('issue'); setMetaIssue(activeIssue); setMetaModalOpen(true); }}>
+                          <Tags className="w-4 h-4 mr-2" /> Edit Issue Metadata
+                          {activeIssue?.parsedNum != null ? <span className="ml-1 opacity-70">#{activeIssue.parsedNum}</span> : null}
                       </Button>
                   )}
 
@@ -1823,7 +1917,7 @@ function SeriesContent() {
       </Dialog>
 
       <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
-          <DialogContent className="sm:max-w-[450px] bg-background border-border">
+          <DialogContent className="sm:max-w-[520px] w-[95%] max-h-[90vh] overflow-y-auto bg-background border-border">
               <DialogHeader><DialogTitle>Edit Series Info</DialogTitle></DialogHeader>
               <div className="grid gap-4 py-4">
                   <div className="grid gap-2"><Label>Source Folder Path</Label><div className="flex gap-2"><Input readOnly value={seriesInfo.path || folderPath!} className="bg-muted border-border text-xs truncate text-muted-foreground" /><Button variant="secondary" size="icon" onClick={copyToClipboard} className="border border-border hover:bg-muted">{copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}</Button></div></div>
@@ -1882,10 +1976,45 @@ function SeriesContent() {
                           <Label htmlFor="isManga" className="cursor-pointer">Flag as Manga</Label>
                       </div>
                   </div>
+
+                  <Button variant="secondary" className="w-full border border-border hover:bg-muted font-semibold mt-1 h-auto py-2.5 whitespace-normal leading-snug text-center" onClick={() => { setEditModalOpen(false); setMetaMode('series'); setMetaModalOpen(true); }}>
+                      <Tags className="w-4 h-4 mr-2 shrink-0" /> Edit Metadata (Description, Universe, Series Group)
+                  </Button>
               </div>
               <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)} className="border-border hover:bg-muted">Cancel</Button><Button className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
           </DialogContent>
       </Dialog>
+
+      <MetadataEditorModal
+          open={metaModalOpen}
+          onOpenChange={setMetaModalOpen}
+          mode={metaMode}
+          series={metaMode === 'series' ? {
+              currentPath: seriesInfo.path || folderPath || '',
+              name: seriesInfo.name,
+              publisher: seriesInfo.publisher || '',
+              year: seriesInfo.year || '',
+              status: seriesInfo.status || undefined,
+              bookType: seriesInfo.bookType || undefined,
+              monitored: seriesInfo.monitored,
+              isManga: seriesInfo.isManga,
+              description: seriesInfo.description,
+              universe: seriesInfo.universe,
+              seriesGroup: seriesInfo.seriesGroup,
+          } : undefined}
+          issue={metaMode === 'issue' && metaIssue ? {
+              id: metaIssue.id,
+              seriesName: seriesInfo.name,
+              number: metaIssue.parsedNum != null ? String(metaIssue.parsedNum) : (metaIssue.number || ''),
+          } : undefined}
+          onSaved={(r) => {
+              if (metaMode === 'series' && r?.newPath) {
+                  window.location.href = `/library/series?path=${encodeURIComponent(r.newPath)}`;
+              } else {
+                  window.location.reload();
+              }
+          }}
+      />
 
       {/* SPREADSHEET BULK EDITOR MODAL */}
       <Dialog open={bulkEditModalOpen} onOpenChange={setBulkEditModalOpen}>

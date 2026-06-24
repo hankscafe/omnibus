@@ -11,18 +11,20 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger'; 
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { AuditLogger } from '@/lib/audit-logger';
-import { authOptions } from '@/lib/auth';
-import { getServerSession } from 'next-auth';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getServerSession } from 'next-auth/next';
 import { omnibusQueue } from '@/lib/queue';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
-import { UNMATCHED_DIR } from '@/lib/utils/paths';
+import { UNMATCHED_DIR, CONFIG_DIR } from '@/lib/utils/paths';
+import { safeRelocateFolder } from '@/lib/utils/safe-fs';
 
 export async function POST(request: Request) {
   try {
     const req = (await request.json()) as any;
-    const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber } = req;
+    const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber,
+            universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64 } = req;
 
     const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
     const targetSource = metadataSource || 'COMICVINE';
@@ -99,7 +101,11 @@ export async function POST(request: Request) {
 
     const safePublisher = sanitizeFilename(realPublisher);
     const safeName = sanitizeFilename(realName);
-    const safeYear = realYear > 0 ? realYear.toString() : ''; 
+    const safeYear = realYear > 0 ? realYear.toString() : '';
+    // {UniverseName}/{SeriesGroup} are admin-supplied (the Smart Matcher metadata editor) — providers
+    // don't reliably expose them. Sanitized here so they can build folder/file paths like every other token.
+    const safeUniverse = universe ? sanitizeFilename(universe) : '';
+    const safeSeriesGroup = seriesGroup ? sanitizeFilename(seriesGroup) : '';
     
     const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
     
@@ -114,18 +120,20 @@ export async function POST(request: Request) {
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
 
-    let relFolderPath = folderPattern
+    const relFolderPath = folderPattern
         .replace(/{Publisher}/gi, safePublisher || "Other")
         .replace(/{Series}/gi, safeName || "Unknown Series")
         .replace(/{Year}/gi, safeYear)
         .replace(/{VolumeYear}/gi, safeYear)
-        .replace(/\(\s*\)/g, '') 
-        .replace(/\[\s*\]/g, '') 
+        .replace(/{UniverseName}/gi, safeUniverse)
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+        .replace(/\(\s*\)/g, '')
+        .replace(/\[\s*\]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
     const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
-    let newFolderPath = path.join(targetLib.path, ...folderParts).replace(/\\/g, '/');
+    const newFolderPath = path.join(targetLib.path, ...folderParts).replace(/\\/g, '/');
 
     const pubDir = path.dirname(newFolderPath);
     if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
@@ -143,8 +151,14 @@ export async function POST(request: Request) {
         where: { folderPath: oldFolderPath }
     });
 
+    // Cover precedence: an admin can supply a custom cover in the Smart Matcher editor (hasNewCustomCover);
+    // otherwise an already-custom series keeps its cover (keepExistingCustomCover) — a manual re-match must
+    // not overwrite cover.jpg or repoint coverUrl at the provider art.
+    const hasNewCustomCover = typeof coverImageBase64 === 'string' && coverImageBase64.length > 0;
+    const keepExistingCustomCover = !hasNewCustomCover && !!(existingRecord?.hasCustomCover || unmatchedRecord?.hasCustomCover);
+
     const updateData = {
-        cvId: targetSource === 'COMICVINE' ? parseInt(targetMetaId) : null, 
+        cvId: targetSource === 'COMICVINE' ? parseInt(targetMetaId) : null,
         metadataId: targetMetaId,
         metadataSource: targetSource,
         matchState: 'MATCHED',
@@ -154,8 +168,19 @@ export async function POST(request: Request) {
         folderPath: newFolderPath,
         isManga: isManga,
         status: status,
-        libraryId: targetLib.id, 
-        coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null
+        libraryId: targetLib.id,
+        ...(hasNewCustomCover
+            ? { coverUrl: `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}&v=${Date.now()}`, hasCustomCover: true }
+            : keepExistingCustomCover
+                ? {}
+                : { coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null }),
+        // Admin-supplied descriptive metadata from the Smart Matcher editor. Stored raw (paths use the
+        // sanitized copies above). lockMetadata sets hasCustomMetadata so the post-match provider sync
+        // can't revert the admin's entries — same contract as the rich metadata editor (library/update).
+        ...(universe !== undefined ? { universe: universe || null } : {}),
+        ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
+        ...(description !== undefined ? { description: description || null } : {}),
+        ...(lockMetadata ? { hasCustomMetadata: true } : {})
     };
 
     if (existingRecord) {
@@ -187,24 +212,37 @@ export async function POST(request: Request) {
     const oldStat = await fs.promises.stat(oldFolderPath);
     const isFile = oldStat.isFile();
 
+    // Count duplicate files we refuse to overwrite (parity with the Standardize-names route). A non-zero
+    // count is returned + logged so a dupe is preserved instead of silently clobbered.
+    let conflicts = 0;
+    // True when a loose file couldn't be placed because a same-named file was already in the target —
+    // the matching file in the folder is then NOT ours, so the rename loop must leave it alone.
+    let looseFileConflict = false;
+
     let activeFolderPath = oldFolderPath;
     if (isFile) {
         if (!fs.existsSync(newFolderPath)) {
             await fs.promises.mkdir(newFolderPath, { recursive: true });
         }
-        activeFolderPath = newFolderPath; 
+        activeFolderPath = newFolderPath;
         const targetFilePath = path.join(newFolderPath, path.basename(oldFolderPath));
-        await fs.promises.rename(oldFolderPath, targetFilePath);
-    } else if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
-        if (fs.existsSync(newFolderPath)) {
-            const files = await fs.promises.readdir(oldFolderPath);
-            for (const file of files) {
-                await fs.promises.rename(path.join(oldFolderPath, file), path.join(newFolderPath, file));
-            }
-            try { await fs.promises.rmdir(oldFolderPath); } catch(e) {}
+        // Never overwrite a different file already sitting at the destination — leave the loose file where it is.
+        if (fs.existsSync(targetFilePath) && path.normalize(targetFilePath).toLowerCase() !== path.normalize(oldFolderPath).toLowerCase()) {
+            Logger.log(`[Match Series] Conflict: "${path.basename(targetFilePath)}" already exists in the target folder; left the source file in place: ${oldFolderPath}`, 'warn');
+            conflicts++;
+            looseFileConflict = true;
         } else {
-            await fs.promises.rename(oldFolderPath, newFolderPath);
+            await fs.promises.rename(oldFolderPath, targetFilePath);
         }
+    } else if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
+        // Non-destructive folder relocate/merge: a pre-existing target is merged into, never deleted, and
+        // any colliding file is left in place + counted (safeRelocateFolder also handles a plain move when
+        // the destination doesn't exist, and cleans up the emptied source folder).
+        const srcRoot = [...libraries.map(l => l.path), unmatchedDir]
+            .find(r => path.normalize(oldFolderPath).toLowerCase().startsWith(path.normalize(r).toLowerCase()))
+            || path.dirname(oldFolderPath);
+        const { conflicts: folderConflicts } = await safeRelocateFolder(oldFolderPath, newFolderPath, srcRoot);
+        conflicts += folderConflicts;
         activeFolderPath = newFolderPath;
     }
 
@@ -238,7 +276,13 @@ export async function POST(request: Request) {
                 
                 // Skip adjacent files to prevent accidental ghost records
                 if (!isTargetFile) {
-                    continue; 
+                    continue;
+                }
+
+                // The loose file was left in place due to a name collision — the file matching this name
+                // in the folder is the pre-existing one, so never touch it.
+                if (looseFileConflict) {
+                    continue;
                 }
                 
                 Logger.log(`[Match Series Debug] Evaluating exact target file for rename: "${file}"`, 'debug');
@@ -271,17 +315,27 @@ export async function POST(request: Request) {
                         .replace(/{VolumeYear}/gi, safeYear)
                         .replace(/{IssueYear}/gi, issueYear)
                         .replace(/{Issue}/gi, formattedNum)
+                        .replace(/{UniverseName}/gi, safeUniverse)
+                        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
                         .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + finalExt;
                     
                     const oldFilePath = path.join(activeFolderPath, file);
                     const newFilePath = path.join(activeFolderPath, newFileName);
-                    
-                    // 1. Handle OS Rename
-                    if (oldFilePath !== newFilePath && !fs.existsSync(newFilePath)) {
+
+                    // 1. Handle OS Rename — never overwrite a different existing file (case-only differences
+                    //    are treated as already-correct). On a real collision, leave the duplicate in place,
+                    //    restore a loose file to /unmatched so nothing is half-imported, and skip the DB write.
+                    if (path.normalize(oldFilePath).toLowerCase() !== path.normalize(newFilePath).toLowerCase()) {
+                        if (fs.existsSync(newFilePath)) {
+                            Logger.log(`[Match Series] Conflict: "${newFileName}" already exists in the target folder; not overwriting.`, 'warn');
+                            conflicts++;
+                            if (isFile) { try { await fs.promises.rename(oldFilePath, oldFolderPath); } catch (e) {} }
+                            continue;
+                        }
                         Logger.log(`[Match Series Debug] Executing OS File Rename: ${file} -> ${newFileName}`, 'debug');
                         await fs.promises.rename(oldFilePath, newFilePath);
                     }
-                    
+
                     // 2. Inline Database Update (No more silent transaction rollbacks!)
                     if (existingRecord) {
                         const updatePayload: any = { 
@@ -325,10 +379,28 @@ export async function POST(request: Request) {
                             if ((finalExt === '.cbr' || finalExt === '.cb7' || finalExt === '.rar') && finalIssueId) {
                                 Logger.log(`[Match Series Debug] Convertible archive detected. Queueing conversion for Issue ${finalIssueId}...`, 'debug');
                                 
-                                await omnibusQueue.add('CBR_CONVERSION', 
-                                    { type: 'CBR_CONVERSION', issueId: finalIssueId }, 
+                                await omnibusQueue.add('CBR_CONVERSION',
+                                    { type: 'CBR_CONVERSION', issueId: finalIssueId },
                                     { jobId: `CBR_CONVERSION_${finalIssueId}_${Date.now()}` }
                                 );
+                            }
+
+                            // --- Per-issue custom cover from the Smart Matcher — written keyed by issue id
+                            //     (in CONFIG/uploads, like avatars) + hasCustomCover so the sync never clobbers it.
+                            if (issueCoverImageBase64 && finalIssueId) {
+                                try {
+                                    const coversDir = path.join(CONFIG_DIR, 'uploads', 'issue-covers');
+                                    await fs.promises.mkdir(coversDir, { recursive: true });
+                                    const b64 = issueCoverImageBase64.replace(/^data:image\/\w+;base64,/, '');
+                                    await fs.promises.writeFile(path.join(coversDir, `${finalIssueId}.jpg`), Buffer.from(b64, 'base64'));
+                                    await prisma.issue.update({
+                                        where: { id: finalIssueId },
+                                        data: { coverUrl: `/api/uploads/issue-covers/${finalIssueId}.jpg?t=${Date.now()}`, hasCustomCover: true }
+                                    });
+                                    Logger.log(`[Match Series Debug] Wrote custom issue cover for ${finalIssueId}`, 'debug');
+                                } catch (coverErr) {
+                                    Logger.log(`[Match Series] Failed to write issue cover for ${finalIssueId}: ${getErrorMessage(coverErr)}`, 'warn');
+                                }
                             }
 
                         } catch (dbErr) {
@@ -339,7 +411,13 @@ export async function POST(request: Request) {
             }
         }
 
-        if (imageUrl) {
+        if (hasNewCustomCover) {
+            // Admin supplied a cover in the Smart Matcher editor — write it (already flagged custom above).
+            try {
+                const b64 = coverImageBase64.replace(/^data:image\/\w+;base64,/, '');
+                await fs.promises.writeFile(path.join(activeFolderPath, 'cover.jpg'), Buffer.from(b64, 'base64'));
+            } catch(e) {}
+        } else if (imageUrl && !keepExistingCustomCover) {
             try {
                 const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 3000, headers: { 'User-Agent': 'Omnibus/1.0' } });
                 await fs.promises.writeFile(path.join(activeFolderPath, 'cover.jpg'), Buffer.from(imgRes.data));
@@ -390,18 +468,32 @@ export async function POST(request: Request) {
         if (existingRecord?.id) {
             await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC', seriesIds: [existingRecord.id] }, { jobId: `METADATA_SYNC_MATCH_${existingRecord.id}_${Date.now()}` });
         }
+
+        // When the admin supplied custom metadata, embed it (SeriesGroup/Universe/Description) into the
+        // files' ComicInfo.xml — unless they turned the per-edit toggle off, in which case fall back to
+        // the global default. Mirrors library/update's EMBED-on-write resolution.
+        if (lockMetadata && existingRecord?.id) {
+            const doWrite = writeToFile !== undefined ? writeToFile : (config.metadata_write_comicinfo !== 'false');
+            if (doWrite) {
+                await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: existingRecord.id }, { jobId: `EMBED_META_MATCH_${existingRecord.id}_${Date.now()}` });
+            }
+        }
     } catch (e: any) {
         Logger.log(`[Match Series] Failed to queue jobs: ${e.message}`, 'warn');
     }
 
-    const session = await getServerSession(authOptions);
+    if (conflicts > 0) {
+        Logger.log(`[Match Series] Completed with ${conflicts} duplicate-file conflict(s) — left in place, not overwritten.`, 'warn');
+    }
+
+    const session = await getServerSession(await getAuthOptions());
     const userId = (session?.user as any)?.id;
     if (userId) {
-        await AuditLogger.log('MATCH_SERIES', { oldPath: oldFolderPath, newPath: activeFolderPath }, userId);
+        await AuditLogger.log('MATCH_SERIES', { oldPath: oldFolderPath, newPath: activeFolderPath, conflicts }, userId);
     }
-    
+
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
-    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId });
+    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId, conflicts });
 
   } catch (error: unknown) {
     Logger.log(`[Match Series API] Error: ${getErrorMessage(error)}`, 'error');

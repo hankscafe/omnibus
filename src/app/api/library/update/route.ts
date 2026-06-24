@@ -11,6 +11,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
+import { safeRelocateFolder } from '@/lib/utils/safe-fs';
 
 export async function POST(request: Request) {
   try {
@@ -18,7 +19,8 @@ export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id || 'System';
 
-    const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType } = await request.json();
+    const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType, seriesGroup,
+            description, universe, writeToFile, lockMetadata } = await request.json();
 
     // Mylar booktype values — anything else is ignored rather than stored
     const VALID_BOOK_TYPES = ['Print', 'OneShot', 'TPB', 'GN'];
@@ -44,24 +46,43 @@ export async function POST(request: Request) {
     const safePublisher = publisher && publisher !== "Unknown" ? sanitize(publisher) : "Other";
     const safeSeries = sanitize(name || "Unknown Series");
     const safeYear = year ? year.toString() : "";
-    
-    let relFolderPath = folderPattern
+
+    // Universe/Series Group aren't edited by the basic modal, so resolve them from the existing
+    // series record — otherwise a folder pattern using {UniverseName}/{SeriesGroup} would have
+    // those subfolders stripped on a routine name/year/publisher edit. seriesGroup may also be
+    // supplied explicitly (the metadata editor) and takes precedence when provided.
+    const existingMetaRow = await prisma.series.findFirst({
+        where: { folderPath: currentPath },
+        select: { universe: true, seriesGroup: true }
+    });
+    const safeUniverse = existingMetaRow?.universe ? sanitize(existingMetaRow.universe) : "";
+    const effectiveSeriesGroup = (seriesGroup !== undefined ? seriesGroup : existingMetaRow?.seriesGroup) || "";
+    const safeSeriesGroup = effectiveSeriesGroup ? sanitize(effectiveSeriesGroup) : "";
+
+    const relFolderPath = folderPattern
         .replace(/{Publisher}/gi, safePublisher)
         .replace(/{Series}/gi, safeSeries)
         .replace(/{Year}/gi, safeYear)
-        .replace(/\(\s*\)/g, '') 
+        .replace(/{VolumeYear}/gi, safeYear)
+        .replace(/{UniverseName}/gi, safeUniverse)
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+        .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '') 
         .replace(/\s+/g, ' ')
         .trim();
 
     const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
-    let newPath = path.join(libraryRoot, ...folderParts).replace(/\\/g, '/');
+    const newPath = path.join(libraryRoot, ...folderParts).replace(/\\/g, '/');
     let activePath = currentPath.replace(/\\/g, '/');
 
     if (activePath.toLowerCase() !== newPath.toLowerCase()) {
         if (fs.existsSync(activePath)) {
-            await fs.ensureDir(path.dirname(newPath));
-            await fs.move(activePath, newPath, { overwrite: true });
+            // Merge into the destination without overwriting — NEVER delete a pre-existing target folder
+            // (fs.move with overwrite:true wipes it wholesale). Conflicting files are left in place.
+            const { conflicts } = await safeRelocateFolder(activePath, newPath, libraryRoot);
+            if (conflicts > 0) {
+                Logger.log(`[Library Update] Folder relocate left ${conflicts} conflicting file(s) un-moved in ${activePath}.`, 'warn');
+            }
             activePath = newPath;
         } else {
             activePath = newPath;
@@ -96,7 +117,13 @@ export async function POST(request: Request) {
                 metadataSource: existingRecord.metadataSource || 'COMICVINE',
                 libraryId: targetLib.id,
                 status: status || existingRecord.status,
-                bookType: parsedBookType || existingRecord.bookType
+                bookType: parsedBookType || existingRecord.bookType,
+                ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
+                ...(description !== undefined ? { description: description || null } : {}),
+                ...(universe !== undefined ? { universe: universe || null } : {}),
+                // Only the rich metadata editor locks the series against auto-sync; the basic
+                // Edit Info modal (name/year/publisher) leaves sync behavior unchanged.
+                ...(lockMetadata ? { hasCustomMetadata: true } : {})
             }
         });
 
@@ -120,13 +147,21 @@ export async function POST(request: Request) {
             }
         }
 
-        // --- NEW: Trigger instant XML embedding to reflect these manual changes ---
-        try {
-            await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: existingRecord.id }, {
-                jobId: `EMBED_META_${existingRecord.id}_${Date.now()}`
-            });
-            Logger.log(`[Metadata] Queued XML injection for manually edited series: ${cleanName}`, 'info');
-        } catch (e) {}
+        // Embed manual changes into the files' ComicInfo.xml — unless the admin chose "keep in
+        // Omnibus". The per-edit toggle (writeToFile) wins; otherwise the global default applies.
+        let doWrite = writeToFile;
+        if (doWrite === undefined) {
+            const writeSetting = await prisma.systemSetting.findUnique({ where: { key: 'metadata_write_comicinfo' } });
+            doWrite = writeSetting?.value !== 'false'; // default: write
+        }
+        if (doWrite) {
+            try {
+                await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', seriesId: existingRecord.id }, {
+                    jobId: `EMBED_META_${existingRecord.id}_${Date.now()}`
+                });
+                Logger.log(`[Metadata] Queued XML injection for manually edited series: ${cleanName}`, 'info');
+            } catch (e) {}
+        }
 
     } else if (parsedCvId) {
         await prisma.series.upsert({

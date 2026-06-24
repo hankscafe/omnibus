@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
             const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
             const safePubFolder = safePublisher !== "Unknown" ? safePublisher.replace(/[<>:"/\\|?*]/g, '').trim() : "Other";
 
-            let relFolderPath = folderPattern
+            const relFolderPath = folderPattern
                 .replace(/{Publisher}/gi, safePubFolder)
                 .replace(/{Series}/gi, safeFolderName)
                 .replace(/{Year}/gi, year ? year.toString() : "")

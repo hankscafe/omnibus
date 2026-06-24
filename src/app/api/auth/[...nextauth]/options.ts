@@ -29,6 +29,8 @@ if (!globalForRateLimit.loginAttempts) {
 }
 const loginAttempts = globalForRateLimit.loginAttempts;
 
+// otplib is CommonJS; require() with the interop fallback below avoids ESM default-interop pitfalls.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const otplib = require('otplib');
 const authenticator = otplib.authenticator || otplib.default?.authenticator || otplib;
 

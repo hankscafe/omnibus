@@ -272,7 +272,7 @@ export async function POST(request: Request) {
                 }
 
                 // 1. Identify if this is the EXACT file we clicked in the UI
-                const isTargetFile = require('path').basename(file) === require('path').basename(oldFolderPath);
+                const isTargetFile = path.basename(file) === path.basename(oldFolderPath);
                 
                 // Skip adjacent files to prevent accidental ghost records
                 if (!isTargetFile) {

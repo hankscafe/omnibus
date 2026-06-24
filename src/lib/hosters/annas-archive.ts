@@ -249,7 +249,7 @@ export async function searchAnnasArchive(queries: string[], isInteractive: boole
     let flareUrl = '';
     let solverType = 'flaresolverr';
     let solveSecs = 300;
-    let blocklist: string[] = [];
+    const blocklist: string[] = [];
 
     try {
         const [

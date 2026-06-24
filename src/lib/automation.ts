@@ -314,7 +314,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
             let localScore = (release.seeders || 0) + ((release.peers || 0) * 0.5);
             const titleLower = release.title.toLowerCase();
             
-            let appliedRules: string[] = [];
+            const appliedRules: string[] = [];
 
             for (const rule of scoringRules) {
                 if (titleLower.includes(rule.term.toLowerCase())) {

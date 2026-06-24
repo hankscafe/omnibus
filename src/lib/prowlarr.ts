@@ -183,9 +183,9 @@ export const ProwlarrService = {
             }
 
             // 5. Issue Number Check
-            let cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})\)/g, '');
+            const cleanTor = titleLower.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})\)/g, '');
             
-            let torIssueMatch = cleanTor.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
+            const torIssueMatch = cleanTor.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?)/i);
             let torNum = torIssueMatch ? parseFloat(torIssueMatch[1]) : null;
             
             if (torNum === null) {

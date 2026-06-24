@@ -46,7 +46,7 @@ describe('Data Processing: Reading List Auto-Builder', () => {
         
         // Bypass rate limit delays
         originalSetTimeout = global.setTimeout;
-        vi.stubGlobal('setTimeout', (cb: Function) => originalSetTimeout(cb, 0));
+        vi.stubGlobal('setTimeout', (cb: (...args: unknown[]) => void) => originalSetTimeout(cb, 0));
         
         mocks.createList.mockResolvedValue({ id: 'list_123' });
     });

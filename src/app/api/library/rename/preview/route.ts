@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
             const safeYear = series.year ? series.year.toString() : "";
             const safeUniverse = (series as any).universe ? (series as any).universe.replace(/[<>:"/\\|?*]/g, '').trim() : "";
 
-            let relFolderPath = folderPattern
+            const relFolderPath = folderPattern
                 .replace(/{Publisher}/gi, safePublisher)
                 .replace(/{Series}/gi, safeName)
                 .replace(/{Year}/gi, safeYear)

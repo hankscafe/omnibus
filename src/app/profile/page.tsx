@@ -948,10 +948,8 @@ export default function ProfilePage() {
                                     <Link href="/library/history">View Full History <ArrowRight className="w-3 h-3 ml-1.5" /></Link>
                                 </Button>
                                 <div className="flex items-center gap-2 bg-background p-1 rounded-md shadow-sm border border-border">
-                                    {/* @ts-ignore */}
                                     <Button variant="ghost" size="icon-xs" className="h-6 w-6 p-0" onClick={() => setHistoryPage(p => Math.max(0, p - 1))} disabled={historyPage === 0}><ChevronLeft className="w-4 h-4" /></Button>
                                     <span className="text-xs font-mono w-4 text-center">{historyPage + 1}</span>
-                                    {/* @ts-ignore */}
                                     <Button variant="ghost" size="icon-xs" className="h-6 w-6 p-0" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages - 1, p + 1))} disabled={historyPage >= totalHistoryPages - 1}><ChevronRight className="w-4 h-4" /></Button>
                                 </div>
                             </div>

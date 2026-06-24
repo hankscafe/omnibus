@@ -95,7 +95,7 @@ describe('Cron: BullMQ Worker Router', () => {
 
         // Bypass all the API-ban delays in the fetcher/sync loops to prevent 5000ms test timeouts
         originalSetTimeout = global.setTimeout;
-        vi.stubGlobal('setTimeout', (cb: Function) => originalSetTimeout(cb, 0));
+        vi.stubGlobal('setTimeout', (cb: (...args: unknown[]) => void) => originalSetTimeout(cb, 0));
     });
 
     afterEach(() => {

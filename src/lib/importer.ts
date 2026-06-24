@@ -401,7 +401,7 @@ export const Importer = {
     }
 
     let isManga = false;
-    let cleanSeriesName = (req.activeDownloadName || path.basename(sourcePath))
+    const cleanSeriesName = (req.activeDownloadName || path.basename(sourcePath))
         .replace(/\.[^/.]+$/, "") 
         // Added -? to strip negative signs so they don't pollute the series name
         .replace(/(?:#|issue\s*#?|vol(?:ume)?\s*\.?|v|ch(?:apter)?\s*\.?)\s*(-?\d+(?:\.\d+)?)/i, '') 
@@ -457,7 +457,7 @@ export const Importer = {
          
     Logger.log(`[Importer Debug] Applying Folder Pattern: "${folderPattern}" | Variables -> Publisher: "${publisherName}", Series: "${seriesNameFromMeta}", Year: "${seriesYearFromMeta}"`, 'debug');
 
-    let relFolderPath = folderPattern
+    const relFolderPath = folderPattern
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
@@ -544,7 +544,7 @@ export const Importer = {
     const issueTitle = xmlMeta?.title || "";
     const universeName = xmlMeta?.universe || "";
     
-    let newFileName = filePatToUse
+    const newFileName = filePatToUse
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())

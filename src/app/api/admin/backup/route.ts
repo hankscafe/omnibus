@@ -80,7 +80,7 @@ export async function GET() {
                     const take = 500;
                     let firstRow = true;
                     while (true) {
-                        // @ts-ignore
+                        // @ts-expect-error table.model is a union of Prisma delegates; findMany's args type isn't common across the union
                         const rows = await table.model.findMany({ skip, take });
                         if (rows.length === 0) break;
                         for (const row of rows) {

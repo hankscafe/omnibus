@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
             const safeUniverse = (s as any).universe ? sanitize((s as any).universe) : "";
             
             // FIX: Use activeFolderPattern here
-            let relFolderPath = activeFolderPattern
+            const relFolderPath = activeFolderPattern
                 .replace(/{Publisher}/gi, safePublisher)
                 .replace(/{Series}/gi, safeSeries)
                 .replace(/{Year}/gi, safeYear)

@@ -87,7 +87,7 @@ export async function POST(request: Request) {
             
             const libraries = await prisma.library.findMany();
             
-            let physicalFiles: string[] = [];
+            const physicalFiles: string[] = [];
             for (const lib of libraries) {
                 await getPhysicalFiles(lib.path, physicalFiles);
             }

@@ -197,8 +197,8 @@ export function initCronJobs() {
                           }
                       }
 
-                      let cleanReqName = reqNameLower.replace(/[0-9]/g, '');
-                      let cleanTorName = torNameLower.replace(/[0-9]/g, '');
+                      const cleanReqName = reqNameLower.replace(/[0-9]/g, '');
+                      const cleanTorName = torNameLower.replace(/[0-9]/g, '');
                       
                       const reqWords = cleanReqName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));
                       const torWords = cleanTorName.replace(/[^a-z]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2 && !junkWords.includes(w));

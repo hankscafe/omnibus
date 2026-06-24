@@ -53,7 +53,7 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
 
         // Bypass all the 3-second API-ban delays in the fetcher to prevent 5000ms test timeouts
         originalSetTimeout = global.setTimeout;
-        vi.stubGlobal('setTimeout', (cb: Function) => originalSetTimeout(cb, 0));
+        vi.stubGlobal('setTimeout', (cb: (...args: unknown[]) => void) => originalSetTimeout(cb, 0));
 
         // Basic default mock for DB
         mocks.seriesFindFirst.mockResolvedValue({ 

@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
       const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
       const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
 
-      let relFolderPath = folderPattern
+      const relFolderPath = folderPattern
           .replace(/{Publisher}/gi, safePubFolder)
           .replace(/{Series}/gi, safeFolderName)
           .replace(/{Year}/gi, year ? year.toString() : "")
@@ -324,7 +324,7 @@ export async function POST(request: NextRequest) {
               }
               const isReleased = isReleasedYet(issue.releaseDate, issue.releaseDate);
               
-              let issueImage = issue.coverUrl || image;
+              const issueImage = issue.coverUrl || image;
               
               let issueStatus = initialStatus;
               if (!isReleased) issueStatus = 'UNRELEASED';

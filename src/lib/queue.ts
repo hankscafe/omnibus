@@ -400,7 +400,7 @@ export function initWorker() {
                         let firstRow = true;
                         
                         while (true) {
-                            // @ts-ignore
+                            // @ts-expect-error table.model is a union of Prisma delegates; findMany's args type isn't common across the union
                             const rows = await table.model.findMany({ skip, take });
                             if (rows.length === 0) break;
                             
@@ -668,7 +668,7 @@ export function initWorker() {
                                 const safePub = sanitize(safePublisher);
                                 const universeName = meta.universe || "";
 
-                                let relFolderPath = folderPattern
+                                const relFolderPath = folderPattern
                                     .replace(/{Publisher}/gi, safePub)
                                     .replace(/{Series}/gi, safeSeries)
                                     .replace(/{Year}/gi, safeYear)
@@ -683,7 +683,7 @@ export function initWorker() {
                                 await fs.ensureDir(destFolder);
 
                                 const extractedNum = meta.number || extractIssueNumber(file);
-                                let formattedNum = extractedNum.includes('.') || extractedNum.length > 1 ? extractedNum : `0${extractedNum}`;
+                                const formattedNum = extractedNum.includes('.') || extractedNum.length > 1 ? extractedNum : `0${extractedNum}`;
                                 
                                 const issueYear = meta.year ? meta.year.toString() : safeYear;
                                 const filePatToUse = isManga ? mangaFilePattern : filePattern;
@@ -1160,7 +1160,7 @@ export function initWorker() {
                                 
                                 if (matchedSeries) {
                                     Logger.log(`[Series Monitor Debug] Upcoming Metron issue "${mIssue.name || mNumStr}" matched to local series "${matchedSeries.name}"`, 'debug');
-                                    let issueDate = mIssue.store_date || mIssue.cover_date || null;
+                                    const issueDate = mIssue.store_date || mIssue.cover_date || null;
                                     const searchName = `${matchedSeries.name} #${mNumStr}`;
                                     const isReleased = isReleasedYet(mIssue.store_date, mIssue.cover_date);
                                     
@@ -1569,7 +1569,7 @@ export function initWorker() {
         
                         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
                         let nextUrl: string | null = `https://metron.cloud/api/issue/?store_date_range_after=${thirtyDaysAgo}`;
-                        let metronNewReleases: any[] = [];
+                        const metronNewReleases: any[] = [];
                         
                         const seriesNameCache = new Map<string, number>();
         
@@ -1584,7 +1584,7 @@ export function initWorker() {
                                     parsedSeriesId = parseInt(item.series_id);
                                 }
 
-                                let seriesName = typeof item.series === 'string' ? item.series : (item.series?.name || null);
+                                const seriesName = typeof item.series === 'string' ? item.series : (item.series?.name || null);
 
                                 if ((!parsedSeriesId || isNaN(parsedSeriesId)) && seriesName) {
                                     const cleanName = seriesName.replace(/\(\d{4}\)/g, '').trim();
@@ -1691,7 +1691,7 @@ export function initWorker() {
                         };
 
                         const fetchCategory = async (sort: string) => {
-                            let validItems: any[] = [];
+                            const validItems: any[] = [];
                             let offset = 0;
                             let apiCallsMade = 0;
 
@@ -1710,7 +1710,7 @@ export function initWorker() {
                                 offset += 100;
 
                                 const volIds = [...new Set(items.map((i: any) => i.volume?.id).filter(Boolean))];
-                                let volumesMap: Record<number, any> = {};
+                                const volumesMap: Record<number, any> = {};
 
                                 if (volIds.length > 0) {
                                     try {

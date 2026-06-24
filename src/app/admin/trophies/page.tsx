@@ -98,7 +98,7 @@ export default function AdminTrophies() {
                     <Card key={t.id} className="shadow-sm relative overflow-hidden group border-border bg-background transition-all hover:border-primary/50">
                         <CardContent className="p-6 flex items-start gap-4">
                             <div className="w-16 h-16 rounded-full bg-muted border border-border flex items-center justify-center shrink-0 shadow-inner">
-                                {t.iconUrl ? <img src={t.iconUrl} className="w-10 h-10 object-contain" /> : <Trophy className="w-8 h-8 text-muted-foreground/50" />}
+                                {t.iconUrl ? <img src={t.iconUrl} alt={`${t.name} icon`} className="w-10 h-10 object-contain" /> : <Trophy className="w-8 h-8 text-muted-foreground/50" />}
                             </div>
                             <div className="flex-1 min-w-0">
                                 <h3 className="font-bold text-lg leading-tight text-foreground truncate">{t.name}</h3>
@@ -125,7 +125,7 @@ export default function AdminTrophies() {
                         <div className="flex flex-col items-center justify-center gap-2">
                             <div className="w-20 h-20 rounded-full border-2 border-dashed border-border flex items-center justify-center relative overflow-hidden bg-muted group cursor-pointer transition-colors hover:border-primary">
                                 {editing._previewUrl || editing.iconUrl ? (
-                                    <img src={editing._previewUrl || editing.iconUrl} className="object-contain w-14 h-14" />
+                                    <img src={editing._previewUrl || editing.iconUrl} alt="Trophy icon preview" className="object-contain w-14 h-14" />
                                 ) : (
                                     <Upload className="w-6 h-6 text-muted-foreground group-hover:text-primary transition-colors" />
                                 )}

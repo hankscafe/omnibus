@@ -9,7 +9,7 @@ import { ArrowLeft, Save, Loader2, FileEdit, Code, Info } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
-import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 const TEMPLATE_KEYS = [
     { id: "account_approved", label: "Account Approved", vars: ["user"] },
@@ -32,6 +32,7 @@ const DEFAULT_TEMPLATES: Record<string, string> = {
 };
 
 export default function EmailTemplatesPage() {
+  const router = useRouter();
   const [activeTemplate, setActiveTemplate] = useState(TEMPLATE_KEYS[0].id);
   const [templates, setTemplates] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -102,8 +103,8 @@ export default function EmailTemplatesPage() {
       
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" asChild className="hover:bg-muted text-foreground">
-              <Link href="/admin/settings"><ArrowLeft className="w-5 h-5" /></Link>
+            <Button variant="ghost" size="icon" onClick={() => { if (window.history.length > 1) router.back(); else router.push("/admin"); }} className="hover:bg-muted text-foreground">
+              <ArrowLeft className="w-5 h-5" />
             </Button>
             <div>
               <h1 className="text-3xl font-bold flex items-center gap-3 text-foreground">

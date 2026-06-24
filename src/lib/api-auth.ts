@@ -61,6 +61,10 @@ export async function validateApiKey(req: Request) {
         });
 
         if (opdsKey) {
+            if (opdsKey.expiresAt && new Date() > opdsKey.expiresAt) {
+                Logger.log(`[API Auth Debug] OPDS key validation failed: Key has expired`, 'debug');
+                return { valid: false, user: null, keyType: null, error: "OPDS Key has expired." };
+            }
             prisma.opdsKey.update({ where: { id: opdsKey.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
             return { valid: true, user: opdsKey.user, keyType: 'OPDS_KEY' };
         }
@@ -72,8 +76,14 @@ export async function validateApiKey(req: Request) {
     // 3. Legacy Check
     try {
         const legacySetting = await prisma.systemSetting.findUnique({ where: { key: 'omnibus_api_key' } });
-        if (legacySetting?.value && legacySetting.value.trim() === providedKey) {
-            return { valid: true, user: null, keyType: 'LEGACY_ADMIN' }; 
+        if (legacySetting?.value) {
+            // Constant-time compare (hash both to equal-length buffers) so the legacy key can't be
+            // recovered byte-by-byte via response timing.
+            const provided = Buffer.from(keyHash, 'hex');
+            const legacy = crypto.createHash('sha256').update(legacySetting.value.trim()).digest();
+            if (provided.length === legacy.length && crypto.timingSafeEqual(provided, legacy)) {
+                return { valid: true, user: null, keyType: 'LEGACY_ADMIN' };
+            }
         }
     } catch (e) {}
 

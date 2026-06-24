@@ -1,6 +1,7 @@
 // src/lib/hosters/index.ts
 import { prisma } from '@/lib/db';
 import { Logger } from '../logger';
+import { decryptSecret } from '../encryption';
 import { resolveMediaFire } from './mediafire';
 import { resolvePixeldrain } from './pixeldrain';
 import { resolveMega } from './mega';
@@ -26,6 +27,11 @@ export const HosterEngine = {
         const account = await prisma.hosterAccount.findFirst({
             where: { hoster, isActive: true }
         });
+        if (account) {
+            // Credentials are encrypted at rest; the per-hoster resolvers need the plaintext.
+            account.password = await decryptSecret(account.password);
+            account.apiKey = await decryptSecret(account.apiKey);
+        }
 
         Logger.log(`[Hoster Engine Debug] Account configuration for ${hoster}: ${account ? 'Active (Premium)' : 'None (Anonymous)'}`, 'debug');
 

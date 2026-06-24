@@ -1,7 +1,7 @@
 // __tests__/lib/utils/issue-parser.test.ts
 // Removed X of Y testing since hasn't been implemented yet
 import { describe, it, expect } from 'vitest';
-import { extractIssueNumber, isSameIssue } from '@/lib/utils/issue-parser';
+import { extractIssueNumber, isSameIssue, parseIssueRange } from '@/lib/utils/issue-parser';
 
 describe('Utility: Issue Number Parser', () => {
     describe('isSameIssue()', () => {
@@ -55,6 +55,25 @@ describe('Utility: Issue Number Parser', () => {
 
         it('should fall back to the volume number only when no other number exists', () => {
             expect(extractIssueNumber('Batman Vol 4.cbz')).toBe('4');
+        });
+    });
+
+    describe('parseIssueRange()', () => {
+        it('detects issue/volume ranges in GetComics batch titles', () => {
+            expect(parseIssueRange('Crossed Vol. 1 #0 – 9 (2008-2010)')).toEqual({ start: 0, end: 9 });
+            expect(parseIssueRange('Saga #1-54')).toEqual({ start: 1, end: 54 });
+            expect(parseIssueRange('Crossed Volume 1 – 4 + Extras (2008-2015)')).toEqual({ start: 1, end: 4 });
+            expect(parseIssueRange('Crossed +100 #1 – 18 (2014-2016)')).toEqual({ start: 1, end: 18 });
+        });
+
+        it('picks the issue range and ignores the trailing year span when both are present', () => {
+            expect(parseIssueRange('Crossed Vol. 4 – Badlands #1 – 25 (2012-2013)')).toEqual({ start: 1, end: 25 });
+        });
+
+        it('returns null for single issues, lone TPBs, and pure year spans', () => {
+            expect(parseIssueRange('Batman #12 (2011)')).toBeNull();
+            expect(parseIssueRange('Batman Vol 1 TPB')).toBeNull();
+            expect(parseIssueRange('Crossed (2008-2010)')).toBeNull();
         });
     });
 });

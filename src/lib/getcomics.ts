@@ -7,6 +7,7 @@ import { prisma } from './db';
 import { markSystemFlag } from './utils/system-flags';
 import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
 import { normalizeRequestName } from './search-engine';
+import { parseIssueRange } from './utils/issue-parser';
 
 // --- Shared hoster-priority helpers (kept in lock-step with the Rust engine's getcomics.rs) ---
 
@@ -172,7 +173,13 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
 
   async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string, allowPacksOverride?: boolean) {
     const results: any[] = [];
-    
+
+    // GetComics post titles use UNPADDED issue numbers ("#1", "Vol. 1") — never zero-padded "001" —
+    // so a padded query (some callers, e.g. the interactive modal, pad to 3 digits) matches nothing on
+    // their WordPress search. Strip leading zeros from numeric tokens up front so both the search URL and
+    // the relevance words use the canonical form. Years ("2008") and plain numbers ("100") are untouched.
+    safeQuery = safeQuery.replace(/\b0+(\d)/g, '$1');
+
     // Generate both word arrays for TPB vs Single Issue validation. Normalize the name first
     // ("#1: Book One" -> "#1", "….cbz" -> "…") so a subtitle keyword doesn't flip this into omnibus mode
     // and a leaked file extension / subtitle word isn't enforced as a required title word (parity with
@@ -300,7 +307,12 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
 
       if (!isInteractive && isRelevant) {
           const packTerms = ['story arc', 'pack', 'complete', 'collection', 'bundle', 'run', 'chronological'];
-          const isPack = allowBulkPacks && packTerms.some(term => titleLower.includes(term));
+          // A multi-issue/volume RANGE in the title ("#0 – 9", "Vol. 1 – 4") is the most reliable batch
+          // signal — GetComics bundles older runs as ranges that carry no pack KEYWORD. Treat those as
+          // packs too (when bulk is enabled) so volume-batches stop being wrongly rejected as unwanted
+          // TPBs for single-issue requests. (packTerms list and tpbTerms reject list previously only
+          // overlapped on "collection", so a "Vol. 1 – 4" post could never be accepted.)
+          const isPack = allowBulkPacks && (packTerms.some(term => titleLower.includes(term)) || parseIssueRange(titleLower) !== null);
           
           if (reqNum !== null && !isLookingForOmnibus && !isPack) {
               const unexpectedTpbTerms = tpbTerms.filter(term => !cleanOriginal.toLowerCase().includes(term));
@@ -400,7 +412,15 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
     });
   },
 
-  async scrapeDeepLink(articleUrl: string): Promise<{ url: string, isDirect: boolean, hoster: string }> {
+  // `target` (optional) lets the caller section-target a multi-pack article page (e.g. a "Crossed
+  // Collection" listing 11 separate archives) to the one archive whose issue-range + year contain the
+  // requested issue. Without a target — or on an ordinary single-download page — behavior is unchanged.
+  // `ambiguous: true` means "this is a multi-pack page and no single archive cleanly matched" → the
+  // caller should hold it for manual review rather than grab an arbitrary archive.
+  async scrapeDeepLink(
+      articleUrl: string,
+      target?: { issueNum?: number | null; year?: string | null }
+  ): Promise<{ url: string, isDirect: boolean, hoster: string, ambiguous?: boolean }> {
       try {
           Logger.log(`[GetComics] Rate-limit throttle: Delaying scrape for 2.5s...`, 'info');
           await new Promise(resolve => setTimeout(resolve, 2500));
@@ -408,7 +428,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           const data = await fetchGetComicsHtml(articleUrl);
           const $ = cheerio.load(data);
 
-          let foundLinks: { url: string, isDirect: boolean, hoster: string }[] = [];
+          type DeepLink = { url: string, isDirect: boolean, hoster: string };
 
           const decodeLink = (rawHref: string): string | null => {
             if (!rawHref) return null;
@@ -418,7 +438,7 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
                     return Buffer.from(encoded, 'base64').toString('utf-8');
                 } catch (e) { return null; }
             }
-            return rawHref; 
+            return rawHref;
           };
 
           // Classify a decoded URL into a hoster key. GetComics is split: `getcomics_direct` (comicfiles
@@ -441,43 +461,64 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
               return 'unknown';
           };
 
-          $('a').each((i, el) => {
+          // Turn one anchor into a classified deep link, or null if it isn't a real download button / a
+          // known hoster. This is the exact per-anchor logic the flat scraper always used.
+          const classifyAnchor = (el: any): DeepLink | null => {
               const text = $(el).text().toLowerCase();
               const titleAttr = ($(el).attr('title') || "").toLowerCase();
               const rawHref = $(el).attr('href') || "";
               const btnClass = ($(el).attr('class') || "").toLowerCase();
 
               const decoded = decodeLink(rawHref);
-              if (!decoded) return;
+              if (!decoded) return null;
 
               Logger.log(`[GetComics Debug] Decoded raw deep link: ${decoded}`, 'debug');
 
               // Ensure we accurately target the actual download button, even if text varies slightly
-              const isMainServerBtn = text.includes('main server') || 
-                                      titleAttr.includes('main server') || 
-                                      text.includes('download now') || 
-                                      text.includes('direct download') || 
+              const isMainServerBtn = text.includes('main server') ||
+                                      titleAttr.includes('main server') ||
+                                      text.includes('download now') ||
+                                      text.includes('direct download') ||
                                       (btnClass.includes('aio-button') && text.includes('download'));
-              
+
               if (isMainServerBtn && !rawHref.includes('go.php') && !decoded.match(/\.(cbz|cbr|zip)$/i)) {
-                  // THE FIX: Allow native GetComics file servers (like dl.getcomics.org or comicfiles) 
-                  // to bypass the strict file extension check, but do NOT allow this block to trust 
+                  // THE FIX: Allow native GetComics file servers (like dl.getcomics.org or comicfiles)
+                  // to bypass the strict file extension check, but do NOT allow this block to trust
                   // the word 'getcomics' on every anchor tag on the webpage.
                   if (!decoded.includes('comicfiles') && !decoded.includes('comic-files') && !decoded.includes('getcomics')) {
-                      return;
+                      return null;
                   }
               }
 
               const hoster = getHosterFromUrl(decoded, isMainServerBtn);
+              if (hoster === 'unknown') return null;
+              return { url: decoded, isDirect: hoster.startsWith('getcomics'), hoster };
+          };
 
-              if (hoster !== 'unknown') {
-                  foundLinks.push({
-                      url: decoded,
-                      isDirect: hoster.startsWith('getcomics'),
-                      hoster
-                  });
+          // FLAT list — global anchor sweep, identical to the original scraper (the single-page default).
+          const flatLinks: DeepLink[] = [];
+          $('a').each((i, el) => {
+              const link = classifyAnchor(el);
+              if (link) flatLinks.push(link);
+          });
+
+          // SECTION grouping — scoped to the post body, walked in document order so each download button
+          // group lands under its preceding heading. Used ONLY for multi-pack targeting below.
+          const contentRoot = $('.post-contents, .entry-content, article');
+          const scope = contentRoot.length ? contentRoot.first() : $('body');
+          const sections: { label: string, links: DeepLink[] }[] = [];
+          let current: { label: string, links: DeepLink[] } = { label: '', links: [] };
+          scope.find('h1, h2, h3, h4, h5, a').each((i, el) => {
+              const tag = (((el as any).tagName || (el as any).name || '') as string).toLowerCase();
+              if (/^h[1-5]$/.test(tag)) {
+                  if (current.links.length > 0) sections.push(current);
+                  current = { label: $(el).text().trim().replace(/\s+/g, ' '), links: [] };
+              } else if (tag === 'a') {
+                  const link = classifyAnchor(el);
+                  if (link) current.links.push(link);
               }
           });
+          if (current.links.length > 0) sections.push(current);
 
           const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
           let prefs = parseHosterPrefs(setting?.value);
@@ -488,10 +529,54 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           // off, OR absent from the list entirely, is never used (kept in lock-step with the Rust engine).
           const enabledOrder = prefs.filter(p => p.enabled).map(p => p.hoster);
 
-          const beforeCount = foundLinks.length;
-          foundLinks = foundLinks.filter(l => enabledOrder.includes(l.hoster));
-          if (foundLinks.length < beforeCount) {
-              Logger.log(`[GetComics] Ignored ${beforeCount - foundLinks.length} links from disabled/unlisted hosters.`, 'info');
+          // Sort by enabled-priority position.
+          const rank = (hoster: string): number => {
+              const idx = enabledOrder.indexOf(hoster);
+              return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+          };
+          const enabledOnly = (links: DeepLink[]) => links.filter(l => enabledOrder.includes(l.hoster));
+          const bestOf = (links: DeepLink[]) => [...links].sort((a, b) => rank(a.hoster) - rank(b.hoster))[0];
+
+          // --- SECTION-TARGETING (multi-pack pages only) ---
+          // Diverge from the flat behavior ONLY when >= 2 sections each name a distinct issue/volume RANGE
+          // — that is the signature of a multi-archive page, and it guards an ordinary post (whose
+          // incidental headings carry no range) from ever being treated as ambiguous.
+          if (target && target.issueNum != null) {
+              const packSections = sections
+                  .map(s => ({ label: s.label, links: enabledOnly(s.links), range: parseIssueRange(s.label) }))
+                  .filter(s => s.links.length > 0 && s.range !== null);
+
+              if (packSections.length >= 2) {
+                  Logger.log(`[GetComics] Multi-pack page detected (${packSections.length} archive sections). Targeting issue #${target.issueNum}${target.year ? ` (${target.year})` : ''}.`, 'info');
+
+                  const matches = packSections.filter(s => {
+                      const r = s.range!;
+                      if (target.issueNum! < r.start || target.issueNum! > r.end) return false;
+                      if (target.year) {
+                          const ym = s.label.match(/\b(19\d{2}|20\d{2})\b/);
+                          if (ym && Math.abs(parseInt(target.year, 10) - parseInt(ym[1], 10)) > 1) return false;
+                      }
+                      return true;
+                  });
+
+                  if (matches.length === 0) {
+                      Logger.log(`[GetComics] No archive section cleanly contains issue #${target.issueNum}. Flagging for manual review.`, 'warn');
+                      return { url: articleUrl, isDirect: false, hoster: 'unknown', ambiguous: true };
+                  }
+
+                  // Prefer the narrowest range (most specific to the requested issue).
+                  matches.sort((a, b) => (a.range!.end - a.range!.start) - (b.range!.end - b.range!.start));
+                  const chosen = matches[0];
+                  const link = bestOf(chosen.links);
+                  Logger.log(`[GetComics] Selected archive "${chosen.label}" via ${link.hoster} for issue #${target.issueNum}.`, 'success');
+                  return link;
+              }
+          }
+
+          // --- FLAT BEHAVIOR (single page / no target) — unchanged from the original scraper ---
+          const foundLinks = enabledOnly(flatLinks);
+          if (foundLinks.length < flatLinks.length) {
+              Logger.log(`[GetComics] Ignored ${flatLinks.length - foundLinks.length} links from disabled/unlisted hosters.`, 'info');
           }
 
           if (foundLinks.length === 0) {
@@ -501,11 +586,6 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
           const foundHosterNames = [...new Set(foundLinks.map(l => l.hoster))];
           Logger.log(`[GetComics] Found ${foundLinks.length} valid links. Available Hosters: ${foundHosterNames.join(', ')}`, 'info');
 
-          // Sort by enabled-priority position.
-          const rank = (hoster: string): number => {
-              const idx = enabledOrder.indexOf(hoster);
-              return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
-          };
           foundLinks.sort((a, b) => rank(a.hoster) - rank(b.hoster));
 
           const selectedHoster = foundLinks[0].hoster;

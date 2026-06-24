@@ -205,7 +205,26 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
             }
             
             const best = getComicsResults[0];
-            const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
+            // Parse the requested issue number so a multi-pack GetComics article (e.g. a "Crossed
+            // Collection" listing several separate archives) can be section-targeted to the archive that
+            // actually contains it. dynamicYear disambiguates same-numbered issues across volumes.
+            const reqNumMatch = (freshReq.activeDownloadName || name).match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)/i);
+            const targetIssueNum = reqNumMatch ? parseFloat(reqNumMatch[1]) : null;
+            const deepLink = await GetComicsService.scrapeDeepLink(best.downloadUrl, { issueNum: targetIssueNum, year: dynamicYear });
+
+            if (deepLink.ambiguous) {
+                Logger.log(`[Automation] [GetComics] "${best.title}" is a multi-pack page and no single archive cleanly matched issue #${targetIssueNum}. Holding for admin review.`, 'warn');
+                const ambiguousReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
+                await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED', downloadLink: best.downloadUrl, activeDownloadName: best.title } });
+                await SystemNotifier.sendAlert('download_failed', {
+                    title: name, imageUrl: ambiguousReq?.imageUrl, user: ambiguousReq?.user?.username,
+                    description: `GetComics lists **${name}** only on a multi-pack page with several separate archives. Please use Interactive Search in the Active Downloads queue to select the correct archive.`,
+                    publisher: publisher, year: year
+                }).catch(() => {});
+                return;
+            }
+
+            const { url, hoster } = deepLink;
             const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
             
             if (enabledHosters.includes(hoster)) {

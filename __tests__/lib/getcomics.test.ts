@@ -70,3 +70,61 @@ describe('Download Pipeline: GetComics Scraper', () => {
         expect(results[0].title).toBe('Batman #001');
     });
 });
+
+describe('Download Pipeline: GetComics Section-Targeting', () => {
+    // A multi-pack article page (like the real "Crossed Collection") with one heading + button group
+    // per archive. Vol. 1 (#0–9, 2008-2010) and Vol. 4 Badlands (#1–25, 2012-2013) both contain a "#1",
+    // so the requested YEAR is what disambiguates them.
+    const MULTI_PACK_HTML = `
+        <div class="post-contents">
+            <h3>Crossed Vol. 1 #0 – 9 (2008-2010)</h3>
+            <div class="aio-button-center"><a class="aio-button" href="https://comicfiles.example/crossed-vol1.cbz">Download Now</a></div>
+            <h3>Crossed Vol. 4 – Badlands #1 – 25 (2012-2013)</h3>
+            <div class="aio-button-center"><a class="aio-button" href="https://comicfiles.example/crossed-badlands.cbz">Download Now</a></div>
+        </div>
+    `;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        // Default hoster prefs (getcomics_direct enabled) for every settings lookup.
+        mocks.findUniqueSetting.mockResolvedValue(null);
+    });
+
+    it('targets the archive whose issue range AND year contain the requested issue (2008 -> Vol. 1)', async () => {
+        vi.mocked(axios.get).mockResolvedValueOnce({ data: MULTI_PACK_HTML } as any);
+
+        const result = await GetComicsService.scrapeDeepLink('https://getcomics.org/crossed-collection/', { issueNum: 1, year: '2008' });
+
+        expect(result.url).toBe('https://comicfiles.example/crossed-vol1.cbz');
+        expect(result.hoster).toBe('getcomics_direct');
+        expect(result.ambiguous).toBeFalsy();
+    });
+
+    it('uses the year to pick the right same-numbered issue (2012 -> Badlands #1, not Vol. 1 #1)', async () => {
+        vi.mocked(axios.get).mockResolvedValueOnce({ data: MULTI_PACK_HTML } as any);
+
+        const result = await GetComicsService.scrapeDeepLink('https://getcomics.org/crossed-collection/', { issueNum: 1, year: '2012' });
+
+        expect(result.url).toBe('https://comicfiles.example/crossed-badlands.cbz');
+        expect(result.ambiguous).toBeFalsy();
+    });
+
+    it('flags the page as ambiguous when no archive contains the requested issue', async () => {
+        vi.mocked(axios.get).mockResolvedValueOnce({ data: MULTI_PACK_HTML } as any);
+
+        const result = await GetComicsService.scrapeDeepLink('https://getcomics.org/crossed-collection/', { issueNum: 99, year: '2008' });
+
+        expect(result.ambiguous).toBe(true);
+        expect(result.hoster).toBe('unknown');
+    });
+
+    it('keeps the original flat behavior when no target issue is supplied', async () => {
+        vi.mocked(axios.get).mockResolvedValueOnce({ data: MULTI_PACK_HTML } as any);
+
+        const result = await GetComicsService.scrapeDeepLink('https://getcomics.org/crossed-collection/');
+
+        // No target -> no section targeting; returns the first valid link by hoster priority.
+        expect(result.url).toBe('https://comicfiles.example/crossed-vol1.cbz');
+        expect(result.ambiguous).toBeFalsy();
+    });
+});

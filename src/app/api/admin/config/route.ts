@@ -8,8 +8,9 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { syncSchedules } from '@/lib/queue';
 import { CACHE_DIR, LOGS_DIR, BACKUPS_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
-import { encryptSecret } from '@/lib/encryption';
+import { encryptSecret, decryptSecret } from '@/lib/encryption';
 import { SECRET_SETTING_KEYS } from '@/lib/secret-keys';
+import { testAnnasArchiveKey } from '@/lib/annas-test';
 
 const SENSITIVE_KEYS = [
     'cv_api_key', 
@@ -161,6 +162,47 @@ export async function POST(request: Request) {
     const encDownloadClients = await encryptRows(downloadClients, ['pass', 'apiKey']);
     const encHosterAccounts = await encryptRows(hosterAccounts, ['password', 'apiKey']);
 
+    // --- Anna's Archive automation gate ---
+    // Enabling Anna's Archive as an AUTOMATION source requires a working premium API key + a passing
+    // connection test; otherwise revert that entry to disabled before persisting (interactive search is
+    // unaffected). Only runs on the enable transition (annas off→on), so unrelated saves aren't re-tested.
+    const gateWarnings: string[] = [];
+    if (settings && typeof settings.search_source_priority === 'string') {
+        try {
+            const ssp = JSON.parse(settings.search_source_priority);
+            const annasIdx = Array.isArray(ssp)
+                ? ssp.findIndex((s: any) => s?.source === 'annas_archive' && s?.enabled)
+                : -1;
+            if (annasIdx !== -1) {
+                const prior = await prisma.systemSetting.findUnique({ where: { key: 'search_source_priority' } });
+                let wasEnabled = false;
+                try {
+                    const priorArr = prior?.value ? JSON.parse(prior.value) : [];
+                    wasEnabled = Array.isArray(priorArr) && priorArr.some((s: any) => s?.source === 'annas_archive' && s?.enabled);
+                } catch { /* prior unparsable — treat as not-enabled so the gate runs */ }
+
+                if (!wasEnabled) {
+                    const rawIncoming = Array.isArray(hosterAccounts)
+                        ? hosterAccounts.find((h: any) => h.hoster === 'annas_archive') : null;
+                    let key: string | null = "";
+                    if (rawIncoming?.apiKey && rawIncoming.apiKey !== '********') {
+                        key = rawIncoming.apiKey; // new plaintext key from this save
+                    } else {
+                        const dbAcct = await prisma.hosterAccount.findFirst({ where: { hoster: 'annas_archive', isActive: true } });
+                        key = dbAcct?.apiKey ? await decryptSecret(dbAcct.apiKey) : "";
+                    }
+                    const test = await testAnnasArchiveKey(key, settings.annas_archive_base_url);
+                    if (!test.success) {
+                        ssp[annasIdx].enabled = false;
+                        settings.search_source_priority = JSON.stringify(ssp);
+                        gateWarnings.push(`Anna's Archive automation was disabled: a premium API key with a successful connection test is required (${test.message}). It remains available for interactive search.`);
+                        Logger.log(`[Config] Anna's Archive automation gate failed: ${test.message}`, 'warn');
+                    }
+                }
+            }
+        } catch { /* malformed search_source_priority — leave it untouched */ }
+    }
+
     await prisma.$transaction(async (tx) => {
         
         if (settings) {
@@ -297,7 +339,7 @@ export async function POST(request: Request) {
         await syncSchedules().catch(e => Logger.log(`Failed to sync BullMQ schedules: ${getErrorMessage(e)}`, 'error'));
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, warnings: gateWarnings });
   } catch (error: unknown) {
     Logger.log(`Settings Save Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: "Failed to save configuration. Please check the server logs." }, { status: 500 });

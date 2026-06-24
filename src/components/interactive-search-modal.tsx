@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader } f
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Search, Loader2, Download, Ban, Globe, HardDrive, Users, Database } from "lucide-react"
+import { Search, Loader2, Download, Ban, Globe, HardDrive, Users, Database, Library } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { formatBytes } from "@/lib/utils/format"
 
@@ -21,6 +21,7 @@ interface Props {
     image: string;
     type: 'volume' | 'issue';
     metadataSource?: string;
+    isManga?: boolean;
   };
   requestId?: string;
 }
@@ -29,7 +30,7 @@ interface Props {
 const getOptimizedSearchQuery = (rawQuery: string, year?: string) => {
     if (!rawQuery) return "";
     
-    let query = String(rawQuery);
+    const query = String(rawQuery);
     
     // 1. Strip out subtitles (anything after a colon) to broaden indexer results
     let clean = query.split(':')[0].trim();
@@ -69,7 +70,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   
-  const [monitorPrompt, setMonitorPrompt] = useState<{ result: any, source: 'prowlarr' | 'getcomics' } | null>(null)
+  const [monitorPrompt, setMonitorPrompt] = useState<{ result: any, source: 'prowlarr' | 'getcomics' | 'annas_archive' } | null>(null)
   
   const { toast } = useToast()
 
@@ -89,11 +90,15 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
     if (!searchQuery || !searchQuery.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/search/interactive?q=${encodeURIComponent(searchQuery)}`)
+      const params = new URLSearchParams({ q: searchQuery });
+      if (comicData?.year && /^\d{4}$/.test(comicData.year)) params.set('year', comicData.year);
+      if (comicData?.isManga) params.set('isManga', 'true');
+      const res = await fetch(`/api/search/interactive?${params.toString()}`)
       const data = await res.json()
       const combined = [];
       if (data.prowlarr) combined.push(...data.prowlarr);
       if (data.getcomics) combined.push(...data.getcomics);
+      if (data.annas_archive) combined.push(...data.annas_archive);
       setResults(combined);
     } catch (e) {
       toast({ title: "Error", description: "Search failed.", variant: "destructive" });
@@ -102,15 +107,21 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
     }
   }
 
-  const initiateManualRequest = (searchResult: any, source: 'prowlarr' | 'getcomics' | 'flag_admin') => {
+  // GetComics and Anna's Archive results both arrive as protocol 'ddl'; the indexer label distinguishes
+  // them so each routes to the right download branch in /api/request/manual.
+  const sourceOf = (res: any): 'prowlarr' | 'getcomics' | 'annas_archive' =>
+      (res?.indexer || '').toLowerCase().includes('anna') ? 'annas_archive'
+      : res?.protocol === 'ddl' ? 'getcomics' : 'prowlarr';
+
+  const initiateManualRequest = (searchResult: any, source: 'prowlarr' | 'getcomics' | 'annas_archive' | 'flag_admin') => {
       if (source !== 'flag_admin' && comicData?.type === 'volume') {
-          setMonitorPrompt({ result: searchResult, source: source as 'prowlarr' | 'getcomics' });
+          setMonitorPrompt({ result: searchResult, source: source as 'prowlarr' | 'getcomics' | 'annas_archive' });
       } else {
           handleManualRequest(searchResult, source, false);
       }
   }
 
-  const handleManualRequest = async (searchResult: any, source: 'prowlarr' | 'getcomics' | 'flag_admin', monitored: boolean) => {
+  const handleManualRequest = async (searchResult: any, source: 'prowlarr' | 'getcomics' | 'annas_archive' | 'flag_admin', monitored: boolean) => {
     const trackingId = source === 'flag_admin' ? 'flag_admin' : (searchResult.infoHash || searchResult.guid || searchResult.downloadUrl);
     setDownloadingId(trackingId);
     
@@ -225,12 +236,13 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                     const trackingId = res.guid || res.infoHash || res.downloadUrl;
                                     const isTorrent = res.protocol === 'torrent';
                                     const isDdl = res.protocol === 'ddl';
+                                    const isAnnas = (res.indexer || '').toLowerCase().includes('anna');
                                     return (
                                     <tr key={trackingId || idx} className="hover:bg-muted/50 transition-colors">
                                         <td className="px-4 py-3 whitespace-nowrap">
-                                            <Badge variant="outline" className={isTorrent ? "text-green-600 border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800" : isDdl ? "text-primary border-primary/30 bg-primary/10" : "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-800"}>
-                                                {isTorrent ? <Database className="w-3 h-3 mr-1"/> : isDdl ? <Globe className="w-3 h-3 mr-1"/> : <HardDrive className="w-3 h-3 mr-1"/>}
-                                                {isDdl ? 'Direct' : res.protocol}
+                                            <Badge variant="outline" className={isAnnas ? "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800" : isTorrent ? "text-green-600 border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800" : isDdl ? "text-primary border-primary/30 bg-primary/10" : "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-800"}>
+                                                {isAnnas ? <Library className="w-3 h-3 mr-1"/> : isTorrent ? <Database className="w-3 h-3 mr-1"/> : isDdl ? <Globe className="w-3 h-3 mr-1"/> : <HardDrive className="w-3 h-3 mr-1"/>}
+                                                {isAnnas ? "Anna's" : isDdl ? 'Direct' : res.protocol}
                                             </Badge>
                                         </td>
                                         <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.age : getAge(res.publishDate)}</td>
@@ -244,12 +256,12 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                         </td>
                                         
                                         <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{res.indexer}</td>
-                                        <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.size : formatSize(res.size)}</td>
+                                        <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{formatSize(res.size)}</td>
                                         <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{isTorrent ? <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 font-bold"><Users className="w-4 h-4"/> S: {res.seeders}</span> : isDdl ? "-" : `Grabs: ${res.grabs || 0}`}</td>
                                         <td className="px-4 py-3 whitespace-nowrap">
                                             <div className="flex items-center justify-end gap-2">
                                                 <Button variant="ghost" size="icon" className="h-9 w-9 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setHiddenIds(prev => new Set(prev).add(trackingId))} title="Hide/Block Release"><Ban className="w-4 h-4" /></Button>
-                                                <Button size="sm" onClick={() => initiateManualRequest(res, isDdl ? 'getcomics' : 'prowlarr')} disabled={downloadingId !== null} className="font-bold h-9 bg-primary text-primary-foreground hover:bg-primary/90">
+                                                <Button size="sm" onClick={() => initiateManualRequest(res, sourceOf(res))} disabled={downloadingId !== null} className="font-bold h-9 bg-primary text-primary-foreground hover:bg-primary/90">
                                                     {downloadingId === trackingId ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Download className="w-4 h-4 mr-2" /> Download</>}
                                                 </Button>
                                             </div>
@@ -272,23 +284,24 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                         const trackingId = res.guid || res.infoHash || res.downloadUrl;
                         const isTorrent = res.protocol === 'torrent';
                         const isDdl = res.protocol === 'ddl';
+                        const isAnnas = (res.indexer || '').toLowerCase().includes('anna');
                         return (
                         <div key={trackingId || idx} className="flex flex-col gap-3 p-4 sm:p-5 bg-background border border-border rounded-lg shadow-sm">
                             <div className="font-bold text-base break-words leading-tight text-foreground line-clamp-3" title={res.title}>{res.title}</div>
                             <div className="flex flex-wrap gap-2 items-center">
-                                <Badge variant="outline" className={`text-xs uppercase tracking-wider px-2 py-0.5 ${isTorrent ? "text-green-600 border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800" : isDdl ? "text-primary border-primary/30 bg-primary/10" : "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-800"}`}>
-                                    {isTorrent ? <Database className="w-3.5 h-3.5 mr-1.5"/> : isDdl ? <Globe className="w-3.5 h-3.5 mr-1.5"/> : <HardDrive className="w-3.5 h-3.5 mr-1.5"/>}
-                                    {isDdl ? 'Direct' : res.protocol}
+                                <Badge variant="outline" className={`text-xs uppercase tracking-wider px-2 py-0.5 ${isAnnas ? "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800" : isTorrent ? "text-green-600 border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800" : isDdl ? "text-primary border-primary/30 bg-primary/10" : "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-800"}`}>
+                                    {isAnnas ? <Library className="w-3.5 h-3.5 mr-1.5"/> : isTorrent ? <Database className="w-3.5 h-3.5 mr-1.5"/> : isDdl ? <Globe className="w-3.5 h-3.5 mr-1.5"/> : <HardDrive className="w-3.5 h-3.5 mr-1.5"/>}
+                                    {isAnnas ? "Anna's" : isDdl ? 'Direct' : res.protocol}
                                 </Badge>
                                 <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{isDdl ? res.age : getAge(res.publishDate)}</Badge>
-                                <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{isDdl ? res.size : formatSize(res.size)}</Badge>
+                                <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{formatSize(res.size)}</Badge>
                                 {isTorrent && <Badge variant="outline" className="text-xs px-2 py-0.5 border-green-200 text-green-600 bg-green-50 dark:bg-green-900/20 dark:text-green-400">S: {res.seeders}</Badge>}
                             </div>
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-border mt-2">
                                 <span className="text-sm text-muted-foreground font-medium truncate">{res.indexer}</span>
                                 <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
                                     <Button variant="outline" size="icon" className="h-11 w-11 text-red-500 hover:bg-red-50 border-border dark:hover:bg-red-900/20 shrink-0" onClick={() => setHiddenIds(prev => new Set(prev).add(trackingId))} title="Hide/Block Release"><Ban className="w-5 h-5" /></Button>
-                                    <Button size="sm" className="h-11 flex-1 sm:px-6 font-bold shadow-sm bg-primary hover:bg-primary/90 text-primary-foreground text-sm" onClick={() => initiateManualRequest(res, isDdl ? 'getcomics' : 'prowlarr')} disabled={downloadingId !== null}>
+                                    <Button size="sm" className="h-11 flex-1 sm:px-6 font-bold shadow-sm bg-primary hover:bg-primary/90 text-primary-foreground text-sm" onClick={() => initiateManualRequest(res, sourceOf(res))} disabled={downloadingId !== null}>
                                         {downloadingId === trackingId ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Download className="w-5 h-5 mr-2" /> Download</>}
                                     </Button>
                                 </div>

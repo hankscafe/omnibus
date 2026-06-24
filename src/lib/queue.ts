@@ -18,6 +18,7 @@ import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { BACKUPS_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
+import { containsWord } from '@/lib/filter-defaults';
 
 const execFileAsync = promisify(execFile);
 
@@ -1534,11 +1535,11 @@ export function initWorker() {
                             const volName = (item.volume?.name || '').toLowerCase().trim();
                             const concepts = item.volume?.concepts || [];
                             if (filterEnabled) {
-                                if (blockedPublishers.length > 0 && blockedPublishers.some((bp: string) => pubName.includes(bp))) {
+                                if (blockedPublishers.length > 0 && blockedPublishers.some((bp: string) => containsWord(pubName, bp))) {
                                     Logger.log(`[Discover Sync Debug] Filtered out "${volName}" due to blocked publisher: ${pubName}`, 'debug');
                                     return false;
                                 }
-                                if (blockedKeywords.length > 0 && blockedKeywords.some((bk: string) => volName.includes(bk))) {
+                                if (blockedKeywords.length > 0 && blockedKeywords.some((bk: string) => containsWord(volName, bk))) {
                                     Logger.log(`[Discover Sync Debug] Filtered out "${volName}" due to blocked keyword`, 'debug');
                                     return false;
                                 }

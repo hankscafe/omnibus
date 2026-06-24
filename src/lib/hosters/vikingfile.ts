@@ -39,6 +39,14 @@ export async function resolveVikingfile(url: string, account?: any) {
             return { success: true, directUrl };
         }
 
+        // VikingFile now gates the link behind a Cloudflare Turnstile captcha: the #download-link anchor
+        // is empty in the static HTML and only filled in by client-side JS once the token is solved, so
+        // there is nothing to scrape anonymously. Report the real reason instead of "no button found".
+        if (/challenges\.cloudflare\.com\/turnstile|cf-turnstile|turnstile\.render/i.test(res.data)) {
+            Logger.log(`[VikingFile Debug] Cloudflare Turnstile captcha detected; link is generated in-browser.`, 'debug');
+            return { success: false, error: 'VikingFile requires a Cloudflare Turnstile captcha; its download link is generated in-browser and cannot be resolved automatically.' };
+        }
+
         Logger.log(`[VikingFile Debug] Evaluation complete. No valid download links found.`, 'debug');
         return { success: false, error: 'Could not locate direct download button on Vikingfile page.' };
     } catch (error: any) {

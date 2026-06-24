@@ -1,7 +1,7 @@
 // src/lib/automation.ts
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
-import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
+import { getCustomAcronyms, generateSearchQueries, normalizeRequestName } from '@/lib/search-engine';
 import { ProwlarrService } from '@/lib/prowlarr';
 import { GetComicsService } from '@/lib/getcomics';
 import { DownloadService } from '@/lib/download-clients';
@@ -342,6 +342,31 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: fallbackManualUrl, activeDownloadName: fallbackManualName } });
       return;
   }
+
+  // Anna's Archive automation fallback (opt-in via search_source_priority): GetComics + Prowlarr found
+  // nothing, so if Anna's is an enabled automation source, surface its best match into the manual queue
+  // (MANUAL_DDL) for one-click admin pickup via the request/manual annas_archive flow.
+  // NOTE: net-new on the Node branch (rust-engine auto-streamed this in the engine with its own scorer);
+  // it holds for manual review here rather than auto-downloading a possible mismatch — tune on a live deploy.
+  try {
+      const sspSetting = await prisma.systemSetting.findUnique({ where: { key: 'search_source_priority' } });
+      const ssp = sspSetting?.value ? JSON.parse(sspSetting.value) : [];
+      const annasAutomation = Array.isArray(ssp) && ssp.some((s: any) => s?.source === 'annas_archive' && s?.enabled);
+      if (annasAutomation) {
+          const { searchAnnasArchive } = await import('@/lib/hosters/annas-archive');
+          const annasResults = await searchAnnasArchive(queries, false, isManga).catch(() => []);
+          const nameTokens = normalizeRequestName(name).split(/\s+/).filter((t: string) => t.length > 2);
+          const match = annasResults.find((r: any) => {
+              const t = (r.title || '').toLowerCase();
+              return nameTokens.length > 0 && nameTokens.every((tok: string) => t.includes(tok));
+          });
+          if (match?.downloadUrl) {
+              Logger.log(`[Automation] Anna's Archive fallback: surfacing "${match.title}" to the manual queue.`, 'info');
+              await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: match.downloadUrl, activeDownloadName: match.title } });
+              return;
+          }
+      }
+  } catch (e) { Logger.log(`[Automation] Anna's Archive fallback failed: ${getErrorMessage(e)}`, 'warn'); }
 
   const currentReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
   if (currentReq?.status !== 'MANUAL_DDL' && currentReq?.status !== 'DOWNLOADING') {

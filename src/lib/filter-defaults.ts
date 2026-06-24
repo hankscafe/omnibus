@@ -24,3 +24,27 @@ export const RECOMMENDED_KEYWORDS =
   "young animal, weekly shonen, monthly shonen, weekly playboy, monthly young magazine, " +
   "big comic superior, big comic spirits, young champion, young king, young comic, comic zenon, " +
   "shonen sunday s";
+
+/**
+ * True if `needle` occurs in `haystack` as a whole word — i.e. with no ASCII alphanumeric character
+ * immediately on either side of the match. Byte-level (not a `/\b/` regex) so hyphenated needles
+ * ("gee-whiz", "project-h") and multi-word phrases ("comic gaze") match correctly and regex
+ * metacharacters are never an issue. Both arguments should already be lowercased. Parity with the
+ * engine's `discover::contains_word`; used by the Discover content filter + the Anna's Archive blocklist
+ * so the curated keyword list can't false-match substrings (e.g. "manga" inside "mangaka").
+ */
+export function containsWord(haystack: string, needle: string): boolean {
+  if (!needle) return false;
+  const isWordChar = (c: string) =>
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+  let from = 0;
+  for (;;) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx === -1) return false;
+    const before = idx > 0 ? haystack[idx - 1] : '';
+    const afterIdx = idx + needle.length;
+    const after = afterIdx < haystack.length ? haystack[afterIdx] : '';
+    if ((!before || !isWordChar(before)) && (!after || !isWordChar(after))) return true;
+    from = idx + 1;
+  }
+}

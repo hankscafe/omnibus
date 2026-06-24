@@ -21,9 +21,7 @@ import {
     AlertTriangle
 } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-
-const RECOMMENDED_PUBLISHERS = "hakusensha, shueisha, kodansha, shogakukan, square enix, yen press, viz media, seven seas, fakku, project-h, denpa, irodori, eros comix, tokyopop, kadokawa, futabasha, houbunsha, takeshobo, mag garden, akita shoten, shonen gahosha, nihon bungeisha, coamix, gee-whiz, ghost ship, j-novel club, suiseisha, shinchosha, ascii media works, ichijinsha";
-const RECOMMENDED_KEYWORDS = "weekly young, young animal, weekly shonen, monthly shonen, gee-whiz, manga, hentai, doujinshi, shoujo, seinen, shojo, josei, gaze, lustiges taschenbuch enten-edition, les tuniques bleues, big comic superior, Creature Girls: A Hands-On Field Journal In Another World, Young King Bull, weekly playboy, big comic spirits, Young Champion Retsu, Big Comic Zōkan, Monthly Young Magazine, Comic Zenon, shonen sunday s, Chira Chiller, young champion, young king, yojng comic, Shana-Ou Yoshitsune";
+import { RECOMMENDED_PUBLISHERS, RECOMMENDED_KEYWORDS } from "@/lib/filter-defaults"
 
 const DISCORD_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
@@ -33,6 +31,7 @@ const DISCORD_EVENTS = [
   { id: "pending_account", label: "Pending Account", desc: "Includes new user's username, email, and registration date." },
   { id: "account_approved", label: "Account Approved", desc: "Alerts when an admin approves a new user account." },
   { id: "system_alert", label: "System Health", desc: "Triggers for disk space warnings or critical errors." },
+  { id: "duplicate_files", label: "Duplicate Files Found", desc: "Alerts when new duplicate comic files are detected anywhere in the library." },
   { id: "update_available", label: "System Update Available", desc: "Alerts when a new version of Omnibus is published to GitHub." },
   { id: "library_cleanup", label: "Library Cleanup", desc: "Triggers when a series is deleted, noting if files were removed from the disk." },
   { id: "metadata_match", label: "Metadata Matched", desc: "Alerts when a series is successfully matched to ComicVine IDs." },
@@ -47,6 +46,8 @@ const DISCORD_EVENTS = [
 
 const hosterDisplayNames: Record<string, string> = {
     'mediafire': 'MediaFire',
+    'getcomics_direct': 'GetComics (Direct CDN)',
+    'getcomics_main': 'GetComics (Main Server · Cloudflare)',
     'getcomics': 'GetComics (Direct)',
     'mega': 'Mega',
     'pixeldrain': 'Pixeldrain',
@@ -135,7 +136,7 @@ export default function SetupWizard() {
   // --- THE FIX: Category Update Logic for the Wizard ---
   const updateProwlarrCategories = (toggledId?: string, isChecked?: boolean, newCustom?: string) => {
       const predefinedIds = ["7000", "7010", "7020", "7030", "8000"];
-      let current = (formData.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
+      const current = (formData.prowlarr_categories || "").split(',').map((c: string) => c.trim()).filter(Boolean);
       let activePredefined = current.filter((c: string) => predefinedIds.includes(c));
       
       // Update toggles

@@ -15,19 +15,35 @@ export async function getCustomAcronyms(): Promise<Record<string, string>> {
     return acMap;
 }
 
+// Drops a trailing descriptive subtitle from a single-issue request name:
+// "Batman: Gargoyle of Gotham #1: Book One" -> "Batman: Gargoyle of Gotham #1".
+// Only applies when an issue marker (#/issue/chapter + number) is present, so a genuine TPB request
+// like "Batman Book One" is left intact. Both the query generator and the GetComics relevance filter
+// must derive their "core name" through this, otherwise a subtitle keyword such as "Book"/"Volume"
+// trips TPB/omnibus detection and the subtitle words get enforced as required title words — rejecting
+// every real single-issue file, since the uploader never includes the subtitle. (-? keeps negative
+// issue numbers like "Batman #-1" recognized as single issues.)
+export function stripIssueSubtitle(name: string): string {
+    if (!/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+/i.test(name)) return name;
+    const splitMatch = name.match(/^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*.*$/i);
+    return splitMatch ? splitMatch[1].trim() : name;
+}
+
+// Strips a trailing comic/archive file extension so a download FILENAME (e.g. a retry's
+// activeDownloadName "Wolverine #3 (2024).cbz") doesn't leak "cbz" into the generated queries or the
+// relevance filter.
+export function stripFileExtension(name: string): string {
+    return name.replace(/\.(cbz|cbr|cb7|cbt|zip|rar|7z|pdf|epub)$/i, '').trim();
+}
+
+// Normalizes a request name for searching: drops a trailing file extension AND a trailing subtitle.
+// "Wolverine #3 (2024).cbz" -> "Wolverine #3 (2024)"; "Batman #1: Book One" -> "Batman #1".
+export function normalizeRequestName(name: string): string {
+    return stripIssueSubtitle(stripFileExtension(name));
+}
+
 export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false, prioritizePacks: boolean = false, usePacks: boolean = true): string[] {
-    let searchName = name;
-    
-    // --- SMART SUBTITLE SLICER ---
-    // Added -? to correctly identify single-issue requests for negative numbers
-    const isSingleIssue = /(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+/i.test(name);
-    if (isSingleIssue) {
-        // Added -? to properly split subtitles from negative issues
-        const splitMatch = name.match(/^(.*?(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+(?:\.\d+)?[a-zA-Z]?)\s*[:\-]\s*(.*)$/i);
-        if (splitMatch) {
-            searchName = splitMatch[1].trim();
-        }
-    }
+    const searchName = normalizeRequestName(name);
 
     const primaryQueries = new Set<string>(); 
     const secondaryQueries = new Set<string>();

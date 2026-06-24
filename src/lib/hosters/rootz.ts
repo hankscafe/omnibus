@@ -43,6 +43,17 @@ export async function resolveRootz(url: string, account?: any) {
             return { success: true, directUrl };
         }
 
+        // Rootz is now a Next.js app: the file is described in embedded hydration data and the download
+        // link is generated client-side (JS/API) from a pageToken, not present as a static anchor.
+        // Surface the real reason instead of a generic "no button" message.
+        if (/"status"\s*:\s*"deleted"/i.test(res.data)) {
+            return { success: false, error: 'This Rootz file has been deleted.' };
+        }
+        if (/rootz-download-button|__next_f/i.test(res.data)) {
+            Logger.log(`[Rootz Debug] Next.js client-rendered download detected; link is generated in-browser.`, 'debug');
+            return { success: false, error: 'Rootz generates its download link client-side (JS/API); it cannot be resolved by static scraping.' };
+        }
+
         Logger.log(`[Rootz Debug] Evaluation complete. No valid download links found.`, 'debug');
         return { success: false, error: 'Could not locate direct download button on Rootz page.' };
     } catch (error: any) {

@@ -196,7 +196,9 @@ export const DownloadService = {
 
           let resolvedHoster: any = null;
           
-          if (hoster && hoster !== 'getcomics' && hoster !== 'unknown') {
+          // GetComics variants (direct comicfiles CDN + the /dls/ main server) stream directly like the
+          // legacy 'getcomics' hoster — they are NOT resolved through HosterEngine (which has no case for them).
+          if (hoster && hoster !== 'getcomics' && hoster !== 'getcomics_direct' && hoster !== 'getcomics_main' && hoster !== 'unknown') {
               await prisma.request.update({
                   where: { id: requestId },
                   data: { status: 'DOWNLOADING', progress: 0 }

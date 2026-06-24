@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 import { ProwlarrService } from '@/lib/prowlarr';
 import { GetComicsService } from '@/lib/getcomics';
+import { searchAnnasArchive } from '@/lib/hosters/annas-archive';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { prisma } from '@/lib/db';
@@ -12,7 +13,8 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const q = searchParams.get('q');
     const year = searchParams.get('year') || undefined;
-    
+    const isManga = searchParams.get('isManga') === 'true';
+
     if (!q) return NextResponse.json({ error: 'Query required' }, { status: 400 });
 
     try {
@@ -44,22 +46,27 @@ export async function GET(req: Request) {
             } catch(e) {}
         }
 
-        const promises = [
-            ProwlarrService.searchComics(q, true, false, year).catch(() => [])
-        ];
+        // Anna's Archive interactive search is opt-in (no API key needed for search) — read its gate.
+        const annasSetting = await prisma.systemSetting.findUnique({ where: { key: 'annas_archive_interactive_enabled' } });
+        const annasEnabled = annasSetting?.value === 'true';
 
+        const prowlarrP = ProwlarrService.searchComics(q, true, false, year).catch(() => []);
         // 2. Only query GetComics if the user has DDL enabled AND at least one file hoster enabled
-        if (ddlEnabled && hasEnabledHosters) {
-            promises.push(GetComicsService.search(q, true, false, undefined, year).catch(() => []));
-        }
+        const getcomicsP = (ddlEnabled && hasEnabledHosters)
+            ? GetComicsService.search(q, true, false, undefined, year).catch(() => [])
+            : Promise.resolve([] as any[]);
+        const annasP = annasEnabled
+            ? searchAnnasArchive([q], true, isManga, year).catch(() => [])
+            : Promise.resolve([] as any[]);
 
-        const results = await Promise.all(promises);
+        const [prowlarr, getcomics, annas_archive] = await Promise.all([prowlarrP, getcomicsP, annasP]);
 
-        Logger.log(`[Interactive Search Debug] Search completed. Prowlarr results: ${results[0]?.length || 0}, GetComics results: ${(ddlEnabled && hasEnabledHosters) ? (results[1]?.length || 0) : 0}`, 'debug');
+        Logger.log(`[Interactive Search Debug] Search completed. Prowlarr: ${prowlarr?.length || 0}, GetComics: ${getcomics?.length || 0}, Anna's: ${annas_archive?.length || 0}`, 'debug');
 
-        return NextResponse.json({ 
-            prowlarr: results[0] || [], 
-            getcomics: (ddlEnabled && hasEnabledHosters) ? (results[1] || []) : [] 
+        return NextResponse.json({
+            prowlarr: prowlarr || [],
+            getcomics: getcomics || [],
+            annas_archive: annas_archive || [],
         });
     } catch (error: unknown) {
         Logger.log(`[Interactive Search] Error: ${getErrorMessage(error)}`, 'error');

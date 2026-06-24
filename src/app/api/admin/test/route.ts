@@ -3,8 +3,10 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
+import { decryptSecret } from '@/lib/encryption';
 import { Logger } from '@/lib/logger';
 import { Mailer } from '@/lib/mailer';
+import { testAnnasArchiveKey } from '@/lib/annas-test';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
@@ -26,7 +28,7 @@ export async function POST(request: Request) {
     type = body.type || 'unknown';
     const { config } = body;
 
-    let headers: any = {
+    const headers: any = {
         'User-Agent': 'Omnibus/1.0',
         'Content-Type': 'application/json'
     };
@@ -203,7 +205,7 @@ export async function POST(request: Request) {
             loginParams.append('username', user || '');
             
             const realPass = (pass === '********') 
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ""
                 : pass;
 
             loginParams.append('password', realPass || '');
@@ -226,7 +228,7 @@ export async function POST(request: Request) {
         } 
         else if (clientType === 'sab') {
             const realApiKey = (apiKey === '********')
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey ?? null) || ""
                 : apiKey;
 
             const res = await axios.get(`${cleanUrl}/api`, {
@@ -242,7 +244,7 @@ export async function POST(request: Request) {
         }
         else if (clientType === 'nzbget') {
             const realPass = (pass === '********') 
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ""
                 : pass;
             const auth = Buffer.from(`${user || ''}:${realPass || ''}`).toString('base64');
             const res = await axios.post(`${cleanUrl}/jsonrpc`, { method: "version", params: [] }, { headers: { ...headers, Authorization: `Basic ${auth}` }, timeout: 5000 });
@@ -254,7 +256,7 @@ export async function POST(request: Request) {
         }
         else if (clientType === 'deluge') {
             const realPass = (pass === '********') 
-                ? (await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass || ""
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ""
                 : pass;
             const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [realPass || ''], id: 1 }, { headers, timeout: 5000 });
             if (authRes.data && authRes.data.result) {
@@ -319,16 +321,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: `Connected to Prowlarr (${res.data.length} indexers).` });
     }
 
-    // --- FLARESOLVERR TEST ---
+    // --- ANNA'S ARCHIVE (fast_download API key) ---
+    if (type === 'annas_archive') {
+        // The key lives in HosterAccount (encrypted), not SystemSetting.
+        const account = await prisma.hosterAccount.findFirst({ where: { hoster: 'annas_archive', isActive: true } });
+        const key = account?.apiKey ? await decryptSecret(account.apiKey) : "";
+        const result = await testAnnasArchiveKey(key, config.annas_archive_base_url);
+        return NextResponse.json({ success: result.success, message: result.message });
+    }
+
+    // --- CLOUDFLARE SOLVER TEST (FlareSolverr / Byparr) ---
     if (type === 'flaresolverr') {
         const url = config.flaresolverr_url?.replace(/\/$/, '');
-        if (!url) return NextResponse.json({ success: false, message: 'Missing FlareSolverr URL' });
+        const solverName = config.solver_type === 'byparr' ? 'Byparr' : 'FlareSolverr';
+        if (!url) return NextResponse.json({ success: false, message: `Missing ${solverName} URL` });
 
+        // FlareSolverr's root returns JSON {msg, version}; Byparr's root redirects to its Swagger docs.
         const res = await axios.get(url, { timeout: 10000 });
         if (res.data && res.data.msg) {
             return NextResponse.json({ success: true, message: `FlareSolverr Connected! (v${res.data.version || 'Unknown'})` });
         }
-        return NextResponse.json({ success: true, message: 'FlareSolverr is reachable.' });
+        return NextResponse.json({ success: true, message: `${solverName} is reachable.` });
     }
 
     // --- MAPPING LOGIC ---

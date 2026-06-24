@@ -56,6 +56,7 @@ function ReaderContent() {
   const [zoomLevel, setZoomLevel] = useState(100);
   const [jumpInput, setJumpInput] = useState("");
   const [isJumping, setIsJumping] = useState(false);
+  const [pageLoadError, setPageLoadError] = useState(false);
 
   // Mouse Panning State
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -68,6 +69,12 @@ function ReaderContent() {
   const touchStartY = useRef(0);
   const touchEndX = useRef(0);
   const touchEndY = useRef(0);
+
+  // PINCH-ZOOM STATE — a two-finger gesture drives zoomLevel; multiTouchRef suppresses the swipe
+  // page-turn so a pinch can't flip the page. zoomRef mirrors zoomLevel for the native listener.
+  const pinchRef = useRef({ active: false, startDist: 0, startZoom: 100 });
+  const multiTouchRef = useRef(false);
+  const zoomRef = useRef(100);
 
   // Transient Page Indicator State
   const [showPageToast, setShowPageToast] = useState(false);
@@ -92,6 +99,11 @@ function ReaderContent() {
 
   const [nextIssue, setNextIssue] = useState<{ path: string, name: string } | null>(null);
 
+  // Per-series reader preferences: seriesId identifies the series; prefsLoaded gates saving until the
+  // saved prefs have been fetched + merged, so we never overwrite them with defaults on first load.
+  const [seriesId, setSeriesId] = useState<string | null>(null);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
+
   const issueName = filePath ? filePath.split(/[\\/]/).pop()?.replace(/\.[^/.]+$/, "") : "Loading...";
   const seriesName = seriesPath ? seriesPath.split(/[\\/]/).pop() : "Comic Reader";
 
@@ -107,6 +119,7 @@ function ReaderContent() {
     // Reset reader state immediately when navigating to a new issue
     setCurrentIndex(0);
     setIsReadyToSync(false);
+    setPrefsLoaded(false);
     setPages([]);
     
     Promise.all([
@@ -134,6 +147,20 @@ function ReaderContent() {
             }
         } else {
             setNextIssue(null);
+        }
+
+        // Load this user's saved reader preferences for the series (overriding the isManga RTL default
+        // applied above). prefsLoaded gates the save effect so first load can't clobber saved prefs.
+        const sid: string | null = seriesData?.id ?? null;
+        setSeriesId(sid);
+        if (sid) {
+            fetch(`/api/reader/preferences?seriesId=${encodeURIComponent(sid)}`)
+                .then(r => r.ok ? r.json() : { settings: null })
+                .then(d => { if (d?.settings && typeof d.settings === 'object') setSettings(s => ({ ...s, ...d.settings })); })
+                .catch(() => {})
+                .finally(() => setPrefsLoaded(true));
+        } else {
+            setPrefsLoaded(true);
         }
 
         // Apply progress or URL query param for the specific issue
@@ -169,6 +196,20 @@ function ReaderContent() {
     return () => clearTimeout(timer);
   }, [currentIndex, pages.length, filePath, loading, isReadyToSync, getAuthHeaders]);
 
+  // Persist reader settings per series (debounced). Gated on prefsLoaded so the defaults/merge on
+  // first load don't overwrite the user's saved prefs before they've been fetched.
+  useEffect(() => {
+    if (!prefsLoaded || !seriesId) return;
+    const t = setTimeout(() => {
+        fetch('/api/reader/preferences', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ seriesId, settings })
+        }).catch(() => {});
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [settings, prefsLoaded, seriesId, getAuthHeaders]);
+
   const getStep = useCallback(() => {
     if (settings.pageLayout === 'single' || settings.readingMode === 'webtoon') return 1;
     if (settings.pageLayout === 'double') return 2;
@@ -203,9 +244,10 @@ function ReaderContent() {
           const pageName = pages[index];
           
           loadCachedPage(pageName).then(() => {
-              // Preload into browser memory whether cached or live
+              // Preload into browser memory whether cached or live; decode ahead so the page swap is instant.
               const img = new Image();
               img.src = getPageUrl(pageName);
+              if ('decode' in img) img.decode().catch(() => {});
           });
       };
 
@@ -215,6 +257,9 @@ function ReaderContent() {
           if (settings.pageLayout.includes('double')) preloadImage(currentIndex + (step * i) + 1);
       }
   }, [currentIndex, pages, filePath, getStep, settings.pageLayout, loadCachedPage, getPageUrl]);
+
+  // Clear the page-load error overlay whenever the page changes or the pages reload.
+  useEffect(() => { setPageLoadError(false); }, [currentIndex, pages]);
 
   // Cleanup object URLs on unmount
   useEffect(() => {
@@ -366,9 +411,10 @@ function ReaderContent() {
 
   // NATIVE TOUCH GESTURE LOGIC
   const handleTouchStart = (e: React.TouchEvent) => {
+      if (e.touches.length > 1) return; // multi-touch is a pinch (handled natively), not a swipe
       touchStartX.current = e.changedTouches[0].screenX;
       touchStartY.current = e.changedTouches[0].screenY;
-      touchEndX.current = e.changedTouches[0].screenX; 
+      touchEndX.current = e.changedTouches[0].screenX;
       touchEndY.current = e.changedTouches[0].screenY;
   };
 
@@ -378,6 +424,7 @@ function ReaderContent() {
   };
 
   const handleTouchEnd = () => {
+      if (multiTouchRef.current) return; // a pinch just ended — don't treat it as a swipe
       if (zoomLevel !== 100 || settings.readingMode === 'webtoon') return;
 
       const deltaX = touchEndX.current - touchStartX.current;
@@ -391,6 +438,50 @@ function ReaderContent() {
           }
       }
   };
+
+  // Keep a ref copy of the zoom level so the native pinch listener reads the latest value without re-binding.
+  useEffect(() => { zoomRef.current = zoomLevel; }, [zoomLevel]);
+
+  // Two-finger pinch-to-zoom on touch devices. Uses native non-passive listeners so preventDefault can
+  // stop the container scrolling/native-gesturing mid-pinch (the app disables browser pinch globally via
+  // the viewport meta, so the reader supplies its own). Single-finger pan/scroll + swipe are untouched.
+  useEffect(() => {
+      const el = scrollRef.current;
+      if (!el || loading || settings.readingMode === 'webtoon') return;
+
+      const distance = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+      const onStart = (e: TouchEvent) => {
+          if (e.touches.length === 2) {
+              multiTouchRef.current = true;
+              pinchRef.current = { active: true, startDist: distance(e.touches) || 1, startZoom: zoomRef.current };
+          }
+      };
+      const onMove = (e: TouchEvent) => {
+          if (pinchRef.current.active && e.touches.length === 2) {
+              e.preventDefault();
+              const ratio = distance(e.touches) / pinchRef.current.startDist;
+              setZoomLevel(Math.min(300, Math.max(50, Math.round(pinchRef.current.startZoom * ratio))));
+          }
+      };
+      const onEnd = (e: TouchEvent) => {
+          if (e.touches.length < 2) pinchRef.current.active = false;
+          // Reset the multi-touch flag only after the event settles, so the React touchend handler
+          // (swipe detection) still sees it was a pinch and skips the page turn.
+          if (e.touches.length === 0) setTimeout(() => { multiTouchRef.current = false; }, 0);
+      };
+
+      el.addEventListener('touchstart', onStart, { passive: false });
+      el.addEventListener('touchmove', onMove, { passive: false });
+      el.addEventListener('touchend', onEnd);
+      el.addEventListener('touchcancel', onEnd);
+      return () => {
+          el.removeEventListener('touchstart', onStart);
+          el.removeEventListener('touchmove', onMove);
+          el.removeEventListener('touchend', onEnd);
+          el.removeEventListener('touchcancel', onEnd);
+      };
+  }, [loading, settings.readingMode]);
 
   const handleLeftClick = (e: React.MouseEvent) => { e.stopPropagation(); if (settings.readingMode === 'rtl') nextPage(); else prevPage(); };
   const handleRightClick = (e: React.MouseEvent) => { e.stopPropagation(); if (settings.readingMode === 'rtl') prevPage(); else nextPage(); };
@@ -450,14 +541,13 @@ function ReaderContent() {
       if (settings.scaleType === 'screen') imgClass += ' w-full h-full object-contain';
       if (settings.scaleType === 'fit-height') imgClass += isDouble ? ' h-full max-w-[50%] object-contain' : ' h-full max-w-full object-contain';
       if (settings.scaleType === 'fit-width') imgClass += ' w-full h-auto object-contain';
-      if (settings.scaleType === 'fit-width-shrink') imgClass += ' max-w-full h-auto object-contain';
       if (settings.scaleType === 'original') imgClass += ' w-auto h-auto max-w-none max-h-none';
   }
 
   // Combine scaling style with CSS Image Filters for Brightness/Contrast
   const imgStyle: React.CSSProperties = isZoomed ? {
       height: (settings.scaleType === 'fit-height' || settings.scaleType === 'screen' || settings.scaleType === 'original') ? `${zoomLevel}vh` : 'auto',
-      width: (settings.scaleType === 'fit-width' || settings.scaleType === 'fit-width-shrink') ? (isDouble ? `${zoomLevel / 2}vw` : `${zoomLevel}vw`) : 'auto',
+      width: settings.scaleType === 'fit-width' ? (isDouble ? `${zoomLevel / 2}vw` : `${zoomLevel}vw`) : 'auto',
   } : {};
 
   if (settings.brightness !== 100 || settings.contrast !== 100) {
@@ -487,10 +577,10 @@ function ReaderContent() {
             {/* Zoom Controls */}
             {settings.readingMode !== 'webtoon' && (
                 <div className="hidden md:flex items-center bg-white/10 rounded-md border border-white/20 p-0.5 ml-4">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20" onClick={() => setZoomLevel(z => Math.max(z - 10, 50))}><ZoomOut className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" aria-label="Zoom out" className="h-8 w-8 text-white hover:bg-white/20" onClick={() => setZoomLevel(z => Math.max(z - 10, 50))}><ZoomOut className="w-4 h-4" /></Button>
                     <span className="text-white text-xs font-mono w-12 text-center">{zoomLevel}%</span>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20" onClick={() => setZoomLevel(100)}><Search className="w-3.5 h-3.5" /></Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20" onClick={() => setZoomLevel(z => Math.min(z + 10, 300))}><ZoomIn className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" aria-label="Reset zoom" className="h-8 w-8 text-white hover:bg-white/20" onClick={() => setZoomLevel(100)}><Search className="w-3.5 h-3.5" /></Button>
+                    <Button variant="ghost" size="icon" aria-label="Zoom in" className="h-8 w-8 text-white hover:bg-white/20" onClick={() => setZoomLevel(z => Math.min(z + 10, 300))}><ZoomIn className="w-4 h-4" /></Button>
                 </div>
             )}
         </div>
@@ -566,13 +656,15 @@ function ReaderContent() {
                   onClick={handleClickCanvas}
               >
                   {/* Current Page */}
-                  <img 
-                      key={`p1-${currentIndex}`} 
-                      src={getPageUrl(pages[currentIndex])} 
-                      style={imgStyle} 
-                      className={imgClass} 
-                      alt="Page" 
-                      draggable={false} 
+                  <img
+                      key={`p1-${currentIndex}`}
+                      src={getPageUrl(pages[currentIndex])}
+                      style={imgStyle}
+                      className={imgClass}
+                      alt={`Page ${currentIndex + 1}`}
+                      draggable={false}
+                      onLoad={() => setPageLoadError(false)}
+                      onError={() => setPageLoadError(true)}
                   />
                   
                   {/* Optional Second Page */}
@@ -591,9 +683,19 @@ function ReaderContent() {
               {/* HOVER CLICK ZONES (Disabled when zooming to not interfere with panning) */}
               {!isZoomed && (
                   <>
-                      <div className={`absolute inset-y-0 left-0 w-[25%] z-20 ${hideCursor ? 'cursor-none' : 'cursor-pointer'}`} onClick={handleLeftClick} title={settings.readingMode === 'rtl' ? "Next" : "Previous"} />
-                      <div className={`absolute inset-y-0 right-0 w-[25%] z-20 ${hideCursor ? 'cursor-none' : 'cursor-pointer'}`} onClick={handleRightClick} title={settings.readingMode === 'rtl' ? "Previous" : "Next"} />
+                      <button type="button" aria-label={settings.readingMode === 'rtl' ? "Next page" : "Previous page"} className={`absolute inset-y-0 left-0 w-[25%] z-20 bg-transparent border-0 p-0 ${hideCursor ? 'cursor-none' : 'cursor-pointer'}`} onClick={handleLeftClick} title={settings.readingMode === 'rtl' ? "Next" : "Previous"} />
+                      <button type="button" aria-label={settings.readingMode === 'rtl' ? "Previous page" : "Next page"} className={`absolute inset-y-0 right-0 w-[25%] z-20 bg-transparent border-0 p-0 ${hideCursor ? 'cursor-none' : 'cursor-pointer'}`} onClick={handleRightClick} title={settings.readingMode === 'rtl' ? "Previous" : "Next"} />
                   </>
+              )}
+
+              {/* PAGE LOAD ERROR OVERLAY */}
+              {pageLoadError && (
+                  <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 bg-black/70 text-white p-6 text-center">
+                      <p className="font-bold text-sm max-w-sm">This page couldn&apos;t be loaded — it may be missing or corrupt in the archive.</p>
+                      {currentIndex < pages.length - 1 && (
+                          <Button className="bg-primary text-primary-foreground font-bold" onClick={() => nextPage()}>Skip Page</Button>
+                      )}
+                  </div>
               )}
           </div>
       )}
@@ -744,7 +846,6 @@ function ReaderContent() {
                                       <SelectItem value="screen" className="focus:bg-primary/10 focus:text-primary">Screen (Fit Best)</SelectItem>
                                       <SelectItem value="fit-height" className="focus:bg-primary/10 focus:text-primary">Fit Height</SelectItem>
                                       <SelectItem value="fit-width" className="focus:bg-primary/10 focus:text-primary">Fit Width</SelectItem>
-                                      <SelectItem value="fit-width-shrink" className="focus:bg-primary/10 focus:text-primary">Fit Width (Shrink Only)</SelectItem>
                                       <SelectItem value="original" className="focus:bg-primary/10 focus:text-primary">Original Size</SelectItem>
                                   </SelectContent>
                               </Select>

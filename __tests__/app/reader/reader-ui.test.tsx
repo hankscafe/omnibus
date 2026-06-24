@@ -47,7 +47,7 @@ describe('Component: Reader UI', () => {
 
         // Wait for the component to finish loading to prevent act(...) warnings from background state updates
         await waitFor(() => {
-            expect(screen.getByAltText('Page')).toBeInTheDocument();
+            expect(screen.getByAltText(/^Page \d+$/)).toBeInTheDocument();
         });
     });
 
@@ -56,7 +56,7 @@ describe('Component: Reader UI', () => {
 
         // Wait for pages to load and the image to render
         await waitFor(() => {
-            expect(screen.getByAltText('Page')).toBeInTheDocument();
+            expect(screen.getByAltText(/^Page \d+$/)).toBeInTheDocument();
         });
 
         // Ensure we start on Page 1 (Using getAllByText because it exists in the toast AND scrubber)

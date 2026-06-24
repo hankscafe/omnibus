@@ -11,6 +11,12 @@ import { JUNK_WORDS as junkWords } from '@/lib/utils/search-terms';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
+// In-process re-entrancy guard for the 60s download checker. A completed download triggers an in-process
+// importRequest (copy + CBR→CBZ WebP conversion) that can run well past 60s for a large issue; without
+// this, the next tick would re-fire the importer for the still-DOWNLOADING request and copy duplicate
+// files. (The DB JobLock's 55s staleness window is shorter than a slow import, so it can't prevent this alone.)
+let downloadCheckerRunning = false;
+
 async function acquireLock(lockId: string, timeoutMs: number): Promise<boolean> {
     const cutoff = new Date(Date.now() - timeoutMs);
     try {
@@ -53,10 +59,13 @@ export function initCronJobs() {
 
   // Keep the 60-second Download Checker running independently
   setInterval(async () => {
-    const locked = await acquireLock('CRON_DOWNLOAD_CHECKER', 55000); 
-    if (!locked) return;
+    if (downloadCheckerRunning) return; // a prior cycle (e.g. a slow import) is still in flight
+    downloadCheckerRunning = true;
 
     try {
+      const locked = await acquireLock('CRON_DOWNLOAD_CHECKER', 55000);
+      if (!locked) return;
+
       const stalledRequests = await prisma.request.findMany({
         where: { status: 'STALLED', retryCount: { lt: 3 } }
       });
@@ -314,6 +323,8 @@ export function initCronJobs() {
 
     } catch (error: unknown) {
       Logger.log(`[Cron] Download Checker Error: ${getErrorMessage(error)}`, 'error');
+    } finally {
+      downloadCheckerRunning = false;
     }
-  }, 60000); 
+  }, 60000);
 }

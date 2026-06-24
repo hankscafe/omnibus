@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { decryptSecret } from '@/lib/encryption';
 
 export async function GET() {
   try {
@@ -20,7 +21,10 @@ export async function GET() {
         if (h.key && h.value) headers[h.key.trim()] = h.value.trim();
     });
 
-    for (const client of clients) {
+    for (const rawClient of clients) {
+        // Credentials are encrypted at rest; decrypt into a local copy before contacting the client
+        // (otherwise SABnzbd/qBittorrent auth fails and the poller "times out", leaving the UI at 0%).
+        const client = { ...rawClient, pass: await decryptSecret(rawClient.pass), apiKey: await decryptSecret(rawClient.apiKey) };
         const cleanUrl = client.url?.replace(/\/$/, "");
         if (!cleanUrl) continue;
 

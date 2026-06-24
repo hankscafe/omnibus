@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { prisma } from '@/lib/db';

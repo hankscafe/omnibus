@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   FolderOpen, HardDrive, Save, Cloud, CheckCircle, Loader2, Key, ArrowLeft, 
-  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, Bell, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit, Server, ArrowUp, ArrowDown,
+  XCircle, RefreshCw, Plus, Settings, Shield, Trash2, Zap, Download, Filter, Webhook, Copy, AlertCircle, Send, Fingerprint, CheckCircle2, X, Database, FileText, Mail, FileEdit, Server, ArrowUp, ArrowDown,
   Folder,
   Clock,
   Smartphone,

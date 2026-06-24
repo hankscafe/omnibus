@@ -7,7 +7,6 @@ import { Logger } from './logger';
 import { resolveRemotePath } from './utils/path-resolver'; 
 import axios from 'axios';
 import { SystemNotifier } from './notifications';
-import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';

@@ -3,7 +3,6 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
@@ -13,8 +12,8 @@ import { useToast } from "@/components/ui/use-toast"
 import { 
     ArrowLeft, Trash2, Terminal, History, Loader2, Download, Eye, 
     Clock, AlertTriangle, CheckCircle2, ShieldAlert, Database, 
-    RefreshCw, Activity, Search, CalendarMinus, Shield,
-    ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileText
+    RefreshCw, Activity, CalendarMinus, Shield,
+    ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from "lucide-react"
 import Link from "next/link"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"

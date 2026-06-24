@@ -1,8 +1,6 @@
 // __tests__/api/opds-streaming.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GET } from '@/app/api/opds/page/[issueId]/[pageIndex]/route';
-import * as apiAuth from '@/lib/api-auth';
-import fs from 'fs';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({

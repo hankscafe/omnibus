@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runSystemHealthCheck } from '@/lib/health-checker';
 import fs from 'fs-extra';
 

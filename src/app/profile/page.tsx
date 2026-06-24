@@ -18,7 +18,7 @@ import {
   User as UserIcon, Upload, Loader2, ListOrdered, CheckCircle2, 
   Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, 
   Trophy, History, Palette, Check, ImageIcon, Trash2, ChevronLeft, 
-  ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Webhook, Copy, 
+  ChevronRight, ShieldCheck, ShieldAlert, Key, LogOut, Copy,
   Plus, Smartphone, TabletSmartphone, Wifi, Flame, BookType, Sparkles, Layers,
   ChevronDown, ChevronUp, Settings, Server, Library
 } from "lucide-react"

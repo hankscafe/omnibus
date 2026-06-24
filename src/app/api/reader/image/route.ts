@@ -4,7 +4,6 @@ import path from 'path';
 import AdmZip from 'adm-zip';
 import sharp from 'sharp';
 import crypto from 'crypto';
-import os from 'os';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';

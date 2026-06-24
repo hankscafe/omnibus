@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, Image as ImageIcon, Library } from "lucide-react"; 
+import { Image as ImageIcon, Library } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function RecommendationsShelf() {

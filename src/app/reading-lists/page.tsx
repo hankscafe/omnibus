@@ -6,7 +6,7 @@ import { useSession } from "next-auth/react"
 import { useSearchParams } from "next/navigation"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
@@ -14,8 +14,8 @@ import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
-    BookOpen, Trash2, Plus, GripVertical, Loader2, Image as ImageIcon, 
-    ArrowLeft, ListOrdered, Calendar, Minus, FolderOpen, CloudDownload,
+    BookOpen, Trash2, Plus, GripVertical, Loader2,
+    ArrowLeft, ListOrdered, Minus, FolderOpen, CloudDownload,
     Check, DownloadCloud, Sparkles, Globe, ExternalLink, Share2, Info,
     ChevronDown, ChevronUp, LayoutList, List
 } from "lucide-react"

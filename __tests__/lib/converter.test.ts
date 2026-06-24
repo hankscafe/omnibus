@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { repackArchive } from '@/lib/converter';
-import fs from 'fs-extra';
 import sharp from 'sharp';
 
 // 1. Hoist the mocks

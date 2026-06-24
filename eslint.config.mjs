@@ -30,7 +30,8 @@ const eslintConfig = [
       "@typescript-eslint/no-unused-vars": ["warn", {
         argsIgnorePattern: "^_",
         varsIgnorePattern: "^_",
-        caughtErrorsIgnorePattern: "^_",
+        // Don't flag unused `catch (e)` bindings — `catch (e) {}` is idiomatic and not dead code.
+        caughtErrors: "none",
       }],
       "react/no-unescaped-entities": "warn",
     },

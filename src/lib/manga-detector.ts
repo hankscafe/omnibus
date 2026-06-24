@@ -6,7 +6,6 @@ import { XMLParser } from 'fast-xml-parser';
 import { Logger } from './logger';
 import { getErrorMessage } from './utils/error';
 import { prisma } from './db';
-import { title } from 'process';
 
 // Default Internal Publisher Dictionary Fallbacks
 const DEFAULT_MANGA_PUBLISHERS = [

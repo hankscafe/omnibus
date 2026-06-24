@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DownloadService } from '@/lib/download-clients';
-import axios from 'axios';
 import FormData from 'form-data'; // <-- We import this so we can spy on it!
 
 // 1. Hoist the mocks safely

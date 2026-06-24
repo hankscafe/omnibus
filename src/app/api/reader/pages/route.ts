@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
-import path from 'path';
 import AdmZip from 'adm-zip';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';

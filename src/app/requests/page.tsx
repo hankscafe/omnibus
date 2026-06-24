@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { 
-  Loader2, Search, RefreshCw, Clock, CheckCircle2, Calendar, FileText, 
+  Loader2, Search, RefreshCw, CheckCircle2, Calendar, FileText,
   ChevronLeft, ChevronRight, Info, List, ImageIcon, Server, XCircle, Library,
   CheckSquare, Square, ExternalLink
 } from "lucide-react"

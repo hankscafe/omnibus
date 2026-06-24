@@ -7,12 +7,11 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { 
-  BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
+  BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType
+  Dices, Clock, X, FolderSearch, Globe, BookType
 } from "lucide-react"
-import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
@@ -22,7 +21,6 @@ import { useToast } from "@/components/ui/use-toast"
 import { Switch } from "@/components/ui/switch"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { InteractiveSearchModal } from "@/components/interactive-search-modal"
 
 interface Comic {
   id: string; // Prisma ID
@@ -73,7 +71,6 @@ interface Collection {
   user?: { username: string } | null;
 }
 
-type StatusType = 'LIBRARY_MONITORED' | 'LIBRARY_UNMONITORED' | 'ISSUE_OWNED' | 'REQUESTED' | 'PENDING_APPROVAL' | null;
 
 function LibrarySkeleton({ count = 24 }: { count?: number }) {
   return (

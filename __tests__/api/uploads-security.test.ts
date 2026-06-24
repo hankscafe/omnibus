@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GET } from '@/app/api/uploads/[...path]/route';
 import { NextRequest } from 'next/server';
-import fs from 'fs';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({

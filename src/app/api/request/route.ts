@@ -5,7 +5,6 @@ import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import axios from 'axios';
 import path from 'path';
-import fs from 'fs';
 import { SystemNotifier } from '@/lib/notifications';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
 import { detectManga } from '@/lib/manga-detector'; 
@@ -16,7 +15,6 @@ import { syncSeriesMetadata } from '@/lib/metadata-fetcher';
 import { AuditLogger } from '@/lib/audit-logger';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
-import { omnibusQueue } from '@/lib/queue';
 
 export const dynamic = 'force-dynamic';
 

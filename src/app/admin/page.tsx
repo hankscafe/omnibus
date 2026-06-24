@@ -1,7 +1,7 @@
 // src/app/admin/page.tsx
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { JUNK_WORDS as junkWords } from "@/lib/utils/search-terms"
 import { 
-  TrendingUp, Download, HardDrive, ArrowRight, Loader2, RefreshCw, 
+  TrendingUp, Download, HardDrive, Loader2, RefreshCw,
   AlertTriangle, Users, CheckCircle2, Activity, XCircle, 
   Settings, Trophy, Calendar, FileText, ExternalLink, Clock, Trash2,
   ThumbsUp, ThumbsDown, ImageIcon, EyeOff, Sparkles, ShieldAlert, BarChart3,

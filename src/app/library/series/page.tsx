@@ -1,14 +1,14 @@
 // src/app/library/series/page.tsx
 "use client"
 
-import { useState, useEffect, useTransition, Suspense, useMemo } from "react"
+import { useState, useEffect, Suspense, useMemo } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { 
   ChevronLeft, BookOpen, Layers, Loader2, Image as ImageIcon, 
-  Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
+  PenTool, Paintbrush, Download, ExternalLink,
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,

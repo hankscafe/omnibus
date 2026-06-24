@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PUT } from '@/app/api/koreader/syncs/progress/route';
-import crypto from 'crypto';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({

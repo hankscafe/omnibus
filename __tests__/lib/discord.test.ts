@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DiscordNotifier } from '@/lib/discord';
+import { DiscordNotifier, resolveDiscordThumbnail } from '@/lib/discord';
 import axios from 'axios';
 
 // 1. Hoist the mocks
@@ -69,5 +69,23 @@ describe('Notifications: Discord Webhooks', () => {
         // Omnibus should truncate it down to 250 characters (247 + "...")
         expect(descField.value.length).toBeLessThanOrEqual(255);
         expect(descField.value.endsWith('...')).toBe(true);
+    });
+});
+
+describe('resolveDiscordThumbnail', () => {
+    it('passes through an absolute http(s) URL', () => {
+        expect(resolveDiscordThumbnail('https://comicvine.gamespot.com/a/uploads/cover.jpg'))
+            .toBe('https://comicvine.gamespot.com/a/uploads/cover.jpg');
+    });
+
+    it('unwraps the cover proxy to its absolute original (the download_failed 400 fix)', () => {
+        const original = 'https://comicvine.gamespot.com/a/uploads/scale_medium/11/110017/9541318-wwww.jpg';
+        const proxied = `/api/library/cover?path=${encodeURIComponent(original)}`;
+        expect(resolveDiscordThumbnail(proxied)).toBe(original);
+    });
+
+    it('drops a proxy that wraps a local file path (not reachable by Discord) rather than send a relative URL', () => {
+        expect(resolveDiscordThumbnail(`/api/library/cover?path=${encodeURIComponent('/library/Marvel/Wolverine/cover.jpg')}`)).toBeNull();
+        expect(resolveDiscordThumbnail('/api/library/cover?path=cover.jpg')).toBeNull();
     });
 });

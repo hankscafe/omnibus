@@ -95,19 +95,35 @@ describe('Core Logic: Automation Engine', () => {
         }));
     });
 
-    it('accepts a getcomics_main direct download (regression: getcomics_direct/getcomics_main migration)', async () => {
+    it('auto-downloads a getcomics_direct CDN link via the internal downloader', async () => {
         // The hoster taxonomy was split from a single `getcomics` key into `getcomics_direct` +
-        // `getcomics_main`. scrapeDeepLink returns the new keys; the automation gate must recognize them,
-        // or every GetComics DDL is wrongly rejected as "unsupported" and dumped onto the indexers.
+        // `getcomics_main`. scrapeDeepLink returns the new keys; the automation gate must recognize
+        // getcomics_direct (clean CDN) so it isn't wrongly rejected as "unsupported" and dumped onto indexers.
         vi.mocked(GetComicsService.search).mockResolvedValueOnce([{ title: 'Batman #01 (2024)', downloadUrl: 'http://getcomics/123' } as any]);
-        vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'https://getcomics.org/dls/abc', isDirect: true, hoster: 'getcomics_main' });
+        vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'https://cdn.getcomics.org/file.cbz', isDirect: true, hoster: 'getcomics_direct' });
 
         await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
 
         expect(DownloadService.downloadDirectFile).toHaveBeenCalledWith(
-            'https://getcomics.org/dls/abc', 'Batman #01 (2024)', '/downloads', 'req_1', 'getcomics_main'
+            'https://cdn.getcomics.org/file.cbz', 'Batman #01 (2024)', '/downloads', 'req_1', 'getcomics_direct'
         );
         expect(DownloadService.addDownload).not.toHaveBeenCalled();
+    });
+
+    it('routes a getcomics_main /dls/ link to MANUAL_DDL instead of a Cloudflare-doomed direct download', async () => {
+        // getcomics.org/dls/ links are Cloudflare-protected; a Node Internal DL always 403s (no FlareSolverr).
+        // So getcomics_main must NOT be dispatched to downloadDirectFile — it's held as a manual link, Prowlarr
+        // gets a shot, and it ends as a one-click MANUAL_DDL when the indexers come up empty (the Wolverine #3 fix).
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([{ title: 'Wolverine #3 (2024)', downloadUrl: 'http://getcomics/123' } as any]);
+        vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'https://getcomics.org/dls/abc', isDirect: true, hoster: 'getcomics_main' });
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValue([]); // indexers empty → revert to the held manual link
+
+        await executeSearchAndDownload('req_1', 'Wolverine', '2024', 'Marvel');
+
+        expect(DownloadService.downloadDirectFile).not.toHaveBeenCalled();
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'MANUAL_DDL', downloadLink: 'https://getcomics.org/dls/abc' })
+        }));
     });
 
     it('rejects an off-target indexer release (wrong series/issue) instead of grabbing it', async () => {

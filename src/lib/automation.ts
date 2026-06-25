@@ -218,7 +218,14 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
             const { url, hoster } = deepLink;
             const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
             
-            if (enabledHosters.includes(hoster)) {
+            // getcomics_main is the Cloudflare-protected getcomics.org/dls/ link. Node can't pass the CF
+            // challenge (auto-FlareSolverr streaming was engine-only), so an Internal DL always 403s — exactly
+            // the Wolverine #3 failure. Treat it as manual-only: hold the link, let Prowlarr try for an auto
+            // grab, and end as a one-click MANUAL_DDL if the indexers come up empty. getcomics_direct (clean
+            // CDN) still auto-downloads. (Before beta.051 BOTH were unrecognized and fell to this branch; the
+            // hoster-gate fix correctly enabled getcomics_direct but also started dispatching getcomics_main.)
+            const isCloudflareMain = hoster === 'getcomics_main';
+            if (enabledHosters.includes(hoster) && !isCloudflareMain) {
               const settings = await prisma.systemSetting.findMany();
               const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
               
@@ -249,7 +256,10 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                 
               return; 
             } else {
-              Logger.log(`[Automation] [GetComics] Best match was an unsupported/disabled hoster (${hoster}). Holding manual link and falling back to Prowlarr...`, 'warn');
+              const reason = isCloudflareMain
+                  ? `a Cloudflare-protected getcomics_main /dls/ link (not auto-downloadable in Node)`
+                  : `an unsupported/disabled hoster (${hoster})`;
+              Logger.log(`[Automation] [GetComics] Best match is ${reason}. Holding manual link and falling back to Prowlarr...`, 'warn');
               fallbackManualUrl = url; fallbackManualName = safeTitle;
             }
       } else {

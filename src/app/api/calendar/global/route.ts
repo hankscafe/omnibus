@@ -6,6 +6,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { findLocalSeriesMatch } from '@/lib/utils/series-match';
 
 export async function GET(request: Request) {
     try {
@@ -30,8 +31,8 @@ export async function GET(request: Request) {
         const endDateStr = end.toISOString().split('T')[0];
         const todayStr = today.toISOString().split('T')[0];
         
-        // --- BUMP CACHE TO v15 TO INCLUDE MONITORED/LIBRARY STATUS ---
-        const cacheKey = `calendar_global_v15_${todayStr}_offset_${weekOffset}`;
+        // --- BUMP CACHE TO v16: year-aware library/monitored matching (recompute stale v15 entries) ---
+        const cacheKey = `calendar_global_v16_${todayStr}_offset_${weekOffset}`;
         
         const cache = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
 
@@ -107,7 +108,7 @@ export async function GET(request: Request) {
         }
 
         const localSeries = await prisma.series.findMany({
-            select: { id: true, name: true, publisher: true, metadataId: true, metadataSource: true, monitored: true }
+            select: { id: true, name: true, year: true, publisher: true, metadataId: true, metadataSource: true, monitored: true }
         });
         
         const nameToPubMap = new Map<string, string>();
@@ -117,20 +118,27 @@ export async function GET(request: Request) {
             }
         });
 
+        // Each release → the local series it resolved to, recorded so the monitored block below reuses the
+        // SAME year-aware match (the badge and the auto-created WANTED rows can never land on different volumes).
+        const releaseMatches = new Map<object, (typeof localSeries)[number] | null>();
+
         const formattedReleases = allIssues.map(issue => {
             const rawSeriesName = typeof issue.series === 'object' ? issue.series?.name : issue.series;
             const seriesName = rawSeriesName ? rawSeriesName.trim() : "Unknown";
             const normalizedName = seriesName.toLowerCase();
-            
-            const localMatch = localSeries.find(s => s.name.toLowerCase().trim() === normalizedName);
+            const releaseYear = issue.series?.year_began ? parseInt(issue.series.year_began, 10) : null;
+
+            // Name is the only cross-provider key (Metron pull list vs ComicVine library), but resolve it
+            // year-aware so an owned "X-Men (2019)" doesn't flag a new "X-Men (2024)" release as in-library.
+            const localMatch = findLocalSeriesMatch(localSeries, seriesName, releaseYear);
             const volumeId = localMatch ? localMatch.metadataId : (typeof issue.series === 'object' ? issue.series?.id : null);
-            const metadataSource = localMatch ? localMatch.metadataSource : 'METRON'; 
+            const metadataSource = localMatch ? localMatch.metadataSource : 'METRON';
             const publisher = nameToPubMap.get(normalizedName) || localMatch?.publisher || "Unknown";
 
-            return {
+            const release = {
                 id: issue.id,
                 volumeId: volumeId,
-                metadataSource: metadataSource, 
+                metadataSource: metadataSource,
                 seriesName: seriesName,
                 issueNumber: issue.number || issue.issue || "1",
                 publisher: publisher,
@@ -141,6 +149,8 @@ export async function GET(request: Request) {
                 monitored: localMatch?.monitored || false,
                 inLibrary: !!localMatch
             };
+            releaseMatches.set(release, localMatch);
+            return release;
         });
 
         const monitoredSeries = localSeries.filter(s => s.monitored);
@@ -152,8 +162,10 @@ export async function GET(request: Request) {
 
             const issuesToCreate: any[] = [];
             for (const release of formattedReleases) {
-                const matchedSeries = monitoredSeries.find(s => s.name.toLowerCase().trim() === release.seriesName.toLowerCase().trim());
-                if (matchedSeries) {
+                // Reuse the badge's year-aware resolution — never auto-create a WANTED row on a same-named
+                // wrong volume (e.g. a new "X-Men (2024)" landing under a monitored "X-Men (2019)").
+                const matchedSeries = releaseMatches.get(release);
+                if (matchedSeries && matchedSeries.monitored) {
                     const alreadyExists = existingIssues.some(i => i.seriesId === matchedSeries.id && parseFloat(i.number) === parseFloat(release.issueNumber));
                     if (!alreadyExists) {
                         issuesToCreate.push({
@@ -186,12 +198,12 @@ export async function GET(request: Request) {
         oldDate.setUTCDate(today.getUTCDate() - 1);
         const oldDateStr = oldDate.toISOString().split('T')[0];
         
-        await prisma.systemSetting.deleteMany({ 
-            where: { key: { startsWith: `calendar_global_v14_` } } 
+        await prisma.systemSetting.deleteMany({
+            where: { key: { startsWith: `calendar_global_v15_` } }
         }).catch(()=>{});
-        
-        await prisma.systemSetting.deleteMany({ 
-            where: { key: { startsWith: `calendar_global_v15_${oldDateStr}` } } 
+
+        await prisma.systemSetting.deleteMany({
+            where: { key: { startsWith: `calendar_global_v16_${oldDateStr}` } }
         }).catch(()=>{});
 
         return NextResponse.json({ startDate: startDateStr, endDate: endDateStr, releases: formattedReleases });

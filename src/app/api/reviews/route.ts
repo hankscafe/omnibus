@@ -37,13 +37,18 @@ export async function POST(request: Request) {
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { seriesId, rating, text } = await request.json();
-    if (!seriesId || !rating) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
+    const ratingNum = Number(rating);
+    // The 1-5 star UI can be bypassed with a raw request and the schema's `rating Int` has no CHECK, so a
+    // crafted value (9999 / -50) would skew the displayed average. Validate the bounds here.
+    if (!seriesId || !Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+        return NextResponse.json({ error: "A rating from 1 to 5 is required." }, { status: 400 });
+    }
 
     try {
         const review = await prisma.review.upsert({
             where: { userId_seriesId: { userId, seriesId } },
-            update: { rating, text },
-            create: { userId, seriesId, rating, text }
+            update: { rating: ratingNum, text },
+            create: { userId, seriesId, rating: ratingNum, text }
         });
         return NextResponse.json({ success: true, review });
     } catch (error: unknown) {

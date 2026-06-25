@@ -19,6 +19,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { isComicFile, COMIC_EXTENSIONS } from "@/lib/utils/formats"
 import { UploadCloud, FileText, X, Check, Loader2, AlertCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { formatBytes } from "@/lib/utils/format"
 
 type Destination = "watched" | "unmatched"
 type ItemStatus = "queued" | "uploading" | "done" | "error"
@@ -33,13 +34,6 @@ interface UploadItem {
 }
 
 const ACCEPT = COMIC_EXTENSIONS.join(",")
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 // Upload one file as the raw request body, reporting progress via the resolver's callback.
 function uploadOne(

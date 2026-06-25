@@ -121,11 +121,12 @@ export async function PUT(request: Request) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
   
-        // Update all orders efficiently in a single transaction
+        // Update all orders in one transaction, scoping each update to the verified listId so a caller can't
+        // reorder items in another user's list by submitting foreign item ids (the id is a global cuid).
         await prisma.$transaction(
             items.map((item: any) =>
-                prisma.readingListItem.update({
-                    where: { id: item.id },
+                prisma.readingListItem.updateMany({
+                    where: { id: item.id, listId },
                     data: { order: item.order }
                 })
             )

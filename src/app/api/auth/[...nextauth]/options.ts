@@ -96,7 +96,10 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
               if (!credentials.totpCode || credentials.totpCode === "undefined" || credentials.totpCode.trim() === "") throw new Error("2FA_REQUIRED"); 
               const decryptedSecret = await decrypt2FA(user.twoFactorSecret);
               const isValid = typeof authenticator.verify === 'function' ? authenticator.verify({ token: credentials.totpCode, secret: decryptedSecret }) : authenticator.check(credentials.totpCode, decryptedSecret);
-              if (!isValid) handleFailedAttempt();
+              // A wrong TOTP after a CORRECT password is a distinct failure: don't increment the password
+              // lockout (a few mistyped codes must not lock a verified-password account) and don't report
+              // "invalid username or password". The login UI maps '2FA_INVALID' onto the 2FA screen.
+              if (!isValid) throw new Error("2FA_INVALID");
           }
           loginAttempts.delete(input);
           return { id: user.id, name: user.username, email: user.email, role: user.role, autoApproveRequests: user.autoApproveRequests, canDownload: user.canDownload, canCreateGlobalLists: user.canCreateGlobalLists, image: user.avatar, sessionVersion: user.sessionVersion };

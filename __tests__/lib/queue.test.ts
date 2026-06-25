@@ -37,10 +37,11 @@ vi.mock('@/lib/db', () => ({
         series: { findMany: mocks.seriesFindMany, update: mocks.seriesUpdate },
         issue: { findMany: mocks.issueFindMany },
         user: { findMany: mocks.userFindMany },
-        digestHistory: { 
-            deleteMany: vi.fn(), 
-            findMany: vi.fn().mockResolvedValue([]), 
-            create: mocks.digestHistoryCreate 
+        digestHistory: {
+            deleteMany: vi.fn(),
+            findMany: vi.fn().mockResolvedValue([]),
+            create: mocks.digestHistoryCreate,
+            createMany: mocks.digestHistoryCreate
         }
     }
 }));

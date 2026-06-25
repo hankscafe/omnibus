@@ -17,7 +17,7 @@ import { omnibusQueue } from '@/lib/queue';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
-import { UNMATCHED_DIR, CONFIG_DIR } from '@/lib/utils/paths';
+import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 import { safeRelocateFolder } from '@/lib/utils/safe-fs';
 
 export async function POST(request: Request) {
@@ -41,13 +41,11 @@ export async function POST(request: Request) {
 
     const libraries = await prisma.library.findMany();
     const unmatchedDir = UNMATCHED_DIR;
-    const authorizedRoots = libraries.map(l => path.normalize(l.path).toLowerCase());
-    authorizedRoots.push(path.normalize(unmatchedDir).toLowerCase());
-    
-    const normalizedOld = path.normalize(oldFolderPath).toLowerCase();
-    
-    const isAuthorized = authorizedRoots.some(root => normalizedOld.startsWith(root));
-    if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
+
+    // Separator-safe containment so a sibling-prefix path can't pass (consistency with cover/reader routes).
+    if (!isPathWithinRoots(oldFolderPath, [...libraries.map(l => l.path), unmatchedDir])) {
+        return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
+    }
     if (!fs.existsSync(oldFolderPath)) return NextResponse.json({ error: "File/Folder not found." }, { status: 404 });
 
     let realPublisher = publisher && publisher !== 'Unknown' && publisher !== 'Other' ? publisher : '';

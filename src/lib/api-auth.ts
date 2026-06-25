@@ -28,7 +28,10 @@ export async function validateApiKey(req: Request) {
     const apiKeyQuery = url.searchParams.get('apiKey')?.trim();
 
     const providedKey = apiKeyHeader || tokenFromBearer || basicAuthPassword || apiKeyQuery;
-    
+    // A key supplied ONLY via ?apiKey= leaks to proxy logs / browser history / Referer. The read-only OPDS
+    // path may use it, but an ADMIN/LEGACY admin key must never be accepted from the query string.
+    const fromQueryOnly = !!apiKeyQuery && !apiKeyHeader && !tokenFromBearer && !basicAuthPassword;
+
     if (!providedKey) {
         Logger.log(`[API Auth Debug] Authentication rejected: No token found in headers or query parameters.`, 'debug');
         return { valid: false, user: null, keyType: null };
@@ -45,6 +48,10 @@ export async function validateApiKey(req: Request) {
         });
 
         if (adminKey) {
+            if (fromQueryOnly) {
+                Logger.log(`[API Auth Debug] Rejected ADMIN key supplied via query string (use a header).`, 'warn');
+                return { valid: false, user: null, keyType: null, error: "Admin API keys must be sent in a header, not the URL." };
+            }
             Logger.log(`[API Auth Debug] Key matched ADMIN scope (User: ${adminKey.user.username})`, 'debug');
             if (adminKey.expiresAt && new Date() > adminKey.expiresAt) {
                 Logger.log(`[API Auth Debug] Key validation failed: Key has expired`, 'debug');
@@ -82,6 +89,10 @@ export async function validateApiKey(req: Request) {
             const provided = Buffer.from(keyHash, 'hex');
             const legacy = crypto.createHash('sha256').update(legacySetting.value.trim()).digest();
             if (provided.length === legacy.length && crypto.timingSafeEqual(provided, legacy)) {
+                if (fromQueryOnly) {
+                    Logger.log(`[API Auth Debug] Rejected LEGACY admin key supplied via query string (use a header).`, 'warn');
+                    return { valid: false, user: null, keyType: null, error: "Admin API keys must be sent in a header, not the URL." };
+                }
                 return { valid: true, user: null, keyType: 'LEGACY_ADMIN' };
             }
         }

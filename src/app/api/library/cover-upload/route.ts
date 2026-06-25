@@ -12,7 +12,7 @@ import { revalidatePath, revalidateTag } from 'next/cache';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
-import { UNMATCHED_DIR } from '@/lib/utils/paths';
+import { UNMATCHED_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 
 const MAX_BYTES = 15 * 1024 * 1024; // 15MB
 
@@ -24,10 +24,10 @@ async function authorize(req: NextRequest, currentPath: unknown) {
   if (!currentPath || typeof currentPath !== 'string') return { ok: false as const, error: 'Missing path', status: 400 };
 
   const libraries = await prisma.library.findMany();
-  const roots = libraries.map(l => path.normalize(l.path).toLowerCase());
-  roots.push(path.normalize(UNMATCHED_DIR).toLowerCase());
-  const normalized = path.normalize(currentPath).toLowerCase();
-  if (!roots.some(r => normalized.startsWith(r))) return { ok: false as const, error: 'Unauthorized path access', status: 403 };
+  // Separator-safe containment (consistency with cover/reader/match-series).
+  if (!isPathWithinRoots(currentPath, [...libraries.map(l => l.path), UNMATCHED_DIR])) {
+    return { ok: false as const, error: 'Unauthorized path access', status: 403 };
+  }
   if (!fs.existsSync(currentPath)) return { ok: false as const, error: 'Folder not found', status: 404 };
 
   const series = await prisma.series.findFirst({ where: { folderPath: currentPath } });

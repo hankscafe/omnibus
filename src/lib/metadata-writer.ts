@@ -57,11 +57,15 @@ export async function writeComicInfo(issueId: string): Promise<boolean> {
         let year = issue.series.year?.toString() || '';
         let month = '';
         let day = '';
-        if (issue.releaseDate) {
-            const parts = issue.releaseDate.split('-');
-            year = parts[0] || year;
-            month = parts[1] || '';
-            day = parts[2] || '';
+        // Only accept a well-formed date; a hand-entered slash/text date would otherwise corrupt <Year>.
+        // Full ISO → Y/M/D; bare year → Year; anything else keeps the series-year fallback above.
+        const rd = issue.releaseDate ? String(issue.releaseDate) : '';
+        const isoFull = rd.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        const yearOnly = rd.match(/^(\d{4})$/);
+        if (isoFull) {
+            year = isoFull[1]; month = isoFull[2]; day = isoFull[3];
+        } else if (yearOnly) {
+            year = yearOnly[1];
         }
 
         const isCvSeries = issue.series.metadataSource === 'COMICVINE';

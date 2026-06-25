@@ -26,9 +26,10 @@ export async function POST(req: Request) {
         }
 
         const { email } = await req.json();
-        if (!email) {
+        // Validate format early (mirrors register) so a malformed value can't reach the DB query.
+        if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             rateLimit.trackFailure();
-            return NextResponse.json({ error: "Email is required" }, { status: 400 });
+            return NextResponse.json({ error: "A valid email is required" }, { status: 400 });
         }
 
         const user = await prisma.user.findFirst({ 
@@ -57,12 +58,13 @@ export async function POST(req: Request) {
         const baseUrl = process.env.NEXTAUTH_URL || `${protocol}://${host}`;
         const resetLink = `${baseUrl}/login/reset?token=${encodeURIComponent(token)}`;
 
-        // --- CHANGED: Unified Notifier Call ---
-        await SystemNotifier.sendAlert('password_reset', { 
-            email: user.email, 
-            user: user.username, 
-            resetLink 
-        });
+        // Fire-and-forget so response time doesn't reveal whether the account exists — the no-account branch
+        // above returns immediately, so awaiting SMTP/HTTP here would make the existent path observably slower.
+        SystemNotifier.sendAlert('password_reset', {
+            email: user.email,
+            user: user.username,
+            resetLink
+        }).catch(() => {});
 
         rateLimit.trackSuccess();
         return NextResponse.json({ success: true });

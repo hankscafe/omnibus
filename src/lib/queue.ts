@@ -69,9 +69,11 @@ function isNewerVersion(latest: string, current: string): boolean {
 
 async function getFolderSize(folderPath: string): Promise<number> {
     try {
-        if (!folderPath || !fs.existsSync(folderPath)) return 0;
-        Logger.log(`[Storage Scan Debug] Path invalid or missing: ${folderPath}`, 'debug');
-        
+        if (!folderPath || !fs.existsSync(folderPath)) {
+            Logger.log(`[Storage Scan Debug] Path invalid or missing: ${folderPath}`, 'debug');
+            return 0;
+        }
+
         if (process.platform !== 'win32') {
             try {
                 const { stdout } = await execFileAsync('du', ['-sb', folderPath]);
@@ -1875,9 +1877,9 @@ export function initWorker() {
                         try {
                             await Mailer.sendWeeklyDigest(toEmails, finalComics, finalManga);
                             if (recordsToSave.length > 0) {
-                                for (const record of recordsToSave) {
-                                    await prisma.digestHistory.create({ data: record });
-                                }
+                                // One INSERT for all rows so a mid-loop failure can't persist a partial set
+                                // and re-email the unrecorded issues on the next run (duplicate digest).
+                                await prisma.digestHistory.createMany({ data: recordsToSave });
                             }
                         } catch (mailErr) { 
                             throw mailErr; 

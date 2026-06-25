@@ -1,6 +1,7 @@
 // __tests__/api/import-anilist.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/reading-lists/import-anilist/route';
+import { getServerSession } from 'next-auth/next';
 
 const mocks = vi.hoisted(() => ({
     userFindUnique: vi.fn(),
@@ -88,6 +89,31 @@ describe('API Route: AniList Import', () => {
         // Verify the missing series was requested
         expect(mocks.requestCreate).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ activeDownloadName: 'Chainsaw Man' })
+        }));
+    });
+
+    it('does not let a non-privileged user delete global lists via isGlobal (cross-user data-loss fix)', async () => {
+        // A standard USER forces isGlobal=true. Permission is now resolved BEFORE the delete, so the delete
+        // must stay scoped to their own lists and the new list must be created non-global.
+        vi.mocked(getServerSession).mockResolvedValueOnce({ user: { id: 'user_1', role: 'USER' } } as any);
+        mocks.userFindUnique.mockResolvedValue({ role: 'USER', canRequest: false, canCreateGlobalLists: false });
+        mocks.seriesFindMany.mockResolvedValue([{ id: 'series_aot', name: 'Attack on Titan' }]);
+        vi.mocked(global.fetch).mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ data: { MediaListCollection: { lists: [{ name: 'Reading', entries: [{ media: { title: { english: 'Attack on Titan' } } }] }] } } })
+        } as any);
+
+        const req = new Request('http://localhost/api/reading-lists/import-anilist', {
+            method: 'POST',
+            body: JSON.stringify({ username: 'testuser', requestMissing: false, isGlobal: true })
+        });
+        await POST(req);
+
+        // Delete is scoped to the caller's OWN lists (userId), never the null-owner global bucket.
+        expect(mocks.readingListDeleteMany).toHaveBeenCalledWith({ where: { name: 'AniList: Reading', userId: 'user_1' } });
+        // ...and the created list is forced non-global.
+        expect(mocks.readingListCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ isGlobal: false, userId: 'user_1' })
         }));
     });
 });

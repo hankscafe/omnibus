@@ -22,6 +22,10 @@ import { safeRelocateFolder } from '@/lib/utils/safe-fs';
 
 export async function POST(request: Request) {
   try {
+    // Smart Matcher: provider re-match, folder relocate/merge, file renames, DB mutation, job enqueues.
+    // Middleware only role-gates /api/admin/*, so enforce admin here before any destructive work.
+    const session = await getServerSession(await getAuthOptions());
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     const req = (await request.json()) as any;
     const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber,
             universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64 } = req;
@@ -486,7 +490,6 @@ export async function POST(request: Request) {
         Logger.log(`[Match Series] Completed with ${conflicts} duplicate-file conflict(s) — left in place, not overwritten.`, 'warn');
     }
 
-    const session = await getServerSession(await getAuthOptions());
     const userId = (session?.user as any)?.id;
     if (userId) {
         await AuditLogger.log('MATCH_SERIES', { oldPath: oldFolderPath, newPath: activeFolderPath, conflicts }, userId);

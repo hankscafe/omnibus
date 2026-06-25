@@ -2,25 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/auth/reset-password/confirm/route';
 import crypto from 'crypto';
 
-// 1. Hoist the mocks
+// 1. Hoist the mocks — the route now reads sessionVersion (findUnique) and consumes the token via a
+//    conditional updateMany (single-use), so both are mocked.
 const mocks = vi.hoisted(() => ({
-    userUpdate: vi.fn(),
+    userFindUnique: vi.fn(),
+    userUpdateMany: vi.fn(),
     log: vi.fn(),
     hash: vi.fn().mockResolvedValue('new_hashed_password')
 }));
 
 // 2. Mock dependencies
 vi.mock('@/lib/db', () => ({
-    prisma: { user: { update: mocks.userUpdate } }
+    prisma: { user: { findUnique: mocks.userFindUnique, updateMany: mocks.userUpdateMany } }
 }));
 vi.mock('bcryptjs', () => ({ default: { hash: mocks.hash } }));
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn() } }));
 
-// Helper to create fake Next.js requests
+// Unique IP per request so the per-IP limiter never accumulates across tests in this file.
+let ipCounter = 0;
 const createReq = (body: any) => new Request('http://localhost/api/auth/reset-password/confirm', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '127.0.0.1' },
+    headers: { 'Content-Type': 'application/json', 'x-forwarded-for': `10.0.0.${++ipCounter}` },
     body: JSON.stringify(body)
 });
 
@@ -30,58 +33,62 @@ describe('Security: Password Reset Confirmation', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         process.env.NEXTAUTH_SECRET = TEST_SECRET;
+        mocks.userFindUnique.mockResolvedValue({ sessionVersion: 3 });
+        mocks.userUpdateMany.mockResolvedValue({ count: 1 });
     });
 
-    // Helper to generate a valid token just like your real app does
-    const generateToken = (userId: string, expiresInMs: number) => {
+    // Mirrors the route: HMAC binds sessionVersion, but the token plaintext stays id|expiration|sig.
+    const generateToken = (userId: string, expiresInMs: number, sessionVersion: number = 3) => {
         const expiration = Date.now() + expiresInMs;
-        const data = `${userId}|${expiration}`;
-        const sig = crypto.createHmac('sha256', TEST_SECRET).update(data).digest('hex');
-        return Buffer.from(`${data}|${sig}`).toString('base64');
+        const sig = crypto.createHmac('sha256', TEST_SECRET).update(`${userId}|${expiration}|${sessionVersion}`).digest('hex');
+        return Buffer.from(`${userId}|${expiration}|${sig}`).toString('base64');
     };
 
-    it('should successfully reset password with a valid, unexpired token', async () => {
-        const validToken = generateToken('user_123', 3600000); // Expires in 1 hour
-        const req = createReq({ token: validToken, password: 'NewSecurePassword123!' });
-
-        const res = await POST(req);
+    it('resets the password with a valid, unexpired token via a conditional (single-use) update', async () => {
+        const res = await POST(createReq({ token: generateToken('user_123', 3600000), password: 'NewSecurePassword123!' }));
         const data = await res.json();
 
         expect(res.status).toBe(200);
         expect(data.success).toBe(true);
-        expect(mocks.userUpdate).toHaveBeenCalledWith(expect.objectContaining({
-            where: { id: 'user_123' },
-            data: expect.objectContaining({ password: 'new_hashed_password' }) // Verifies password was hashed
+        // Gated on the signed sessionVersion AND increments it, so a replay can't re-consume the token.
+        expect(mocks.userUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'user_123', sessionVersion: 3 },
+            data: expect.objectContaining({ password: 'new_hashed_password', sessionVersion: { increment: 1 } })
         }));
     });
 
-    it('should reject a token that has expired', async () => {
-        const expiredToken = generateToken('user_123', -3600000); // Expired 1 hour ago
-        const req = createReq({ token: expiredToken, password: 'NewSecurePassword123!' });
-
-        const res = await POST(req);
-        const data = await res.json();
-
+    it('rejects an expired token', async () => {
+        const res = await POST(createReq({ token: generateToken('user_123', -3600000), password: 'x' }));
         expect(res.status).toBe(400);
-        expect(data.error).toBe('Token has expired.');
-        expect(mocks.userUpdate).not.toHaveBeenCalled();
+        expect((await res.json()).error).toBe('Token has expired.');
+        expect(mocks.userUpdateMany).not.toHaveBeenCalled();
     });
 
-    it('should reject a token with an invalid signature (tampering attempt)', async () => {
-        const validToken = generateToken('user_123', 3600000); 
-        
-        // Decode it, change the target user ID to 'admin_1', and re-encode it (Attacker tries to reset admin password)
-        const decoded = Buffer.from(validToken, 'base64').toString('utf-8');
-        const tamperedDecoded = decoded.replace('user_123', 'admin_1');
-        const tamperedToken = Buffer.from(tamperedDecoded).toString('base64');
+    it('rejects a tampered signature (attacker swaps the user id to admin_1)', async () => {
+        const valid = generateToken('user_123', 3600000);
+        const decoded = Buffer.from(valid, 'base64').toString('utf-8');
+        const tampered = Buffer.from(decoded.replace('user_123', 'admin_1')).toString('base64');
 
-        const req = createReq({ token: tamperedToken, password: 'HackedPassword123!' });
-
-        const res = await POST(req);
-        const data = await res.json();
-
+        const res = await POST(createReq({ token: tampered, password: 'HackedPassword123!' }));
         expect(res.status).toBe(400);
-        expect(data.error).toBe('Invalid token signature');
-        expect(mocks.userUpdate).not.toHaveBeenCalled(); // Database must NOT be updated
+        expect((await res.json()).error).toBe('Invalid token signature');
+        expect(mocks.userUpdateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a replay after first use: a token signed at an old sessionVersion no longer verifies', async () => {
+        // The user already reset once, so the live sessionVersion (4) is past the token's signed value (3).
+        mocks.userFindUnique.mockResolvedValue({ sessionVersion: 4 });
+        const res = await POST(createReq({ token: generateToken('user_123', 3600000, 3), password: 'x' }));
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toBe('Invalid token signature');
+        expect(mocks.userUpdateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a concurrent double-submit where the conditional update matches 0 rows', async () => {
+        // Signature still matches, but another in-flight request already consumed the token.
+        mocks.userUpdateMany.mockResolvedValue({ count: 0 });
+        const res = await POST(createReq({ token: generateToken('user_123', 3600000), password: 'x' }));
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toBe('This reset link has already been used.');
     });
 });

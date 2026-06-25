@@ -118,18 +118,22 @@ export async function POST(request: Request) {
             }
 
             if (matchedSeriesIds.size > 0) {
+                // Resolve the global permission BEFORE the delete. isGlobal arrives in the request body, and a
+                // non-privileged user must never reach the userId:null branch — otherwise they could delete
+                // global lists they don't own (which cascades to their items). effectiveGlobal drives both.
+                const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
+                const effectiveGlobal = isGlobal === true && canMakeGlobal;
+
                 await prisma.readingList.deleteMany({
-                    where: { name: listName, userId: isGlobal ? null : userId }
+                    where: { name: listName, userId: effectiveGlobal ? null : userId }
                 });
 
-                const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
-
                 const newList = await prisma.readingList.create({
-                    data: { 
-                        name: listName, 
-                        description: `Imported from MyAnimeList user: ${username}`, 
-                        isGlobal: isGlobal === true && canMakeGlobal,
-                        userId: userId 
+                    data: {
+                        name: listName,
+                        description: `Imported from MyAnimeList user: ${username}`,
+                        isGlobal: effectiveGlobal,
+                        userId: userId
                     }
                 });
 

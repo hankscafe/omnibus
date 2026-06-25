@@ -113,18 +113,22 @@ export async function POST(request: Request) {
 
             // Build the Reading List
             if (matchedSeriesIds.size > 0) {
+                // Resolve the global permission BEFORE the delete (see import-mal): isGlobal comes from the
+                // request body, so a non-privileged user must never reach the userId:null branch and delete
+                // global lists they don't own. effectiveGlobal drives both the delete scope and the create.
+                const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
+                const effectiveGlobal = isGlobal === true && canMakeGlobal;
+
                 // Delete old list if re-syncing
                 await prisma.readingList.deleteMany({
-                    where: { name: listName, userId: isGlobal ? null : userId }
+                    where: { name: listName, userId: effectiveGlobal ? null : userId }
                 });
-
-                const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
 
                 const newList = await prisma.readingList.create({
                     data: {
                         name: listName,
                         description: `Imported from AniList user: ${username}`,
-                        isGlobal: isGlobal === true && canMakeGlobal,
+                        isGlobal: effectiveGlobal,
                         userId: userId
                     }
                 });

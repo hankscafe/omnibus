@@ -40,10 +40,11 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Internal Configuration Error: NEXTAUTH_SECRET is not set." }, { status: 500 });
         }
 
-        const expiration = Date.now() + 3600000; 
-        const data = `${user.id}|${expiration}`;
-        const sig = crypto.createHmac('sha256', secret).update(data).digest('hex');
-        const token = Buffer.from(`${data}|${sig}`).toString('base64');
+        const expiration = Date.now() + 3600000;
+        // HMAC binds sessionVersion so the token self-invalidates after one use (confirm increments it).
+        // sessionVersion is NOT placed in the token plaintext, which stays id|expiration|sig.
+        const sig = crypto.createHmac('sha256', secret).update(`${user.id}|${expiration}|${user.sessionVersion}`).digest('hex');
+        const token = Buffer.from(`${user.id}|${expiration}|${sig}`).toString('base64');
 
         const host = req.headers.get('host');
         const protocol = host?.includes('localhost') ? 'http' : 'https';

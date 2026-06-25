@@ -1,6 +1,7 @@
 // __tests__/api/match-series.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/library/match-series/route';
+import { getServerSession } from 'next-auth/next';
 import fs from 'fs';
 import axios from 'axios';
 
@@ -332,5 +333,17 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         const data = await res.json();
         expect(data.conflicts).toBe(1);
         expect(vi.mocked(fs.promises.rename)).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-admin caller with 403 before doing any destructive work', async () => {
+        // Middleware only role-gates /api/admin/*, so this destructive route must enforce admin itself.
+        vi.mocked(getServerSession).mockResolvedValueOnce({ user: { id: 'u1', role: 'USER' } } as any);
+
+        const res = await POST(createReq({ oldFolderPath: '/unmatched/Batman', metadataId: '4050-1234' }));
+
+        expect(res.status).toBe(403);
+        expect(mocks.createSeries).not.toHaveBeenCalled();
+        expect(mocks.updateSeries).not.toHaveBeenCalled();
+        expect(mocks.safeRelocateFolder).not.toHaveBeenCalled();
     });
 });

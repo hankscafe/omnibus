@@ -5,12 +5,14 @@ import { SystemNotifier } from '@/lib/notifications';
 import crypto from 'crypto';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { checkRateLimit } from '@/lib/rate-limit';
+import { checkRateLimit, getClientIp, checkGlobalRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
-    const ip = req.headers.get('x-forwarded-for') || 'unknown';
+    const globalLimit = checkGlobalRateLimit('reset_req', 40, 15 * 60 * 1000);
+    if (globalLimit.isLimited) return globalLimit.response!;
+    const ip = getClientIp(req);
     const rateLimit = checkRateLimit(`reset_req_${ip}`, 3, 15 * 60 * 1000);
     if (rateLimit.isLimited) return rateLimit.response!;
 
@@ -44,10 +46,11 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Internal Configuration Error" }, { status: 500 });
         }
 
-        const expiration = Date.now() + 3600000; 
-        const data = `${user.id}|${expiration}`;
-        const sig = crypto.createHmac('sha256', secret).update(data).digest('hex');
-        const token = Buffer.from(`${data}|${sig}`).toString('base64');
+        const expiration = Date.now() + 3600000;
+        // HMAC binds sessionVersion so the token self-invalidates after one use (confirm increments it).
+        // sessionVersion is NOT placed in the token plaintext, which stays id|expiration|sig.
+        const sig = crypto.createHmac('sha256', secret).update(`${user.id}|${expiration}|${user.sessionVersion}`).digest('hex');
+        const token = Buffer.from(`${user.id}|${expiration}|${sig}`).toString('base64');
 
         const host = req.headers.get('host');
         const protocol = host?.includes('localhost') ? 'http' : 'https';

@@ -51,6 +51,14 @@ describe('Core Logic: ComicInfo.xml Extractor', () => {
         expect(result).toBeNull();
     });
 
+    it('returns null for RAR-family archives (AdmZip cannot read them; handled by CBZ conversion)', async () => {
+        // Previously .cbr/.rar were accepted, then AdmZip threw and was swallowed → silent null. Now they're
+        // not accepted at all, so getEntries() is never even attempted.
+        expect(await parseComicInfo('/library/comic.cbr')).toBeNull();
+        expect(await parseComicInfo('/library/comic.rar')).toBeNull();
+        expect(mocks.getEntries).not.toHaveBeenCalled();
+    });
+
     it('should return null if ComicInfo.xml is missing from the archive', async () => {
         mocks.getEntries.mockReturnValue([
             { entryName: 'page_01.jpg' },

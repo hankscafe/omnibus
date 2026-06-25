@@ -113,7 +113,20 @@ export async function GET(request: Request) {
         }
 
         for (const [stdNum, issues] of Array.from(issuesByNum.entries())) {
-            issues.sort((a, b) => (parseInt(b.metadataId || "0") - parseInt(a.metadataId || "0"))); 
+            // Keep the highest-QUALITY record, not an arbitrary one. The old sort used parseInt(metadataId),
+            // but an UNMATCHED row's id is `unmatched_<rand>` → NaN → undefined order, so the MATCHED record
+            // (numeric id + real filePath) could be deleted in favor of a placeholder (which cascades to
+            // ReadProgress/Bookmark). Rank: matched first, then has-a-file, then higher numeric id (NaN sinks).
+            const rank = (i: any): [number, number, number] => {
+                const matched = i.metadataId && !String(i.metadataId).startsWith('unmatched') ? 1 : 0;
+                const hasFile = i.filePath ? 1 : 0;
+                const num = parseInt(i.metadataId);
+                return [matched, hasFile, Number.isFinite(num) ? num : -Infinity];
+            };
+            issues.sort((a, b) => {
+                const ra = rank(a), rb = rank(b);
+                return (rb[0] - ra[0]) || (rb[1] - ra[1]) || (rb[2] - ra[2]);
+            });
             dbIssueMap.set(stdNum, issues[0]);
             for (let i = 1; i < issues.length; i++) idsToDelete.push(issues[i].id);
         }

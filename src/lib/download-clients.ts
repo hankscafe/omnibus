@@ -250,27 +250,37 @@ export const DownloadService = {
 
           Logger.log(`[Internal DL] Starting download: ${finalFilename}`, 'info');
 
-          let response: any;
           let attempt = 0;
           const maxAttempts = 3;
-          let abortController = new AbortController();
-          
-          let megaStream: any = null;
+          let downloadSucceeded = false;
 
-          while (attempt < maxAttempts) {
+          // Each attempt establishes the stream AND runs the transfer to completion. Previously only
+          // stream establishment was retried and the pipeline ran once outside the loop, so a mid-stream
+          // 45s stall (the stall timer aborts the controller) rejected with no retry and landed STALLED.
+          // Now a stall/abort — or a truncated/too-small file or an HTML error page — consumes a retry.
+          while (attempt < maxAttempts && !downloadSucceeded) {
               attempt++;
-              abortController = new AbortController(); 
+              const abortController = new AbortController();
+              let megaStream: any = null;
+              let response: any = null;
+              let stallTimer: NodeJS.Timeout | null = null;
+
+              // A failed prior attempt may have left a partial behind; start each attempt clean.
+              if (fs.existsSync(partFilePath)) {
+                  try { fs.unlinkSync(partFilePath); } catch (e) {}
+              }
+
               try {
+                  // 1. Establish the stream
                   if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
                       megaStream = resolvedHoster.megaFileNode.download();
-                      break;
                   } else {
-                      const requestHeaders: any = { 
+                      const requestHeaders: any = {
                           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                           'Accept': 'application/zip, application/x-rar-compressed, application/octet-stream, */*',
-                          'Referer': 'https://getcomics.org/' 
+                          'Referer': 'https://getcomics.org/'
                       };
-                      
+
                       if (resolvedHoster?.headers) {
                           Object.assign(requestHeaders, resolvedHoster.headers);
                       }
@@ -285,71 +295,76 @@ export const DownloadService = {
                           beforeRedirect: assertSafeRedirect,
                           signal: abortController.signal
                       });
-                      break; 
+
+                      const contentType = (response.headers['content-type'] || '').toLowerCase();
+                      if (contentType.includes('text/html')) {
+                          throw new Error("Download URL returned an HTML webpage instead of a comic file.");
+                      }
                   }
+
+                  // 2. Run the transfer under the stall timer
+                  const writer = fs.createWriteStream(partFilePath);
+
+                  let totalLength = 0;
+                  if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
+                      totalLength = resolvedHoster.megaFileNode.size;
+                  } else if (response?.headers) {
+                      totalLength = parseInt(response.headers['content-length'] || '0');
+                  }
+
+                  let downloadedBytes = 0;
+                  let lastUpdate = 0;
+
+                  const resetStallTimer = () => {
+                      if (stallTimer) clearTimeout(stallTimer);
+                      stallTimer = setTimeout(() => {
+                          Logger.log(`[Internal DL] Data stream stalled for 45 seconds. Killing connection to trigger retry.`, 'error');
+                          abortController.abort(new Error("Download stalled for 45 seconds"));
+                          if (megaStream) megaStream.destroy(new Error("Download stalled"));
+                      }, 45000);
+                  };
+
+                  resetStallTimer();
+
+                  const dataStream = megaStream || response.data;
+
+                  dataStream.on('data', (chunk: Buffer) => {
+                      resetStallTimer();
+                      downloadedBytes += chunk.length;
+                      if (totalLength) {
+                          const percent = Math.round((downloadedBytes / totalLength) * 100);
+                          const now = Date.now();
+                          if (percent % 5 === 0 && now - lastUpdate > 2000) {
+                              lastUpdate = now;
+                              prisma.request.update({ where: { id: requestId }, data: { progress: percent } }).catch(() => {});
+                          }
+                      }
+                  });
+
+                  try {
+                      await pipeline(dataStream, writer);
+                  } finally {
+                      if (stallTimer) clearTimeout(stallTimer);
+                  }
+
+                  // 3. Validate the completed file before accepting it
+                  const stats = fs.statSync(partFilePath);
+                  if (stats.size < 500000) {
+                     throw new Error(`Downloaded file is suspiciously small (${Math.round(stats.size/1024)}kb). Aborting.`);
+                  }
+
+                  downloadSucceeded = true;
               } catch (err: any) {
-                  if (attempt >= maxAttempts) throw err; 
+                  if (stallTimer) clearTimeout(stallTimer);
+                  // Drop the partial so the next attempt — or the outer failure handler — starts clean.
+                  if (fs.existsSync(partFilePath)) {
+                      try { fs.unlinkSync(partFilePath); } catch (e) {}
+                  }
+                  if (attempt >= maxAttempts) throw err;
                   const status = err.response?.status;
                   Logger.log(`[Internal DL] Attempt ${attempt} failed (Status: ${status || err.message}). Retrying in 3s...`, 'warn');
                   await new Promise(r => setTimeout(r, 3000));
               }
-          }
-
-          if (response && !resolvedHoster?.isMegaStream) {
-              const contentType = (response.headers['content-type'] || '').toLowerCase();
-              if (contentType.includes('text/html')) {
-                  throw new Error("Download URL returned an HTML webpage instead of a comic file.");
-              }
-          }
-
-          const writer = fs.createWriteStream(partFilePath);
-          
-          let totalLength = 0;
-          if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
-              totalLength = resolvedHoster.megaFileNode.size;
-          } else if (response?.headers) {
-              totalLength = parseInt(response.headers['content-length'] || '0');
-          }
-
-          let downloadedBytes = 0;
-          let lastUpdate = 0;
-
-          let stallTimer: NodeJS.Timeout | null = null;
-          const resetStallTimer = () => {
-              if (stallTimer) clearTimeout(stallTimer);
-              stallTimer = setTimeout(() => {
-                  Logger.log(`[Internal DL] Data stream stalled for 45 seconds. Killing connection to trigger retry.`, 'error');
-                  abortController.abort(new Error("Download stalled for 45 seconds"));
-                  if (megaStream) megaStream.destroy(new Error("Download stalled"));
-              }, 45000);
-          };
-
-          resetStallTimer(); 
-
-          const dataStream = megaStream || response.data;
-
-          dataStream.on('data', (chunk: Buffer) => {
-              resetStallTimer(); 
-              downloadedBytes += chunk.length;
-              if (totalLength) {
-                  const percent = Math.round((downloadedBytes / totalLength) * 100);
-                  const now = Date.now();
-                  if (percent % 5 === 0 && now - lastUpdate > 2000) {
-                      lastUpdate = now;
-                      prisma.request.update({ where: { id: requestId }, data: { progress: percent } }).catch(() => {});
-                  }
-              }
-          });
-
-          try {
-              await pipeline(dataStream, writer);
-          } finally {
-              if (stallTimer) clearTimeout(stallTimer); 
-          }
-
-          const stats = fs.statSync(partFilePath);
-          if (stats.size < 500000) {
-             throw new Error(`Downloaded file is suspiciously small (${Math.round(stats.size/1024)}kb). Aborting.`);
           }
 
           if (fs.existsSync(filePath)) {

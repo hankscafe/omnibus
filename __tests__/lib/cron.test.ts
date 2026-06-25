@@ -5,6 +5,7 @@ import { initCronJobs } from '@/lib/cron';
 const mocks = vi.hoisted(() => ({
     requestFindMany: vi.fn(),
     requestUpdate: vi.fn(),
+    requestUpdateMany: vi.fn().mockResolvedValue({ count: 0 }),
     systemSettingFindUnique: vi.fn(),
     systemSettingFindMany: vi.fn(),
     jobLockFindUnique: vi.fn(),
@@ -22,7 +23,7 @@ const mocks = vi.hoisted(() => ({
 // 2. Mock dependencies safely
 vi.mock('@/lib/db', () => ({
     prisma: {
-        request: { findMany: mocks.requestFindMany, update: mocks.requestUpdate },
+        request: { findMany: mocks.requestFindMany, update: mocks.requestUpdate, updateMany: mocks.requestUpdateMany },
         systemSetting: { findUnique: mocks.systemSettingFindUnique, findMany: mocks.systemSettingFindMany },
         jobLock: { findUnique: mocks.jobLockFindUnique, create: mocks.jobLockCreate, updateMany: mocks.jobLockUpdateMany },
         jobLog: { create: mocks.jobLogCreate },
@@ -149,6 +150,37 @@ describe('Cron Logic: Automated Download Checker', () => {
             expect.stringContaining('[Cron Debug] Match SUCCESS! Ratio:'),
             'debug'
         );
+    });
+
+    it('releases parked batch siblings stranded by a permanently-failed (terminal) lead', async () => {
+        const deadLink = 'http://getcomics/batch-pack.cbz';
+
+        mocks.requestFindMany.mockImplementation(async (args) => {
+            // The terminal-dead-lead query (STALLED, retryCount >= 3) — return one dead lead.
+            if (args.where.status === 'STALLED' && args.where.retryCount?.gte === 3) {
+                return [{ downloadLink: deadLink }];
+            }
+            // The retryable-stalled query (retryCount < 3) and any DOWNLOADING query — nothing here.
+            return [];
+        });
+        mocks.requestUpdateMany.mockResolvedValue({ count: 2 });
+        mocks.systemSettingFindMany.mockResolvedValue([{ key: 'download_path', value: '/downloads' }]);
+        mocks.getAllActiveDownloads.mockResolvedValue([]);
+
+        initCronJobs();
+        await mocks.cronCb.current();
+
+        // Parked DOWNLOADING siblings sharing the dead lead's link are demoted to terminal STALLED.
+        expect(mocks.requestUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({
+                status: 'DOWNLOADING',
+                downloadLink: { in: [deadLink] }
+            }),
+            data: expect.objectContaining({ status: 'STALLED', retryCount: 3 })
+        }));
+
+        // With no retryable stalls present, nothing should be re-downloaded.
+        expect(mocks.downloadDirectFile).not.toHaveBeenCalled();
     });
 
 });

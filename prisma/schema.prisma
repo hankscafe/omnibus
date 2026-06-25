@@ -161,7 +161,8 @@ model Series {
   library         Library? @relation(fields: [libraryId], references: [id], onDelete: SetNull)
 
   @@index([libraryId])
-  @@unique([metadataSource, metadataId]) 
+  @@index([metadataId]) // library pendingOnly branch filters metadataId IN (...); the composite unique can't serve a metadataId-only scan
+  @@unique([metadataSource, metadataId])
 }
 
 model Issue {
@@ -173,10 +174,9 @@ model Issue {
   metadataId      String?  
   metadataSource  String   @default("COMICVINE")
   matchState      String?  @default("UNMATCHED")
-  number          String   
-  status          String   @default("WANTED") 
+  number          String
+  status          String   @default("WANTED")
   filePath        String?
-  downloadId      String?
   pageCount       Int      @default(0)
 
   name            String?
@@ -208,6 +208,7 @@ model Issue {
   @@index([seriesId])
   @@index([metadataId])
   @@index([metadataSource])
+  @@index([releaseDate]) // global calendar range-scans Issue.releaseDate (ISO YYYY-MM-DD, lexical = chronological)
 }
 
 model IssueReport {

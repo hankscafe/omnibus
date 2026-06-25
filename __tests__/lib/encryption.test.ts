@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { encrypt2FA, decrypt2FA } from '@/lib/encryption';
+import crypto from 'crypto';
+import { encryptSecret, decryptSecret, encrypt2FA, decrypt2FA } from '@/lib/encryption';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
@@ -18,55 +19,117 @@ vi.mock('@/lib/logger', () => ({
     Logger: { log: mocks.log }
 }));
 
-describe('Security: 2FA Encryption Engine', () => {
+// Default deterministic key source (a DATABASE_ENCRYPTION_KEY row). getEncryptionKey() derives the
+// AES key as sha256(secret), so the test can reproduce it to hand-craft legacy v1 values.
+const TEST_SECRET = 'unit-test-encryption-key-0123456789abcdef';
+
+function derivedKey() {
+    return crypto.createHash('sha256').update(TEST_SECRET).digest();
+}
+
+// Reproduce the pre-migration v1 format (unauthenticated AES-256-CBC) exactly as the old code wrote it.
+function makeLegacyV1(plaintext: string): string {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-cbc', derivedKey(), iv);
+    const encrypted = cipher.update(plaintext, 'utf8', 'hex') + cipher.final('hex');
+    return `enc:v1:${iv.toString('hex')}:${encrypted}`;
+}
+
+describe('Security: Credential Encryption Engine (AES-256-GCM)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        // Provide a valid fake secret for the tests
+        mocks.findUnique.mockResolvedValue({ value: TEST_SECRET });
         process.env.NEXTAUTH_SECRET = 'super_secure_test_secret_key_1234567890';
     });
 
-    it('should successfully encrypt and perfectly decrypt a 2FA secret', async () => {
-        mocks.findUnique.mockResolvedValue(null); // Fallback to process.env.NEXTAUTH_SECRET
-
+    it('encrypts to the authenticated v2 format and round-trips back to the plaintext', async () => {
         const rawSecret = 'JBSWY3DPEHPK3PXP';
-        
-        // 1. Encrypt
-        const encrypted = await encrypt2FA(rawSecret);
+        const encrypted = await encryptSecret(rawSecret);
+
         expect(encrypted).not.toBeNull();
-        expect(encrypted).toContain('enc:v1:'); // Must have your custom prefix
-        expect(encrypted).not.toBe(rawSecret);  // Must not be plaintext
+        expect(encrypted!.startsWith('enc:v2:')).toBe(true); // authenticated GCM, no longer v1/CBC
+        expect(encrypted).not.toBe(rawSecret);
+        // enc:v2:<iv>:<tag>:<ciphertext> — five colon-separated fields.
+        expect(encrypted!.split(':')).toHaveLength(5);
 
-        // 2. Decrypt
-        const decrypted = await decrypt2FA(encrypted);
-        expect(decrypted).toBe(rawSecret); // Must perfectly match the original
+        expect(await decryptSecret(encrypted)).toBe(rawSecret);
     });
 
-    it('should bypass encryption if the string is already encrypted', async () => {
-        const alreadyEncrypted = 'enc:v1:some_fake_iv:some_fake_ciphertext';
-        const result = await encrypt2FA(alreadyEncrypted);
-        
-        // It should realize it's already encrypted and return it untouched
-        expect(result).toBe(alreadyEncrypted);
+    it('uses a fresh IV per call, so the same plaintext encrypts to different ciphertexts', async () => {
+        const a = await encryptSecret('repeated-value');
+        const b = await encryptSecret('repeated-value');
+        expect(a).not.toEqual(b);
+        expect(await decryptSecret(a)).toBe('repeated-value');
+        expect(await decryptSecret(b)).toBe('repeated-value');
     });
 
-    it('should throw a critical error if the NEXTAUTH_SECRET is the default insecure string', async () => {
-        // Simulate a user forgetting to change the default secret
+    it('detects tampering: corrupting a ciphertext byte fails the GCM auth tag', async () => {
+        const encrypted = (await encryptSecret('tamper-me'))!;
+        const [prefix, version, iv, tag, ct] = encrypted.split(':');
+        const ctBytes = Buffer.from(ct, 'base64');
+        ctBytes[0] ^= 0xff;
+        const tampered = [prefix, version, iv, tag, ctBytes.toString('base64')].join(':');
+        expect(tampered).not.toEqual(encrypted);
+
+        await expect(decryptSecret(tampered)).rejects.toThrow('Decryption failed');
+        expect(mocks.log).toHaveBeenCalled();
+    });
+
+    it('detects tampering: a corrupted auth tag fails to decrypt', async () => {
+        const encrypted = (await encryptSecret('tag-tamper'))!;
+        const [prefix, version, iv, tag, ct] = encrypted.split(':');
+        const tagBytes = Buffer.from(tag, 'base64');
+        tagBytes[0] ^= 0xff;
+        const tampered = [prefix, version, iv, tagBytes.toString('base64'), ct].join(':');
+
+        await expect(decryptSecret(tampered)).rejects.toThrow('Decryption failed');
+    });
+
+    it('detects tampering: a truncated ciphertext fails to decrypt and is logged', async () => {
+        const encrypted = await encryptSecret('JBSWY3DPEHPK3PXP');
+        const tampered = encrypted?.slice(0, -8);
+
+        await expect(decryptSecret(tampered!)).rejects.toThrow('Decryption failed');
+        expect(mocks.log).toHaveBeenCalled();
+    });
+
+    it('still decrypts legacy v1 (AES-256-CBC) values written before the migration', async () => {
+        const legacy = makeLegacyV1('legacy-stored-password');
+        expect(legacy.startsWith('enc:v1:')).toBe(true);
+        expect(await decryptSecret(legacy)).toBe('legacy-stored-password');
+    });
+
+    it('is idempotent: re-encrypting an already-encrypted value (v1 or v2) returns it unchanged', async () => {
+        const v2 = (await encryptSecret('once'))!;
+        expect(await encryptSecret(v2)).toBe(v2);
+
+        const v1 = makeLegacyV1('once');
+        expect(await encryptSecret(v1)).toBe(v1);
+    });
+
+    it('passes null/empty and unencrypted plaintext through untouched', async () => {
+        expect(await encryptSecret(null)).toBeNull();
+        expect(await encryptSecret('')).toBe('');
+        expect(await decryptSecret(null)).toBeNull();
+        expect(await decryptSecret('not-encrypted-plaintext')).toBe('not-encrypted-plaintext');
+    });
+
+    it('keeps the encrypt2FA/decrypt2FA aliases working end-to-end', async () => {
+        const encrypted = await encrypt2FA('JBSWY3DPEHPK3PXP');
+        expect(encrypted).toContain('enc:v2:');
+        expect(await decrypt2FA(encrypted)).toBe('JBSWY3DPEHPK3PXP');
+    });
+
+    it('falls back to NEXTAUTH_SECRET when no DATABASE_ENCRYPTION_KEY row exists', async () => {
+        mocks.findUnique.mockResolvedValue(null); // forces the env fallback
+        const encrypted = await encryptSecret('env-fallback-secret');
+        expect(await decryptSecret(encrypted)).toBe('env-fallback-secret');
+    });
+
+    it('throws a critical error if the secret is the default insecure placeholder', async () => {
+        mocks.findUnique.mockResolvedValue(null);
         process.env.NEXTAUTH_SECRET = 'change_this_to_a_random_secure_string_123!';
-        mocks.findUnique.mockResolvedValue(null); 
 
-        await expect(encrypt2FA('secret')).rejects.toThrow('CRITICAL SECURITY ERROR');
-    });
-
-    it('should throw an error if the ciphertext has been tampered with', async () => {
-        mocks.findUnique.mockResolvedValue(null); 
-
-        const rawSecret = 'JBSWY3DPEHPK3PXP';
-        const encrypted = await encrypt2FA(rawSecret);
-        
-        // FIX: Break the AES padding and block-size by slicing off the end of the string
-        const tampered = encrypted?.slice(0, -8); 
-        
-        await expect(decrypt2FA(tampered!)).rejects.toThrow('Decryption failed');
-        expect(mocks.log).toHaveBeenCalled(); // Should log the tampering attempt
+        await expect(encryptSecret('secret')).rejects.toThrow('CRITICAL SECURITY ERROR');
     });
 });

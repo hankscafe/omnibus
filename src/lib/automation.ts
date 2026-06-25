@@ -3,12 +3,13 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getCustomAcronyms, generateSearchQueries, normalizeRequestName } from '@/lib/search-engine';
 import { ProwlarrService } from '@/lib/prowlarr';
-import { GetComicsService } from '@/lib/getcomics';
+import { GetComicsService, enabledHostersFromSetting } from '@/lib/getcomics';
 import { DownloadService } from '@/lib/download-clients';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
 import { SystemNotifier } from '@/lib/notifications';
-import { isSameIssue } from '@/lib/utils/issue-parser';
+import { isSameIssue, extractIssueNumber, parseIssueRange } from '@/lib/utils/issue-parser';
+import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { DEFAULT_SCORING_RULES } from '@/lib/utils/defaults';
 
 export async function getDownloadClient(protocol: string = 'torrent') {
@@ -50,20 +51,25 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   }
 
   // --- START OF ISSUE YEAR OPTIMIZATION & PACK ISOLATION ---
-  let dynamicYear = year; 
-  let allowPacksForThisRequest = false; 
+  let dynamicYear = year;
+  let allowPacksForThisRequest = false;
+  // Authoritative series name from metadata (ComicVine/Metron), captured for the indexer relevance guard
+  // below so "which series did we ask for" is judged against the canonical name — not a delimiter-split
+  // guess or a stale activeDownloadName. Stays null for manual (non-metadata) requests.
+  let canonicalSeriesName: string | null = null;
 
   if (freshReq.volumeId && freshReq.volumeId !== "0") {
       const reqSource = (freshReq as any).metadataSource || 'COMICVINE';
 
       const localSeries = await prisma.series.findFirst({
-          where: { 
+          where: {
               metadataId: freshReq.volumeId,
               metadataSource: reqSource
           }
       });
 
       if (localSeries) {
+          canonicalSeriesName = localSeries.name || null;
           // Check the database to see if we ALREADY have downloaded files for this series
           const downloadedIssuesCount = await prisma.issue.count({
               where: { seriesId: localSeries.id, filePath: { not: null } }
@@ -129,28 +135,13 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
    Logger.log(`[Automation Debug] Generated queries for "${name}": ${JSON.stringify(queries)}`, 'debug');
 
    const ddlEnabled = ddlSetting?.value !== 'false';
-   let hasEnabledHosters = true;
-   let enabledHosters = ['mediafire', 'getcomics', 'mega', 'pixeldrain', 'rootz', 'vikingfile', 'terabox', 'annas_archive'];
-
-   if (hpSetting?.value) {
-      try {
-          const val = hpSetting.value;
-          const parsed = typeof val === 'string' ? JSON.parse(val) : val;
-          
-          if (Array.isArray(parsed)) {
-              if (parsed.length === 0) {
-                  hasEnabledHosters = false;
-                  enabledHosters = [];
-              } else if (typeof parsed[0] === 'string') {
-                  enabledHosters = parsed;
-                  hasEnabledHosters = enabledHosters.length > 0;
-              } else if (typeof parsed[0] === 'object') {
-                  enabledHosters = parsed.filter((p: any) => p.enabled !== false).map((p: any) => p.hoster);
-                  hasEnabledHosters = enabledHosters.length > 0;
-              }
-          }
-      } catch(e) {}
-  }
+   // Resolve the enabled hoster list through the SAME parser+migration getcomics.ts uses, so the legacy
+   // single `getcomics` key is split into `getcomics_direct` + `getcomics_main` here too. This block used
+   // to parse the raw setting on its own and default to the obsolete `getcomics` token — so the gate below
+   // never recognized the `getcomics_main`/`getcomics_direct` hosters scrapeDeepLink actually returns, and
+   // every GetComics direct download was wrongly rejected as "unsupported" and dumped onto the indexers.
+   const enabledHosters = enabledHostersFromSetting(hpSetting?.value);
+   const hasEnabledHosters = enabledHosters.length > 0;
   
   let getComicsResults: any[] = [];
   let fallbackManualUrl: string | null = null;
@@ -271,6 +262,47 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   // --- PHASE 2: INDEXER FALLBACK ---
   if (!skipIndexers) {
       Logger.log(`[Automation] Fallback Phase: Searching Prowlarr...`, 'info');
+
+      // Relevance guard anchored to the ORIGINAL request, not the query that happened to return results.
+      // Prowlarr's per-query filter disables its issue gate whenever the query carries no issue number, so
+      // a broad fallback like "X Men 2026" (e.g. from a colon-split "X-Men: Outback #1") lets every X-Men
+      // issue through and the scorer then grabs an arbitrary one. This re-checks each release against the
+      // requested SERIES words and ISSUE number so the wrong series/issue can never be selected.
+      const reqClean = normalizeRequestName(name);
+      const reqIssueMatch = reqClean.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)/i);
+      const requestedIssue = reqIssueMatch ? reqIssueMatch[1] : null;
+      // Judge "which series" against the AUTHORITATIVE metadata name when we have it, so a series whose
+      // name contains ':' or '-' (e.g. "X-Men: Outback") is enforced IN FULL and never reduced to a
+      // droppable prefix. Delimiters are normalized to spaces on both sides, so ":"/"-"/" - " variants
+      // compare equal. Manual (non-metadata) requests fall back to the parsed request name.
+      const seriesNameForMatch = canonicalSeriesName
+          || reqClean.replace(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*-?\d+(?:\.\d+)?.*$/i, '');
+      const reqSeriesTokens = seriesNameForMatch
+          .replace(/\b(19|20)\d{2}\b/g, ' ')
+          .replace(/[^a-zA-Z0-9\s]/g, ' ')
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t: string) => t.length > 2 && !STOP_WORDS.includes(t));
+
+      const matchesRequest = (title: string): boolean => {
+          const titleLower = (title || '').toLowerCase();
+          // Every significant series word from the request must be present (the same mandatory-word
+          // intersection Prowlarr applies per-query, but anchored to the request so a broad query can't
+          // relax it — this is what rejects a different series like "X-Men 031" for "X-Men: Outback").
+          if (reqSeriesTokens.length > 0 && !reqSeriesTokens.every((t: string) => titleLower.includes(t))) return false;
+          // A single-issue request must land on that exact issue (or a pack/range that contains it).
+          if (requestedIssue !== null && !usePacks) {
+              const range = parseIssueRange(titleLower);
+              if (range) {
+                  const n = parseFloat(requestedIssue);
+                  if (Number.isFinite(n) && (n < range.start || n > range.end)) return false;
+              } else if (!isSameIssue(extractIssueNumber(title), requestedIssue)) {
+                  return false;
+              }
+          }
+          return true;
+      };
+
       let healthyResults: any[] = [];
       for (const query of queries) {
           // Detect if this query is a broad/pack search (lacks an issue number)
@@ -283,17 +315,24 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
           healthyResults = prowlarrResults.filter((r: any) => {
               const isHealthy = r.seeders > 0 || r.protocol === 'usenet';
               const trackingHash = r.infoHash || r.guid || r.downloadUrl;
-              
+
               // BLOCKLIST CHECK: Filter out titles, hashes, or URLs that have failed
               const isFailed = failedItems.includes(r.title) || failedItems.includes(trackingHash);
-              
+
               if (isFailed) {
                   Logger.log(`[Automation Debug] Skipping blocklisted Prowlarr release: "${r.title}"`, 'debug');
               }
-              
-              return isHealthy && !isFailed;
+
+              // RELEVANCE GUARD: reject wrong-series/wrong-issue releases that a broad query let through, so
+              // a query yielding only mismatches no longer short-circuits the more specific queries below.
+              const isRelevant = matchesRequest(r.title);
+              if (isHealthy && !isFailed && !isRelevant) {
+                  Logger.log(`[Automation Debug] Discarding off-target Prowlarr release "${r.title}" (does not match requested "${reqClean}").`, 'debug');
+              }
+
+              return isHealthy && !isFailed && isRelevant;
           });
-          
+
           if (healthyResults.length > 0) break;
           await new Promise(resolve => setTimeout(resolve, 2000));
       }
@@ -356,7 +395,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
       }
   }
 
-  if (fallbackManualUrl && enabledHosters.includes('getcomics')) {
+  if (fallbackManualUrl && enabledHosters.some(h => h.startsWith('getcomics'))) {
       Logger.log(`[Automation] Prowlarr failed. Reverting to GetComics Manual DDL fallback.`, 'warn');
       await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: fallbackManualUrl, activeDownloadName: fallbackManualName } });
       return;

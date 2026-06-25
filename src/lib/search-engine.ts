@@ -127,11 +127,17 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         }
     }
 
+    // The bare main-title queries (e.g. "X Men" / "X Men 2026" from a colon-split "X-Men: Outback #1")
+    // live in primaryQueries; the full, specific name variants (series + subtitle + issue number) live in
+    // secondaryQueries. Search the SPECIFIC variants FIRST so a series whose name legitimately contains a
+    // colon/dash isn't immediately matched against its entire line by an over-broad title-only query —
+    // which also drops the issue number, disabling the indexer's issue filter and letting any issue win.
+    // The broad title query is retained as a fallback for when the specific variants find nothing.
     if (prioritizePacks && usePacks) {
-        return [...Array.from(packQueries), ...Array.from(primaryQueries), ...Array.from(secondaryQueries)];
+        return [...Array.from(packQueries), ...Array.from(secondaryQueries), ...Array.from(primaryQueries)];
     }
 
-    return [...Array.from(primaryQueries), ...Array.from(secondaryQueries), ...Array.from(packQueries)];
+    return [...Array.from(secondaryQueries), ...Array.from(primaryQueries), ...Array.from(packQueries)];
 }
 
 export const SearchEngine = {

@@ -9,10 +9,13 @@ import { SystemNotifier } from '@/lib/notifications';
 const mocks = vi.hoisted(() => ({
     findManyClients: vi.fn(),
     findManySettings: vi.fn(),
-    findUniqueSetting: vi.fn(), 
+    findUniqueSetting: vi.fn(),
     updateRequest: vi.fn(),
     findUniqueRequest: vi.fn(),
     findFirstRequest: vi.fn().mockResolvedValue(null), // <-- ADDED: Mock for Traffic Cop duplicate check
+    findFirstSeries: vi.fn().mockResolvedValue(null),  // canonical series lookup (metadata anchor)
+    countIssues: vi.fn().mockResolvedValue(0),
+    findManyIssues: vi.fn().mockResolvedValue([]),
     log: vi.fn()
 }));
 
@@ -20,27 +23,39 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         downloadClient: { findMany: mocks.findManyClients },
-        systemSetting: { 
+        systemSetting: {
             findMany: mocks.findManySettings,
-            findUnique: mocks.findUniqueSetting 
+            findUnique: mocks.findUniqueSetting
         },
-        request: { 
-            update: mocks.updateRequest, 
+        request: {
+            update: mocks.updateRequest,
             findUnique: mocks.findUniqueRequest,
             findFirst: mocks.findFirstRequest // <-- ADDED: Wire up the mock
-        }
+        },
+        series: { findFirst: mocks.findFirstSeries },
+        issue: { count: mocks.countIssues, findMany: mocks.findManyIssues }
     }
 }));
 
-vi.mock('@/lib/getcomics', () => ({ GetComicsService: { search: vi.fn(), scrapeDeepLink: vi.fn() } }));
+// Keep the real pure helpers (enabledHostersFromSetting handles the getcomics_direct/getcomics_main
+// hoster migration) while stubbing the network-bound service methods.
+vi.mock('@/lib/getcomics', async (importOriginal) => {
+    const actual = await importOriginal() as any;
+    return { ...actual, GetComicsService: { search: vi.fn(), scrapeDeepLink: vi.fn() } };
+});
 vi.mock('@/lib/prowlarr', () => ({ ProwlarrService: { searchComics: vi.fn() } }));
 vi.mock('@/lib/download-clients', () => ({ DownloadService: { addDownload: vi.fn(), downloadDirectFile: vi.fn().mockResolvedValue(true) } }));
 vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/search-engine', () => ({
-    getCustomAcronyms: vi.fn().mockResolvedValue({}),
-    generateSearchQueries: vi.fn().mockReturnValue(['Batman 2024'])
-}));
+// Keep the real normalizeRequestName (used by the indexer relevance guard) while stubbing query generation.
+vi.mock('@/lib/search-engine', async (importOriginal) => {
+    const actual = await importOriginal() as any;
+    return {
+        ...actual,
+        getCustomAcronyms: vi.fn().mockResolvedValue({}),
+        generateSearchQueries: vi.fn().mockReturnValue(['Batman 2024'])
+    };
+});
 
 describe('Core Logic: Automation Engine', () => {
     beforeEach(() => {
@@ -77,6 +92,63 @@ describe('Core Logic: Automation Engine', () => {
         expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
             where: { id: 'req_1' },
             data: expect.objectContaining({ status: 'DOWNLOADING' })
+        }));
+    });
+
+    it('accepts a getcomics_main direct download (regression: getcomics_direct/getcomics_main migration)', async () => {
+        // The hoster taxonomy was split from a single `getcomics` key into `getcomics_direct` +
+        // `getcomics_main`. scrapeDeepLink returns the new keys; the automation gate must recognize them,
+        // or every GetComics DDL is wrongly rejected as "unsupported" and dumped onto the indexers.
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([{ title: 'Batman #01 (2024)', downloadUrl: 'http://getcomics/123' } as any]);
+        vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'https://getcomics.org/dls/abc', isDirect: true, hoster: 'getcomics_main' });
+
+        await executeSearchAndDownload('req_1', 'Batman', '2024', 'DC');
+
+        expect(DownloadService.downloadDirectFile).toHaveBeenCalledWith(
+            'https://getcomics.org/dls/abc', 'Batman #01 (2024)', '/downloads', 'req_1', 'getcomics_main'
+        );
+        expect(DownloadService.addDownload).not.toHaveBeenCalled();
+    });
+
+    it('rejects an off-target indexer release (wrong series/issue) instead of grabbing it', async () => {
+        // Reproduces the X-Men: Outback #1 -> "X-Men 031" mis-grab. GetComics finds nothing; Prowlarr (fed a
+        // broad query) returns a different series/issue. The relevance guard, anchored to the request, must
+        // discard it and stall rather than download.
+        mocks.findUniqueRequest.mockResolvedValue({ id: 'req_1', activeDownloadName: 'X-Men: Outback #1', user: { username: 'Bruce' } });
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([]);
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValue([
+            { title: 'X-Men 031 (2026) (Digital) (Kileko-Empire) (cbz)', downloadUrl: 'magnet:?xt=wrong', seeders: 50, protocol: 'torrent' } as any
+        ]);
+
+        await executeSearchAndDownload('req_1', 'X-Men: Outback #1', '2026', 'Marvel');
+
+        expect(DownloadService.addDownload).not.toHaveBeenCalled();
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'STALLED' })
+        }));
+    });
+
+    it('anchors series matching on the canonical metadata name, even when activeDownloadName is polluted', async () => {
+        // Hardening for ":"/"-" series names + retry pollution: a prior wrong grab left activeDownloadName =
+        // "X-Men 031 …", but the request is for the "X-Men: Outback" volume. The guard must judge against the
+        // canonical series name (requires "outback"), not the polluted activeDownloadName, and reject the
+        // re-offered wrong issue rather than "confirming" it.
+        mocks.findUniqueRequest.mockResolvedValue({
+            id: 'req_1', volumeId: 'cv_173293', metadataSource: 'COMICVINE',
+            activeDownloadName: 'X-Men 031 (2026) (Digital) (Kileko-Empire) (cbz)', user: { username: 'Bruce' }
+        });
+        mocks.findFirstSeries.mockResolvedValue({ id: 'series_1', name: 'X-Men: Outback' });
+
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([]);
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValue([
+            { title: 'X-Men 031 (2026) (Digital) (Kileko-Empire) (cbz)', downloadUrl: 'magnet:?xt=wrong', seeders: 50, protocol: 'torrent' } as any
+        ]);
+
+        await executeSearchAndDownload('req_1', 'X-Men: Outback #1', '2026', 'Marvel');
+
+        expect(DownloadService.addDownload).not.toHaveBeenCalled();
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'STALLED' })
         }));
     });
 

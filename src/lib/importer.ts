@@ -10,6 +10,7 @@ import { SystemNotifier } from './notifications';
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { WATCHED_DIR } from '@/lib/utils/paths';
@@ -414,6 +415,43 @@ export const Importer = {
         const seriesYearMatch = (req.activeDownloadName || path.basename(sourcePath)).match(/\((\d{4})\)/);
         const detectedYear = seriesYearMatch ? parseInt(seriesYearMatch[1]) : 0;
         isManga = await detectManga({ name: cleanSeriesName, publisher: { name: 'Other' }, year: detectedYear }, actualSourceFile);
+    }
+
+    // --- WRONG-DOWNLOAD GUARD (single-file imports only; batch payloads already returned above) ---
+    // Automation can, on a broad/fallback indexer search, grab a file from the wrong series or issue (e.g.
+    // an "X-Men: Outback #1" request that fell through to Prowlarr and pulled "X-Men 031"). Importing that
+    // under the requested series silently fabricates a bogus issue and corrupts the Discover/request UI.
+    // Refuse the import ONLY when BOTH signals agree it's wrong: the requested series' name words are absent
+    // from the download AND its parsed issue isn't one this volume actually has. The double condition keeps
+    // a legitimately new (not-yet-synced) issue of the CORRECT series importable.
+    if (series?.id && req.volumeId && req.volumeId !== "0") {
+        const downloadLabel = (req.activeDownloadName || path.basename(actualSourceFile) || "").toLowerCase();
+        const seriesTokens = (series.name || "")
+            .replace(/\b(19|20)\d{2}\b/g, ' ')
+            .replace(/[^a-zA-Z0-9\s]/g, ' ')
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((t: string) => t.length > 2 && !STOP_WORDS.includes(t));
+        const seriesNameMissing = seriesTokens.length > 0 && !seriesTokens.every((t: string) => downloadLabel.includes(t));
+
+        if (seriesNameMissing) {
+            const parsedIssue = extractIssueNumber(path.basename(actualSourceFile));
+            const knownIssues = await prisma.issue.findMany({ where: { seriesId: series.id } });
+            const issueInVolume = knownIssues.some((i: any) => isSameIssue(i.number, parsedIssue));
+
+            if (knownIssues.length > 0 && !issueInVolume) {
+                Logger.log(`[Importer] Aborting import: "${req.activeDownloadName}" does not match requested series "${series.name}" (series words missing and issue #${parsedIssue} not in this volume). Holding for manual review.`, 'warn');
+                await prisma.request.update({ where: { id: req.id }, data: { status: 'STALLED' } });
+                await SystemNotifier.sendAlert('download_failed', {
+                    title: series.name,
+                    imageUrl: req.imageUrl ?? undefined,
+                    user: req.user?.username,
+                    email: req.user?.email,
+                    description: `The downloaded file **${req.activeDownloadName}** doesn't appear to match **${series.name}**, so it was not imported. Please use Interactive Search to grab the correct release.`
+                }).catch(() => {});
+                return false;
+            }
+        }
     }
 
     const libraries = await prisma.library.findMany();

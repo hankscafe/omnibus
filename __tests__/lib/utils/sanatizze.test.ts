@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeDescription } from '../../../src/lib/utils/sanitize';
+import { sanitizeDescription, sanitizeFilename } from '../../../src/lib/utils/sanitize';
 
 describe('Utility: HTML Sanitizer', () => {
     it('should return an empty string for null or undefined input', () => {
@@ -32,5 +32,24 @@ describe('Utility: HTML Sanitizer', () => {
         expect(output).toContain('target="_blank"');
         expect(output).toContain('rel="noopener noreferrer"');
         expect(output).not.toContain('onclick');
+    });
+});
+
+describe('Utility: sanitizeFilename (path-traversal safe)', () => {
+    it('neutralizes pure dot segments that would otherwise become "."/".." path parts', () => {
+        expect(sanitizeFilename('..')).toBe('_');
+        expect(sanitizeFilename('.')).toBe('_');
+        expect(sanitizeFilename('...')).toBe('_');
+    });
+
+    it('strips leading/trailing dots but preserves interior dots', () => {
+        expect(sanitizeFilename('..X-Men')).toBe('X-Men');
+        expect(sanitizeFilename('X-Men..')).toBe('X-Men');
+        expect(sanitizeFilename('Mr. Robot')).toBe('Mr. Robot');
+        expect(sanitizeFilename('Vol.1')).toBe('Vol.1');
+    });
+
+    it('still strips filesystem-reserved characters', () => {
+        expect(sanitizeFilename('A/B:C*?')).toBe('ABC');
     });
 });

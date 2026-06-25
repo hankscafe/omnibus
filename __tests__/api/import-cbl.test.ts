@@ -74,4 +74,24 @@ describe('API Route: CBL Import', () => {
             ]
         });
     });
+
+    it('refuses an internal SSRF target URL with 400 and never fetches it', async () => {
+        const fetchSpy = vi.fn();
+        global.fetch = fetchSpy as any;
+
+        const req = {
+            formData: async () => ({
+                get: (key: string) => {
+                    if (key === 'url') return 'http://169.254.169.254/latest/meta-data/';
+                    if (key === 'name') return 'Evil List';
+                    if (key === 'isGlobal') return 'false';
+                    return null;
+                }
+            })
+        } as any;
+
+        const res = await POST(req);
+        expect(res.status).toBe(400);
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
 });

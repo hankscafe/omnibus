@@ -10,6 +10,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
+import { sanitizeDescription } from '@/lib/utils/sanitize';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { safeParse } from '@/lib/utils/safe-parse';
@@ -238,7 +239,8 @@ export async function GET(request: Request) {
       bookType: seriesRecord?.bookType || null,
       monitored: seriesRecord?.monitored || false,
       isManga: seriesRecord?.isManga || false,
-      description: seriesRecord?.description || null,
+      // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored XSS).
+      description: sanitizeDescription(seriesRecord?.description) || null,
       universe: seriesRecord?.universe || null,
       seriesGroup: (seriesRecord as any)?.seriesGroup || null,
       matchState: seriesRecord?.matchState || 'UNMATCHED',

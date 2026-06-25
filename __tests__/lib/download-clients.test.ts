@@ -106,4 +106,27 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
 
         expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Failed: ECONNREFUSED'), 'error');
     });
+
+    const delugeClient = { type: 'deluge', url: 'http://192.168.1.50:8112', user: 'admin', pass: 'deluge', category: 'comics' };
+
+    it('adds a magnet to Deluge using the correct core.add_torrent_magnet method (regression: was "magents")', async () => {
+        mocks.axiosPost
+            .mockResolvedValueOnce({ headers: { 'set-cookie': ['_session_id=abc'] }, data: { result: true } }) // auth.login
+            .mockResolvedValueOnce({ data: { result: 'torrent_hash_123' } });                                  // add
+
+        const result = await DownloadService.addDownload(delugeClient, 'magnet:?xt=urn:btih:abc', 'Batman #1', 0, 0);
+
+        expect(result.success).toBe(true);
+        expect(mocks.axiosPost.mock.calls[1][1].method).toBe('core.add_torrent_magnet');
+    });
+
+    it('throws on a Deluge HTTP-200 JSON-RPC error instead of reporting false success', async () => {
+        mocks.axiosPost
+            .mockResolvedValueOnce({ headers: { 'set-cookie': ['_session_id=abc'] }, data: { result: true } }) // auth.login
+            .mockResolvedValueOnce({ data: { result: null, error: { message: 'Unknown method' } } });          // add error (HTTP 200)
+
+        await expect(
+            DownloadService.addDownload(delugeClient, 'magnet:?xt=urn:btih:abc', 'Batman #1', 0, 0)
+        ).rejects.toThrow('Deluge add failed');
+    });
 });

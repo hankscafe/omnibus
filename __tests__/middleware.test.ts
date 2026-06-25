@@ -66,11 +66,30 @@ describe('Security: Next.js Front-Door Middleware', () => {
 
     it('should return 403 Forbidden JSON for standard users accessing admin APIs', async () => {
         mocks.getToken.mockResolvedValueOnce({ id: 'user_123', role: 'USER' });
-        const req = createReq('/api/admin/users'); 
+        const req = createReq('/api/admin/users');
         const res = await middleware(req) as Response;
 
         expect(res?.status).toBe(403);
         const data = await res.json();
         expect(data.error).toBe('Forbidden: Admin privileges required.');
+    });
+
+    it('lets unauthenticated /api/koreader requests through (devices self-auth via x-auth-key)', async () => {
+        // KOReader devices carry no NextAuth cookie; middleware must not 401 them before the handler's own
+        // x-auth-key check runs.
+        mocks.getToken.mockResolvedValueOnce(null);
+        const req = createReq('/api/koreader/syncs/progress');
+        const res = await middleware(req) as Response;
+
+        expect(res?.status).not.toBe(401);
+        expect(res.headers.get('x-middleware-request-x-pathname')).toBe('/api/koreader/syncs/progress');
+    });
+
+    it('still protects the cookie-authed /api/profile/koreader route (not shadowed by the koreader allowlist)', async () => {
+        mocks.getToken.mockResolvedValueOnce(null);
+        const req = createReq('/api/profile/koreader');
+        const res = await middleware(req) as Response;
+
+        expect(res?.status).toBe(401);
     });
 });

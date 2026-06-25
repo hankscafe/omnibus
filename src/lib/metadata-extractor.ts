@@ -80,11 +80,15 @@ export async function parseComicInfo(filePath: string) {
         }
 
         const cacheKey = `${seriesName}_${parsedYear || 'unknown'}`;
+        // Namespace the resolution cache by provider — a ComicVine volume id and a Metron series id for the
+        // same series+year are different numbers and must not alias each other in this shared map.
+        const cvCacheKey = `CV:${cacheKey}`;
+        const metronCacheKey = `METRON:${cacheKey}`;
 
         // 3. Dynamic Resolution: If we STILL don't have an ID, we query the APIs using the Series Name
         if (!cvId && cvIssueId) {
-            if (seriesName && volumeResolutionCache.has(cacheKey)) {
-                cvId = volumeResolutionCache.get(cacheKey)!.cvId as number; 
+            if (seriesName && volumeResolutionCache.has(cvCacheKey)) {
+                cvId = volumeResolutionCache.get(cvCacheKey)!.cvId as number;
             } else {
                 try {
                     const { prisma } = await import('@/lib/db');
@@ -97,19 +101,21 @@ export async function parseComicInfo(filePath: string) {
                         
                         if (cvRes.data?.results?.volume?.id) {
                             cvId = parseInt(cvRes.data.results.volume.id);
-                            if (seriesName) volumeResolutionCache.set(cacheKey, { cvId, timestamp: Date.now() }); 
+                            if (seriesName) volumeResolutionCache.set(cvCacheKey, { cvId, timestamp: Date.now() });
                         }
                     }
                 } catch (e) {
                     Logger.log(`[Metadata] Failed to resolve Volume ID from Issue URL: ${cvIssueId}`, 'warn');
                 }
             }
-        } else if (!metronId && seriesName) {
-            // THE FIX: If there is no numeric Metron ID in the file or URL, 
-            // query the Metron API directly using the clean XML Series Name and Year.
-            if (volumeResolutionCache.has(cacheKey)) {
-                Logger.log(`[Metadata Extractor Debug] Cache HIT for composite key: ${cacheKey}`, 'debug');
-                metronId = volumeResolutionCache.get(cacheKey)!.cvId as number; 
+        } else if (!metronId && metronIssueId && seriesName) {
+            // Resolve a Metron SERIES id by name ONLY for files that actually carry Metron evidence (a Metron
+            // issue id). Previously this `else if (!metronId && seriesName)` fired for essentially every
+            // series-named file lacking a Metron id — including normal ComicVine files — issuing a live Metron
+            // search per scanned file and sometimes flipping the resolved source to METRON.
+            if (volumeResolutionCache.has(metronCacheKey)) {
+                Logger.log(`[Metadata Extractor Debug] Cache HIT for composite key: ${metronCacheKey}`, 'debug');
+                metronId = volumeResolutionCache.get(metronCacheKey)!.cvId as number;
             } else {
                 try {
                     const { prisma } = await import('@/lib/db');
@@ -144,7 +150,7 @@ export async function parseComicInfo(filePath: string) {
                             
                             metronId = parseInt(finalResult.id);
                             Logger.log(`[Metadata] Resolved Metron Series ID ${metronId} from Series Name search (Year Checked: ${parsedYear || 'None'}).`, 'info');
-                            volumeResolutionCache.set(cacheKey, { cvId: metronId, timestamp: Date.now() }); 
+                            volumeResolutionCache.set(metronCacheKey, { cvId: metronId, timestamp: Date.now() });
                         }
                     }
                 } catch (e) {

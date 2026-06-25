@@ -78,24 +78,55 @@ export const LibraryScanner = {
                     select: { volumeId: true }
                 });
                 const activeReqVolumeIds = new Set(activeRequests.map(r => r.volumeId));
-                const badIds: string[] = allSeries
-                    .filter(s => {
-                        // If folder physically exists, it's good
-                        if (s.folderPath && fs.existsSync(s.folderPath)) return false; 
-                        // If the series is being monitored for new issues, keep it
-                        if (s.monitored) return false;
-                        // If the series has active/pending requests tied to it, keep it
-                        if (s.metadataId && activeReqVolumeIds.has(s.metadataId)) return false;
-                        
-                        // Otherwise, the folder is gone and no one is looking for it -> Ghost
-                        return true;
-                    })
-                    .map(s => s.id);
+                // Ghost-series purge with a GRACE WINDOW. A series whose folder is missing is NOT deleted
+                // immediately — a transient SMB/network subfolder outage must not destroy read progress and
+                // curated metadata (the per-issue delete cascades to ReadProgress). We persist when each series
+                // was first seen missing and only purge after the folder has stayed gone past GRACE_MS. The
+                // library-root check above already aborts the whole scan on a full-drive disconnect.
+                const GRACE_MS = 24 * 60 * 60 * 1000; // 24h gone before auto-purge
+                const nowMs = Date.now();
+                let missState: Record<string, number> = {};
+                try {
+                    const raw = await prisma.systemSetting.findUnique({ where: { key: 'scan_missing_series' } });
+                    missState = JSON.parse(raw?.value || '{}');
+                } catch (e) { missState = {}; }
+
+                const badIds: string[] = [];
+                const nextMissState: Record<string, number> = {};
+                for (const s of allSeries) {
+                    if (s.folderPath && fs.existsSync(s.folderPath)) continue;            // present → not a ghost
+                    if (s.monitored) continue;                                            // monitored → keep
+                    if (s.metadataId && activeReqVolumeIds.has(s.metadataId)) continue;   // active request → keep
+
+                    const firstMissed = missState[s.id] || nowMs;                         // first time seen gone
+                    if (nowMs - firstMissed >= GRACE_MS) {
+                        badIds.push(s.id);                                                // gone long enough → purge
+                    } else {
+                        nextMissState[s.id] = firstMissed;                                // still in grace → remember
+                    }
+                }
+
+                // Persist grace counters (recovered + purged series naturally drop out of the map). Best-effort:
+                // if this write fails, series simply look "freshly missing" next scan and stay un-purged — a
+                // safe failure mode (never deletes early), so a counter-write hiccup must not abort the scan.
+                try {
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'scan_missing_series' },
+                        update: { value: JSON.stringify(nextMissState) },
+                        create: { key: 'scan_missing_series', value: JSON.stringify(nextMissState) }
+                    });
+                } catch (e) {
+                    Logger.log(`[Scan] Could not persist ghost-series grace counters: ${getErrorMessage(e)}`, 'warn');
+                }
 
                 if (badIds.length > 0) {
                     await prisma.issue.deleteMany({ where: { seriesId: { in: badIds } } });
                     await prisma.series.deleteMany({ where: { id: { in: badIds } } });
-                    Logger.log(`[Scan] Purged ${badIds.length} ghost series records.`, 'info');
+                    Logger.log(`[Scan] Purged ${badIds.length} ghost series records (folder missing > 24h).`, 'info');
+                }
+                const graceCount = Object.keys(nextMissState).length;
+                if (graceCount > 0) {
+                    Logger.log(`[Scan] ${graceCount} series folder(s) missing but within the 24h grace window — not purged.`, 'info');
                 }
 
                 Logger.log(`[Scanner Debug] Searching for ghost issues with missing files...`, 'debug');

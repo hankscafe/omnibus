@@ -1227,7 +1227,8 @@ export function initWorker() {
                                                 data: {
                                                     userId: admin?.id || 'system', 
                                                     volumeId: matchedSeries.metadataId || matchedSeries.id,
-                                                    status: issueStatus, 
+                                                    metadataSource: matchedSeries.metadataSource,
+                                                    status: issueStatus,
                                                     activeDownloadName: searchName, 
                                                     imageUrl: mIssue.image || matchedSeries.coverUrl
                                                 }
@@ -1345,7 +1346,8 @@ export function initWorker() {
                                     const newReq = await prisma.request.create({
                                         data: {
                                             userId: admin?.id || 'system', 
-                                            volumeId: cvId.toString(), 
+                                            volumeId: cvId.toString(),
+                                            metadataSource: seriesRecord.metadataSource,
                                             status: issueStatus,
                                             activeDownloadName: searchName, 
                                             imageUrl: cvIssue.image?.medium_url || seriesRecord.coverUrl

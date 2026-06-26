@@ -618,6 +618,34 @@ function SeriesContent() {
     }
   };
 
+  // Admin: reset a single issue's cover — clears a stale Smart-Matcher custom cover (which the sync is
+  // locked out of) and re-fetches the provider image, so a broken/wrong issue cover is restored in place.
+  const handleResetIssueCover = async () => {
+    if (!activeIssue?.id) return;
+    setCoverUploading(true);
+    try {
+      const res = await fetch('/api/library/issue/reset-cover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issueId: activeIssue.id })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Reset failed');
+      const restored = !!data.coverUrl;
+      setActiveIssue((prev: any) => prev ? { ...prev, coverUrl: data.coverUrl ?? null, hasCustomCover: false } : prev);
+      toast({
+        title: restored ? "Cover reset" : "Custom cover cleared",
+        description: restored
+          ? "Re-fetched this issue's cover from the metadata provider."
+          : "No provider cover found — falling back to the series cover. A metadata refresh may restore it."
+      });
+    } catch (err) {
+      toast({ title: "Reset failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
   const copyToClipboard = () => {
     if (seriesInfo.path) {
       navigator.clipboard.writeText(seriesInfo.path);
@@ -1022,18 +1050,27 @@ function SeriesContent() {
                           ) : null}
                       </div>
 
-                      {/* Admin: change / revert the series cover */}
+                      {/* Admin: reset the active issue's cover, or change/revert the series cover */}
                       {isAdmin && (
                           <div className="absolute bottom-2 right-2 z-30 flex items-center gap-1.5">
-                              <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">
-                                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleCoverFile} disabled={coverUploading} />
-                                  {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                                  <span>Cover</span>
-                              </label>
-                              {seriesInfo.hasCustomCover && !coverUploading && (
-                                  <button onClick={handleRevertCover} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors" title="Revert to automatic cover">
-                                      <RotateCcw className="w-3.5 h-3.5" />
+                              {activeIssue?.id ? (
+                                  <button onClick={handleResetIssueCover} disabled={coverUploading} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold shadow-lg transition-colors disabled:pointer-events-none disabled:opacity-70" title="Reset this issue's cover — clears a stale custom cover and re-fetches the provider image">
+                                      {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                                      <span>Reset cover</span>
                                   </button>
+                              ) : (
+                                  <>
+                                      <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">
+                                          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleCoverFile} disabled={coverUploading} />
+                                          {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                                          <span>Cover</span>
+                                      </label>
+                                      {seriesInfo.hasCustomCover && !coverUploading && (
+                                          <button onClick={handleRevertCover} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors" title="Revert to automatic cover">
+                                              <RotateCcw className="w-3.5 h-3.5" />
+                                          </button>
+                                      )}
+                                  </>
                               )}
                           </div>
                       )}

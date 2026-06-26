@@ -624,8 +624,8 @@ function SeriesContent() {
     if (!activeIssue?.id) return;
     setCoverUploading(true);
     try {
-      const res = await fetch('/api/library/issue/reset-cover', {
-        method: 'POST',
+      const res = await fetch('/api/library/issue/cover-upload', {
+        method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ issueId: activeIssue.id })
       });
@@ -641,6 +641,39 @@ function SeriesContent() {
       });
     } catch (err) {
       toast({ title: "Reset failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
+  // Admin: upload a custom cover for the active issue (writes uploads/issue-covers/<id>.jpg + locks it).
+  const handleIssueCoverFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // let the same file be re-picked later
+    if (!file || !activeIssue?.id) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Please choose an image under 15MB.", variant: "destructive" });
+      return;
+    }
+    setCoverUploading(true);
+    try {
+      const imageBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Could not read the image file."));
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch('/api/library/issue/cover-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issueId: activeIssue.id, imageBase64 })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setActiveIssue((prev: any) => prev ? { ...prev, coverUrl: data.coverUrl, hasCustomCover: true } : prev);
+      toast({ title: "Issue cover updated", description: "Your custom cover has been saved for this issue." });
+    } catch (err) {
+      toast({ title: "Upload failed", description: getErrorMessage(err), variant: "destructive" });
     } finally {
       setCoverUploading(false);
     }
@@ -1054,10 +1087,16 @@ function SeriesContent() {
                       {isAdmin && (
                           <div className="absolute bottom-2 right-2 z-30 flex items-center gap-1.5">
                               {activeIssue?.id ? (
-                                  <button onClick={handleResetIssueCover} disabled={coverUploading} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold shadow-lg transition-colors disabled:pointer-events-none disabled:opacity-70" title="Reset this issue's cover — clears a stale custom cover and re-fetches the provider image">
-                                      {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
-                                      <span>Reset cover</span>
-                                  </button>
+                                  <>
+                                      <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover for this issue">
+                                          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleIssueCoverFile} disabled={coverUploading} />
+                                          {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                                          <span>Cover</span>
+                                      </label>
+                                      <button onClick={handleResetIssueCover} disabled={coverUploading} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors disabled:pointer-events-none disabled:opacity-70" title="Reset this issue's cover — clears a custom cover and re-fetches the provider image">
+                                          <RotateCcw className="w-3.5 h-3.5" />
+                                      </button>
+                                  </>
                               ) : (
                                   <>
                                       <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">

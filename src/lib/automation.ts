@@ -11,6 +11,7 @@ import { SystemNotifier } from '@/lib/notifications';
 import { isSameIssue, extractIssueNumber, parseIssueRange } from '@/lib/utils/issue-parser';
 import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { DEFAULT_SCORING_RULES } from '@/lib/utils/defaults';
+import { isReleasedYet } from '@/lib/utils';
 
 export async function getDownloadClient(protocol: string = 'torrent') {
   const clients = await prisma.downloadClient.findMany();
@@ -57,6 +58,9 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   // below so "which series did we ask for" is judged against the canonical name — not a delimiter-split
   // guess or a stale activeDownloadName. Stays null for manual (non-metadata) requests.
   let canonicalSeriesName: string | null = null;
+  // Release date of the specifically-requested issue (when resolvable), used below to park a not-yet-
+  // released issue as UNRELEASED instead of STALLED so the Series Monitor retries it once it drops.
+  let requestedIssueReleaseDate: string | null = null;
 
   if (freshReq.volumeId && freshReq.volumeId !== "0") {
       const reqSource = (freshReq as any).metadataSource || 'COMICVINE';
@@ -92,6 +96,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
               const issueSkeleton = allSeriesIssues.find(i => isSameIssue(i.number, targetIssueNum));
 
               if (issueSkeleton && issueSkeleton.releaseDate) {
+                  requestedIssueReleaseDate = issueSkeleton.releaseDate;
                   const parsedIssueYear = issueSkeleton.releaseDate.split('-')[0];
                   if (parsedIssueYear && parsedIssueYear.match(/^\d{4}$/) && parsedIssueYear !== dynamicYear) {
                       Logger.log(`[Automation] Overriding series year (${dynamicYear}) with accurate issue release year (${parsedIssueYear}) for ${name}`, 'info');
@@ -438,13 +443,21 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
 
   const currentReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
   if (currentReq?.status !== 'MANUAL_DDL' && currentReq?.status !== 'DOWNLOADING') {
-      Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
-      await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
-      await SystemNotifier.sendAlert('download_failed', {
-          title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
-          description: `Omnibus searched all connected indexers and direct download sites but could not find a match for **${name}**.`,
-          publisher: publisher, year: year
-      }).catch(() => {});
+      // If the requested issue simply isn't out yet, park it as UNRELEASED (not STALLED) so the Series
+      // Monitor's existing UNRELEASED→PENDING refire picks it up once it actually drops — instead of
+      // stranding it in the request queue as a failure that never retries.
+      if (requestedIssueReleaseDate && !isReleasedYet(requestedIssueReleaseDate, null)) {
+          Logger.log(`[Automation] No match for ${name} yet — issue not released until ${requestedIssueReleaseDate}. Parking as UNRELEASED for the monitor to retry.`, 'info');
+          await prisma.request.update({ where: { id: requestId }, data: { status: 'UNRELEASED' } });
+      } else {
+          Logger.log(`[Automation] No results found anywhere for: ${name}`, 'warn');
+          await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
+          await SystemNotifier.sendAlert('download_failed', {
+              title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
+              description: `Omnibus searched all connected indexers and direct download sites but could not find a match for **${name}**.`,
+              publisher: publisher, year: year
+          }).catch(() => {});
+      }
   }
 }
 

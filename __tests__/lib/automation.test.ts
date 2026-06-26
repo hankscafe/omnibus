@@ -222,4 +222,31 @@ describe('Core Logic: Automation Engine', () => {
             title: 'Batman'
         }));
     });
+
+    it('parks an unreleased issue as UNRELEASED (not STALLED) so the monitor retries it once it drops', async () => {
+        // A monitored series requests an issue whose release date is in the future. GetComics + Prowlarr
+        // find nothing (it isn't out yet). Instead of STALLING it as a failure that never retries, it must
+        // be parked UNRELEASED so the Series Monitor's UNRELEASED→PENDING refire grabs it once it releases.
+        mocks.findUniqueRequest.mockResolvedValue({
+            id: 'req_1', volumeId: 'cv_999', metadataSource: 'COMICVINE',
+            activeDownloadName: 'Spawn #999', user: { username: 'Bruce' }
+        });
+        mocks.findFirstSeries.mockResolvedValue({ id: 'series_1', name: 'Spawn' });
+        mocks.findManyIssues.mockResolvedValue([{ number: '999', releaseDate: '2099-12-31' }]);
+
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([]);
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValueOnce([]);
+
+        await executeSearchAndDownload('req_1', 'Spawn #999', '2099', 'Image');
+
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'req_1' },
+            data: expect.objectContaining({ status: 'UNRELEASED' })
+        }));
+        // It must NOT be stalled, and must NOT alert the user as a failure.
+        expect(mocks.updateRequest).not.toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'STALLED' })
+        }));
+        expect(SystemNotifier.sendAlert).not.toHaveBeenCalled();
+    });
 });

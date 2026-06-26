@@ -1,7 +1,7 @@
 // src/app/admin/smart-match/page.tsx
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/components/ui/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -15,6 +15,39 @@ import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview } from "@/components/smart-match-metadata-dialog"
+
+// Auto-scan results (the ComicVine/Metron match suggestions) are kept in sessionStorage so a page
+// refresh or navigate-away-and-back restores them instead of re-running the scan. The cache is
+// provider-scoped and shares the 12h TTL of the server-side /api/search cache so client and server
+// expire in lockstep. sessionStorage (not localStorage) clears on tab close, which matches the
+// volatile nature of a matching session.
+const SCAN_CACHE_PREFIX = 'omnibus-smartmatch-suggestions';
+const SCAN_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+
+function readScanCache(provider: string): Record<string, any> {
+    try {
+        const raw = sessionStorage.getItem(`${SCAN_CACHE_PREFIX}-${provider}`);
+        if (!raw) return {};
+        const env = JSON.parse(raw);
+        if (!env || typeof env.ts !== 'number' || Date.now() - env.ts > SCAN_CACHE_TTL_MS) {
+            sessionStorage.removeItem(`${SCAN_CACHE_PREFIX}-${provider}`);
+            return {};
+        }
+        return env.data && typeof env.data === 'object' ? env.data : {};
+    } catch {
+        return {};
+    }
+}
+
+function writeScanCache(provider: string, data: Record<string, any>) {
+    try {
+        if (!data || Object.keys(data).length === 0) {
+            sessionStorage.removeItem(`${SCAN_CACHE_PREFIX}-${provider}`);
+            return;
+        }
+        sessionStorage.setItem(`${SCAN_CACHE_PREFIX}-${provider}`, JSON.stringify({ ts: Date.now(), data }));
+    } catch {}
+}
 
 export default function SmartMatchPage() {
     const [unmatched, setUnmatched] = useState<any[]>([]);
@@ -100,6 +133,23 @@ export default function SmartMatchPage() {
                 setLoading(false);
             });
     }, [toast]);
+
+    // Which provider the live `suggestions` belong to. The persist effect writes under this ref (not
+    // the latest searchProvider) so a provider switch — which re-hydrates suggestions on the next
+    // render — can't momentarily clobber the other provider's cache with stale data.
+    const suggestionsProviderRef = useRef<string>('COMICVINE');
+
+    // Hydrate cached suggestions whenever the active provider changes (incl. the initial settle from
+    // saved config). Stale entries for series no longer unmatched simply don't render and age out by TTL.
+    useEffect(() => {
+        suggestionsProviderRef.current = searchProvider;
+        setSuggestions(readScanCache(searchProvider));
+    }, [searchProvider]);
+
+    // Persist live suggestions under the provider they belong to.
+    useEffect(() => {
+        writeScanCache(suggestionsProviderRef.current, suggestions);
+    }, [suggestions]);
 
     const startSmartScan = async () => {
         setIsScanning(true);
@@ -924,7 +974,7 @@ export default function SmartMatchPage() {
                         )}
                     </div>
                     
-                    <DialogFooter className="gap-2 sm:gap-0 mt-2 shrink-0">
+                    <DialogFooter className="gap-2 mt-2 shrink-0">
                         <Button variant="outline" onClick={() => { setManualMatchOpen(false); setManualMatchResult(null); }} className="border-border hover:bg-muted text-foreground">Cancel</Button>
                         <Button onClick={handleApplyManualMatch} disabled={!manualMatchResult} className="bg-green-600 text-white hover:bg-green-700 font-bold">
                             <Check className="w-4 h-4 mr-2" /> Apply Match

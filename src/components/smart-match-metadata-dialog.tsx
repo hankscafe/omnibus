@@ -336,7 +336,7 @@ export default function SmartMatchMetadataDialog({
           </div>
         </div>
 
-        <DialogFooter className="shrink-0 gap-2 sm:gap-0">
+        <DialogFooter className="shrink-0 gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} className="border-border hover:bg-muted text-foreground">Cancel</Button>
           <Button onClick={handleSave} className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground">
             <Check className="w-4 h-4 mr-2" /> Save Details

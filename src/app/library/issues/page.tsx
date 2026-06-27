@@ -149,7 +149,7 @@ export default function LibraryIssuesPage() {
   const triggerClass = "flex-1 sm:w-[140px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border";
 
   return (
-    <div className="space-y-6">
+    <div className="container mx-auto py-10 px-6 space-y-6">
       <div>
         <Link href="/library" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-1">
           <ChevronLeft className="w-4 h-4" /> Library
@@ -245,7 +245,7 @@ export default function LibraryIssuesPage() {
         <div className="text-center py-20 text-muted-foreground border-2 border-dashed rounded-lg border-border bg-muted/30">
           <CalendarDays className="w-10 h-10 mx-auto mb-3 opacity-20" />
           <p>No issues found matching your criteria.</p>
-          <p className="text-xs mt-1 opacity-70">Only issues with a known release date are shown here.</p>
+          <p className="text-xs mt-1 opacity-70">Only released issues with a known release date are shown here.</p>
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10">

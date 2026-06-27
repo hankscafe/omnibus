@@ -55,7 +55,10 @@ export async function GET(request: Request) {
         const eraRange = eraToYear(era);
         if (eraRange) seriesWhere.year = eraRange;
 
-        const where: any = { releaseDate: { not: null } };
+        // Exclude not-yet-released issues (future-dated monitor skeletons); only list what's actually out.
+        // releaseDate is ISO YYYY-MM-DD, so a lexical <= today is a chronological "already released" test.
+        const todayISO = new Date().toISOString().slice(0, 10);
+        const where: any = { releaseDate: { not: null, lte: todayISO } };
         if (Object.keys(seriesWhere).length > 0) where.series = seriesWhere;
         if (status === 'DOWNLOADED') where.filePath = { not: null };
         else if (status === 'WANTED') where.filePath = null;

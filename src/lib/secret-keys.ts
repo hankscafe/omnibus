@@ -1,4 +1,4 @@
-// SystemSetting keys whose values are credentials encrypted at rest (enc:v1: AES-256-CBC).
+// SystemSetting keys whose values are credentials encrypted at rest (enc:v2: AES-256-GCM; legacy enc:v1: CBC still read).
 // Reads are transparently decrypted by the Prisma extension in db.ts; writes are encrypted by the
 // admin config route; existing plaintext is migrated by db-init. The Rust engine has a matching
 // decrypt (omnibus-engine/src/secret_crypto.rs) for the keys it reads (cv_api_key, prowlarr_key,

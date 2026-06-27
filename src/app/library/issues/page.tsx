@@ -154,14 +154,15 @@ export default function LibraryIssuesPage() {
         <Link href="/library" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-1">
           <ChevronLeft className="w-4 h-4" /> Library
         </Link>
-        <h1 className="text-2xl font-black tracking-tight flex items-center gap-2">
+        <h1 className="text-3xl font-bold flex items-center gap-2 text-foreground">
           <CalendarDays className="w-6 h-6 text-primary" /> All Issues
         </h1>
         <p className="text-sm text-muted-foreground">Every individual issue across your library, ordered by release date.</p>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 items-stretch sm:items-center">
+      {/* Filters — contained in a panel to match the library view */}
+      <div className="bg-muted/50 p-4 rounded-lg border border-border">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 items-stretch sm:items-center">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
@@ -236,6 +237,7 @@ export default function LibraryIssuesPage() {
             <span className="hidden sm:inline font-bold">Clear Filters</span>
           </Button>
         )}
+        </div>
       </div>
 
       {/* Grid */}

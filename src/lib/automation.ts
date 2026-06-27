@@ -13,6 +13,16 @@ import { STOP_WORDS, JUNK_WORDS, BOUNDED_VARIANT_KEYWORDS, OPEN_VARIANT_KEYWORDS
 import { DEFAULT_SCORING_RULES } from '@/lib/utils/defaults';
 import { isReleasedYet } from '@/lib/utils';
 
+// A generated query targets a SPECIFIC issue when it still carries an issue number. The query builder
+// strips the '#', so a marker-only regex ("#22" / "issue 22") misses a plain "Wolverine 22" and would
+// misclassify every issue query as a series/pack query — which then searches under the series year instead
+// of the accurate per-issue release year (the N+1 long-running-series bug). Treat any bare non-year digit
+// as an issue number; true series/pack queries ("Wolverine", "Wolverine collection") have none.
+function queryTargetsIssue(query: string): boolean {
+  if (/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+/i.test(query)) return true;
+  return /\d/.test(query.replace(/\b(19|20)\d{2}\b/g, ' '));
+}
+
 export async function getDownloadClient(protocol: string = 'torrent') {
   const clients = await prisma.downloadClient.findMany();
   if (clients.length === 0) return null;
@@ -136,7 +146,9 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
    const prioritizePacks = globalPrioritize && usePacks;
 
    const acronyms = await getCustomAcronyms();
-   const queries = generateSearchQueries(searchName, year, acronyms, isManga, prioritizePacks, usePacks);
+   // Build queries with the accurate per-issue release year (dynamicYear) so a long-running series finds the
+   // right post (e.g. "Wolverine 22 2026", not "...2024"). dynamicYear == year unless overridden above.
+   const queries = generateSearchQueries(searchName, dynamicYear, acronyms, isManga, prioritizePacks, usePacks);
    Logger.log(`[Automation Debug] Generated queries for "${name}": ${JSON.stringify(queries)}`, 'debug');
 
    const ddlEnabled = ddlSetting?.value !== 'false';
@@ -155,9 +167,9 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
   if (ddlEnabled && hasEnabledHosters) {
       Logger.log(`[Automation] Priority Phase: Searching GetComics...`, 'info');
       for (const query of queries) {
-          // Detect if this query is a broad/pack search (lacks an issue number)
-          const isPackQuery = !query.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+/i);
-          const activeYear = isPackQuery ? year : dynamicYear;
+          // Issue-targeted queries filter on the accurate per-issue year (dynamicYear); broad/pack queries
+          // (no issue number) keep the series year so a "(2024)" collection isn't rejected for a 2026 issue.
+          const activeYear = queryTargetsIssue(query) ? dynamicYear : year;
 
           const rawGetComicsResults = (await GetComicsService.search(query, false, isManga, name, activeYear, usePacks)) || [];
           
@@ -375,9 +387,9 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
 
       let healthyResults: any[] = [];
       for (const query of queries) {
-          // Detect if this query is a broad/pack search (lacks an issue number)
-          const isPackQuery = !query.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+/i);
-          const activeYear = isPackQuery ? year : dynamicYear;
+          // Issue-targeted queries filter on the accurate per-issue year (dynamicYear); broad/pack queries
+          // (no issue number) keep the series year so a "(2024)" collection isn't rejected for a 2026 issue.
+          const activeYear = queryTargetsIssue(query) ? dynamicYear : year;
 
           // Pass `usePacks` down to Prowlarr to prevent torrent pack leaks
           const prowlarrResults = (await ProwlarrService.searchComics(query, false, isManga, activeYear, usePacks)) || [];

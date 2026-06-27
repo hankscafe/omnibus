@@ -4,6 +4,7 @@ import { GetComicsService } from '@/lib/getcomics';
 import { ProwlarrService } from '@/lib/prowlarr';
 import { DownloadService } from '@/lib/download-clients';
 import { SystemNotifier } from '@/lib/notifications';
+import { generateSearchQueries } from '@/lib/search-engine';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -229,6 +230,31 @@ describe('Core Logic: Automation Engine', () => {
             'magnet:?xt=right',
             expect.anything(), expect.anything(), expect.anything()
         );
+    });
+
+    it('searches under the accurate per-issue release year, not the series year (long-running N+1)', async () => {
+        // A long-running series started in 2024 but issue #22 shipped in 2026. The engine overrides the series
+        // year with the issue's release year — and that override must reach BOTH the generated query string
+        // AND the year filter, or GetComics/Prowlarr search "...2024" and never find the 2026 post. (The query
+        // builder strips the '#', so the filter's old pack-detection also misfired and forced the series year.)
+        mocks.findUniqueRequest.mockResolvedValue({
+            id: 'req_1', volumeId: 'cv_123', metadataSource: 'COMICVINE',
+            activeDownloadName: 'Wolverine #22', user: { username: 'Logan' }
+        });
+        mocks.findFirstSeries.mockResolvedValue({ id: 'series_1', name: 'Wolverine' });
+        mocks.countIssues.mockResolvedValue(0);
+        mocks.findManyIssues.mockResolvedValue([{ number: '22', releaseDate: '2026-03-01' }]);
+        vi.mocked(generateSearchQueries).mockReturnValueOnce(['Wolverine 22 2026']);
+        vi.mocked(GetComicsService.search).mockResolvedValue([]);
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValue([]);
+
+        await executeSearchAndDownload('req_1', 'Wolverine #22', '2024', 'Marvel');
+
+        // The accurate issue year (2026) is what we build queries from...
+        expect(generateSearchQueries).toHaveBeenCalledWith('Wolverine #22', '2026', expect.anything(), false, expect.anything(), expect.anything());
+        // ...and what the issue-targeted search filters on (5th arg to GetComics, 4th to Prowlarr) — NOT 2024.
+        expect(GetComicsService.search).toHaveBeenCalledWith('Wolverine 22 2026', false, false, 'Wolverine #22', '2026', expect.anything());
+        expect(ProwlarrService.searchComics).toHaveBeenCalledWith('Wolverine 22 2026', false, false, '2026', expect.anything());
     });
 
     it('should completely skip GetComics and go straight to Prowlarr if all file hosters are disabled', async () => {

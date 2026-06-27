@@ -179,7 +179,12 @@ export const DownloadService = {
       }
   },
 
-  async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string, hoster?: string) {
+  async downloadDirectFile(url: string, filename: string, targetPath: string, requestId: string, hoster?: string, options?: { softFail?: boolean }) {
+      // softFail: the caller intends to try another source if this download fails (e.g. a getcomics_main
+      // /dls/ link that may be behind a live Cloudflare challenge). When set, a failure does NOT terminally
+      // STALL the request or fire a "download failed" alert — it just returns false so the caller can fall
+      // through to Prowlarr / a manual hold.
+      const softFail = options?.softFail === true;
       const diskSetting = await prisma.systemSetting.findUnique({ where: { key: 'is_disk_full' } });
       if (diskSetting?.value === 'true') {
           throw new Error("Download aborted: Disk Space is Critically Full (< 2GB).");
@@ -384,9 +389,16 @@ export const DownloadService = {
           return true;
       } catch (error: unknown) {
           if (fs.existsSync(partFilePath)) try { fs.unlinkSync(partFilePath); } catch (e) {}
-          
+
+          // Soft failure: let the caller decide what happens next (it has another source to try). Don't
+          // STALL the request or alert the user — just report the failure to the caller.
+          if (softFail) {
+              Logger.log(`[Internal DL] Download failed (soft): ${getErrorMessage(error)}. Deferring to caller's fallback.`, 'warn');
+              return false;
+          }
+
           Logger.log(`[Internal DL] Download Failed: ${getErrorMessage(error)}`, 'error');
-          
+
           await prisma.request.update({
             where: { id: requestId },
             data: { status: 'STALLED', progress: 0 }

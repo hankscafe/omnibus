@@ -110,17 +110,39 @@ describe('Core Logic: Automation Engine', () => {
         expect(DownloadService.addDownload).not.toHaveBeenCalled();
     });
 
-    it('routes a getcomics_main /dls/ link to MANUAL_DDL instead of a Cloudflare-doomed direct download', async () => {
-        // getcomics.org/dls/ links are Cloudflare-protected; a Node Internal DL always 403s (no FlareSolverr).
-        // So getcomics_main must NOT be dispatched to downloadDirectFile — it's held as a manual link, Prowlarr
-        // gets a shot, and it ends as a one-click MANUAL_DDL when the indexers come up empty (the Wolverine #3 fix).
+    it('auto-downloads a working getcomics_main /dls/ link instead of dumping it to indexers', async () => {
+        // getcomics.org/dls/ "main server" links serve the file directly for most issues (the in-browser
+        // "Download Now" button works immediately). Many posts now expose ONLY this link, so it must be
+        // ATTEMPTED — soft-fail — rather than blanket-held for manual. A working link downloads and imports.
         vi.mocked(GetComicsService.search).mockResolvedValueOnce([{ title: 'Wolverine #3 (2024)', downloadUrl: 'http://getcomics/123' } as any]);
         vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'https://getcomics.org/dls/abc', isDirect: true, hoster: 'getcomics_main' });
+        vi.mocked(DownloadService.downloadDirectFile).mockResolvedValue(true); // /dls/ streams fine
+
+        await executeSearchAndDownload('req_1', 'Wolverine', '2024', 'Marvel');
+
+        expect(DownloadService.downloadDirectFile).toHaveBeenCalledWith(
+            'https://getcomics.org/dls/abc', expect.anything(), expect.anything(), 'req_1', 'getcomics_main',
+            expect.objectContaining({ softFail: true })
+        );
+        // It downloaded directly — it must NOT have fallen through to the indexers or a manual hold.
+        expect(ProwlarrService.searchComics).not.toHaveBeenCalled();
+        expect(DownloadService.addDownload).not.toHaveBeenCalled();
+        expect(mocks.updateRequest).not.toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'MANUAL_DDL' })
+        }));
+    });
+
+    it('falls a genuinely Cloudflare-gated getcomics_main link to MANUAL_DDL when the /dls/ fetch fails', async () => {
+        // The subset of /dls/ links behind a LIVE Cloudflare challenge fail the soft-fail download. Those are
+        // held as a one-click manual link, Prowlarr gets a shot, and they end as MANUAL_DDL when indexers are empty.
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([{ title: 'Wolverine #3 (2024)', downloadUrl: 'http://getcomics/123' } as any]);
+        vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'https://getcomics.org/dls/abc', isDirect: true, hoster: 'getcomics_main' });
+        vi.mocked(DownloadService.downloadDirectFile).mockResolvedValue(false); // soft-fail: CF challenge
         vi.mocked(ProwlarrService.searchComics).mockResolvedValue([]); // indexers empty → revert to the held manual link
 
         await executeSearchAndDownload('req_1', 'Wolverine', '2024', 'Marvel');
 
-        expect(DownloadService.downloadDirectFile).not.toHaveBeenCalled();
+        expect(DownloadService.downloadDirectFile).toHaveBeenCalled();
         expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ status: 'MANUAL_DDL', downloadLink: 'https://getcomics.org/dls/abc' })
         }));
@@ -166,6 +188,47 @@ describe('Core Logic: Automation Engine', () => {
         expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ status: 'STALLED' })
         }));
+    });
+
+    it('rejects a same-name-different-subtitle indexer release whose distinguishing word is a stop-word', async () => {
+        // Reproduces the Wolverine #3 -> "Wolverine - Blood Hunt 003" mis-grab. GetComics finds the correct
+        // page but only on a CF-gated getcomics_main link whose /dls/ fetch soft-fails (held for manual);
+        // Prowlarr then offers a DIFFERENT series ("Blood Hunt") that merely contains "Wolverine" + issue 3.
+        // Because "blood" is a STOP_WORD, Prowlarr's ratio gate sees only 2 extra tokens and lets it through,
+        // and the forward-only presence check can't tell the series apart. The reverse guard ("hunt" is an
+        // extra series word the canonical name lacks) must discard it, leaving the held link as MANUAL_DDL.
+        mocks.findUniqueRequest.mockResolvedValue({ id: 'req_1', activeDownloadName: 'Wolverine #3', user: { username: 'Logan' } });
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([{ title: 'Wolverine #3 (2024)', downloadUrl: 'http://getcomics/123' } as any]);
+        vi.mocked(GetComicsService.scrapeDeepLink).mockResolvedValueOnce({ url: 'https://getcomics.org/dls/abc', isDirect: true, hoster: 'getcomics_main' });
+        vi.mocked(DownloadService.downloadDirectFile).mockResolvedValue(false); // soft-fail: CF challenge → fall to Prowlarr
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValue([
+            { title: 'Wolverine - Blood Hunt 003 (2024) (digital) (Marika-Empire) (cbz)', downloadUrl: 'magnet:?xt=wrong', seeders: 50, protocol: 'torrent' } as any
+        ]);
+
+        await executeSearchAndDownload('req_1', 'Wolverine #3', '2024', 'Marvel');
+
+        expect(DownloadService.addDownload).not.toHaveBeenCalled();
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'MANUAL_DDL', downloadLink: 'https://getcomics.org/dls/abc' })
+        }));
+    });
+
+    it('still accepts the correct same-series release for a single-issue request', async () => {
+        // Guardrail for the reverse check: the legitimate main-series release must NOT be rejected. Its core
+        // title is exactly the canonical name, so there are no extra series words and it downloads normally.
+        mocks.findUniqueRequest.mockResolvedValue({ id: 'req_1', activeDownloadName: 'Wolverine #3', user: { username: 'Logan' } });
+        vi.mocked(GetComicsService.search).mockResolvedValueOnce([]);
+        vi.mocked(ProwlarrService.searchComics).mockResolvedValue([
+            { title: 'Wolverine 003 (2024) (Digital) (Kileko-Empire) (cbz)', downloadUrl: 'magnet:?xt=right', seeders: 50, protocol: 'torrent' } as any
+        ]);
+
+        await executeSearchAndDownload('req_1', 'Wolverine #3', '2024', 'Marvel');
+
+        expect(DownloadService.addDownload).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'client_1' }),
+            'magnet:?xt=right',
+            expect.anything(), expect.anything(), expect.anything()
+        );
     });
 
     it('should completely skip GetComics and go straight to Prowlarr if all file hosters are disabled', async () => {

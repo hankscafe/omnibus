@@ -9,7 +9,7 @@ import { Importer } from '@/lib/importer';
 import { getErrorMessage } from './utils/error';
 import { SystemNotifier } from '@/lib/notifications';
 import { isSameIssue, extractIssueNumber, parseIssueRange } from '@/lib/utils/issue-parser';
-import { STOP_WORDS } from '@/lib/utils/search-terms';
+import { STOP_WORDS, JUNK_WORDS, BOUNDED_VARIANT_KEYWORDS, OPEN_VARIANT_KEYWORDS } from '@/lib/utils/search-terms';
 import { DEFAULT_SCORING_RULES } from '@/lib/utils/defaults';
 import { isReleasedYet } from '@/lib/utils';
 
@@ -223,17 +223,18 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
             const { url, hoster } = deepLink;
             const safeTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
             
-            // getcomics_main is the Cloudflare-protected getcomics.org/dls/ link. Node can't pass the CF
-            // challenge (auto-FlareSolverr streaming was engine-only), so an Internal DL always 403s — exactly
-            // the Wolverine #3 failure. Treat it as manual-only: hold the link, let Prowlarr try for an auto
-            // grab, and end as a one-click MANUAL_DDL if the indexers come up empty. getcomics_direct (clean
-            // CDN) still auto-downloads. (Before beta.051 BOTH were unrecognized and fell to this branch; the
-            // hoster-gate fix correctly enabled getcomics_direct but also started dispatching getcomics_main.)
+            // getcomics_main is the getcomics.org/dls/ "main server" link. It serves the file directly for
+            // MOST issues — clicking "Download Now" in a browser starts it immediately — and only the subset
+            // behind a *live* Cloudflare challenge actually fails. (Many GetComics posts now expose ONLY this
+            // link and no comicfiles getcomics_direct CDN button, so blanket-blocking it sent nearly every
+            // request to the indexers.) So ATTEMPT it like any other GetComics link, but in soft-fail mode:
+            // if the /dls/ fetch genuinely fails (a CF HTML challenge / 403), we hold the link for manual and
+            // let Prowlarr try, ending as a one-click MANUAL_DDL — instead of a terminal STALL.
             const isCloudflareMain = hoster === 'getcomics_main';
-            if (enabledHosters.includes(hoster) && !isCloudflareMain) {
+            if (enabledHosters.includes(hoster)) {
               const settings = await prisma.systemSetting.findMany();
               const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-              
+
               const duplicateDownload = await prisma.request.findFirst({
                   where: {
                       downloadLink: url,
@@ -241,30 +242,47 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
                       id: { not: requestId }
                   }
               });
-              
+
               if (duplicateDownload) {
                    Logger.log(`[Automation] Batch pack already downloading or downloaded (${url}). Queuing ${name} for batch extraction.`, 'info');
                    await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
                    return;
               }
-              
+
               await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url } });
-              
-              DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
-                .then(async (success) => {
-                    if (success) {
-                        await new Promise(r => setTimeout(r, 2000));
-                        await Importer.importRequest(requestId);
-                    }
-                })
-                .catch(e => Logger.log(getErrorMessage(e), 'error'));
-                
-              return; 
+
+              if (isCloudflareMain) {
+                  // Await the attempt so we can fall through to Prowlarr/manual if it's one of the CF-gated ones.
+                  let mainSucceeded = false;
+                  try {
+                      mainSucceeded = await DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster, { softFail: true });
+                  } catch (e) {
+                      Logger.log(getErrorMessage(e), 'error');
+                  }
+
+                  if (mainSucceeded) {
+                      await new Promise(r => setTimeout(r, 2000));
+                      await Importer.importRequest(requestId);
+                      return;
+                  }
+
+                  Logger.log(`[Automation] [GetComics] getcomics_main /dls/ download failed (likely a live Cloudflare challenge). Holding manual link and falling back to Prowlarr...`, 'warn');
+                  fallbackManualUrl = url; fallbackManualName = safeTitle;
+              } else {
+                  // getcomics_direct (clean comicfiles CDN) — fire-and-forget; it doesn't need a fallback.
+                  DownloadService.downloadDirectFile(url, safeTitle, config.download_path, requestId, hoster)
+                    .then(async (success) => {
+                        if (success) {
+                            await new Promise(r => setTimeout(r, 2000));
+                            await Importer.importRequest(requestId);
+                        }
+                    })
+                    .catch(e => Logger.log(getErrorMessage(e), 'error'));
+
+                  return;
+              }
             } else {
-              const reason = isCloudflareMain
-                  ? `a Cloudflare-protected getcomics_main /dls/ link (not auto-downloadable in Node)`
-                  : `an unsupported/disabled hoster (${hoster})`;
-              Logger.log(`[Automation] [GetComics] Best match is ${reason}. Holding manual link and falling back to Prowlarr...`, 'warn');
+              Logger.log(`[Automation] [GetComics] Best match is an unsupported/disabled hoster (${hoster}). Holding manual link and falling back to Prowlarr...`, 'warn');
               fallbackManualUrl = url; fallbackManualName = safeTitle;
             }
       } else {
@@ -299,12 +317,49 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
           .split(/\s+/)
           .filter((t: string) => t.length > 2 && !STOP_WORDS.includes(t));
 
+      // Reverse-check noise: words that don't identify a SERIES (grammar, format/release tags, variant
+      // descriptors). Everything else left in a release's core title is treated as a series word. STOP_WORDS
+      // is included so both sides of the comparison drop the same tokens — that keeps a legitimate
+      // "Black, White & Blood" series matching its own releases even though those words are stop-words.
+      const reverseNoise = new Set<string>([
+          ...STOP_WORDS,
+          ...JUNK_WORDS,
+          ...BOUNDED_VARIANT_KEYWORDS,
+          ...OPEN_VARIANT_KEYWORDS.flatMap(k => k.split(/\s+/)),
+          'cover', 'covers', 'scan', 'scans', 'noads', 'c2c', 'empire', 'mobile',
+      ]);
+      // Reduce a release title to its core series words: strip [tags], (year)/(group), bare years and
+      // issue/cover numbers, then drop noise. What remains should be ONLY the series name.
+      const coreSeriesWords = (title: string): string[] =>
+          (title || '')
+              .toLowerCase()
+              .replace(/\[[^\]]*\]/g, ' ')
+              .replace(/\([^)]*\)/g, ' ')
+              .replace(/\b(19|20)\d{2}\b/g, ' ')
+              .replace(/#?\d+(?:\.\d+)?/g, ' ')
+              .replace(/[^a-z0-9\s]/g, ' ')
+              .split(/\s+/)
+              .filter((t: string) => t.length > 2 && !reverseNoise.has(t));
+
       const matchesRequest = (title: string): boolean => {
           const titleLower = (title || '').toLowerCase();
           // Every significant series word from the request must be present (the same mandatory-word
           // intersection Prowlarr applies per-query, but anchored to the request so a broad query can't
           // relax it — this is what rejects a different series like "X-Men 031" for "X-Men: Outback").
           if (reqSeriesTokens.length > 0 && !reqSeriesTokens.every((t: string) => titleLower.includes(t))) return false;
+          // REVERSE GUARD: the presence check above can't tell the requested series from a differently
+          // titled one that merely CONTAINS its words — e.g. "Wolverine - Blood Hunt 003" for a plain
+          // "Wolverine #3" request. ("blood" is a stop word, so Prowlarr's ratio gate sees only 2 extra
+          // tokens and its "> 2 extra words" rule lets it through.) Reject any single-issue release whose
+          // core title introduces a series word the canonical request name doesn't have. Skipped for packs,
+          // which legitimately carry extra words (e.g. "Complete Collection").
+          if (requestedIssue !== null && !usePacks && reqSeriesTokens.length > 0) {
+              const extraSeriesWords = coreSeriesWords(title).filter((t: string) => !reqSeriesTokens.includes(t));
+              if (extraSeriesWords.length > 0) {
+                  Logger.log(`[Automation Debug] Discarding off-series Prowlarr release "${title}" — extra series words ${JSON.stringify(extraSeriesWords)} not in requested "${seriesNameForMatch.trim()}".`, 'debug');
+                  return false;
+              }
+          }
           // A single-issue request must land on that exact issue (or a pack/range that contains it).
           if (requestedIssue !== null && !usePacks) {
               const range = parseIssueRange(titleLower);

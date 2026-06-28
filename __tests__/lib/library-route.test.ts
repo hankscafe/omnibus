@@ -5,6 +5,8 @@ import { GET } from '@/app/api/library/route';
 const mocks = vi.hoisted(() => ({
     findManySeries: vi.fn(),
     countSeries: vi.fn(),
+    groupByIssue: vi.fn(),
+    findManyIssue: vi.fn(),
     getServerSession: vi.fn()
 }));
 
@@ -15,9 +17,13 @@ vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn()
 // 3. Mock Prisma
 vi.mock('@/lib/db', () => ({
     prisma: {
-        series: { 
+        series: {
             findMany: mocks.findManySeries,
             count: mocks.countSeries
+        },
+        issue: {
+            groupBy: mocks.groupByIssue,
+            findMany: mocks.findManyIssue
         }
     }
 }));
@@ -34,6 +40,29 @@ describe('API Route: Library Advanced Search', () => {
         mocks.getServerSession.mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } });
         mocks.countSeries.mockResolvedValue(1);
         mocks.findManySeries.mockResolvedValue([{ id: '1', issues: [], favorites: [] }]);
+        mocks.groupByIssue.mockResolvedValue([]);
+        mocks.findManyIssue.mockResolvedValue([]);
+    });
+
+    it('derives card counts from grouped aggregates instead of loading every issue row', async () => {
+        // The page no longer include-loads all issues; it counts downloaded + read issues per series via two
+        // groupBy aggregates. Verify the derived numbers: count = downloaded, unread = downloaded - read,
+        // progress = round(read / downloaded * 100).
+        mocks.findManySeries.mockResolvedValue([
+            { id: 's1', name: 'Batman', year: 2016, publisher: 'DC', coverUrl: '/cover.jpg', folderPath: '/x', favorites: [] }
+        ]);
+        mocks.groupByIssue
+            .mockResolvedValueOnce([{ seriesId: 's1', _count: { _all: 10 } }])  // downloaded
+            .mockResolvedValueOnce([{ seriesId: 's1', _count: { _all: 4 } }]);  // read/completed
+
+        const res = await GET(createReq('batman'));
+        const body = await res.json();
+        const series = body.series[0];
+
+        expect(series.count).toBe(10);
+        expect(series.unreadCount).toBe(6);
+        expect(series.progressPercentage).toBe(40);
+        expect(series.isPendingReq).toBe(false);
     });
 
     it('should default to a broad OR search if no prefix is provided', async () => {

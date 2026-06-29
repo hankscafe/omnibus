@@ -470,7 +470,7 @@ export async function executeSearchAndDownload(requestId: string, name: string, 
               }
           }
           Logger.log(`[Automation] Sending to Client: ${clientConfig.name} for ${best.title}`, 'info');
-          await DownloadService.addDownload(clientConfig, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0);
+          await DownloadService.addDownload(clientConfig, best.downloadUrl, best.title, best.seedTime || 0, best.seedRatio || 0, isManga);
           await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: best.title, downloadLink: trackingHash, indexer: best.indexer } });
           return; 
         }

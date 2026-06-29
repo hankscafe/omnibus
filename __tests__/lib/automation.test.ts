@@ -228,7 +228,7 @@ describe('Core Logic: Automation Engine', () => {
         expect(DownloadService.addDownload).toHaveBeenCalledWith(
             expect.objectContaining({ id: 'client_1' }),
             'magnet:?xt=right',
-            expect.anything(), expect.anything(), expect.anything()
+            expect.anything(), expect.anything(), expect.anything(), expect.anything()
         );
     });
 
@@ -289,7 +289,8 @@ describe('Core Logic: Automation Engine', () => {
             'magnet:?xt=123',
             'Batman #01 (2024)',
             0,
-            0
+            0,
+            false
         );
     });
 

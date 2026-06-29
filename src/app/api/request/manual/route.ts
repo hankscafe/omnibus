@@ -193,7 +193,9 @@ export async function POST(request: NextRequest) {
                     }
                 }
 
-                await DownloadService.addDownload(client, searchResult.downloadUrl, searchResult.title, searchResult.seedTime || 0, searchResult.seedRatio || 0);
+                // File manga under its own category/label in the client (manga → second configured category).
+                const mangaSeries = await prisma.series.findFirst({ where: { metadataId: String(cvId), metadataSource: targetMetadataSource }, select: { isManga: true } });
+                await DownloadService.addDownload(client, searchResult.downloadUrl, searchResult.title, searchResult.seedTime || 0, searchResult.seedRatio || 0, mangaSeries?.isManga ?? false);
                 await prisma.request.update({
                   where: { id: targetReqId },
                   data: { downloadLink: trackingHash, indexer: searchResult.indexer }

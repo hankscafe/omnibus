@@ -78,12 +78,19 @@ export async function GET() {
             else if (client.type === 'deluge') {
                 const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers, timeout: 15000 });
                 const cookie = authRes.headers['set-cookie'];
-                const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size"], {}], id: 2 }, { headers: { ...headers, Cookie: cookie }, timeout: 15000 });
+                // Request the Label-plugin `label` field so a shared Deluge can be filtered by category, like qBit/SAB.
+                const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size", "label"], {}], id: 2 }, { headers: { ...headers, Cookie: cookie }, timeout: 15000 });
                 if (listRes.data.result?.torrents) {
                     const torrents = listRes.data.result.torrents;
-                    allDownloads.push(...Object.keys(torrents).map(hash => ({
-                        id: hash, name: torrents[hash].name, progress: torrents[hash].progress.toFixed(1),
-                        status: torrents[hash].state, clientName: client.name, size: (torrents[hash].total_size / 1024 / 1024).toFixed(2) + " MB"
+                    const entries = Object.keys(torrents).map(hash => ({ hash, ...torrents[hash] }));
+                    // Deluge "categories" are Label-plugin labels. Only filter when labels are actually in use, so a
+                    // Deluge without the Label plugin (no torrent carries a label) still lists downloads instead of
+                    // showing nothing — while a shared instance (labels present) is correctly narrowed to the category.
+                    const labelsInUse = entries.some((t: any) => t.label && String(t.label).trim() !== '');
+                    const visible = labelsInUse ? entries.filter((t: any) => isAllowedCategory(t.label)) : entries;
+                    allDownloads.push(...visible.map((t: any) => ({
+                        id: t.hash, name: t.name, progress: t.progress.toFixed(1),
+                        status: t.state, clientName: client.name, size: (t.total_size / 1024 / 1024).toFixed(2) + " MB"
                     })));
                 }
             }

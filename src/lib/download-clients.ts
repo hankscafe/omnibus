@@ -22,12 +22,17 @@ async function getNetworkHeaders() {
 }
 
 export const DownloadService = {
-  async addDownload(rawClient: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0) {
+  async addDownload(rawClient: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0, isManga: boolean = false) {
     // Credentials are encrypted at rest; decrypt into a local copy before use.
     const client = { ...rawClient, pass: await decryptSecret(rawClient.pass), apiKey: await decryptSecret(rawClient.apiKey) };
     const cleanUrl = client.url.replace(/\/$/, '');
     const categoryString = client.category || 'comics';
-    const primaryCategory = categoryString.split(',')[0].trim();
+    // The category field is an ordered list: first = comics, optional second = manga. Route manga to the
+    // second entry when present so comics and manga land in their own category/label in the download client;
+    // everything else (and manga when only one category is configured) uses the first. The active-downloads
+    // filter still accepts the whole list, so both categories remain visible.
+    const categoryList = categoryString.split(',').map((c: string) => c.trim()).filter(Boolean);
+    const primaryCategory = (isManga && categoryList[1]) ? categoryList[1] : (categoryList[0] || 'comics');
     const networkHeaders = await getNetworkHeaders();
 
     Logger.log(`[Download Service Debug] Preparing to add download to ${client.name} (${client.type}): Title: "${title}", URL: "${downloadUrl.substring(0, 60)}...", Category: ${primaryCategory}`, 'debug');
@@ -73,7 +78,10 @@ export const DownloadService = {
       else if (client.type === 'deluge') {
         const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, baseConfig);
         const cookie = authRes.headers['set-cookie'];
-        const options: any = { download_location: primaryCategory };
+        // Don't force download_location to the category string (it previously set the save path to e.g.
+        // "comics", a stray relative folder). Let Deluge use its configured default — or its per-label
+        // download location, now that we tag the torrent with the category as a label below.
+        const options: any = {};
         if (seedRatio > 0) { options.stop_at_ratio = true; options.stop_ratio = seedRatio; }
         // Deluge's magnet method is core.add_torrent_magnet — "add_torrent_magents" was a typo, so every
         // magnet add hit an unknown method, and Deluge returns JSON-RPC errors with HTTP 200 (axios won't
@@ -82,6 +90,18 @@ export const DownloadService = {
         const addRes = await axios.post(`${cleanUrl}/json`, { method: method, params: [[downloadUrl], options], id: 2 }, { ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie } });
         // Surface HTTP-200 JSON-RPC errors explicitly so a failed add doesn't masquerade as success.
         if (addRes.data?.error) throw new Error(`Deluge add failed: ${JSON.stringify(addRes.data.error)}`);
+
+        // Tag the torrent with the configured category as a Deluge *label* (Label plugin), so the
+        // active-downloads view can filter a shared Deluge instance by category the same way qBit/SAB/NZBGet
+        // do with their native categories. Best-effort: if the Label plugin is disabled, Deluge returns the
+        // error in a 200 body (axios won't throw) and the torrent is simply left unlabeled — no add failure.
+        const delugeTorrentId = addRes.data?.result;
+        const delugeLabel = primaryCategory.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        if (delugeTorrentId && typeof delugeTorrentId === 'string' && delugeLabel) {
+            const labelHeaders = { ...baseConfig.headers, Cookie: cookie };
+            try { await axios.post(`${cleanUrl}/json`, { method: "label.add", params: [delugeLabel], id: 3 }, { ...baseConfig, headers: labelHeaders }); } catch (e) {}
+            try { await axios.post(`${cleanUrl}/json`, { method: "label.set_torrent", params: [delugeTorrentId, delugeLabel], id: 4 }, { ...baseConfig, headers: labelHeaders }); } catch (e) {}
+        }
       }
       else if (client.type === 'sab') {
           if (fileBuffer) {
@@ -469,12 +489,19 @@ export const DownloadService = {
         else if (client.type === 'deluge') {
             const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers: baseHeaders, timeout: 15000 });
             const cookie = authRes.headers['set-cookie'];
-            const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size"], {}], id: 2 }, { headers: { ...baseHeaders, Cookie: cookie }, timeout: 15000 });
+            // Request the Label-plugin `label` field so a shared Deluge can be filtered by category, like qBit/SAB.
+            const listRes = await axios.post(`${cleanUrl}/json`, { method: "web.update_ui", params: [["name", "progress", "state", "total_size", "label"], {}], id: 2 }, { headers: { ...baseHeaders, Cookie: cookie }, timeout: 15000 });
             if (listRes.data.result?.torrents) {
                 const torrents = listRes.data.result.torrents;
-                allDownloads.push(...Object.keys(torrents).map(hash => ({
-                    id: hash, name: torrents[hash].name, progress: torrents[hash].progress.toFixed(1),
-                    status: torrents[hash].state, clientName: client.name, size: (torrents[hash].total_size / 1024 / 1024).toFixed(2) + " MB"
+                const entries = Object.keys(torrents).map(hash => ({ hash, ...torrents[hash] }));
+                // Deluge "categories" are Label-plugin labels. Only filter when labels are actually in use, so a
+                // Deluge without the Label plugin (no torrent carries a label) still lists downloads instead of
+                // showing nothing — while a shared instance (labels present) is correctly narrowed to the category.
+                const labelsInUse = entries.some((t: any) => t.label && String(t.label).trim() !== '');
+                const visible = labelsInUse ? entries.filter((t: any) => isAllowedCategory(t.label)) : entries;
+                allDownloads.push(...visible.map((t: any) => ({
+                    id: t.hash, name: t.name, progress: t.progress.toFixed(1),
+                    status: t.state, clientName: client.name, size: (t.total_size / 1024 / 1024).toFixed(2) + " MB"
                 })));
             }
         }

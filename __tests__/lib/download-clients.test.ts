@@ -84,6 +84,20 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
         appendSpy.mockRestore();
     });
 
+    it('routes manga to the SECOND configured category, comics to the first', async () => {
+        // category = "comics,manga": a comics add uses "comics" (covered above); a manga add must use "manga"
+        // so the two land under their own category/label in the client.
+        const appendSpy = vi.spyOn(FormData.prototype, 'append');
+        mocks.axiosPost
+            .mockResolvedValueOnce({ headers: { 'set-cookie': ['SID=x'] }, data: 'Ok.' })  // auth.login
+            .mockResolvedValueOnce({ data: 'Ok.' });                                          // add
+
+        await DownloadService.addDownload(mockClient, 'magnet:?xt=urn:btih:1', 'Naruto #1', 0, 0, true);
+
+        expect(appendSpy).toHaveBeenCalledWith('category', 'manga');
+        appendSpy.mockRestore();
+    });
+
     it('should gracefully handle a 403 Forbidden error (bad password)', async () => {
         const mockError = new Error('Request failed with status code 403');
         (mockError as any).response = { status: 403 };
@@ -118,6 +132,52 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
 
         expect(result.success).toBe(true);
         expect(mocks.axiosPost.mock.calls[1][1].method).toBe('core.add_torrent_magnet');
+    });
+
+    it('labels the Deluge torrent with the configured category so a shared instance can be filtered', async () => {
+        // qBit/SAB/NZBGet set their native category on add; Deluge has no category, so Omnibus tags the
+        // torrent with the configured category as a Label-plugin label. Without this, Omnibus's own comics
+        // torrents would be unlabeled and the category-filtered active-downloads list would hide them.
+        mocks.axiosPost
+            .mockResolvedValueOnce({ headers: { 'set-cookie': ['_session_id=abc'] }, data: { result: true } })  // auth.login
+            .mockResolvedValueOnce({ data: { result: 'torrent_hash_123' } })                                     // add (returns torrent id)
+            .mockResolvedValueOnce({ data: { result: null } })                                                   // label.add
+            .mockResolvedValueOnce({ data: { result: true } });                                                  // label.set_torrent
+
+        const result = await DownloadService.addDownload(delugeClient, 'magnet:?xt=urn:btih:abc', 'Batman #1', 0, 0);
+
+        expect(result.success).toBe(true);
+        const setLabelCall = mocks.axiosPost.mock.calls.find(c => c[1]?.method === 'label.set_torrent');
+        expect(setLabelCall).toBeTruthy();
+        expect(setLabelCall![1].params).toEqual(['torrent_hash_123', 'comics']);
+    });
+
+    it('does not fail the add when the Deluge Label plugin is unavailable (best-effort labeling)', async () => {
+        // label.add / label.set_torrent return a 200 JSON-RPC error when the plugin is off; the add must
+        // still succeed (the labeling is best-effort, not a hard requirement).
+        mocks.axiosPost
+            .mockResolvedValueOnce({ headers: { 'set-cookie': ['_session_id=abc'] }, data: { result: true } })  // auth.login
+            .mockResolvedValueOnce({ data: { result: 'torrent_hash_123' } })                                     // add
+            .mockRejectedValueOnce(new Error('Unknown method label.add'))                                        // label.add throws
+            .mockRejectedValueOnce(new Error('Unknown method label.set_torrent'));                               // label.set_torrent throws
+
+        const result = await DownloadService.addDownload(delugeClient, 'magnet:?xt=urn:btih:abc', 'Batman #1', 0, 0);
+
+        expect(result.success).toBe(true);
+    });
+
+    it('does not force the Deluge save path to the category string (download_location quirk)', async () => {
+        mocks.axiosPost
+            .mockResolvedValueOnce({ headers: { 'set-cookie': ['_session_id=abc'] }, data: { result: true } })  // auth.login
+            .mockResolvedValueOnce({ data: { result: 'torrent_hash_123' } })                                     // add
+            .mockResolvedValueOnce({ data: { result: null } })                                                   // label.add
+            .mockResolvedValueOnce({ data: { result: true } });                                                  // label.set_torrent
+
+        await DownloadService.addDownload(delugeClient, 'magnet:?xt=urn:btih:abc', 'Batman #1', 0, 0);
+
+        // The add options (params[1] of the add call) must NOT pin download_location to "comics".
+        const addOptions = mocks.axiosPost.mock.calls[1][1].params[1];
+        expect(addOptions.download_location).toBeUndefined();
     });
 
     it('throws on a Deluge HTTP-200 JSON-RPC error instead of reporting false success', async () => {

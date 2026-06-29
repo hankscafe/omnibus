@@ -32,7 +32,9 @@ export async function POST(request: Request) {
         query = `${body.name} ${body.year}`;
     }
 
-    const result = await SearchEngine.performSmartSearch(query);
+    // Resolve manga-vs-comics from the request's series so a forced download is filed under the right category.
+    const fsSeries = await prisma.series.findFirst({ where: { metadataId: dbReq.volumeId, metadataSource: dbReq.metadataSource }, select: { isManga: true } });
+    const result = await SearchEngine.performSmartSearch(query, fsSeries?.isManga ?? false);
 
     if (result.success) {
         await prisma.request.update({

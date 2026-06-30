@@ -40,10 +40,20 @@ export async function PUT(request: Request) {
         create: { userId: user.id, document, progress, percentage, device, deviceId: device_id, timestamp }
     });
 
-    // Optional: Sync this progress back to the Omnibus Web UI!
-    const matchedIssue = await prisma.issue.findFirst({
-        where: { filePath: { endsWith: document } }
-    });
+    // Optional: Sync this progress back to the Omnibus Web UI! KOReader reports a bare basename, and an
+    // unanchored endsWith can bind the WRONG issue (duplicate basenames across series, or a suffix like
+    // '1.cbz' matching '001.cbz'). Filter to an EXACT filename match and only bind when it's unambiguous.
+    const docStr = String(document);
+    const docBase = docStr.split(/[\\/]/).pop() || docStr;
+    const koNorm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+    // Candidates by EXACT filename (so '1.cbz' can't suffix-match '001.cbz'), robust to differing path roots.
+    const koCandidates = (await prisma.issue.findMany({ where: { filePath: { endsWith: docBase } } }))
+        .filter(i => i.filePath && i.filePath.split(/[\\/]/).pop() === docBase);
+    // If KOReader reported a full path and several files share the basename, disambiguate by the path suffix.
+    const koByPath = (docStr.includes('/') || docStr.includes('\\'))
+        ? koCandidates.filter(i => koNorm(i.filePath!).endsWith(koNorm(docStr)))
+        : [];
+    const matchedIssue = koByPath.length === 1 ? koByPath[0] : (koCandidates.length === 1 ? koCandidates[0] : null);
 
     if (matchedIssue) {
         const newPercentage = Math.max(0, Math.min(1, Number(percentage) || 0));

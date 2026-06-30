@@ -5,12 +5,18 @@ import axios from 'axios';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { decryptSecret } from '@/lib/encryption';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export async function GET() {
   // NOTE: the per-client polling below duplicates DownloadService.getAllActiveDownloads()
   // (src/lib/download-clients.ts); this route adds the ignored/pending-request UI filtering.
   // Consolidate onto the service method if the two implementations drift again.
   try {
+    // Defense-in-depth behind the middleware /api/admin/* gate — enforce admin in-handler too.
+    const session = await getServerSession(await getAuthOptions());
+    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+
     const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) {
         return NextResponse.json({ success: true, activeDownloads: [] });

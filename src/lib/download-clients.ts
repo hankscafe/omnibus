@@ -541,7 +541,11 @@ export const DownloadService = {
                 }
             } catch (e) { }
         }
-      } catch (err) { }
+      } catch (err) {
+          // Surface a broken/mis-authed client instead of silently contributing zero downloads — that made
+          // the importer/cron lookup fail later as a generic "not found" rather than an auth problem.
+          Logger.log(`[Download Service] Could not list active downloads from "${rawClient?.name || 'client'}": ${getErrorMessage(err)}`, 'warn');
+      }
     }
     return allDownloads;
   }

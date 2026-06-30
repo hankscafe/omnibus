@@ -78,7 +78,9 @@ async function fetchGetComicsHtml(url: string) {
         if (solverSetting?.value === 'byparr') solverType = 'byparr';
         const parsedSecs = parseInt(timeoutSetting?.value || '300', 10);
         if (!isNaN(parsedSecs)) solveSecs = Math.min(600, Math.max(30, parsedSecs));
-    } catch(e) {}
+    } catch(e) {
+        Logger.log(`[GetComics] Could not read FlareSolverr settings (Cloudflare bypass may be disabled): ${e instanceof Error ? e.message : String(e)}`, 'warn');
+    }
 
     try {
         const { data } = await axios.get(url, {

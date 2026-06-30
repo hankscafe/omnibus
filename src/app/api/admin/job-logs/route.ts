@@ -10,6 +10,10 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
+    // Defense-in-depth behind the middleware /api/admin/* gate.
+    const session = await getServerSession(await getAuthOptions());
+    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+
     // --- AUTO-HEAL STUCK JOBS ---
     // If a job has been "IN_PROGRESS" for more than 2 hours, it was likely killed by a server restart.
     // We automatically mark it as FAILED so it stops spinning in the UI forever.
@@ -43,6 +47,7 @@ export async function DELETE(request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
+    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     const userId = (session?.user as any)?.id;
     const { searchParams } = new URL(request.url);
     const days = searchParams.get('days');

@@ -25,7 +25,8 @@ vi.mock('@/lib/db', () => ({
 }));
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
-vi.mock('@/lib/utils/paths', () => ({ UNMATCHED_DIR: '/unmatched' }));
+// Keep the real isPathWithinRoots (the route uses it for containment now) while overriding UNMATCHED_DIR.
+vi.mock('@/lib/utils/paths', async (importOriginal) => ({ ...(await importOriginal() as any), UNMATCHED_DIR: '/unmatched' }));
 vi.mock('fs-extra', () => ({
     default: {
         existsSync: mocks.existsSync,

@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
     findUniqueOpds: vi.fn(),
     findUniqueApi: vi.fn(),
     koreaderUpsert: vi.fn(),
-    findFirstIssue: vi.fn(),
+    findManyIssue: vi.fn(),
     readProgressUpsert: vi.fn(),
     readProgressFindUnique: vi.fn(),
     upsertDailyStat: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock('@/lib/db', () => ({
         opdsKey: { findUnique: mocks.findUniqueOpds },
         apiKey: { findUnique: mocks.findUniqueApi },
         koreaderSync: { upsert: mocks.koreaderUpsert },
-        issue: { findFirst: mocks.findFirstIssue },
+        issue: { findMany: mocks.findManyIssue },
         readProgress: { upsert: mocks.readProgressUpsert, findUnique: mocks.readProgressFindUnique },
         dailyReadingStat: { upsert: mocks.upsertDailyStat },
         dailyIssueRead: { upsert: mocks.upsertDailyIssueRead }
@@ -67,8 +67,8 @@ describe('Integrations: KOReader Progress Sync', () => {
             user: { id: 'user_1', username: 'TestUser' }
         });
 
-        // 2. Find the Omnibus Issue that matches the KOReader document
-        mocks.findFirstIssue.mockResolvedValueOnce({ id: 'issue_100' });
+        // 2. Find the Omnibus Issue that matches the KOReader document (exact filename, unambiguous)
+        mocks.findManyIssue.mockResolvedValueOnce([{ id: 'issue_100', filePath: '/manga/Naruto/vol_1.cbz' }]);
 
         // 3. KOReader says the user finished the book (99%+)
         const req = createReq(
@@ -93,7 +93,7 @@ describe('Integrations: KOReader Progress Sync', () => {
             user: { id: 'user_1', username: 'TestUser' }
         });
         // The matched issue has a known real page count of 40
-        mocks.findFirstIssue.mockResolvedValueOnce({ id: 'issue_100', pageCount: 40 });
+        mocks.findManyIssue.mockResolvedValueOnce([{ id: 'issue_100', pageCount: 40, filePath: '/manga/Naruto/vol_1.cbz' }]);
         // The user had previously synced to 25%
         mocks.readProgressFindUnique.mockResolvedValueOnce({ currentPage: 25, totalPages: 100 });
 
@@ -118,7 +118,7 @@ describe('Integrations: KOReader Progress Sync', () => {
         mocks.findUniqueOpds.mockResolvedValueOnce({
             user: { id: 'user_1', username: 'TestUser' }
         });
-        mocks.findFirstIssue.mockResolvedValueOnce({ id: 'issue_100', pageCount: 40 });
+        mocks.findManyIssue.mockResolvedValueOnce([{ id: 'issue_100', pageCount: 40, filePath: '/manga/Naruto/vol_1.cbz' }]);
         // The user was already at 80%, but the device syncs an older 50% state
         mocks.readProgressFindUnique.mockResolvedValueOnce({ currentPage: 80, totalPages: 100 });
 

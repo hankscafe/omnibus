@@ -183,15 +183,6 @@ function LibraryContent() {
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
   const [selectedComic, setSelectedComic] = useState<Comic | null>(null)
-  const [relatedIssues, setRelatedIssues] = useState<Comic[]>([])
-  const [loadingRelated, setLoadingRelated] = useState(false)
-  
-  const [ownedSeries, setOwnedSeries] = useState<Set<number>>(new Set())
-  const [monitoredSeries, setMonitoredSeries] = useState<Set<number>>(new Set())
-  const [ownedIssues, setOwnedIssues] = useState<Set<number>>(new Set())
-  const [activeRequests, setActiveRequests] = useState<any[]>([])
-  const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set())
-  const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set())
 
   const isAdmin = (session?.user as any)?.role === 'ADMIN'
 
@@ -245,20 +236,6 @@ function LibraryContent() {
           })
           .catch(() => {});
   }, []);
-  
-  useEffect(() => {
-    fetch('/api/library/ids')
-      .then(res => res.json())
-      .then(data => { 
-          if (data) {
-              setOwnedSeries(new Set(data.series || []));
-              setMonitoredSeries(new Set(data.monitored || []));
-              setOwnedIssues(new Set(data.issues || []));
-              setActiveRequests(data.requests || []);
-          }
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!selectedComic?.cvId) return;
@@ -285,20 +262,6 @@ function LibraryContent() {
         }
       });
   }, [selectedComic?.id, selectedComic?.cvId]);
-
-  useEffect(() => {
-    if (!selectedComic?.cvId) { setRelatedIssues([]); return; }
-    setLoadingRelated(true)
-    fetch(`/api/series-issues?volumeId=${selectedComic.cvId}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.results) {
-           const sorted = data.results.sort((a: any, b: any) => (parseFloat(b.issueNumber) || 0) - (parseFloat(a.issueNumber) || 0));
-           setRelatedIssues(sorted);
-        }
-      })
-      .finally(() => setLoadingRelated(false))
-  }, [selectedComic?.cvId])
 
   const loadLibraryData = useCallback(async (pageNum: number, isRefreshScan: boolean, appendResults: boolean) => {
       if (isRefreshScan) setIsRefreshing(true);

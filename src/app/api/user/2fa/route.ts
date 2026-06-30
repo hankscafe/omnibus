@@ -8,8 +8,11 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { checkRateLimit } from '@/lib/rate-limit';
 
+// otplib & qrcode are CommonJS; require() with the interop fallback avoids ESM default-interop pitfalls.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const otplib = require('otplib');
 const authenticator = otplib.authenticator || otplib.default?.authenticator || otplib;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const QRCode = require('qrcode');
 
 export async function GET(req: Request) {

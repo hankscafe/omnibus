@@ -164,10 +164,25 @@ fn build_comic_info_xml(row: &sqlx::postgres::PgRow) -> String {
     let mut m = String::new();
     let mut d = String::new();
     if let Some(rd) = g("releaseDate") {
-        let parts: Vec<&str> = rd.split('-').collect();
-        if let Some(p) = parts.first() { if !p.is_empty() { y = p.to_string(); } }
-        if let Some(p) = parts.get(1) { m = p.to_string(); }
-        if let Some(p) = parts.get(2) { d = p.to_string(); }
+        // Only accept a well-formed date; a hand-entered slash/text date would otherwise corrupt <Year>.
+        // Full ISO (YYYY-MM-DD, optional trailing time) -> Y/M/D; bare year (YYYY) -> Year; anything else
+        // keeps the series-year fallback above. Mirrors the Node writeComicInfo guard (#35).
+        let rd = rd.trim();
+        let b = rd.as_bytes();
+        let is_iso_full = rd.len() >= 10
+            && b[..4].iter().all(u8::is_ascii_digit)
+            && b[4] == b'-'
+            && b[5..7].iter().all(u8::is_ascii_digit)
+            && b[7] == b'-'
+            && b[8..10].iter().all(u8::is_ascii_digit);
+        let is_year_only = rd.len() == 4 && b.iter().all(u8::is_ascii_digit);
+        if is_iso_full {
+            y = rd[0..4].to_string();
+            m = rd[5..7].to_string();
+            d = rd[8..10].to_string();
+        } else if is_year_only {
+            y = rd.to_string();
+        }
     }
 
     let issue_meta_id = g("issue_meta_id");

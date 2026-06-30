@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "Username or Email already in use." }, { status: 400 });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const hashedPassword = await bcrypt.hash(password, 12); // standardized to 12 (register/reset/change all use 12)
 
       const newUser = await prisma.user.create({
           data: {

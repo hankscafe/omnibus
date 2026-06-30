@@ -8,6 +8,9 @@ import { getErrorMessage } from '@/lib/utils/error';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
+  // Defense-in-depth behind the middleware /api/admin/* gate.
+  const session = await getServerSession(await getAuthOptions());
+  if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   return NextResponse.json(Logger.getLogs());
 }
 
@@ -15,6 +18,7 @@ export async function DELETE() {
   try {
       const authOptions = await getAuthOptions();
       const session = await getServerSession(authOptions);
+      if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
       const userId = (session?.user as any)?.id;
 
       Logger.clear();

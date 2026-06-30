@@ -143,7 +143,9 @@ export class MetronProvider implements IMetadataProvider {
                     const issueRes = await this.fetchWithBackoff(`${this.baseUrl}/series/${series.id}/issue_list/`, { headers: this.requestHeaders, auth, timeout: 3000 }, 1);
                     if (issueRes.data?.results?.length > 0) coverUrl = issueRes.data.results[0].image || null;
                 } catch(e: any) {
-                    if (e.message === 'RATE_LIMIT') rateLimitHit = true;
+                    // fetchWithBackoff throws 'FATAL_RATE_LIMIT' (or 'HTTP Error: 429'), never 'RATE_LIMIT' —
+                    // the old check never tripped, leaving this per-page cover circuit-breaker dead.
+                    if (e.message === 'FATAL_RATE_LIMIT' || (e.message || '').includes('429')) rateLimitHit = true;
                 }
             }
 

@@ -384,8 +384,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
         offset += 100;
         loopCount++;
-        
+
         await new Promise(r => setTimeout(r, 3000));
+    }
+    // The loopCount<20 guard caps a sync at 2000 issues; warn (instead of silently clipping) when a volume
+    // genuinely has more — latestDateMs and the 'Ended' heuristic would also be incomplete in that case.
+    if (loopCount >= 20 && offset < totalResults) {
+        Logger.log(`[Metadata Fetcher] "${series.name}" exceeded the 2000-issue sync cap (${offset}/${totalResults}); remaining issues were not synced this run.`, 'warn');
     }
 
     if (!volData.end_year && latestDateMs > 0) {

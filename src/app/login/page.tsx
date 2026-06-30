@@ -107,6 +107,12 @@ export default function LoginPage() {
             setLoading(false);
             return;
         }
+        if (res.error === "2FA_INVALID") {
+            setShowTwoFactor(true); // stay on the 2FA step with a clear message
+            setErrorMsg("Invalid authenticator code. Please try again.");
+            setLoading(false);
+            return;
+        }
         let message = res.error;
         if (message === "CredentialsSignin") message = "Invalid username or password.";
         setErrorMsg(message);

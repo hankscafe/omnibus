@@ -89,7 +89,13 @@ export async function POST(request: Request) {
             const normalizedSearchSeries = normalize(seriesName);
             const parsedTargetNum = parseFloat(issueNum.replace(/[^0-9.-]/g, ''));
 
-            const matchedSeries = allSeries.find(s => normalize(s.name) === normalizedSearchSeries || normalize(s.name).includes(normalizedSearchSeries));
+            // Prefer an exact normalized match; only fall back to a prefix match when it's unambiguous (a
+            // single candidate), so 'Batman' can't silently link to 'Batman Beyond' / 'Batman and Robin'.
+            const exactSeries = allSeries.filter(s => normalize(s.name) === normalizedSearchSeries);
+            const prefixSeries = exactSeries.length === 0
+                ? allSeries.filter(s => normalize(s.name).startsWith(normalizedSearchSeries))
+                : [];
+            const matchedSeries = exactSeries[0] || (prefixSeries.length === 1 ? prefixSeries[0] : null);
             let matchedIssueId = null;
 
             if (matchedSeries) {

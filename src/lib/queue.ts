@@ -966,9 +966,9 @@ export function initWorker() {
                         try {
                             await Mailer.sendWeeklyDigest(toEmails, finalComics, finalManga);
                             if (recordsToSave.length > 0) {
-                                for (const record of recordsToSave) {
-                                    await prisma.digestHistory.create({ data: record });
-                                }
+                                // One INSERT for all rows so a mid-loop failure can't persist a partial set
+                                // and re-email the unrecorded issues on the next run (duplicate digest).
+                                await prisma.digestHistory.createMany({ data: recordsToSave });
                             }
                         } catch (mailErr) { 
                             throw mailErr; 

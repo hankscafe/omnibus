@@ -6,6 +6,9 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 import { isPathWithinRoots } from '@/lib/utils/paths';
 
 export async function GET(request: Request) {
@@ -26,6 +29,16 @@ export async function GET(request: Request) {
     if (!isPathWithinRoots(filePath, libraries.map(lib => lib.path))) {
       Logger.log(`[Reader Debug] Access denied. Path is outside of configured library roots: ${filePath}`, 'warn');
       return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
+    }
+
+    // Per-library access: the file must live under a library THIS user has been granted (admins bypass),
+    // matching reader/image. Without it, any authenticated user could enumerate the page entries of any
+    // archive in any library — including ones they were never granted.
+    const authOptions = await getAuthOptions();
+    const session = await getServerSession(authOptions);
+    const accessiblePaths = await getAccessibleLibraryPaths((session?.user as any)?.id, (session?.user as any)?.role);
+    if (!canAccessPath(accessiblePaths, filePath)) {
+      return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
     }
 
     const isZip = filePath.toLowerCase().match(/\.(cbz|epub|zip)$/);

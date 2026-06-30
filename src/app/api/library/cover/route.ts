@@ -5,6 +5,7 @@ import path from 'path';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { isPathWithinRoots } from '@/lib/utils/paths';
 
 const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org', 'metron.cloud', 'static.metron.cloud'];
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -90,18 +91,11 @@ export async function GET(request: NextRequest) {
 
     const realTarget = path.normalize(filePath);
     const libraries = await prisma.library.findMany();
-    
-    const isAuthorized = libraries.some(lib => {
-        try {
-            const realLibRoot = path.normalize(lib.path).toLowerCase();
-            return realTarget.toLowerCase().startsWith(realLibRoot);
-        } catch (e) {
-            return false;
-        }
-    });
 
-    if (!isAuthorized) {
-      return getFallbackImage(); 
+    // Separator-aware containment (root === target, or under root + path.sep). A bare startsWith let a
+    // sibling root like "/data/comics-private" satisfy the "/data/comics" check and leak arbitrary files.
+    if (!isPathWithinRoots(realTarget, libraries.map(l => l.path))) {
+      return getFallbackImage();
     }
 
     if (!fs.existsSync(realTarget)) {

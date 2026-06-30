@@ -5,11 +5,13 @@ import { DiscordNotifier } from '@/lib/discord';
 import { Mailer } from '@/lib/mailer';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { checkRateLimit } from '@/lib/rate-limit';
+import { checkRateLimit, getClientIp, checkGlobalRateLimit } from '@/lib/rate-limit';
 import { grantAllLibraries, setUserLibraryAccess, getDefaultLibraryIds } from '@/lib/library-access';
 
 export async function POST(request: Request) {
-  const ip = request.headers.get('x-forwarded-for') || 'unknown';
+  const globalLimit = checkGlobalRateLimit('register', 40, 15 * 60 * 1000);
+  if (globalLimit.isLimited) return globalLimit.response!;
+  const ip = getClientIp(request);
   const rateLimit = checkRateLimit(`register_${ip}`, 5, 15 * 60 * 1000);
   if (rateLimit.isLimited) return rateLimit.response!;
 

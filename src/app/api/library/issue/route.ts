@@ -10,6 +10,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { parseComicVineCredits } from '@/lib/utils';
+import { sanitizeDescription } from '@/lib/utils/sanitize';
 import { safeParse } from '@/lib/utils/safe-parse';
 import { omnibusQueue } from '@/lib/queue';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
@@ -206,7 +207,8 @@ export async function GET(request: Request) {
         storyArcs: parsedStoryArcs,
         teams: parsedTeams,
         locations: parsedLocations,
-        description: issue.description
+        // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored XSS).
+        description: sanitizeDescription(issue.description)
     });
   } catch (error: unknown) {
     Logger.log(`[Library Issue API] Error: ${getErrorMessage(error)}`, 'error');

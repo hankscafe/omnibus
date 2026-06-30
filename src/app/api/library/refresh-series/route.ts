@@ -4,9 +4,15 @@ import axios from 'axios';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export async function POST(request: Request) {
   try {
+    // Re-fetches provider data and rewrites the series record — admin-only.
+    const session = await getServerSession(await getAuthOptions());
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+
     const { cvId, metadataId, metadataSource, folderPath } = await request.json();
     
     // Normalize IDs and Sources

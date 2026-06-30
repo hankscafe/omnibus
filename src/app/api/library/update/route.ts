@@ -17,6 +17,9 @@ export async function POST(request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
+    // This route relocates folders, rewrites issue.filePath, mutates the Series record and queues jobs.
+    // Middleware only role-gates /api/admin/*, so gate here too — otherwise any authenticated user reaches it.
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     const userId = (session?.user as any)?.id || 'System';
 
     const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType, seriesGroup,

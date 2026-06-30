@@ -10,6 +10,7 @@ import { DiscordNotifier } from './discord';
 import { getErrorMessage } from './utils/error';
 import { HosterEngine } from './hosters';
 import { decryptSecret } from './encryption';
+import { assertSafeFetchUrl, assertSafeRedirect } from './utils/ssrf';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 
 async function getNetworkHeaders() {
@@ -44,9 +45,13 @@ export const DownloadService = {
       // This protects NZBGet and Deluge from Cloudflare blocks by utilizing Omnibus's FlareSolverr config!
       if (!downloadUrl.startsWith('magnet:')) {
         try {
-            const fileRes = await axios.get(downloadUrl, { responseType: 'arraybuffer', ...baseConfig });
+            // SSRF guard: indexer/scraped URLs are untrusted — never let Omnibus fetch an internal host, and
+            // re-validate each redirect hop. On block/failure we fall through to handing the raw URL to the
+            // download client (whose own fetch happens outside Omnibus's network).
+            assertSafeFetchUrl(downloadUrl);
+            const fileRes = await axios.get(downloadUrl, { responseType: 'arraybuffer', ...baseConfig, maxRedirects: 5, beforeRedirect: assertSafeRedirect });
             fileBuffer = Buffer.from(fileRes.data);
-        } catch (err) { Logger.log(`[Proxy] File fetch failed, using URL instead.`, 'info'); }
+        } catch (err) { Logger.log(`[Proxy] File fetch skipped/failed (${getErrorMessage(err)}), using URL instead.`, 'info'); }
       }
 
       if (client.type === 'qbit') {
@@ -245,6 +250,10 @@ export const DownloadService = {
           // guard, and the .part -> final rename. Hoster resolution (above) and the Mega SDK stream
           // (below) stay in Node, as does the failure alert in the catch block.
           if (!resolvedHoster?.isMegaStream) {
+              // SSRF guard on the (possibly hoster-resolved) URL before streaming it. Mega uses its own SDK,
+              // not a URL fetch. The Rust engine re-validates internally, but block here too so a poisoned
+              // scrape never even reaches the engine call.
+              assertSafeFetchUrl(finalDownloadUrl);
               await prisma.request.update({
                   where: { id: requestId },
                   data: { activeDownloadName: finalFilename, status: 'DOWNLOADING', progress: 0, downloadLink: url }
@@ -321,11 +330,13 @@ export const DownloadService = {
                           Object.assign(requestHeaders, resolvedHoster.headers);
                       }
 
-                      response = await axios({ 
-                          method: 'get', 
-                          url: finalDownloadUrl, 
-                          responseType: 'stream', 
+                      response = await axios({
+                          method: 'get',
+                          url: finalDownloadUrl,
+                          responseType: 'stream',
                           headers: requestHeaders,
+                          maxRedirects: 5,
+                          beforeRedirect: assertSafeRedirect,
                           timeout: 60000,
                           signal: abortController.signal
                       });

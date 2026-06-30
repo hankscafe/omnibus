@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { XMLParser } from 'fast-xml-parser';
+import { assertSafeFetchUrl } from '@/lib/utils/ssrf';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,9 +34,17 @@ export async function POST(request: Request) {
             xmlContent = await file.text();
         } else if (url) {
             try {
-                const res = await fetch(url);
+                // SSRF guard: only public http(s) hosts, no redirects (which could bounce to an internal
+                // address), a hard timeout, and a body-size cap.
+                assertSafeFetchUrl(url);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000);
+                const res = await fetch(url, { signal: controller.signal, redirect: 'error' });
+                clearTimeout(timeoutId);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                if (parseInt(res.headers.get('content-length') || '0', 10) > 5_000_000) throw new Error('CBL too large');
                 xmlContent = await res.text();
+                if (xmlContent.length > 5_000_000) throw new Error('CBL too large');
             } catch (e) {
                 return NextResponse.json({ error: "Failed to download CBL from the provided URL." }, { status: 400 });
             }

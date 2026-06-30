@@ -19,7 +19,10 @@ export function cleanupMetadataExtractorCache() {
 }
 
 export async function parseComicInfo(filePath: string) {
-    if (!filePath.toLowerCase().match(/\.(cbz|zip|epub|cbr|rar)$/)) return null;
+    // ZIP-family only: AdmZip cannot read RAR, so accepting .cbr/.rar here only produced a silent throw →
+    // null (it never actually read their ComicInfo). CBR/RAR are handled by the CBZ conversion pipeline
+    // (unrar/unar); the resulting .cbz is then parsed here normally — so don't pretend to parse them now.
+    if (!filePath.toLowerCase().match(/\.(cbz|zip|epub)$/)) return null;
 
     try {
         const zip = new AdmZip(filePath);

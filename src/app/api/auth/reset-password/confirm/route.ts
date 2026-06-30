@@ -5,12 +5,15 @@ import crypto from 'crypto';
 import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { checkRateLimit } from '@/lib/rate-limit';
+import { checkRateLimit, getClientIp, checkGlobalRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
-    const ip = req.headers.get('x-forwarded-for') || 'unknown';
+    // Global backstop first (resists X-Forwarded-For rotation), then best-effort per-IP.
+    const globalLimit = checkGlobalRateLimit('reset_confirm', 60, 15 * 60 * 1000);
+    if (globalLimit.isLimited) return globalLimit.response!;
+    const ip = getClientIp(req);
     const rateLimit = checkRateLimit(`reset_confirm_${ip}`, 5, 15 * 60 * 1000);
     if (rateLimit.isLimited) return rateLimit.response!;
 
@@ -36,7 +39,15 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Token has expired." }, { status: 400 });
         }
 
-        const expectedSig = crypto.createHmac('sha256', secret).update(`${userId}|${expStr}`).digest('hex');
+        // Bind the signature to the user's CURRENT sessionVersion so the token is single-use: the successful
+        // reset below increments sessionVersion, so any replay recomputes a different expected signature.
+        const resetUser = await prisma.user.findUnique({ where: { id: userId }, select: { sessionVersion: true } });
+        if (!resetUser) {
+            rateLimit.trackFailure();
+            return NextResponse.json({ error: "Invalid reset token." }, { status: 400 });
+        }
+
+        const expectedSig = crypto.createHmac('sha256', secret).update(`${userId}|${expStr}|${resetUser.sessionVersion}`).digest('hex');
 
         const sigBuffer = Buffer.from(sig);
         const expectedBuffer = Buffer.from(expectedSig);
@@ -47,13 +58,19 @@ export async function POST(req: Request) {
         }
 
         const hashedPassword = await bcrypt.hash(password, 12);
-        await prisma.user.update({
-            where: { id: userId },
-            data: { 
+        // Conditional update closes the concurrent-replay race: only the request still seeing the signed
+        // sessionVersion wins; a second one (or any replay after success) matches 0 rows.
+        const result = await prisma.user.updateMany({
+            where: { id: userId, sessionVersion: resetUser.sessionVersion },
+            data: {
                 password: hashedPassword,
-                sessionVersion: { increment: 1 } 
+                sessionVersion: { increment: 1 }
             }
         });
+        if (result.count === 0) {
+            rateLimit.trackFailure();
+            return NextResponse.json({ error: "This reset link has already been used." }, { status: 400 });
+        }
 
         await AuditLogger.log('PASSWORD_RESET', { message: "Password was reset via email token." }, userId);
         

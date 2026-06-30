@@ -3,9 +3,15 @@ import { omnibusQueue } from '@/lib/queue';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getServerSession } from 'next-auth/next';
+import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
 export async function POST(request: Request) {
   try {
+    // Queues a provider metadata re-sync that overwrites series/issue records — admin-only.
+    const session = await getServerSession(await getAuthOptions());
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+
     const { cvId, metadataId, metadataSource, folderPath } = await request.json();
     
     const targetId = metadataId || (cvId ? cvId.toString() : null);

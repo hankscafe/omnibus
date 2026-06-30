@@ -14,6 +14,23 @@ interface DiscordEmbed {
     thumbnail?: { url: string };
 }
 
+// Discord only accepts ABSOLUTE http(s) embed thumbnail URLs. Covers are normally passed as the relative
+// proxy path "/api/library/cover?path=<encoded original>", which Discord rejects with HTTP 400 — sinking the
+// entire webhook (the download_failed 400s seen in the logs). Unwrap the proxy to its original external URL
+// when that's itself absolute (e.g. a ComicVine cover, which Discord can fetch); otherwise drop the thumbnail
+// (a local library file path isn't reachable by Discord) so the alert still sends, just without an image.
+export function resolveDiscordThumbnail(imageUrl: string): string | null {
+    if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+    const proxyMatch = imageUrl.match(/[?&]path=([^&]+)/);
+    if (proxyMatch) {
+        try {
+            const decoded = decodeURIComponent(proxyMatch[1]);
+            if (/^https?:\/\//i.test(decoded)) return decoded;
+        } catch (e) { /* malformed encoding — fall through to null */ }
+    }
+    return null;
+}
+
 export const DiscordNotifier = {
   async sendAlert(event: string, payload: { 
     title?: string, 
@@ -50,7 +67,8 @@ export const DiscordNotifier = {
       };
 
       if (payload.imageUrl) {
-          embed.thumbnail = { url: payload.imageUrl };
+          const thumbUrl = resolveDiscordThumbnail(payload.imageUrl);
+          if (thumbUrl) embed.thumbnail = { url: thumbUrl };
       }
 
       const appendMetadata = () => {

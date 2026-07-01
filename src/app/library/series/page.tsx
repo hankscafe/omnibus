@@ -12,7 +12,7 @@ import {
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
-  MapPin, Shield, FolderSearch, Upload, RotateCcw
+  MapPin, Shield, FolderSearch, Upload, RotateCcw, FolderInput
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -122,6 +122,14 @@ function SeriesContent() {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+
+  // "Move issues to another series" — re-file mis-matched issues without delete/re-import.
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+  const [moveSearch, setMoveSearch] = useState("");
+  const [moveResults, setMoveResults] = useState<{ id: string; name: string; year?: string | number }[]>([]);
+  const [moveTargetId, setMoveTargetId] = useState<string | null>(null);
+  const [moveNewName, setMoveNewName] = useState("");
+  const [isMoving, setIsMoving] = useState(false);
 
   const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
   const [bulkEditData, setBulkEditData] = useState<any[]>([]);
@@ -434,6 +442,64 @@ function SeriesContent() {
       }
   };
 
+  // Debounced search for an existing target series in the "move" dialog.
+  useEffect(() => {
+    if (!moveDialogOpen) return;
+    const q = moveSearch.trim();
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/library?q=${encodeURIComponent(q)}&type=TITLE&limit=15`, { cache: 'no-store' });
+        const data = await res.json();
+        const rows = (data.series || [])
+          .filter((s: any) => s.id !== seriesInfo.id) // don't offer the series we're already on
+          .map((s: any) => ({ id: s.id, name: s.name, year: s.year }));
+        setMoveResults(rows);
+      } catch { setMoveResults([]); }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [moveSearch, moveDialogOpen, seriesInfo.id]);
+
+  // Admin: move the selected issues to an existing series (moveTargetId) or a new one (moveNewName).
+  const handleMoveIssues = async () => {
+    const issueIds = Array.from(selectedIssues);
+    if (issueIds.length === 0) return;
+    if (!moveTargetId && !moveNewName.trim()) {
+      toast({ title: "Pick a destination", description: "Choose an existing series or enter a new series name.", variant: "destructive" });
+      return;
+    }
+    setIsMoving(true);
+    try {
+      const res = await fetch('/api/library/issue/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(moveTargetId ? { issueIds, targetSeriesId: moveTargetId } : { issueIds, newSeriesName: moveNewName.trim() })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Move failed');
+
+      // Refresh this series' issue lists — moved issues now live elsewhere.
+      try {
+        const ref = await fetch(`/api/library/series?path=${encodeURIComponent(folderPath || '')}&t=${Date.now()}`, { cache: 'no-store' });
+        const refData = await ref.json();
+        if (!refData.error) {
+          setDownloadedIssues(refData.downloadedIssues || []);
+          setMissingIssues(refData.missingIssues || []);
+        }
+      } catch {}
+
+      const extra = data.conflicts ? ` (${data.conflicts} skipped — a file with that name already existed at the destination)` : '';
+      toast({ title: "Issues moved", description: `Moved ${data.moved} issue(s) to "${data.targetName}".${extra}` });
+      setSelectedIssues(new Set());
+      setIsSelectionMode(false);
+      setMoveDialogOpen(false);
+      setMoveSearch(""); setMoveResults([]); setMoveTargetId(null); setMoveNewName("");
+    } catch (err) {
+      toast({ title: "Move failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setIsMoving(false);
+    }
+  };
+
   const handleRefreshMetadata = async () => {
     if (!seriesInfo.metadataId && !seriesInfo.cvId) return;
     setIsRefreshingMetadata(true);
@@ -613,6 +679,67 @@ function SeriesContent() {
       toast({ title: "Reverted to automatic", description: "The cover will be regenerated on the next scan or metadata refresh." });
     } catch (err) {
       toast({ title: "Revert failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
+  // Admin: reset a single issue's cover — clears a stale Smart-Matcher custom cover (which the sync is
+  // locked out of) and re-fetches the provider image, so a broken/wrong issue cover is restored in place.
+  const handleResetIssueCover = async () => {
+    if (!activeIssue?.id) return;
+    setCoverUploading(true);
+    try {
+      const res = await fetch('/api/library/issue/cover-upload', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issueId: activeIssue.id })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Reset failed');
+      const restored = !!data.coverUrl;
+      setActiveIssue((prev: any) => prev ? { ...prev, coverUrl: data.coverUrl ?? null, hasCustomCover: false } : prev);
+      toast({
+        title: restored ? "Cover reset" : "Custom cover cleared",
+        description: restored
+          ? "Re-fetched this issue's cover from the metadata provider."
+          : "No provider cover found — falling back to the series cover. A metadata refresh may restore it."
+      });
+    } catch (err) {
+      toast({ title: "Reset failed", description: getErrorMessage(err), variant: "destructive" });
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
+  // Admin: upload a custom cover for the active issue (writes uploads/issue-covers/<id>.jpg + locks it).
+  const handleIssueCoverFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // let the same file be re-picked later
+    if (!file || !activeIssue?.id) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Please choose an image under 15MB.", variant: "destructive" });
+      return;
+    }
+    setCoverUploading(true);
+    try {
+      const imageBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Could not read the image file."));
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch('/api/library/issue/cover-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issueId: activeIssue.id, imageBase64 })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setActiveIssue((prev: any) => prev ? { ...prev, coverUrl: data.coverUrl, hasCustomCover: true } : prev);
+      toast({ title: "Issue cover updated", description: "Your custom cover has been saved for this issue." });
+    } catch (err) {
+      toast({ title: "Upload failed", description: getErrorMessage(err), variant: "destructive" });
     } finally {
       setCoverUploading(false);
     }
@@ -1022,18 +1149,33 @@ function SeriesContent() {
                           ) : null}
                       </div>
 
-                      {/* Admin: change / revert the series cover */}
+                      {/* Admin: reset the active issue's cover, or change/revert the series cover */}
                       {isAdmin && (
                           <div className="absolute bottom-2 right-2 z-30 flex items-center gap-1.5">
-                              <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">
-                                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleCoverFile} disabled={coverUploading} />
-                                  {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                                  <span>Cover</span>
-                              </label>
-                              {seriesInfo.hasCustomCover && !coverUploading && (
-                                  <button onClick={handleRevertCover} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors" title="Revert to automatic cover">
-                                      <RotateCcw className="w-3.5 h-3.5" />
-                                  </button>
+                              {activeIssue?.id ? (
+                                  <>
+                                      <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover for this issue">
+                                          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleIssueCoverFile} disabled={coverUploading} />
+                                          {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                                          <span>Cover</span>
+                                      </label>
+                                      <button onClick={handleResetIssueCover} disabled={coverUploading} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors disabled:pointer-events-none disabled:opacity-70" title="Reset this issue's cover — clears a custom cover and re-fetches the provider image">
+                                          <RotateCcw className="w-3.5 h-3.5" />
+                                      </button>
+                                  </>
+                              ) : (
+                                  <>
+                                      <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">
+                                          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleCoverFile} disabled={coverUploading} />
+                                          {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                                          <span>Cover</span>
+                                      </label>
+                                      {seriesInfo.hasCustomCover && !coverUploading && (
+                                          <button onClick={handleRevertCover} className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white shadow-lg transition-colors" title="Revert to automatic cover">
+                                              <RotateCcw className="w-3.5 h-3.5" />
+                                          </button>
+                                      )}
+                                  </>
                               )}
                           </div>
                       )}
@@ -1680,6 +1822,12 @@ function SeriesContent() {
                                       <Edit className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Bulk Edit</span>
                                   </Button>
                               )}
+
+                              {isAdmin && (
+                                  <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => { setMoveTargetId(null); setMoveNewName(""); setMoveSearch(""); setMoveResults([]); setMoveDialogOpen(true); }} title="Move the selected issues to another series">
+                                      <FolderInput className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Move</span>
+                                  </Button>
+                              )}
                           </div>
                       </div>
                   )}
@@ -1764,6 +1912,53 @@ function SeriesContent() {
       )}
 
       {/* --- DIALOGS --- */}
+
+      {/* Admin: move the selected issues to another series (fixes mis-filed/merged issues) */}
+      <Dialog open={moveDialogOpen} onOpenChange={(o) => { setMoveDialogOpen(o); if (!o) { setMoveSearch(""); setMoveResults([]); setMoveTargetId(null); setMoveNewName(""); } }}>
+          <DialogContent className="sm:max-w-lg bg-background border-border">
+              <DialogHeader>
+                  <DialogTitle>Move {selectedIssues.size} issue{selectedIssues.size === 1 ? '' : 's'} to another series</DialogTitle>
+                  <DialogDescription>Re-file mis-matched issues. The files are relocated into the destination series folder on disk.</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-2">
+                  <div>
+                      <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Pick an existing series</Label>
+                      <div className="relative mt-1">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input value={moveSearch} onChange={(e) => { setMoveSearch(e.target.value); setMoveTargetId(null); }} placeholder="Search series by title…" className="pl-9 bg-muted/50 border-border" />
+                      </div>
+                      {moveResults.length > 0 && (
+                          <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-border divide-y divide-border">
+                              {moveResults.map((s) => (
+                                  <button key={s.id} type="button" onClick={() => { setMoveTargetId(s.id); setMoveNewName(""); }} className={`w-full text-left px-3 py-2 text-sm transition-colors ${moveTargetId === s.id ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-muted'}`}>
+                                      {s.name}{s.year ? <span className="text-muted-foreground"> ({s.year})</span> : null}
+                                  </button>
+                              ))}
+                          </div>
+                      )}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-muted-foreground/60 font-black">
+                      <div className="h-px flex-1 bg-border" /> or <div className="h-px flex-1 bg-border" />
+                  </div>
+
+                  <div>
+                      <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Create a new series</Label>
+                      <Input value={moveNewName} onChange={(e) => { setMoveNewName(e.target.value); if (e.target.value) setMoveTargetId(null); }} placeholder="New series name…" className="mt-1 bg-muted/50 border-border" />
+                      <p className="text-[11px] text-muted-foreground mt-1">Creates an unmatched series you can then match in the Smart Matcher.</p>
+                  </div>
+              </div>
+
+              <DialogFooter className="gap-2">
+                  <Button variant="outline" onClick={() => setMoveDialogOpen(false)} className="border-border">Cancel</Button>
+                  <Button onClick={handleMoveIssues} disabled={isMoving || (!moveTargetId && !moveNewName.trim())} className="bg-primary text-primary-foreground font-bold hover:bg-primary/90">
+                      {isMoving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FolderInput className="w-4 h-4 mr-2" />} Move
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+
       <Dialog open={matchModalOpen} onOpenChange={setMatchModalOpen}>
           <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col bg-background border-border">
               <DialogHeader><DialogTitle>Match Series</DialogTitle></DialogHeader>

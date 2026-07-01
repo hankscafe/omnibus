@@ -209,6 +209,7 @@ model Issue {
   @@index([metadataId])
   @@index([metadataSource])
   @@index([releaseDate]) // global calendar range-scans Issue.releaseDate (ISO YYYY-MM-DD, lexical = chronological)
+  @@index([seriesId, releaseDate]) // library-wide issues view: per-series releaseDate scans when filtered by a Series field
 }
 
 model IssueReport {

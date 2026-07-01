@@ -10,7 +10,7 @@ import {
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType
+  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType, CalendarDays
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -719,6 +719,9 @@ function LibraryContent() {
             </div>
             
             <div className="flex items-center gap-2 shrink-0">
+                <Button aria-label="Browse all individual issues by release date" variant="outline" size="sm" onClick={() => router.push('/library/issues')} className="h-10 sm:h-9 border-border">
+                    <CalendarDays className="w-4 h-4 mr-2" /> All Issues
+                </Button>
                 <Button aria-label={isSelectionMode ? "Cancel series selection" : "Enter series selection mode"} variant={isSelectionMode ? "secondary" : "outline"} size="sm" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedSeries(new Set()); }} className={`h-10 sm:h-9 ${isSelectionMode ? "bg-primary/20 text-primary border-primary/50 hover:bg-primary/30" : "border-border"}`}>
                     <CheckSquare className="w-4 h-4 mr-2" /> {isSelectionMode ? "Cancel Select" : "Select"}
                 </Button>

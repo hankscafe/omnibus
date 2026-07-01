@@ -15,6 +15,7 @@ import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview } from "@/components/smart-match-metadata-dialog"
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
 export default function SmartMatchPage() {
     const [unmatched, setUnmatched] = useState<any[]>([]);
@@ -38,6 +39,9 @@ export default function SmartMatchPage() {
     const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
     const [isBulkProcessing, setIsBulkProcessing] = useState(false);
     const [isBulkManualMatch, setIsBulkManualMatch] = useState(false);
+    // Guard: warn before a bulk Custom-ID applies the same series to multiple FOLDERS (which merges them).
+    const [mergeWarnOpen, setMergeWarnOpen] = useState(false);
+    const [mergeWarnCount, setMergeWarnCount] = useState(0);
 
     const [searchProvider, setSearchProvider] = useState("COMICVINE");
     const [metronConfigured, setMetronConfigured] = useState(false);
@@ -313,7 +317,26 @@ export default function SmartMatchPage() {
         }
     };
 
+    // Applying ONE Custom ID to multiple FOLDERS assigns them all the same series, which merges them into
+    // a single series (match-series collapses duplicate metadataId). Warn first. Loose-file selections
+    // (issues of one series, auto-mapped during lookup) are the intended bulk use and don't trigger it.
     const handleApplyManualMatch = () => {
+        if (!manualMatchResult) return;
+        if (isBulkManualMatch) {
+            const folderCount = Array.from(selectedItems).filter(id => {
+                const it = unmatched.find(s => s.id === id);
+                return it && !it.isRawFile;
+            }).length;
+            if (folderCount > 1) {
+                setMergeWarnCount(folderCount);
+                setMergeWarnOpen(true);
+                return;
+            }
+        }
+        doApplyManualMatch();
+    };
+
+    const doApplyManualMatch = () => {
         if (!manualMatchResult) return;
 
         if (isBulkManualMatch) {
@@ -932,6 +955,17 @@ export default function SmartMatchPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <ConfirmationDialog
+                isOpen={mergeWarnOpen}
+                onClose={() => setMergeWarnOpen(false)}
+                onConfirm={() => { setMergeWarnOpen(false); doApplyManualMatch(); }}
+                title="Merge these folders into one series?"
+                description={`You're assigning the same series to ${mergeWarnCount} folders, which combines them into a single series (their issues are moved together). That's rarely what you want for separate series — continue only if these folders really are the same series.`}
+                confirmText="Merge anyway"
+                cancelText="Cancel"
+                variant="destructive"
+            />
 
             {/* PER-ITEM METADATA EDITOR — fill Series Group / Universe / identity before accepting. */}
             <SmartMatchMetadataDialog

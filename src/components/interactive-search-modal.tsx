@@ -44,11 +44,11 @@ const getOptimizedSearchQuery = (rawQuery: string, year?: string) => {
     if (issueMatch && issueMatch.index !== undefined) {
         // Slice out the base name (everything before the issue number)
         let baseName = clean.substring(0, issueMatch.index).trim();
-        baseName = baseName.replace(/[-]$/, '').trim(); 
-        
-        // Force the issue number to 3 digits (e.g. "1" -> "001", "18" -> "018")
-        const paddedNum = issueMatch[1].padStart(3, '0');
-        clean = `${baseName} ${paddedNum}`;
+        baseName = baseName.replace(/[-]$/, '').trim();
+
+        // Use the RAW issue number — GetComics post titles use "#1"/"Vol. 1", never zero-padded "001",
+        // so padding here yields zero search hits; Prowlarr/indexers match the unpadded form fine too.
+        clean = `${baseName} ${issueMatch[1]}`;
     }
     
     // 4. Append the year

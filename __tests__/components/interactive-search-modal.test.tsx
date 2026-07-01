@@ -52,7 +52,7 @@ describe('Component: InteractiveSearchModal', () => {
         });
     });
     
-    it('should correctly pad issue numbers during optimization', async () => {
+    it('should use the raw (unpadded) issue number during optimization', async () => {
         const comicData = {
             cvId: 123,
             year: '2016',
@@ -70,12 +70,13 @@ describe('Component: InteractiveSearchModal', () => {
             />
         );
 
-        // Base name is "Batman", issue "1" -> "001", year "2016"
+        // Base name is "Batman", issue "1" stays "1" (NOT "001" — GetComics titles use "#1", so a
+        // zero-padded query returns no hits), year "2016".
         const searchInput = screen.getByRole('textbox');
-        
+
         // Wrap in waitFor to account for state updates in useEffect
         await waitFor(() => {
-            expect(searchInput).toHaveValue('Batman 001 2016');
+            expect(searchInput).toHaveValue('Batman 1 2016');
         });
     });
 });

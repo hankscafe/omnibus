@@ -72,5 +72,28 @@ export function extractIssueNumber(filename: string): string {
     if (volumeNum) return volumeNum;
          
     Logger.log(`[Issue Extractor Debug] Failed to match any extraction rule for "${filename}". Defaulting to "1"`, 'debug');
-    return "1"; 
+    return "1";
+}
+
+// Detects a multi-issue / multi-volume RANGE in a release title — e.g. "#0 – 9", "#1-100",
+// "Vol. 1 – 4". Returns the inclusive {start,end} of the first such range, or null when the title
+// names at most a single issue. Used to recognize GetComics batch posts (a range spans multiple
+// issues) for pack acceptance and section-targeting. Conservative on purpose: a span where BOTH
+// ends look like 4-digit years (e.g. "(2008-2010)") is read as a release-date range, not an issue
+// range, so it never trips pack detection; and the end must exceed the start. Accepts hyphen,
+// en/em dash, or the word "to" as the separator, and an optional "#" before the second number.
+// Kept in lock-step with the Rust engine's getcomics.rs parse_issue_range.
+export function parseIssueRange(title: string): { start: number; end: number } | null {
+    if (!title) return null;
+    const rangeRegex = /(?:#|issues?\s*#?|vol(?:ume)?\.?\s*|v\.?\s*)?(\d{1,4})\s*(?:[-–—]|\bto\b)\s*#?(\d{1,4})/gi;
+    let m: RegExpExecArray | null;
+    while ((m = rangeRegex.exec(title)) !== null) {
+        const start = parseInt(m[1], 10);
+        const end = parseInt(m[2], 10);
+        if (isNaN(start) || isNaN(end)) continue;
+        const bothLookLikeYears = start >= 1900 && start <= 2099 && end >= 1900 && end <= 2099;
+        if (bothLookLikeYears) continue;
+        if (end > start) return { start, end };
+    }
+    return null;
 }

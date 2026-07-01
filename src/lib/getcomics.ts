@@ -7,6 +7,7 @@ import { prisma } from './db';
 import { markSystemFlag } from './utils/system-flags';
 import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
 import { normalizeRequestName } from './search-engine';
+import { parseIssueRange } from './utils/issue-parser';
 
 // --- Shared hoster-priority helpers (kept in lock-step with the Rust engine's getcomics.rs) ---
 
@@ -174,7 +175,13 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
 
   async performSearch(safeQuery: string, originalQuery: string, isInteractive: boolean = false, isManga: boolean = false, seriesYear?: string, allowPacksOverride?: boolean) {
     const results: any[] = [];
-    
+
+    // GetComics post titles use UNPADDED issue numbers ("#1", "Vol. 1") — never zero-padded "001" —
+    // so a padded query (some callers, e.g. the interactive modal, pad to 3 digits) matches nothing on
+    // their WordPress search. Strip leading zeros from numeric tokens up front so both the search URL and
+    // the relevance words use the canonical form. Years ("2008") and plain numbers ("100") are untouched.
+    safeQuery = safeQuery.replace(/\b0+(\d)/g, '$1');
+
     // Generate both word arrays for TPB vs Single Issue validation. Normalize the name first
     // ("#1: Book One" -> "#1", "….cbz" -> "…") so a subtitle keyword doesn't flip this into omnibus mode
     // and a leaked file extension / subtitle word isn't enforced as a required title word (parity with
@@ -302,8 +309,13 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
 
       if (!isInteractive && isRelevant) {
           const packTerms = ['story arc', 'pack', 'complete', 'collection', 'bundle', 'run', 'chronological'];
-          const isPack = allowBulkPacks && packTerms.some(term => titleLower.includes(term));
-          
+          // A multi-issue/volume RANGE in the title ("#0 – 9", "Vol. 1 – 4") is the most reliable batch
+          // signal — GetComics bundles older runs as ranges that carry no pack KEYWORD. Treat those as
+          // packs too (when bulk is enabled) so volume-batches stop being wrongly rejected as unwanted
+          // TPBs for single-issue requests. (packTerms and the tpbTerms reject list previously only
+          // overlapped on "collection", so a "Vol. 1 – 4" post could never be accepted.)
+          const isPack = allowBulkPacks && (packTerms.some(term => titleLower.includes(term)) || parseIssueRange(titleLower) !== null);
+
           if (reqNum !== null && !isLookingForOmnibus && !isPack) {
               const unexpectedTpbTerms = tpbTerms.filter(term => !cleanOriginal.toLowerCase().includes(term));
               if (unexpectedTpbTerms.some(term => titleLower.includes(term))) {

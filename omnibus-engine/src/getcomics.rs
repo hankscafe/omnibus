@@ -248,6 +248,25 @@ pub(crate) fn interactive_query_variants(queries: &[String]) -> Vec<String> {
 /// de-dupes by URL. `dynamic_year` is the (possibly issue-release-overridden) request year used for
 /// issue queries; `series_year` is the original series year used for pack queries.
 /// `allow_packs_override == Some(false)` suppresses pack acceptance for isolated-issue automation.
+/// Detects a multi-issue/volume RANGE in a release title ("#0 – 9", "Vol. 1 – 4"). Returns the first
+/// inclusive (start, end), or None for a single issue. A both-ends-look-like-years span (e.g. "2008-2010")
+/// is read as a release-date range, not an issue range, and the end must exceed the start. Kept in
+/// lock-step with issue-parser.ts parseIssueRange.
+pub fn parse_issue_range(title: &str) -> Option<(u32, u32)> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)(?:#|issues?\s*#?|vol(?:ume)?\.?\s*|v\.?\s*)?(\d{1,4})\s*(?:[-–—]|\bto\b)\s*#?(\d{1,4})").unwrap()
+    });
+    for cap in re.captures_iter(title) {
+        let start = match cap.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) { Some(v) => v, None => continue };
+        let end = match cap.get(2).and_then(|m| m.as_str().parse::<u32>().ok()) { Some(v) => v, None => continue };
+        let both_look_like_years = (1900..=2099).contains(&start) && (1900..=2099).contains(&end);
+        if both_look_like_years { continue; }
+        if end > start { return Some((start, end)); }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn search(
     db: &PgPool,
@@ -325,11 +344,16 @@ pub async fn search(
     let re_word_num = regex::Regex::new(r"\d+(?:\.\d+)?").unwrap();
     // A 4-digit year is NOT an issue number — strip years before the bare-digit issue check below.
     let re_year = regex::Regex::new(r"\b(?:19|20)\d{2}\b").unwrap();
+    // GetComics post titles use UNPADDED issue numbers ("#1", "Vol. 1"), so a zero-padded query (e.g. the
+    // interactive modal padding to "001") matches nothing. Strip leading zeros from numeric tokens.
+    let re_pad = regex::Regex::new(r"\b0+(\d)").unwrap();
 
     let mut results: Vec<ProwlarrResult> = Vec::new();
     let mut seen_urls: HashSet<String> = HashSet::new();
 
     'queries: for q in &query_list {
+        let q_stripped = re_pad.replace_all(q, "$1").into_owned();
+        let q = &q_stripped;
         log::info!("[GetComics] Searching for: \"{}\"", q);
         let safe_query_words: Vec<String> = q.to_lowercase().split(' ')
             .filter(|&w| !w.is_empty() && !stop_words.contains(w))
@@ -417,7 +441,11 @@ pub async fn search(
 
                 // --- STRICT AUTOMATION-ONLY FILTERS ---
                 if !is_interactive && is_relevant {
-                    let is_pack = allow_bulk_packs && pack_terms.iter().any(|t| title_lower.contains(t));
+                    // A multi-issue/volume RANGE in the title ("#0 – 9", "Vol. 1 – 4") is the most reliable
+                    // batch signal — GetComics bundles older runs as ranges with no pack KEYWORD. Treat those
+                    // as packs too (when bulk is enabled) so volume-batches aren't rejected as unwanted TPBs.
+                    let is_pack = allow_bulk_packs
+                        && (pack_terms.iter().any(|t| title_lower.contains(t)) || parse_issue_range(&title_lower).is_some());
 
                     // TPB guard: reject collected editions when a single issue was requested.
                     if req_num.is_some() && !is_looking_for_omnibus && !is_pack {
@@ -655,6 +683,20 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_issue_range_detects_batches_but_not_years() {
+        // Multi-issue / multi-volume ranges (the batch signal).
+        assert_eq!(parse_issue_range("Crossed #0 - 9"), Some((0, 9)));
+        assert_eq!(parse_issue_range("Saga Vol. 1 – 4 (2019)"), Some((1, 4)));
+        assert_eq!(parse_issue_range("Hellboy 1 to 12"), Some((1, 12)));
+        // A both-ends-years span is a date range, not an issue range.
+        assert_eq!(parse_issue_range("The Boys (2008-2010)"), None);
+        // A single issue has no range.
+        assert_eq!(parse_issue_range("Wolverine #3 (2024)"), None);
+        // Descending / equal is not a range.
+        assert_eq!(parse_issue_range("Foo 9 - 3"), None);
+    }
 
     // The modal pads issue numbers ("003") but GetComics titles them "#3" — the fan-out must also
     // search the de-padded form so the real post matches, while keeping the padded form for "#003" posts.

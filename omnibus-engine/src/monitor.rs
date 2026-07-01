@@ -17,6 +17,10 @@ use crate::metadata::is_same_issue;
 #[derive(Serialize)]
 pub struct MonitorCandidate {
     pub volume_id: String,
+    // The matched series' provider (COMICVINE/METRON). The Node worker stamps it onto the created Request
+    // so the indexer relevance guard can resolve the canonical name by (metadataId, metadataSource);
+    // without it, a Metron-monitored series' request defaulted to COMICVINE and the lookup missed.
+    pub metadata_source: String,
     pub search_name: String,
     pub issue_number: String,
     pub issue_year: String,
@@ -264,6 +268,7 @@ async fn phase1_metron(
             let image_url = m.get("image").and_then(|v| v.as_str()).map(|s| s.to_string()).or_else(|| s.cover_url.clone());
             candidates.push(MonitorCandidate {
                 volume_id: s.metadata_id.clone().unwrap_or_else(|| s.id.clone()),
+                metadata_source: s.metadata_source.clone(),
                 search_name: format!("{} #{}", s.name, m_num_str),
                 issue_number: m_num_str.clone(),
                 issue_year,
@@ -366,6 +371,8 @@ async fn phase2_comicvine(
             let image_url = cv.pointer("/image/medium_url").and_then(|v| v.as_str()).map(|s| s.to_string()).or_else(|| cover_url.clone());
             candidates.push(MonitorCandidate {
                 volume_id: cv_id.clone(),
+                // This phase queries only COMICVINE-monitored series (see the SQL filter above).
+                metadata_source: "COMICVINE".to_string(),
                 search_name: format!("{} #{}", series_name, cv_num_str),
                 issue_number: cv_num_str.clone(),
                 issue_year,

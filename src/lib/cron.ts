@@ -70,6 +70,27 @@ export function initCronJobs() {
         where: { status: 'STALLED', retryCount: { lt: 3 } }
       });
 
+      // Release parked batch siblings stranded by a permanently-failed lead. A getcomics batch can
+      // short-circuit duplicate requests (automation.ts), parking the siblings as DOWNLOADING against a
+      // single lead download. If that lead exhausts its retries and goes terminally STALLED, the active-
+      // torrent reconciler further down never touches the siblings (it only matches client torrents), so
+      // they sit DOWNLOADING forever. Mark them STALLED too — and terminal, since re-downloading a pack
+      // that already failed three times is pointless — so the whole pack reflects the failure consistently.
+      const deadLeads = await prisma.request.findMany({
+        where: { status: 'STALLED', retryCount: { gte: 3 }, downloadLink: { startsWith: 'http' } },
+        select: { downloadLink: true }
+      });
+      const deadLinks = [...new Set(deadLeads.map(r => r.downloadLink).filter((l): l is string => !!l))];
+      if (deadLinks.length > 0) {
+        const released = await prisma.request.updateMany({
+          where: { status: 'DOWNLOADING', downloadLink: { in: deadLinks } },
+          data: { status: 'STALLED', retryCount: 3, progress: 0 }
+        });
+        if (released.count > 0) {
+          Logger.log(`[Cron] Released ${released.count} parked download(s) stranded by a failed batch lead.`, 'warn');
+        }
+      }
+
       if (stalledRequests.length > 0) {
         const retryDelaySetting = await prisma.systemSetting.findUnique({ where: { key: 'download_retry_delay' } });
         const retryDelayMinutes = parseInt(retryDelaySetting?.value || "5");

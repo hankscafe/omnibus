@@ -404,7 +404,27 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         .fetch_all(&db)
         .await?;
 
+        // Ghost-series purge with a GRACE WINDOW. A series whose folder is missing is NOT deleted
+        // immediately — a transient SMB/network subfolder outage must not destroy read progress and
+        // curated metadata (the per-issue delete cascades to ReadProgress). We persist when each series
+        // was first seen missing (the scan_missing_series SystemSetting) and only purge after the folder
+        // has stayed gone past GRACE_MS. The library-root reachability check above already aborts the whole
+        // scan on a full-drive disconnect. (Parity with library-scanner.ts.)
+        const GRACE_MS: i64 = 24 * 60 * 60 * 1000; // 24h gone before auto-purge
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        let miss_raw: Option<String> = sqlx::query_scalar(
+            r#"SELECT value FROM "SystemSetting" WHERE key = 'scan_missing_series'"#,
+        )
+        .fetch_optional(&db)
+        .await
+        .ok()
+        .flatten();
+        let miss_state: HashMap<String, i64> =
+            miss_raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+
         let mut bad_series_ids: Vec<String> = Vec::new();
+        let mut next_miss_state: HashMap<String, i64> = HashMap::new();
         for row in series_for_ghost {
             let id: String = row.get("id");
             let folder: String = row.get("folderPath");
@@ -422,7 +442,29 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
                     continue; // an active request is tied to it
                 }
             }
-            bad_series_ids.push(id);
+
+            let first_missed = miss_state.get(&id).copied().unwrap_or(now_ms); // first time seen gone
+            if now_ms - first_missed >= GRACE_MS {
+                bad_series_ids.push(id); // gone long enough → purge
+            } else {
+                next_miss_state.insert(id, first_missed); // still in grace → remember
+            }
+        }
+
+        // Persist grace counters (recovered + purged series naturally drop out of the map). Best-effort:
+        // a failed write just makes series look "freshly missing" next scan and stay un-purged — a safe
+        // failure mode (never deletes early), so a counter-write hiccup must not abort the scan.
+        let next_miss_json =
+            serde_json::to_string(&next_miss_state).unwrap_or_else(|_| "{}".to_string());
+        if let Err(e) = sqlx::query(
+            r#"INSERT INTO "SystemSetting" (key, value) VALUES ('scan_missing_series', $1)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
+        )
+        .bind(&next_miss_json)
+        .execute(&db)
+        .await
+        {
+            log::warn!("[Scan] Could not persist ghost-series grace counters: {:?}", e);
         }
 
         if !bad_series_ids.is_empty() {
@@ -440,7 +482,11 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             {
                 log::error!("[Scan] Failed to delete ghost series: {:?}", e);
             }
-            log::info!("[Scan] Purged {} ghost series records.", bad_series_ids.len());
+            log::info!("[Scan] Purged {} ghost series records (folder missing > 24h).", bad_series_ids.len());
+        }
+        let grace_count = next_miss_state.len();
+        if grace_count > 0 {
+            log::info!("[Scan] {} series folder(s) missing but within the 24h grace window — not purged.", grace_count);
         }
 
         // ---------------------------------------------------------

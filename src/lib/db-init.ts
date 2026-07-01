@@ -246,11 +246,10 @@ export async function initDatabase() {
     }
 
     // 9. Encrypt credential fields at rest (idempotent). Upgrades existing plaintext download-client
-    //    and hoster-account credentials to AES-encrypted form; rows already carrying the enc:v1:
+    //    and hoster-account credentials to AES-encrypted form; rows already carrying an enc:v1:/enc:v2:
     //    prefix are skipped, so this is a no-op on every subsequent boot.
     try {
-        const ENC_PREFIX = 'enc:v1:';
-        const needsEnc = (v: string | null) => !!v && !v.startsWith(ENC_PREFIX);
+        const needsEnc = (v: string | null) => !!v && !v.startsWith('enc:'); // already-encrypted (v1 or v2) → skip
 
         const clients = await prisma.downloadClient.findMany();
         let encClients = 0;
@@ -290,14 +289,14 @@ export async function initDatabase() {
     }
 
     // 10. Encrypt SystemSetting credential values at rest (idempotent). Reads RAW values via
-    //     $queryRaw to bypass the auto-decrypting Prisma extension; rows already carrying the
-    //     enc:v1: prefix are skipped, so this is a no-op on every subsequent boot.
+    //     $queryRaw to bypass the auto-decrypting Prisma extension; rows already carrying an
+    //     enc:v1:/enc:v2: prefix are skipped, so this is a no-op on every subsequent boot.
     try {
         let encSettings = 0;
         for (const key of SECRET_SETTING_KEYS) {
             const rows = await prisma.$queryRaw<Array<{ value: string }>>`SELECT "value" FROM "SystemSetting" WHERE "key" = ${key}`;
             const raw = rows[0]?.value;
-            if (raw && !raw.startsWith('enc:v1:')) {
+            if (raw && !raw.startsWith('enc:')) {
                 const encrypted = await encryptSecret(raw);
                 if (encrypted && encrypted !== raw) {
                     await prisma.systemSetting.update({ where: { key }, data: { value: encrypted } });

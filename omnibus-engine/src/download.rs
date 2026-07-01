@@ -3,7 +3,7 @@
 // stall-watchdog, throttled progress writes, the suspiciously-small-file guard, and the .part→final
 // rename. Hoster *resolution* (HosterEngine.resolveLink) and the Mega SDK stream stay in Node, which
 // calls this only for plain HTTP(S) URLs and handles the failure alert.
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use sqlx::PgPool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -232,10 +232,65 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
 
     let client = reqwest::Client::builder().build()?;
 
+    // Each attempt re-establishes the stream AND runs the transfer to completion: a mid-stream 45s stall
+    // (or a truncated/too-small file, or an HTML error/challenge page) now consumes a retry instead of
+    // failing outright. Previously only connection establishment was retried and the transfer ran once
+    // outside the loop, so a stall rejected with no second chance and landed STALLED.
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_err = anyhow!("download failed before any attempt");
+    let mut succeeded = false;
+    for attempt in 1..=MAX_ATTEMPTS {
+        // A failed prior attempt may have left a partial behind; start each attempt clean.
+        let _ = tokio::fs::remove_file(&part_path).await;
+        match attempt_stream_to_part(db, &client, req, &part_path).await {
+            Ok(()) => {
+                succeeded = true;
+                break;
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&part_path).await;
+                log::warn!("[Internal DL] Attempt {}/{} failed ({}).", attempt, MAX_ATTEMPTS, e);
+                last_err = e;
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+            }
+        }
+    }
+    if !succeeded {
+        return Err(last_err);
+    }
+
+    // Overwrite any existing final file, then rename .part → final (timestamped fallback if locked).
+    let _ = tokio::fs::remove_file(&req.dest_path).await;
+    if tokio::fs::rename(&part_path, &req.dest_path).await.is_ok() {
+        return Ok(req.dest_path.clone());
+    }
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let ts_path = match &req.ext {
+        Some(ext) if req.dest_path.ends_with(&format!(".{}", ext)) => {
+            let stem = &req.dest_path[..req.dest_path.len() - ext.len() - 1];
+            format!("{}_{}.{}", stem, ms, ext)
+        }
+        _ => format!("{}_{}", req.dest_path, ms),
+    };
+    tokio::fs::rename(&part_path, &ts_path).await?;
+    Ok(ts_path)
+}
+
+/// A single download attempt: establish the stream (with the getcomics Cloudflare warm-up/solver dance),
+/// reject an HTML page, stream to `part_path` under the 45s stall-watchdog, and reject a too-small file.
+/// Leaves the completed bytes at `part_path` on success; any failure returns Err so the caller can retry.
+async fn attempt_stream_to_part(
+    db: &PgPool,
+    client: &reqwest::Client,
+    req: &StreamRequest,
+    part_path: &str,
+) -> Result<()> {
     // First, a plain direct fetch. comicfiles / resolved-hoster URLs — and any getcomics.org link that
     // isn't actually behind a challenge — serve the file straight away and stream with zero FlareSolverr
     // overhead.
-    let mut response = establish_stream(&client, req, None, DEFAULT_UA).await?;
+    let mut response = establish_stream(client, req, None, DEFAULT_UA).await?;
     let mut content_type = response_content_type(&response);
 
     // When a getcomics.org link answers with an HTML page — the Cloudflare "Just a moment…" challenge
@@ -243,7 +298,7 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
     // clears the light challenge variant with no solver; only if that fails do we pay for a
     // FlareSolverr/Byparr solve. A non-challenged download never enters this branch.
     if content_type.contains("text/html") && req.url.contains("getcomics.org") {
-        match warm_up_and_retry(&client, req).await {
+        match warm_up_and_retry(client, req).await {
             Ok(warmed) => {
                 let warmed_ct = response_content_type(&warmed);
                 if !warmed_ct.contains("text/html") {
@@ -272,18 +327,18 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
                 // /dls/ download is inherently unreliable — the solver clears the challenge in ITS browser,
                 // and getcomics' one-shot signed link can be consumed by that session, so the replay may
                 // come back empty/stalled. Any such failure falls through to the manual-hold wrapper.
-                match get_clearance(&client, &flare_url, &req.url, false, &sc).await {
+                match get_clearance(client, &flare_url, &req.url, false, &sc).await {
                     Ok((cookie, ua)) => {
                         log::info!("[Internal DL] GetComics Cloudflare challenge solved via {}; replaying the clearance on the download.", sc.kind);
                         let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
-                        response = establish_stream(&client, req, Some(&cookie), &ua_eff).await?;
+                        response = establish_stream(client, req, Some(&cookie), &ua_eff).await?;
                         content_type = response_content_type(&response);
                         // A cached cookie that's gone stale still answers with a challenge — force one fresh
                         // solve and retry before giving up.
                         if content_type.contains("text/html") {
-                            if let Ok((cookie, ua)) = get_clearance(&client, &flare_url, &req.url, true, &sc).await {
+                            if let Ok((cookie, ua)) = get_clearance(client, &flare_url, &req.url, true, &sc).await {
                                 let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
-                                response = establish_stream(&client, req, Some(&cookie), &ua_eff).await?;
+                                response = establish_stream(client, req, Some(&cookie), &ua_eff).await?;
                                 content_type = response_content_type(&response);
                             }
                         }
@@ -305,7 +360,7 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
 
     // Stream to the .part file. The 45s stall-watchdog is a per-chunk timeout: no data for 45s aborts
     // (Node reset a setTimeout on every 'data' event). Progress is throttled to every 5% / >2s.
-    let mut file = tokio::fs::File::create(&part_path).await?;
+    let mut file = tokio::fs::File::create(part_path).await?;
     let mut stream = response.bytes_stream();
     let mut downloaded: u64 = 0;
     let mut last_pct: i64 = -1;
@@ -316,12 +371,10 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
         match tokio::time::timeout(std::time::Duration::from_secs(STALL_SECS), stream.next()).await {
             Err(_) => {
                 log::error!("[Internal DL] Data stream stalled for {} seconds. Aborting to trigger retry.", STALL_SECS);
-                let _ = tokio::fs::remove_file(&part_path).await;
                 bail!("Download stalled for {} seconds", STALL_SECS);
             }
             Ok(None) => break, // stream finished
             Ok(Some(Err(e))) => {
-                let _ = tokio::fs::remove_file(&part_path).await;
                 bail!("Stream error: {}", e);
             }
             Ok(Some(Ok(chunk))) => {
@@ -343,29 +396,15 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
     file.flush().await?;
     drop(file);
 
-    // Reject suspiciously small files (a failed/blocked download often yields a tiny error page).
-    let size = tokio::fs::metadata(&part_path).await?.len();
+    // Reject suspiciously small files (a failed/blocked download often yields a tiny error page). The
+    // caller cleans up the partial and retries (or, for getcomics, hands it to the manual-hold wrapper).
+    let size = tokio::fs::metadata(part_path).await?.len();
     let min_size = req.min_size_bytes.unwrap_or(DEFAULT_MIN_SIZE);
     if size < min_size {
-        let _ = tokio::fs::remove_file(&part_path).await;
         bail!("Downloaded file is suspiciously small ({}kb). Aborting.", size / 1024);
     }
 
-    // Overwrite any existing final file, then rename .part → final (timestamped fallback if locked).
-    let _ = tokio::fs::remove_file(&req.dest_path).await;
-    if tokio::fs::rename(&part_path, &req.dest_path).await.is_ok() {
-        return Ok(req.dest_path.clone());
-    }
-    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let ts_path = match &req.ext {
-        Some(ext) if req.dest_path.ends_with(&format!(".{}", ext)) => {
-            let stem = &req.dest_path[..req.dest_path.len() - ext.len() - 1];
-            format!("{}_{}.{}", stem, ms, ext)
-        }
-        _ => format!("{}_{}", req.dest_path, ms),
-    };
-    tokio::fs::rename(&part_path, &ts_path).await?;
-    Ok(ts_path)
+    Ok(())
 }
 
 #[cfg(test)]

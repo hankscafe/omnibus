@@ -737,6 +737,10 @@ export function initWorker() {
                                 data: {
                                     userId: admin?.id || 'system',
                                     volumeId: c.volume_id,
+                                    // Carry the matched series' provider so the indexer relevance guard can look up
+                                    // the canonical name by (metadataId, metadataSource); defaulting to COMICVINE
+                                    // broke that lookup for Metron-monitored series and weakened the guard.
+                                    metadataSource: c.metadata_source,
                                     status: issueStatus,
                                     activeDownloadName: c.search_name,
                                     imageUrl: c.image_url || null

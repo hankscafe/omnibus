@@ -76,8 +76,13 @@ export const DownloadService = {
         const cookie = authRes.headers['set-cookie'];
         const options: any = { download_location: primaryCategory };
         if (seedRatio > 0) { options.stop_at_ratio = true; options.stop_ratio = seedRatio; }
-        const method = downloadUrl.startsWith('magnet:') ? "core.add_torrent_magents" : "core.add_torrent_url";
-        await axios.post(`${cleanUrl}/json`, { method: method, params: [[downloadUrl], options], id: 2 }, { ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie } });
+        // Deluge's magnet method is core.add_torrent_magnet — "add_torrent_magents" was a typo, so every
+        // magnet add hit an unknown method, and Deluge returns JSON-RPC errors with HTTP 200 (axios won't
+        // throw), so the request was logged as success and wedged in DOWNLOADING with no recovery.
+        const method = downloadUrl.startsWith('magnet:') ? "core.add_torrent_magnet" : "core.add_torrent_url";
+        const addRes = await axios.post(`${cleanUrl}/json`, { method: method, params: [[downloadUrl], options], id: 2 }, { ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie } });
+        // Surface HTTP-200 JSON-RPC errors explicitly so a failed add doesn't masquerade as success.
+        if (addRes.data?.error) throw new Error(`Deluge add failed: ${JSON.stringify(addRes.data.error)}`);
       }
       else if (client.type === 'sab') {
           if (fileBuffer) {

@@ -320,9 +320,11 @@ pub async fn search(
         queries.to_vec()
     };
 
-    // Detects broad/pack queries (no issue-number marker) so they search against the series year.
+    // Detects broad/pack queries (no issue number) so they search against the series year.
     let re_issue_marker = regex::Regex::new(r"(?i)(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*\d+").unwrap();
     let re_word_num = regex::Regex::new(r"\d+(?:\.\d+)?").unwrap();
+    // A 4-digit year is NOT an issue number — strip years before the bare-digit issue check below.
+    let re_year = regex::Regex::new(r"\b(?:19|20)\d{2}\b").unwrap();
 
     let mut results: Vec<ProwlarrResult> = Vec::new();
     let mut seen_urls: HashSet<String> = HashSet::new();
@@ -334,10 +336,15 @@ pub async fn search(
             .map(|s| s.to_string())
             .collect();
 
-        // Pack queries (no issue number) search against the original series year; issue queries
-        // use the dynamic (issue-release-overridden) year. Parity with automation.ts activeYear.
-        let is_pack_query = !re_issue_marker.is_match(q);
-        let active_year = if is_pack_query { series_year } else { dynamic_year };
+        // A query targets a SPECIFIC issue when it carries an issue marker OR any bare non-year digit.
+        // The query builder strips the '#', so a plain "Wolverine 22" has no marker but IS an issue query
+        // — the old marker-only check misclassified it as a pack and searched the series year, missing the
+        // accurate per-issue release year (the N+1 long-running-series bug). True broad/pack queries
+        // ("Wolverine", "Wolverine collection") have no digit and keep the series year so a "(2024)"
+        // collection isn't rejected for a 2026 issue. Parity with automation.ts queryTargetsIssue.
+        let targets_issue =
+            re_issue_marker.is_match(q) || re_word_num.is_match(&re_year.replace_all(q, " "));
+        let active_year = if targets_issue { dynamic_year } else { series_year };
         let req_year: Option<String> = crate::search_engine::find_title_year(&clean_original)
             .or_else(|| active_year.map(|s| s.to_string()));
 

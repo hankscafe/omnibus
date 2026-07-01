@@ -246,15 +246,21 @@ pub fn generate_search_queries(
         }
     }
 
+    // The bare main-title queries (e.g. "X Men" / "X Men 2026" from a colon-split "X-Men: Outback #1")
+    // live in `primary`; the full, specific name variants (series + subtitle + issue number) live in
+    // `secondary`. Search the SPECIFIC variants FIRST so a series whose name legitimately contains a
+    // colon/dash isn't immediately matched against its entire line by an over-broad title-only query —
+    // which also drops the issue number, disabling the indexer's issue filter and letting any issue win.
+    // The broad title query is retained as a fallback for when the specific variants find nothing.
     if prioritize_packs && use_packs {
         let mut final_queries = packs;
-        final_queries.extend(primary);
         final_queries.extend(secondary);
+        final_queries.extend(primary);
         return final_queries;
     }
 
-    let mut final_queries: Vec<String> = primary;
-    final_queries.extend(secondary);
+    let mut final_queries: Vec<String> = secondary;
+    final_queries.extend(primary);
     final_queries.extend(packs);
     final_queries
 }
@@ -324,6 +330,31 @@ fn fails_match_ratio(significant_query_words: &[String], result_words: &[String]
     let max_len = significant_query_words.len().max(result_words.len());
     let match_ratio = if max_len > 0 { matches as f64 / max_len as f64 } else { 0.0 };
     match_ratio < ratio_config && extra_words > 2
+}
+
+/// Reduce a release title to its core series words: strip [tags], (year)/(group), bare years and
+/// issue/cover numbers, then drop noise. What remains should be ONLY the series name. Used by the
+/// beta.068 reverse guard to detect a differently-titled series (e.g. "Wolverine - Blood Hunt 003").
+fn core_series_words(title: &str, noise: &HashSet<String>) -> Vec<String> {
+    static RE_BRACKETS: OnceLock<Regex> = OnceLock::new();
+    static RE_PARENS: OnceLock<Regex> = OnceLock::new();
+    static RE_YEAR: OnceLock<Regex> = OnceLock::new();
+    static RE_NUM: OnceLock<Regex> = OnceLock::new();
+    let re_brackets = RE_BRACKETS.get_or_init(|| Regex::new(r"\[[^\]]*\]").unwrap());
+    let re_parens = RE_PARENS.get_or_init(|| Regex::new(r"\([^)]*\)").unwrap());
+    let re_year = RE_YEAR.get_or_init(|| Regex::new(r"\b(?:19|20)\d{2}\b").unwrap());
+    let re_num = RE_NUM.get_or_init(|| Regex::new(r"#?\d+(?:\.\d+)?").unwrap());
+    let t = title.to_lowercase();
+    let t = re_brackets.replace_all(&t, " ");
+    let t = re_parens.replace_all(&t, " ");
+    let t = re_year.replace_all(&t, " ");
+    let t = re_num.replace_all(&t, " ");
+    let cleaned: String = t.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
+    cleaned
+        .split_whitespace()
+        .filter(|w| w.chars().count() > 2 && !noise.contains(*w))
+        .map(|s| s.to_string())
+        .collect()
 }
 
 pub async fn filter_and_score(
@@ -406,6 +437,18 @@ pub async fn filter_and_score(
         .cloned()
         .collect();
 
+    // Noise set for the beta.068 reverse guard — stop words, junk/format tokens, variant keywords, and
+    // common scan tags. Dropped symmetrically from both the request and the release-title core words, so a
+    // real "Black, White & Blood" series still matches its own releases (parity with automation.ts reverseNoise).
+    let reverse_noise: HashSet<String> = {
+        let mut s: HashSet<String> = stop_words.iter().map(|w| w.to_string()).collect();
+        for w in ["eng", "cbz", "cbr", "cb7", "zip", "rar", "webrip", "digital", "vol", "volume", "ch", "chapter", "issue", "tpb", "rip", "the", "and", "of", "by", "gn"] { s.insert(w.to_string()); }
+        for w in &bounded_variant_keywords { s.insert(w.to_string()); }
+        for k in &open_variant_keywords { for w in k.split_whitespace() { s.insert(w.to_string()); } }
+        for w in ["cover", "covers", "scan", "scans", "noads", "c2c", "empire", "mobile"] { s.insert(w.to_string()); }
+        s
+    };
+
     results.retain(|res| {
         let title_lower = res.title.to_lowercase();
         let is_ddl = res.protocol == "ddl";
@@ -464,6 +507,23 @@ pub async fn filter_and_score(
 
         // Annual rejection is GetComics/DDL-only in Node (getcomics.ts:258-262); prowlarr.ts has none.
         if is_ddl && !is_looking_for_annual && title_lower.contains("annual") { return false; }
+
+        // REVERSE GUARD (Prowlarr single-issue only): the required-word/ratio checks can't tell the
+        // requested series from a differently-titled one that merely CONTAINS its words — e.g. "Wolverine
+        // - Blood Hunt 003" for a plain "Wolverine #3" ("blood" is a stop word, so the ratio gate sees only
+        // 2 extra tokens and its ">2 extra words" rule lets it through). Reject a single-issue release whose
+        // core title (tags/year/issue stripped) introduces a series word the request lacks. Skipped for
+        // packs, which legitimately carry extra words ("Complete Collection"). (beta.068)
+        if !is_ddl && req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
+            let extra: Vec<String> = core_series_words(&res.title, &reverse_noise)
+                .into_iter()
+                .filter(|t| !significant_query_words.contains(t))
+                .collect();
+            if !extra.is_empty() {
+                log::debug!("[Automation Debug] Discarding off-series Prowlarr release \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
+                return false;
+            }
+        }
 
         // Core-title match-ratio reverse-validation — Prowlarr only (H-12).
         if !is_ddl && !significant_query_words.is_empty() {
@@ -590,6 +650,18 @@ mod tests {
         // Request side (strip_vol=false) keeps a volume number; result side (true) strips it.
         assert_eq!(extract_number("hellboy v2", false, false), Some(2.0));
         assert_eq!(extract_number("hellboy v2", false, true), None);
+    }
+
+    #[test]
+    fn core_series_words_isolates_series_for_reverse_guard() {
+        // Mirrors the stop-word half of the production reverse_noise ("blood" is a stop word).
+        let noise: HashSet<String> = ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"]
+            .iter().map(|s| s.to_string()).collect();
+        // "blood" is noise (dropped), the (year) + issue number strip → "hunt" survives as an EXTRA series
+        // word not present in a "Wolverine #3" request, so the reverse guard would discard this off-series grab.
+        assert_eq!(core_series_words("Wolverine - Blood Hunt 003 (2026)", &noise), vec!["wolverine".to_string(), "hunt".to_string()]);
+        // A plain issue of the requested series reduces to only the series word — nothing extra, so it's kept.
+        assert_eq!(core_series_words("Wolverine 003 (2026) (digital)", &noise), vec!["wolverine".to_string()]);
     }
 
     #[test]

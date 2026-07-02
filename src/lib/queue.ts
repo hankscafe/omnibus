@@ -268,10 +268,13 @@ export function initWorker() {
                             await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
 
                             if (resultData.stall_for_review) {
-                                Logger.log(`[BullMQ] Multiple distinct editions found for: ${name}. Stalling for admin review.`, 'warn');
+                                Logger.log(`[BullMQ] Search for ${name} needs admin review (${resultData.stall_reason ? 'multi-pack ambiguity' : 'multiple distinct editions'}). Stalling.`, 'warn');
                                 await SystemNotifier.sendAlert('download_failed', {
                                     title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
-                                    description: `Multiple distinct versions (variants/special editions) were found for **${name}**. Please use Interactive Search in the Active Downloads queue to select the correct edition.`,
+                                    // The engine explains WHY it stalled when the generic message would mislead
+                                    // (e.g. a multi-pack page needs different guidance than a variants clash).
+                                    description: resultData.stall_reason
+                                        || `Multiple distinct versions (variants/special editions) were found for **${name}**. Please use Interactive Search in the Active Downloads queue to select the correct edition.`,
                                     publisher, year
                                 }).catch(() => {});
                             } else {

@@ -1,5 +1,5 @@
 use reqwest::Client;
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use sqlx::PgPool; 
 use std::collections::HashSet;
 use crate::prowlarr::ProwlarrResult;
@@ -571,10 +571,194 @@ fn get_hoster_from_url(url: &str, is_main_btn: bool) -> String {
     "unknown".to_string()
 }
 
-/// Scrapes an article for download links and returns the ranked candidate list (one link per hoster,
-/// highest-priority first). Returning the full list — not just the top — lets the caller fall back
-/// hoster-by-hoster at download time when the preferred one fails. Empty = no enabled hoster found.
-pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, article_url: &str) -> anyhow::Result<Vec<DeepLinkResult>> {
+/// The requested issue a multi-pack article should be section-targeted to. The caller derives it from
+/// the request name (only when it explicitly names an issue); `year` is the dynamic per-issue year,
+/// used to disambiguate same-numbered issues across volumes.
+pub struct DeepLinkTarget {
+    pub issue_num: f32,
+    pub year: Option<String>,
+}
+
+/// Outcome of resolving an article page to hoster links.
+pub enum DeepLinkOutcome {
+    /// Ranked candidates (one link per hoster, highest-priority first). Returning the full list — not
+    /// just the top — lets the caller fall back hoster-by-hoster at download time when the preferred
+    /// one fails. Empty = no enabled hoster found.
+    Links(Vec<DeepLinkResult>),
+    /// Multi-pack page (>= 2 range-labeled archive sections) where no single archive cleanly contains
+    /// the requested issue — the caller should stall the request for human review rather than grab an
+    /// arbitrary archive.
+    Ambiguous,
+}
+
+/// Turn one anchor into a classified deep link, or None if it isn't a real download button / a known
+/// hoster. This is the exact per-anchor logic the flat scraper always used (lock-step with Node's
+/// classifyAnchor in getcomics.ts).
+fn classify_anchor(a_tag: ElementRef) -> Option<DeepLinkResult> {
+    let raw_href = a_tag.value().attr("href").unwrap_or("");
+    let text = a_tag.text().collect::<Vec<_>>().join(" ").to_lowercase();
+    let title_attr = a_tag.value().attr("title").unwrap_or("").to_lowercase();
+    let btn_class = a_tag.value().attr("class").unwrap_or("").to_lowercase();
+
+    let mut decoded = raw_href.to_string();
+    if let Some(idx) = raw_href.find("go.php-url=") {
+        let mut encoded = raw_href[idx + 11..].to_string();
+        // The base64 payload ends at the query separator; a trailing &hoster=… suffix is not
+        // part of it. Strict base64 would reject the whole string, so truncate first — the
+        // correct read of the wrapped URL (Node decoded leniently and kept the leading run).
+        if let Some(amp) = encoded.find(['&', '#']) { encoded.truncate(amp); }
+        encoded = encoded.replace("%3D", "=").replace("%3d", "=");
+        while encoded.len() % 4 != 0 { encoded.push('='); }
+
+        if let Ok(bytes) = STANDARD.decode(&encoded) {
+            if let Ok(s) = String::from_utf8(bytes) { decoded = s; }
+        }
+    }
+
+    if decoded.is_empty() { return None; }
+
+    let is_main_btn = text.contains("main server") ||
+                      title_attr.contains("main server") ||
+                      text.contains("download now") ||
+                      text.contains("direct download") ||
+                      (btn_class.contains("aio-button") && text.contains("download"));
+
+    if is_main_btn && !raw_href.contains("go.php") && !decoded.to_lowercase().ends_with(".cbz") && !decoded.to_lowercase().ends_with(".zip") && !decoded.to_lowercase().ends_with(".cbr")
+        && !decoded.contains("comicfiles") && !decoded.contains("comic-files") && !decoded.contains("getcomics") {
+            return None;
+        }
+
+    let hoster = get_hoster_from_url(&decoded, is_main_btn);
+    if hoster == "unknown" { return None; }
+    log::debug!("[GetComics Debug] Decoded deep link -> {} (hoster: {})", decoded, hoster);
+    Some(DeepLinkResult { url: decoded, hoster })
+}
+
+/// Parse the article HTML into the FLAT anchor sweep (the single-page default the scraper always used)
+/// plus heading-grouped SECTIONS scoped to the post body, walked in document order so each download
+/// button group lands under its preceding h1–h5 heading. Sections are used ONLY for multi-pack
+/// targeting. Sync + DB-free so the DOM walk is unit-testable.
+fn extract_article_links(html: &str) -> (Vec<DeepLinkResult>, Vec<(String, Vec<DeepLinkResult>)>) {
+    let document = Html::parse_document(html);
+    let a_sel = Selector::parse("a").unwrap();
+
+    let mut flat = Vec::new();
+    for a_tag in document.select(&a_sel) {
+        if let Some(l) = classify_anchor(a_tag) { flat.push(l); }
+    }
+
+    let scope_sel = Selector::parse(".post-contents, .entry-content, article").unwrap();
+    let scope = document.select(&scope_sel).next().unwrap_or_else(|| document.root_element());
+    let mut sections: Vec<(String, Vec<DeepLinkResult>)> = Vec::new();
+    let mut label = String::new();
+    let mut links: Vec<DeepLinkResult> = Vec::new();
+    for node in scope.descendants() {
+        let Some(el) = ElementRef::wrap(node) else { continue };
+        match el.value().name() {
+            "h1" | "h2" | "h3" | "h4" | "h5" => {
+                if !links.is_empty() { sections.push((label.clone(), std::mem::take(&mut links))); }
+                label = el.text().collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+            }
+            "a" => {
+                if let Some(l) = classify_anchor(el) { links.push(l); }
+            }
+            _ => {}
+        }
+    }
+    if !links.is_empty() { sections.push((label, links)); }
+
+    (flat, sections)
+}
+
+/// First 4-digit year (19xx/20xx) in a section label, e.g. "Crossed Vol. 2 (2012-2013)" → 2012.
+fn find_label_year(label: &str) -> Option<i32> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"\b((?:19|20)\d{2})\b").unwrap());
+    re.captures(label).and_then(|c| c.get(1)).and_then(|m| m.as_str().parse().ok())
+}
+
+/// Sort by enabled-priority position, then de-dupe to one link per hoster (keep the highest-priority
+/// occurrence). The caller tries these in order at download time, so one-per-hoster avoids re-attempting
+/// several Cloudflare-gated getcomics.org/dls/ links (each can cost a 300s solve) while still giving
+/// real mirror fallbacks.
+fn rank_and_dedupe(mut links: Vec<DeepLinkResult>, enabled_order: &[String]) -> Vec<DeepLinkResult> {
+    links.sort_by(|a, b| {
+        let pos_a = enabled_order.iter().position(|x| x == &a.hoster).unwrap_or(usize::MAX);
+        let pos_b = enabled_order.iter().position(|x| x == &b.hoster).unwrap_or(usize::MAX);
+        pos_a.cmp(&pos_b)
+    });
+    let mut seen_hosters: HashSet<String> = HashSet::new();
+    links.into_iter().filter(|l| seen_hosters.insert(l.hoster.clone())).collect()
+}
+
+enum SectionSelection {
+    /// Fewer than 2 range-labeled sections — an ordinary post; use the flat behavior.
+    NotMultiPack,
+    /// Multi-pack page, but no section cleanly contains the requested issue.
+    Ambiguous,
+    /// The chosen section's (enabled) links.
+    Section(Vec<DeepLinkResult>),
+}
+
+/// SECTION-TARGETING (multi-pack pages only). Diverge from the flat behavior ONLY when >= 2 sections
+/// each name a distinct issue/volume RANGE — that is the signature of a multi-archive page (e.g. a
+/// "Crossed Collection" listing 11 separate archives), and it guards an ordinary post (whose incidental
+/// headings carry no range) from ever being treated as ambiguous. Lock-step with Node's scrapeDeepLink
+/// targeting in getcomics.ts (node main beta.047).
+fn select_pack_section(
+    sections: Vec<(String, Vec<DeepLinkResult>)>,
+    target: &DeepLinkTarget,
+    enabled_order: &[String],
+) -> SectionSelection {
+    let mut packs: Vec<(String, Vec<DeepLinkResult>, (u32, u32))> = sections.into_iter()
+        .filter_map(|(label, links)| {
+            let range = parse_issue_range(&label)?;
+            let enabled: Vec<DeepLinkResult> = links.into_iter().filter(|l| enabled_order.contains(&l.hoster)).collect();
+            if enabled.is_empty() { return None; }
+            Some((label, enabled, range))
+        })
+        .collect();
+    if packs.len() < 2 { return SectionSelection::NotMultiPack; }
+
+    log::info!("[GetComics] Multi-pack page detected ({} archive sections). Targeting issue #{}{}.",
+        packs.len(), target.issue_num,
+        target.year.as_deref().map(|y| format!(" ({})", y)).unwrap_or_default());
+
+    let target_year: Option<i32> = target.year.as_deref().and_then(|y| y.parse().ok());
+    packs.retain(|(label, _, (start, end))| {
+        if target.issue_num < *start as f32 || target.issue_num > *end as f32 { return false; }
+        // A section labeled with a year far from the requested issue's year is a different volume.
+        if let (Some(ty), Some(ly)) = (target_year, find_label_year(label)) {
+            if (ty - ly).abs() > 1 { return false; }
+        }
+        true
+    });
+
+    if packs.is_empty() {
+        log::warn!("[GetComics] No archive section cleanly contains issue #{}. Flagging for manual review.", target.issue_num);
+        return SectionSelection::Ambiguous;
+    }
+
+    // Prefer the narrowest range (most specific to the requested issue); the stable sort keeps document
+    // order for ties.
+    packs.sort_by_key(|(_, _, (start, end))| end - start);
+    let (label, links, _) = packs.swap_remove(0);
+    log::info!("[GetComics] Selected archive \"{}\" for issue #{}.", label, target.issue_num);
+    SectionSelection::Section(links)
+}
+
+/// Scrapes an article for download links. Without a `target` — or on an ordinary single-download page —
+/// this is the classic flat behavior: the ranked candidate list (one link per hoster, highest-priority
+/// first). With a `target`, a multi-pack article page (>= 2 range-labeled archive sections, e.g. a
+/// "Crossed Collection" listing several separate archives) is section-targeted to the archive whose
+/// issue-range + year contain the requested issue; when no single archive cleanly matches, `Ambiguous`
+/// is returned so the caller stalls for human review instead of grabbing an arbitrary archive.
+pub async fn scrape_deep_link(
+    db: &PgPool,
+    limiter: &crate::rate_limiter::RateLimiter,
+    article_url: &str,
+    target: Option<&DeepLinkTarget>,
+) -> anyhow::Result<DeepLinkOutcome> {
     limiter.enforce("getcomics", 2500).await;
 
     let flare_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#).fetch_optional(db).await?;
@@ -586,56 +770,10 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
             // Graceful empty list (parity with Node's catch-all) so the caller falls back to a manual
             // hold / Prowlarr instead of erroring.
             log::warn!("[GetComics] Failed to scrape deep link {}: {}", article_url, e);
-            return Ok(Vec::new());
+            return Ok(DeepLinkOutcome::Links(Vec::new()));
         }
     };
-    let mut found_links = Vec::new();
-
-    {
-        let document = Html::parse_document(&html);
-        let a_sel = Selector::parse("a").unwrap();
-
-        for a_tag in document.select(&a_sel) {
-            let raw_href = a_tag.value().attr("href").unwrap_or("");
-            let text = a_tag.text().collect::<Vec<_>>().join(" ").to_lowercase();
-            let title_attr = a_tag.value().attr("title").unwrap_or("").to_lowercase();
-            let btn_class = a_tag.value().attr("class").unwrap_or("").to_lowercase();
-
-            let mut decoded = raw_href.to_string();
-            if let Some(idx) = raw_href.find("go.php-url=") {
-                let mut encoded = raw_href[idx + 11..].to_string();
-                // The base64 payload ends at the query separator; a trailing &hoster=… suffix is not
-                // part of it. Strict base64 would reject the whole string, so truncate first — the
-                // correct read of the wrapped URL (Node decoded leniently and kept the leading run).
-                if let Some(amp) = encoded.find(['&', '#']) { encoded.truncate(amp); }
-                encoded = encoded.replace("%3D", "=").replace("%3d", "=");
-                while encoded.len() % 4 != 0 { encoded.push('='); }
-
-                if let Ok(bytes) = STANDARD.decode(&encoded) {
-                    if let Ok(s) = String::from_utf8(bytes) { decoded = s; }
-                }
-            }
-
-            if decoded.is_empty() { continue; }
-
-            let is_main_btn = text.contains("main server") || 
-                              title_attr.contains("main server") || 
-                              text.contains("download now") || 
-                              text.contains("direct download") || 
-                              (btn_class.contains("aio-button") && text.contains("download"));
-            
-            if is_main_btn && !raw_href.contains("go.php") && !decoded.to_lowercase().ends_with(".cbz") && !decoded.to_lowercase().ends_with(".zip") && !decoded.to_lowercase().ends_with(".cbr")
-                && !decoded.contains("comicfiles") && !decoded.contains("comic-files") && !decoded.contains("getcomics") { 
-                    continue; 
-                }
-
-            let hoster = get_hoster_from_url(&decoded, is_main_btn);
-            if hoster != "unknown" {
-                log::debug!("[GetComics Debug] Decoded deep link -> {} (hoster: {})", decoded, hoster);
-                found_links.push(DeepLinkResult { url: decoded, hoster });
-            }
-        }
-    }
+    let (mut found_links, sections) = extract_article_links(&html);
 
     // Parse + legacy `getcomics` → `getcomics_direct`/`getcomics_main` migration. Only hosters that are
     // PRESENT and ENABLED in the priority list are eligible — a hoster toggled off, OR absent from the
@@ -645,30 +783,35 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
     let prefs = if prefs.is_empty() { default_hoster_prefs() } else { prefs };
     let enabled_order: Vec<String> = prefs.iter().filter(|p| p.enabled).map(|p| p.hoster.clone()).collect();
 
+    // Multi-pack section-targeting first — it must judge the page's sections before the flat sweep
+    // collapses them into one pool.
+    if let Some(t) = target {
+        match select_pack_section(sections, t, &enabled_order) {
+            SectionSelection::Ambiguous => return Ok(DeepLinkOutcome::Ambiguous),
+            SectionSelection::Section(links) => {
+                let candidates = rank_and_dedupe(links, &enabled_order);
+                if let Some(top) = candidates.first() {
+                    log::info!("[GetComics] Selected hoster: {} (+{} fallback(s)).", top.hoster, candidates.len() - 1);
+                }
+                return Ok(DeepLinkOutcome::Links(candidates));
+            }
+            SectionSelection::NotMultiPack => {}
+        }
+    }
+
+    // --- FLAT BEHAVIOR (single page / no target) — unchanged from the original scraper. ---
     let available: Vec<String> = found_links.iter().map(|l| l.hoster.clone()).collect();
     log::info!("[GetComics] Found {} valid links. Available hosters: {}", found_links.len(), available.join(", "));
     log::debug!("[GetComics Debug] Enabled hoster priority: [{}]", enabled_order.join(", "));
 
     // Keep only links from an explicitly present+enabled hoster (drops both disabled and unlisted ones).
     found_links.retain(|l| enabled_order.contains(&l.hoster));
-    if found_links.is_empty() { return Ok(Vec::new()); }
+    if found_links.is_empty() { return Ok(DeepLinkOutcome::Links(Vec::new())); }
 
-    // Sort by enabled-priority position. getcomics_main (the /dls/ main server) sits high by default
-    // because its direct download succeeds for most issues; only the subset behind a live Cloudflare
-    // challenge falls through to the download-time manual-hold.
-    found_links.sort_by(|a, b| {
-        let pos_a = enabled_order.iter().position(|x| x == &a.hoster).unwrap_or(usize::MAX);
-        let pos_b = enabled_order.iter().position(|x| x == &b.hoster).unwrap_or(usize::MAX);
-        pos_a.cmp(&pos_b)
-    });
-
-    // De-dupe to one link per hoster (keep the highest-priority occurrence). The caller tries these in
-    // order at download time, so one-per-hoster avoids re-attempting several Cloudflare-gated
-    // getcomics.org/dls/ links (each can cost a 300s solve) while still giving real mirror fallbacks.
-    let mut seen_hosters: HashSet<String> = HashSet::new();
-    let candidates: Vec<DeepLinkResult> = found_links.into_iter()
-        .filter(|l| seen_hosters.insert(l.hoster.clone()))
-        .collect();
+    // getcomics_main (the /dls/ main server) sits high by default because its direct download succeeds
+    // for most issues; only the subset behind a live Cloudflare challenge falls through to the
+    // download-time manual-hold.
+    let candidates = rank_and_dedupe(found_links, &enabled_order);
 
     if let (Some(top), Some(pref)) = (candidates.first(), enabled_order.first()) {
         if &top.hoster != pref {
@@ -677,7 +820,7 @@ pub async fn scrape_deep_link(db: &PgPool, limiter: &crate::rate_limiter::RateLi
             log::info!("[GetComics] Selected hoster: {} (+{} fallback(s)).", top.hoster, candidates.len() - 1);
         }
     }
-    Ok(candidates)
+    Ok(DeepLinkOutcome::Links(candidates))
 }
 
 #[cfg(test)]
@@ -696,6 +839,91 @@ mod tests {
         assert_eq!(parse_issue_range("Wolverine #3 (2024)"), None);
         // Descending / equal is not a range.
         assert_eq!(parse_issue_range("Foo 9 - 3"), None);
+    }
+
+    // A synthetic multi-pack article: three archive sections, each a heading naming an issue range
+    // followed by its download button (the shape of e.g. a "Crossed Collection" post).
+    const MULTI_PACK_HTML: &str = r#"<html><body><div class="post-contents">
+        <h2>Crossed Collection</h2>
+        <p>All the Crossed volumes in one post.</p>
+        <h3>Crossed Vol. 1 #0 – 9 (2010)</h3>
+        <p><a class="aio-button" href="https://comicfiles.ru/crossed-v1.zip">Download Now</a></p>
+        <h3>Crossed Vol. 2 #10 – 30 (2012)</h3>
+        <p><a class="aio-button" href="https://comicfiles.ru/crossed-v2.zip">Download Now</a></p>
+        <h3>Crossed +100 #1 – 18 (2014)</h3>
+        <p><a class="aio-button" href="https://comicfiles.ru/crossed-100.zip">Download Now</a></p>
+    </div></body></html>"#;
+
+    #[test]
+    fn extract_article_links_groups_buttons_under_their_headings() {
+        let (flat, sections) = extract_article_links(MULTI_PACK_HTML);
+        assert_eq!(flat.len(), 3, "flat sweep finds every download button");
+        // The intro heading carries no links, so exactly the three archive sections survive.
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].0, "Crossed Vol. 1 #0 – 9 (2010)");
+        assert!(sections[0].1[0].url.contains("crossed-v1"));
+        assert_eq!(sections[2].0, "Crossed +100 #1 – 18 (2014)");
+        assert!(sections[2].1[0].url.contains("crossed-100"));
+    }
+
+    #[test]
+    fn section_targeting_picks_the_archive_containing_the_issue() {
+        let enabled = vec!["getcomics_direct".to_string()];
+        // Issue #22 is only in Vol. 2's range (10–30).
+        let (_, sections) = extract_article_links(MULTI_PACK_HTML);
+        let t = DeepLinkTarget { issue_num: 22.0, year: None };
+        match select_pack_section(sections, &t, &enabled) {
+            SectionSelection::Section(links) => assert!(links[0].url.contains("crossed-v2")),
+            _ => panic!("expected the Vol. 2 section"),
+        }
+    }
+
+    #[test]
+    fn section_targeting_prefers_the_narrowest_matching_range() {
+        let enabled = vec!["getcomics_direct".to_string()];
+        // Issue #15 is inside BOTH Vol. 2 (10–30, width 20) and +100 (1–18, width 17); the
+        // narrowest (most specific) range wins.
+        let (_, sections) = extract_article_links(MULTI_PACK_HTML);
+        let t = DeepLinkTarget { issue_num: 15.0, year: None };
+        match select_pack_section(sections, &t, &enabled) {
+            SectionSelection::Section(links) => assert!(links[0].url.contains("crossed-100")),
+            _ => panic!("expected the +100 section"),
+        }
+    }
+
+    #[test]
+    fn section_targeting_flags_ambiguity_when_no_archive_cleanly_matches() {
+        let enabled = vec!["getcomics_direct".to_string()];
+
+        // Issue #50 is outside every section's range → no clean match → ambiguous, never an arbitrary grab.
+        let (_, sections) = extract_article_links(MULTI_PACK_HTML);
+        let t = DeepLinkTarget { issue_num: 50.0, year: None };
+        assert!(matches!(select_pack_section(sections, &t, &enabled), SectionSelection::Ambiguous));
+
+        // Issue #5 (2016): Vol. 1 (2010) and +100 (2014) both contain #5 by range but fail the ±1 year
+        // window; Vol. 2 doesn't contain #5 at all → ambiguous rather than a wrong-volume grab.
+        let (_, sections) = extract_article_links(MULTI_PACK_HTML);
+        let t = DeepLinkTarget { issue_num: 5.0, year: Some("2016".to_string()) };
+        assert!(matches!(select_pack_section(sections, &t, &enabled), SectionSelection::Ambiguous));
+    }
+
+    #[test]
+    fn section_targeting_never_diverts_ordinary_pages() {
+        let enabled = vec!["getcomics_direct".to_string()];
+        let t = DeepLinkTarget { issue_num: 3.0, year: None };
+
+        // A single-download page (one range-labeled section) is NOT a multi-pack — flat behavior.
+        let single = r#"<html><body><article>
+            <h3>Wolverine #1 – 10 (2024)</h3>
+            <a class="aio-button" href="https://comicfiles.ru/wolverine.zip">Download Now</a>
+        </article></body></html>"#;
+        let (_, sections) = extract_article_links(single);
+        assert!(matches!(select_pack_section(sections, &t, &enabled), SectionSelection::NotMultiPack));
+
+        // Sections whose hosters are all disabled don't count toward the multi-pack signature either.
+        let (_, sections) = extract_article_links(MULTI_PACK_HTML);
+        let none_enabled = vec!["mediafire".to_string()];
+        assert!(matches!(select_pack_section(sections, &t, &none_enabled), SectionSelection::NotMultiPack));
     }
 
     // The modal pads issue numbers ("003") but GetComics titles them "#3" — the fan-out must also

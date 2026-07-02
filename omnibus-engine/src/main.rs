@@ -104,6 +104,10 @@ struct SearchResponse {
     success: bool,
     best_match: Option<prowlarr::ProwlarrResult>,
     stall_for_review: bool,
+    // Human-readable reason for a stall_for_review, shown in the admin alert (e.g. multi-edition vs
+    // multi-pack ambiguity need different guidance). None → Node falls back to its generic message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stall_reason: Option<String>,
     // A GetComics match was found but resolved to no enabled hoster, and no indexer release was
     // available either: the link is held for human pickup (parity with automation.ts MANUAL_DDL).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -930,7 +934,7 @@ async fn handle_search(
                     get_res.iter().map(|r| search_engine::normalize_edition_title(&r.title)).collect();
                 if get_res.len() > 1 && editions.len() > 1 {
                     log::warn!("Multiple distinct DDL editions found for {}. Stalling for admin review.", payload.name);
-                    return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, manual_ddl: None, ddl_candidates: Vec::new() });
+                    return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, stall_reason: None, manual_ddl: None, ddl_candidates: Vec::new() });
                 }
 
                 // GetComics results are already relevance-filtered in getcomics::search → operator
@@ -938,10 +942,39 @@ async fn handle_search(
                 if let Ok(Some(mut best_ddl)) = search_engine::filter_and_score(
                     &state.db, get_res.clone(), &payload.name, is_manga, req_year.clone(), true, Some(use_packs)
                 ).await {
+                    // Section-target a multi-pack article to the requested issue (node main beta.047):
+                    // only when the request explicitly names an issue (same marker rule as Node's caller);
+                    // the dynamic per-issue year disambiguates same-numbered issues across volumes.
+                    let re_target_issue = regex::Regex::new(r"(?i)(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)").unwrap();
+                    let dl_target = re_target_issue.captures(&payload.name)
+                        .and_then(|c| c.get(1))
+                        .and_then(|m| m.as_str().parse::<f32>().ok())
+                        .map(|n| getcomics::DeepLinkTarget { issue_num: n, year: req_year.clone() });
+
                     // Resolve the article to concrete hoster links; scrape_deep_link drops disabled
                     // hosters, so an empty list means no enabled hoster can serve this match.
-                    let candidates = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url)
-                        .await.unwrap_or_default();
+                    let outcome = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url, dl_target.as_ref())
+                        .await.unwrap_or(getcomics::DeepLinkOutcome::Links(Vec::new()));
+                    let candidates = match outcome {
+                        getcomics::DeepLinkOutcome::Ambiguous => {
+                            // Multi-pack page and no single archive cleanly contains the requested issue —
+                            // grabbing an arbitrary archive would download the wrong volume, so stall for
+                            // the admin to pick via Interactive Search (parity with automation.ts beta.047).
+                            log::warn!("[GetComics] \"{}\" is a multi-pack page and no single archive cleanly matched {}. Stalling for admin review.", best_ddl.title, payload.name);
+                            return Json(SearchResponse {
+                                success: false,
+                                best_match: None,
+                                stall_for_review: true,
+                                stall_reason: Some(format!(
+                                    "GetComics lists **{}** only on a multi-pack page with several separate archives, and none cleanly contains the requested issue. Please use Interactive Search in the Active Downloads queue to select the correct archive.",
+                                    payload.name
+                                )),
+                                manual_ddl: None,
+                                ddl_candidates: Vec::new(),
+                            });
+                        }
+                        getcomics::DeepLinkOutcome::Links(c) => c,
+                    };
                     if let Some(top) = candidates.first() {
                         log::info!("[GetComics] Matched a Direct Download for {}.", payload.name);
                         best_ddl.download_url = top.url.clone();
@@ -988,7 +1021,7 @@ async fn handle_search(
 
     // DDL deep-links are already resolved above; Prowlarr results are torrents/usenet, returned as-is.
     if let Some(best) = best_match {
-        return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, manual_ddl: None, ddl_candidates });
+        return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, stall_reason: None, manual_ddl: None, ddl_candidates });
     }
 
     // Nothing auto-downloadable. If we held a GetComics link and GetComics is an enabled hoster, surface
@@ -996,12 +1029,12 @@ async fn handle_search(
     if let Some((url, name)) = manual_fallback {
         if getcomics::is_getcomics_enabled(&state.db).await {
             log::warn!("No downloadable release for {}. Reverting to the GetComics manual DDL fallback.", payload.name);
-            return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: Some(ManualDdl { url, name }), ddl_candidates: Vec::new() });
+            return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, stall_reason: None, manual_ddl: Some(ManualDdl { url, name }), ddl_candidates: Vec::new() });
         }
     }
 
     log::warn!("No valid release found for {} after checking all sources.", payload.name);
-    Json(SearchResponse { success: false, best_match: None, stall_for_review: false, manual_ddl: None, ddl_candidates: Vec::new() })
+    Json(SearchResponse { success: false, best_match: None, stall_for_review: false, stall_reason: None, manual_ddl: None, ddl_candidates: Vec::new() })
 }
 
 async fn handle_interactive_search(

@@ -364,7 +364,8 @@ export function initWorker() {
 
                             Logger.log(`[BullMQ] Routing ${bestMatch.protocol.toUpperCase()} release to external client: ${clientConfig.name}`, 'info');
                             
-                            await DownloadService.addDownload(clientConfig, bestMatch.downloadUrl, bestMatch.title, 0, 0);
+                            // File manga under its own category/label in the client (manga → second configured category).
+                            await DownloadService.addDownload(clientConfig, bestMatch.downloadUrl, bestMatch.title, 0, 0, isManga || false);
                             
                             const trackingHash = bestMatch.infoHash || bestMatch.guid || bestMatch.downloadUrl;
                             await prisma.request.update({ 

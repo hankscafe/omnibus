@@ -3036,7 +3036,7 @@ export default function SettingsPage() {
                     <div className="grid gap-2">
                         <Label className="text-foreground font-semibold">Download Category / Label</Label>
                         <Input value={editingClient.category || ""} onChange={e => updateEditingClient('category', e.target.value)} placeholder="e.g. comics, manga" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
-                        <p className="text-[11px] text-muted-foreground">Comma-separated list of categories to track. New downloads use the first one. <strong className="text-orange-500">Categories MUST exist in your client!</strong></p>
+                        <p className="text-[11px] text-muted-foreground">Comma-separated. The <strong>first</strong> category is used for comics; add a <strong>second</strong> for manga (e.g. <code>comics, manga</code>). Both are tracked in the active-downloads list. <strong className="text-orange-500">Categories/labels MUST exist in your client</strong> (qBittorrent auto-creates them; Deluge needs the Label plugin).</p>
                     </div>
 
                     <div className="border-t border-border pt-4 mt-2">

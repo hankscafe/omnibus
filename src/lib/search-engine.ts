@@ -135,7 +135,7 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
 }
 
 export const SearchEngine = {
-    async performSmartSearch(query: string) {
+    async performSmartSearch(query: string, isManga: boolean = false) {
         const settings = await prisma.systemSetting.findMany();
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
@@ -196,7 +196,7 @@ export const SearchEngine = {
             if (clients.length === 0) return { success: false, message: "No download client configured." };
             const client = clients[0]; 
 
-            await DownloadService.addDownload(client, downloadLink, bestMatch.title, bestMatch._seedTime || 0, 0);
+            await DownloadService.addDownload(client, downloadLink, bestMatch.title, bestMatch._seedTime || 0, 0, isManga);
 
             const trackingHash = bestMatch.infoHash || bestMatch.guid || downloadLink;
 

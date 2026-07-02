@@ -51,8 +51,13 @@ export async function POST(req: Request) {
         }
     }
 
+    // Resolve manga-vs-comics from the request's series so the download is filed under the right
+    // category/label in the client (manga → second configured category).
+    const dlReq = await prisma.request.findUnique({ where: { id: requestId }, select: { volumeId: true, metadataSource: true } });
+    const dlSeries = dlReq ? await prisma.series.findFirst({ where: { metadataId: dlReq.volumeId, metadataSource: dlReq.metadataSource }, select: { isManga: true } }) : null;
+
     // Send the link to the unified DownloadService
-    await DownloadService.addDownload(client, urlToDownload, title, 0, 0);
+    await DownloadService.addDownload(client, urlToDownload, title, 0, 0, dlSeries?.isManga ?? false);
 
     await prisma.request.update({
       where: { id: requestId },

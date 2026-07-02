@@ -1,7 +1,8 @@
 // src/app/library/page.tsx
 "use client"
 
-import { useState, useEffect, useCallback, useRef, Suspense } from "react"
+import { useState, useEffect, useCallback, useRef, forwardRef, Suspense } from "react"
+import { VirtuosoGrid, TableVirtuoso, type TableComponents } from "react-virtuoso"
 import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card } from "@/components/ui/card"
@@ -64,6 +65,37 @@ interface LibrarySeries {
   isPendingReq?: boolean;
   status?: string | null;
 }
+
+// Context handed to the virtualized table's row component so it can stay module-scoped (stable identity →
+// Virtuoso doesn't remount rows) while still reading the current selection state.
+type ListRowContext = {
+  isSelectionMode: boolean;
+  selectedSeries: Set<string>;
+  toggleSeriesSelection: (id: string) => void;
+};
+
+// Static structural components for the virtualized list/table view. Defined once at module scope so their
+// identity is stable across renders (changing component identity would force Virtuoso to remount every row).
+const LIST_TABLE_COMPONENTS: TableComponents<LibrarySeries, ListRowContext> = {
+  Table: (props) => <table {...props} className="w-full text-sm text-left" />,
+  TableHead: forwardRef<HTMLTableSectionElement, any>(function ListTableHead(props, ref) {
+    return <thead {...props} ref={ref} className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border" />;
+  }),
+  TableBody: forwardRef<HTMLTableSectionElement, any>(function ListTableBody(props, ref) {
+    return <tbody {...props} ref={ref} className="divide-y divide-border" />;
+  }),
+  TableRow: ({ item, context, ...props }) => {
+    const isSelected = !!context && context.selectedSeries.has(item.id);
+    const selectionMode = !!context && context.isSelectionMode;
+    return (
+      <tr
+        {...props}
+        className={`transition-colors group ${selectionMode ? 'cursor-pointer hover:bg-muted ' + (isSelected ? 'bg-primary/10' : '') : 'hover:bg-muted/50'}`}
+        onClick={() => { if (selectionMode && item.id) context!.toggleSeriesSelection(item.id); }}
+      />
+    );
+  },
+};
 
 interface Collection {
   id: string;
@@ -410,23 +442,16 @@ function LibraryContent() {
       toastRef.current({ title: "Scanning Disk", description: "Checking folders for new comics..." });
   }
 
-  const observer = useRef<IntersectionObserver | null>(null);
-  const lastElementRef = useCallback((node: HTMLDivElement | null) => {
-      if (loading || loadingMore) return; 
-      if (observer.current) observer.current.disconnect();
-      
-      observer.current = new IntersectionObserver(entries => {
-          if (entries[0].isIntersecting && hasMore) {
-              setPage(prevPage => {
-                  const nextPage = prevPage + 1;
-                  loadLibraryData(nextPage, false, true);
-                  return nextPage;
-              });
-          }
-      }, { rootMargin: "400px" }); 
-      
-      if (node) observer.current.observe(node);
-  }, [hasMore, loading, loadingMore, loadLibraryData]); 
+  // Virtuoso drives infinite loading via endReached (it fires as the user nears the end of the virtualized
+  // list). Selection mode pauses pagination, matching the prior sentinel which was hidden while selecting.
+  const handleEndReached = useCallback(() => {
+      if (loading || loadingMore || !hasMore || isSelectionMode) return;
+      setPage(prevPage => {
+          const nextPage = prevPage + 1;
+          loadLibraryData(nextPage, false, true);
+          return nextPage;
+      });
+  }, [hasMore, loading, loadingMore, isSelectionMode, loadLibraryData]);
 
   const toggleFavorite = async (seriesId: string, currentStatus: boolean) => {
       if (!seriesId) return;
@@ -896,15 +921,21 @@ function LibraryContent() {
           {activeCollection !== "ALL" ? (<><Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>This reading list is currently empty.</p></>) : (<><Folder className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No comics found matching your criteria.</p></>)}
         </div>
       ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10">
-          {series.map((item: LibrarySeries) => {
+        <VirtuosoGrid
+          useWindowScroll
+          data={series}
+          endReached={handleEndReached}
+          increaseViewportBy={800}
+          computeItemKey={(_, item) => item.id || item.path}
+          listClassName="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10"
+          itemContent={(_, item: LibrarySeries) => {
               const unread = item.unreadCount !== undefined ? item.unreadCount : item.count;
               const isCompleted = unread === 0 && item.count > 0;
               const progress = item.progressPercentage || 0;
               const isSelected = selectedSeries.has(item.id);
               const navId = item.id || item.path;
               return (
-                <div key={item.id || item.path} className="group flex flex-col space-y-2 relative">
+                <div className="group flex flex-col space-y-2 relative">
                   <Card className={`aspect-[2/3] overflow-hidden shadow-sm transition-all p-0 relative flex flex-col ${isSelectionMode ? (isSelected ? 'border-4 border-primary scale-95' : 'border-2 border-border cursor-pointer') : 'border-border group-hover:shadow-md cursor-pointer bg-background'}`}>
                       {isSelectionMode && item.id && (<div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">{isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-white/80" />}</div>)}
                       
@@ -1037,27 +1068,28 @@ function LibraryContent() {
                   </div>
                 </div>
               )
-          })}
-        </div>
+          }}
+        />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden bg-background pb-0 mb-10">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border">
+            <TableVirtuoso
+              useWindowScroll
+              data={series}
+              endReached={handleEndReached}
+              increaseViewportBy={800}
+              computeItemKey={(_, item) => item.id || item.path}
+              context={{ isSelectionMode, selectedSeries, toggleSeriesSelection }}
+              components={LIST_TABLE_COMPONENTS}
+              fixedHeaderContent={() => (
                 <tr>{isSelectionMode && <th className="w-12 px-4 py-3 text-center">Select</th>}<th className="w-16 px-4 py-3 text-center">Cover</th><th className="px-4 py-3">Series Name</th><th className="px-4 py-3 hidden md:table-cell">Publisher</th><th className="px-4 py-3 hidden sm:table-cell text-center">Year</th><th className="px-4 py-3 text-center">Issues</th>{!isSelectionMode && <th className="px-4 py-3 text-right">Actions</th>}</tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {series.map((item: LibrarySeries) => {
+              )}
+              itemContent={(_, item: LibrarySeries) => {
                   const unread = item.unreadCount !== undefined ? item.unreadCount : item.count;
                   const isCompleted = unread === 0 && item.count > 0;
                   const isSelected = selectedSeries.has(item.id);
                   const navId = item.id || item.path;
                   return (
-                    <tr 
-                        key={item.id || item.path} 
-                        className={`transition-colors group ${isSelectionMode ? 'cursor-pointer hover:bg-muted ' + (isSelected ? 'bg-primary/10' : '') : 'hover:bg-muted/50'}`} 
-                        onClick={() => isSelectionMode && item.id && toggleSeriesSelection(item.id)}
-                    >
+                    <>
                         {isSelectionMode && (<td className="px-4 py-3 text-center">{isSelected ? <CheckSquare className="w-6 h-6 text-primary mx-auto" aria-label="Selected" /> : <Square className="w-6 h-6 text-muted-foreground mx-auto" aria-label="Not selected" />}</td>)}
                         
                         <td className="px-4 py-2">
@@ -1143,24 +1175,18 @@ function LibraryContent() {
                                 </div>
                             </td>
                         )}
-                    </tr>
+                    </>
                   )
-                })}
-              </tbody>
-            </table>
-          </div>
+              }}
+            />
         </div>
       )}
 
-      {hasMore && !isSelectionMode && (
-          <div ref={lastElementRef} className="flex justify-center pt-8 pb-12 w-full">
-              {loadingMore ? (
-                  <div className="flex items-center text-muted-foreground font-medium bg-muted/50 px-4 py-2 rounded-full border border-border shadow-sm">
-                      <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading more...
-                  </div>
-              ) : (
-                  <div className="h-10 w-full" /> 
-              )}
+      {loadingMore && (
+          <div className="flex justify-center pt-8 pb-12 w-full">
+              <div className="flex items-center text-muted-foreground font-medium bg-muted/50 px-4 py-2 rounded-full border border-border shadow-sm">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading more...
+              </div>
           </div>
       )}
 

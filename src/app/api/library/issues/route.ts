@@ -62,7 +62,9 @@ export async function GET(request: Request) {
         if (Object.keys(seriesWhere).length > 0) where.series = seriesWhere;
         if (status === 'DOWNLOADED') where.filePath = { not: null };
         else if (status === 'WANTED') where.filePath = null;
-        if (q) where.OR = [{ name: { contains: q } }, { series: { name: { contains: q } } }];
+        // Case-insensitive title search. `mode: 'insensitive'` → Postgres ILIKE (the app runs on Postgres);
+        // node main relies on SQLite's LIKE being case-insensitive by default, so it omits the mode.
+        if (q) where.OR = [{ name: { contains: q, mode: 'insensitive' } }, { series: { name: { contains: q, mode: 'insensitive' } } }];
 
         const rows = await prisma.issue.findMany({
             where,

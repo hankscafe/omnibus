@@ -16,9 +16,13 @@ vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn()
 // 3. Mock Prisma
 vi.mock('@/lib/db', () => ({
     prisma: {
-        series: { 
+        series: {
             findMany: mocks.findManySeries,
             count: mocks.countSeries
+        },
+        issue: {
+            groupBy: vi.fn().mockResolvedValue([]),
+            findMany: vi.fn().mockResolvedValue([])
         },
         library: {
             findMany: vi.fn().mockResolvedValue([{ id: 'lib_1', path: '/library', isManga: false }])

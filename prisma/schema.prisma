@@ -162,6 +162,9 @@ model Series {
 
   @@index([libraryId])
   @@index([metadataId]) // library pendingOnly branch filters metadataId IN (...); the composite unique can't serve a metadataId-only scan
+  @@index([name]) // library default sort (alpha_asc/desc) — without this, every paged load full-scans + sorts the whole table to take 24
+  @@index([year]) // library year sorts + era range filters (gte/lt on year)
+  @@index([publisher]) // library publisher filter + the distinct-publisher dropdown scan
   @@unique([metadataSource, metadataId])
 }
 

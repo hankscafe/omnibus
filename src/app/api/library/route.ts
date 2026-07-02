@@ -194,37 +194,81 @@ export async function GET(request: Request) {
         take: limit,
         orderBy,
         include: {
-            issues: {
-                select: {
-                    id: true,
-                    coverUrl: true,
-                    filePath: true,
-                    readProgresses: {
-                        where: { userId: userId || 'none' },
-                        select: { isCompleted: true }
-                    }
-                }
-            },
             favorites: { where: { userId: userId || 'none' }, select: { userId: true } }
         }
     });
 
+    // The card only needs three numbers per series (downloaded count, read count, and a fallback cover) —
+    // NOT every issue row. Previously the query include-loaded ALL issues (plus a per-issue read-progress
+    // join) for the 24 series on the page just to count them in JS, so a single page could pull thousands of
+    // rows for large/manga series. Derive the counts with two grouped aggregates that return one row per
+    // series, and look up a fallback cover only for series that lack a series-level one.
+    const pageSeriesIds = dbSeries.map(s => s.id);
+    const progressUserId = userId || 'none';
+
+    const [downloadedGroups, completedGroups] = pageSeriesIds.length === 0 ? [[], []] : await Promise.all([
+        prisma.issue.groupBy({
+            by: ['seriesId'],
+            where: { seriesId: { in: pageSeriesIds }, filePath: { not: null } },
+            _count: { _all: true }
+        }),
+        prisma.issue.groupBy({
+            by: ['seriesId'],
+            where: {
+                seriesId: { in: pageSeriesIds },
+                filePath: { not: null },
+                readProgresses: { some: { userId: progressUserId, isCompleted: true } }
+            },
+            _count: { _all: true }
+        })
+    ]);
+
+    const downloadedCountBySeries = new Map<string, number>();
+    for (const g of downloadedGroups) downloadedCountBySeries.set(g.seriesId, g._count._all);
+    const completedCountBySeries = new Map<string, number>();
+    for (const g of completedGroups) completedCountBySeries.set(g.seriesId, g._count._all);
+
+    // Fallback cover: only series with no series-level cover need one. distinct picks one downloaded issue
+    // cover per series (matching the prior "first downloaded issue with a cover" behavior).
+    const seriesNeedingCover = dbSeries.filter(s => !s.coverUrl).map(s => s.id);
+    const coverBySeries = new Map<string, string>();
+    if (seriesNeedingCover.length > 0) {
+        const coverIssues = await prisma.issue.findMany({
+            // Exclude null AND empty covers in SQL so `distinct` can't pick an empty-cover issue for a series
+            // that has a real cover on another issue (exact parity with the prior `!== null && !== ''` check).
+            where: {
+                seriesId: { in: seriesNeedingCover },
+                filePath: { not: null },
+                AND: [{ coverUrl: { not: null } }, { coverUrl: { not: '' } }]
+            },
+            select: { seriesId: true, coverUrl: true },
+            distinct: ['seriesId']
+        });
+        for (const ci of coverIssues) {
+            if (ci.coverUrl) coverBySeries.set(ci.seriesId, ci.coverUrl);
+        }
+    }
+
+    // The publisher dropdown list is global (independent of filters/pagination) and only changes when series
+    // are added/removed. Computing it requires a distinct scan over the whole Series table, so only do it on
+    // the first page — infinite-scroll appends (page > 1) reuse the list the client already has.
     let publishersRaw: any[] = [];
-    try {
-        const pubs = await prisma.series.findMany({ select: { publisher: true }, distinct: ['publisher'] });
-        if (Array.isArray(pubs)) publishersRaw = pubs;
-    } catch(e) {}
+    if (page === 1) {
+        try {
+            const pubs = await prisma.series.findMany({ select: { publisher: true }, distinct: ['publisher'] });
+            if (Array.isArray(pubs)) publishersRaw = pubs;
+        } catch(e) {}
+    }
 
     const formatted = dbSeries.map(s => {
-        const downloadedIssues = s.issues?.filter((i: any) => i.filePath && i.filePath.trim().length > 0) || [];
-        
+        const downloadedCount = downloadedCountBySeries.get(s.id) || 0;
+        const completedCount = completedCountBySeries.get(s.id) || 0;
+
         let finalCover = s.coverUrl;
-        
-        if (!finalCover && downloadedIssues.length > 0) {
-            const issueWithCover = downloadedIssues.find((i: any) => i.coverUrl !== null && i.coverUrl !== '');
-            if (issueWithCover) {
-                finalCover = issueWithCover.coverUrl;
-            }
+
+        if (!finalCover) {
+            const fallback = coverBySeries.get(s.id);
+            if (fallback) finalCover = fallback;
         }
 
         if (finalCover && !finalCover.startsWith('/api/')) {
@@ -241,10 +285,10 @@ export async function GET(request: Request) {
             publisher: s.publisher || "Unknown",
             path: s.folderPath, 
             isFavorite: s.favorites?.length > 0,
-            count: downloadedIssues.length,
-            unreadCount: downloadedIssues.filter((i: any) => !i.readProgresses[0]?.isCompleted).length,
-            progressPercentage: downloadedIssues.length > 0 
-                ? Math.round((downloadedIssues.filter((i: any) => i.readProgresses[0]?.isCompleted).length / downloadedIssues.length) * 100) 
+            count: downloadedCount,
+            unreadCount: downloadedCount - completedCount,
+            progressPercentage: downloadedCount > 0
+                ? Math.round((completedCount / downloadedCount) * 100)
                 : 0,
             cover: finalCover,
             cvId: parseInt(s.metadataId || "") || undefined,
@@ -253,15 +297,17 @@ export async function GET(request: Request) {
             matchState: s.matchState,
             monitored: s.monitored,
             isManga: s.isManga,
-            isPendingReq: downloadedIssues.length === 0,
+            isPendingReq: downloadedCount === 0,
             status: s.status
         }
     });
 
-    return NextResponse.json({ 
-        series: formatted, 
-        publishers: publishersRaw.map(p => p.publisher).filter(Boolean).sort(), 
-        hasMore: skip + limit < totalCount 
+    return NextResponse.json({
+        series: formatted,
+        // Only present on page 1 — the client keeps its existing list on infinite-scroll appends. (Omitted,
+        // not [], so the client's `if (data.publishers)` guard doesn't wipe the dropdown on later pages.)
+        ...(page === 1 ? { publishers: publishersRaw.map(p => p.publisher).filter(Boolean).sort() } : {}),
+        hasMore: skip + limit < totalCount
     });
 
   } catch (error: unknown) {

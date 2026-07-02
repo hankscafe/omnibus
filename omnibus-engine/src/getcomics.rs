@@ -608,7 +608,7 @@ fn classify_anchor(a_tag: ElementRef) -> Option<DeepLinkResult> {
         // correct read of the wrapped URL (Node decoded leniently and kept the leading run).
         if let Some(amp) = encoded.find(['&', '#']) { encoded.truncate(amp); }
         encoded = encoded.replace("%3D", "=").replace("%3d", "=");
-        while encoded.len() % 4 != 0 { encoded.push('='); }
+        while !encoded.len().is_multiple_of(4) { encoded.push('='); }
 
         if let Ok(bytes) = STANDARD.decode(&encoded) {
             if let Ok(s) = String::from_utf8(bytes) { decoded = s; }

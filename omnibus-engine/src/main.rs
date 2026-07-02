@@ -921,6 +921,16 @@ async fn handle_search(
     // Ranked DDL links for the chosen match — Node tries them in order at download time.
     let mut ddl_candidates: Vec<DdlCandidate> = Vec::new();
 
+    // Section-target a multi-pack GetComics article to the requested issue (node main beta.047): only
+    // when the request explicitly names an issue (same marker rule as Node's caller); the dynamic
+    // per-issue year disambiguates same-numbered issues across volumes. Derived once, outside the
+    // source loop (it depends only on the request itself).
+    let re_target_issue = regex::Regex::new(r"(?i)(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)").unwrap();
+    let dl_target = re_target_issue.captures(&payload.name)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse::<f32>().ok())
+        .map(|n| getcomics::DeepLinkTarget { issue_num: n, year: req_year.clone() });
+
     // Evaluate sources in the configured priority order; the first downloadable match wins.
     for source in &source_order {
         match source.as_str() {
@@ -942,15 +952,6 @@ async fn handle_search(
                 if let Ok(Some(mut best_ddl)) = search_engine::filter_and_score(
                     &state.db, get_res.clone(), &payload.name, is_manga, req_year.clone(), true, Some(use_packs)
                 ).await {
-                    // Section-target a multi-pack article to the requested issue (node main beta.047):
-                    // only when the request explicitly names an issue (same marker rule as Node's caller);
-                    // the dynamic per-issue year disambiguates same-numbered issues across volumes.
-                    let re_target_issue = regex::Regex::new(r"(?i)(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)").unwrap();
-                    let dl_target = re_target_issue.captures(&payload.name)
-                        .and_then(|c| c.get(1))
-                        .and_then(|m| m.as_str().parse::<f32>().ok())
-                        .map(|n| getcomics::DeepLinkTarget { issue_num: n, year: req_year.clone() });
-
                     // Resolve the article to concrete hoster links; scrape_deep_link drops disabled
                     // hosters, so an empty list means no enabled hoster can serve this match.
                     let outcome = getcomics::scrape_deep_link(&state.db, &state.limiter, &best_ddl.download_url, dl_target.as_ref())

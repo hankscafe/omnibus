@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
     fsMkdirSync: vi.fn(),
     fsReaddirSync: vi.fn().mockReturnValue([]),
     fsUnlinkSync: vi.fn(),
+    // async fs.promises used on the request hot path
+    fsPromisesStat: vi.fn(),
+    fsPromisesReadFile: vi.fn(),
+    fsPromisesUtimes: vi.fn().mockResolvedValue(true),
     zipGetEntry: vi.fn(),
     zipGetEntries: vi.fn().mockReturnValue([]),
     zipGetData: vi.fn(),
@@ -34,7 +38,7 @@ vi.mock('fs', () => ({
     mkdirSync: mocks.fsMkdirSync,
     readdirSync: mocks.fsReaddirSync,
     unlinkSync: mocks.fsUnlinkSync,
-    promises: { writeFile: vi.fn().mockResolvedValue(true), rename: vi.fn().mockResolvedValue(true), mkdir: vi.fn().mockResolvedValue(true), unlink: vi.fn().mockResolvedValue(true) },
+    promises: { writeFile: vi.fn().mockResolvedValue(true), rename: vi.fn().mockResolvedValue(true), mkdir: vi.fn().mockResolvedValue(true), unlink: vi.fn().mockResolvedValue(true), stat: mocks.fsPromisesStat, readFile: mocks.fsPromisesReadFile, utimes: mocks.fsPromisesUtimes },
     default: {
         existsSync: mocks.fsExistsSync,
         statSync: mocks.fsStatSync,
@@ -43,7 +47,7 @@ vi.mock('fs', () => ({
         mkdirSync: mocks.fsMkdirSync,
         readdirSync: mocks.fsReaddirSync,
         unlinkSync: mocks.fsUnlinkSync,
-        promises: { writeFile: vi.fn().mockResolvedValue(true), rename: vi.fn().mockResolvedValue(true), mkdir: vi.fn().mockResolvedValue(true), unlink: vi.fn().mockResolvedValue(true) }
+        promises: { writeFile: vi.fn().mockResolvedValue(true), rename: vi.fn().mockResolvedValue(true), mkdir: vi.fn().mockResolvedValue(true), unlink: vi.fn().mockResolvedValue(true), stat: mocks.fsPromisesStat, readFile: mocks.fsPromisesReadFile, utimes: mocks.fsPromisesUtimes }
     }
 }));
 
@@ -88,8 +92,11 @@ describe('API Route: Reader Image Serving', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.libraryFindMany.mockResolvedValue([{ path: '/data/comics' }]);
-        mocks.fsExistsSync.mockReturnValue(true); 
+        mocks.fsExistsSync.mockReturnValue(true);
         mocks.fsStatSync.mockReturnValue({ mtimeMs: 12345, size: 50000 });
+        // Source-file stat (async) resolves so the route proceeds; utimes is best-effort.
+        mocks.fsPromisesStat.mockResolvedValue({ mtimeMs: 12345, size: 50000 });
+        mocks.fsPromisesUtimes.mockResolvedValue(true);
     });
 
     it('should reject unauthorized paths outside the library root', async () => {
@@ -101,26 +108,21 @@ describe('API Route: Reader Image Serving', () => {
     });
 
     it('should serve a cached webp image if it already exists on disk', async () => {
-        // Broadly return true so the cache validation passes
-        mocks.fsExistsSync.mockReturnValue(true);
-        mocks.fsReadFileSync.mockReturnValue(Buffer.from('cached_data'));
+        // The async cache read resolves → cache hit, served without touching the zip.
+        mocks.fsPromisesReadFile.mockResolvedValue(Buffer.from('cached_data'));
 
         const req = new NextRequest('http://localhost/api/reader/image?path=/data/comics/batman.cbz&page=page1.jpg');
         const res = await GET(req);
-        
+
         expect(res.status).toBe(200);
         expect(res.headers.get('content-type')).toBe('image/webp');
-        expect(mocks.fsReadFileSync).toHaveBeenCalled();
-        expect(mocks.zipGetEntry).not.toHaveBeenCalled(); 
+        expect(mocks.fsPromisesReadFile).toHaveBeenCalled();
+        expect(mocks.zipGetEntry).not.toHaveBeenCalled();
     });
 
     it('should extract from zip and convert to webp if no cache exists', async () => {
-        // CRITICAL FIX: Robust evaluator function ensures the mock isn't consumed by background intervals
-        mocks.fsExistsSync.mockImplementation((p: string | Buffer | URL) => {
-            if (!p) return false;
-            if (p.toString().endsWith('.webp')) return false; // Force the cache check to fail
-            return true; // Pretend the folder and source zip file exist
-        });
+        // Async cache read rejects with ENOENT → cache miss → fall through to extraction.
+        mocks.fsPromisesReadFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
 
         // Mock out the zip parsing to feed the sharp pipeline
         mocks.zipGetEntry.mockReturnValue({ getData: mocks.zipGetData });

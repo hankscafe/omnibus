@@ -120,8 +120,10 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       clientId: oidcClientId,
       clientSecret: oidcClientSecret,
       profile(profile: any) {
-        Logger.log(`[SSO Debug] Received OIDC Profile Payload: ${JSON.stringify(profile)}`, 'debug');
-        return { 
+        // Log only the identifying fields, not the whole profile — the raw payload can carry arbitrary
+        // IdP claims (phone, address, etc.) that don't belong in the app log even at debug level.
+        Logger.log(`[SSO Debug] Received OIDC profile for sub=${profile.sub} email=${profile.email}`, 'debug');
+        return {
           id: profile.sub, 
           name: profile.name || profile.preferred_username || profile.nickname || profile.email?.split('@')[0] || "SSO User", 
           email: profile.email,

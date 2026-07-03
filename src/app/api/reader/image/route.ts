@@ -95,7 +95,7 @@ export async function GET(request: Request) {
   const pageName = searchParams.get('page');
   const shouldCrop = searchParams.get('crop') === 'true';
 
-  if (!filePath || !pageName || !fs.existsSync(filePath)) {
+  if (!filePath || !pageName) {
     return new NextResponse("Not Found", { status: 404 });
   }
 
@@ -119,28 +119,33 @@ export async function GET(request: Request) {
     if (!isZip) return new NextResponse("Format Not Supported (Likely awaiting CBZ conversion)", { status: 400 });
 
     // --- DISK CACHE CHECK ---
-    // Grab the physical file's modified time to prevent serving stale cache if the file is replaced
-    const fileStats = fs.statSync(filePath);
+    // Grab the physical file's modified time to prevent serving stale cache if the file is replaced.
+    // The async stat doubles as the existence check (throws → 404), keeping sync fs off the event loop.
+    let fileStats;
+    try {
+        fileStats = await fs.promises.stat(filePath);
+    } catch {
+        return new NextResponse("Not Found", { status: 404 });
+    }
     const fileMtime = fileStats.mtimeMs;
 
     const cacheKey = crypto.createHash('md5').update(`${filePath}-${pageName}-${shouldCrop}-${fileMtime}`).digest('hex') + '.webp';
     const cacheFilePath = path.join(CACHE_DIR, cacheKey);
 
-    if (fs.existsSync(cacheFilePath)) {
-        try {
-            const cachedBuffer = fs.readFileSync(cacheFilePath);
-            // Touch the file to update its modified time (keeps it alive in the cache)
-            fs.utimesSync(cacheFilePath, new Date(), new Date()); 
-            
-            return new NextResponse(cachedBuffer as unknown as BodyInit, {
-                headers: {
-                    'Content-Type': 'image/webp',
-                    'Cache-Control': 'public, max-age=86400', 
-                },
-            });
-        } catch (e) {
-            Logger.log(`[Reader] Failed to read image cache: ${getErrorMessage(e)}`, 'warn');
-        }
+    // Async cache read (one syscall instead of a blocking existsSync + readFileSync): a miss throws
+    // ENOENT → fall through to extraction. This is the reader's hot path on re-reads.
+    try {
+        const cachedBuffer = await fs.promises.readFile(cacheFilePath);
+        // Touch the file to keep it alive in the cache (best-effort, non-blocking).
+        fs.promises.utimes(cacheFilePath, new Date(), new Date()).catch(() => {});
+        return new NextResponse(cachedBuffer as unknown as BodyInit, {
+            headers: {
+                'Content-Type': 'image/webp',
+                'Cache-Control': 'public, max-age=86400',
+            },
+        });
+    } catch (e: any) {
+        if (e?.code !== 'ENOENT') Logger.log(`[Reader] Failed to read image cache: ${getErrorMessage(e)}`, 'warn');
     }
 
     const zipInstance = getZipInstance(filePath);

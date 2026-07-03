@@ -332,16 +332,22 @@ export async function POST(request: Request) {
 
         if (action === 'bulk-progress') {
             const isCompleted = status === 'READ';
-            const issues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } } });
-            
-            const updates = issues.map(issue => 
-                prisma.readProgress.upsert({
-                    where: { userId_issueId: { userId, issueId: issue.id } },
-                    update: { isCompleted, currentPage: isCompleted ? 100 : 0, totalPages: 100 },
-                    create: { userId, issueId: issue.id, isCompleted, currentPage: isCompleted ? 100 : 0, totalPages: 100 }
-                })
-            );
-            await prisma.$transaction(updates);
+            const currentPage = isCompleted ? 100 : 0;
+            // Select only ids, then do the whole batch as two bulk statements instead of a per-issue
+            // upsert loop inside one long lock-holding transaction: update the rows that already exist,
+            // then create the ones that don't (skipDuplicates on the (userId, issueId) unique).
+            const issues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } }, select: { id: true } });
+            const issueIds = issues.map(i => i.id);
+            await prisma.$transaction([
+                prisma.readProgress.updateMany({
+                    where: { userId, issueId: { in: issueIds } },
+                    data: { isCompleted, currentPage, totalPages: 100 },
+                }),
+                prisma.readProgress.createMany({
+                    data: issueIds.map(issueId => ({ userId, issueId, isCompleted, currentPage, totalPages: 100 })),
+                    skipDuplicates: true,
+                }),
+            ]);
             return NextResponse.json({ success: true });
         }
 

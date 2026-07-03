@@ -428,14 +428,15 @@ export const DownloadService = {
     const networkHeaders = await getNetworkHeaders();
     const baseHeaders = { 'User-Agent': 'Omnibus/1.0', ...networkHeaders };
 
-    const allDownloads: any[] = [];
-
-    for (const rawClient of clients) {
+    // Query every client concurrently — one dead/slow client (15s per-request timeouts) must not block
+    // the others (the importer + the 15s dashboard poll both call this).
+    const perClient = await Promise.allSettled(clients.map(async (rawClient) => {
+      const downloads: any[] = [];
       // Credentials are encrypted at rest; decrypt into a local copy before use.
       const client = { ...rawClient, pass: await decryptSecret(rawClient.pass), apiKey: await decryptSecret(rawClient.apiKey) };
       try {
         const cleanUrl = client.url?.replace(/\/$/, '');
-        if (!cleanUrl) continue;
+        if (!cleanUrl) return downloads;
 
         const categoryString = client.category || 'comics';
         const allowedCategories = categoryString.toLowerCase().split(',').map(c => c.trim());
@@ -461,7 +462,7 @@ export const DownloadService = {
             const validTorrents = listRes.data.filter((t: any) => isAllowedCategory(t.category));
             Logger.log(`[Download Service Debug] [qBit] Fetched ${listRes.data.length} total torrents. ${validTorrents.length} matched allowed categories (${allowedCategories.join(', ')}).`, 'debug');
             
-            allDownloads.push(...validTorrents.map((t: any) => ({
+            downloads.push(...validTorrents.map((t: any) => ({
               id: t.hash, name: t.name, progress: (t.progress * 100).toFixed(1),
               status: t.state, clientName: client.name, size: (t.size / 1024 / 1024).toFixed(2) + " MB"
             })));
@@ -480,7 +481,7 @@ export const DownloadService = {
                 // showing nothing — while a shared instance (labels present) is correctly narrowed to the category.
                 const labelsInUse = entries.some((t: any) => t.label && String(t.label).trim() !== '');
                 const visible = labelsInUse ? entries.filter((t: any) => isAllowedCategory(t.label)) : entries;
-                allDownloads.push(...visible.map((t: any) => ({
+                downloads.push(...visible.map((t: any) => ({
                     id: t.hash, name: t.name, progress: t.progress.toFixed(1),
                     status: t.state, clientName: client.name, size: (t.total_size / 1024 / 1024).toFixed(2) + " MB"
                 })));
@@ -491,14 +492,14 @@ export const DownloadService = {
             if (queueRes.data.queue?.slots) {
                 const validSlots = queueRes.data.queue.slots.filter((s: any) => isAllowedCategory(s.cat));
                 Logger.log(`[Download Service Debug] [SABnzbd] Fetched ${queueRes.data.queue.slots.length} queue items. ${validSlots.length} matched allowed categories.`, 'debug');
-                allDownloads.push(...validSlots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
+                downloads.push(...validSlots.map((s: any) => ({ id: s.nzo_id, name: s.filename, progress: s.percentage, status: s.status, clientName: client.name, size: s.size })));
             }
             try {
                 const historyRes = await axios.get(`${cleanUrl}/api`, { params: { mode: 'history', limit: 20, apikey: client.apiKey, output: 'json' }, headers: baseHeaders, timeout: 15000 });
                 if (historyRes.data.history?.slots) {
                     const validHistory = historyRes.data.history.slots.filter((s: any) => isAllowedCategory(s.category));
                     Logger.log(`[Download Service Debug] [SABnzbd] Fetched ${historyRes.data.history.slots.length} history items. ${validHistory.length} matched allowed categories.`, 'debug');
-                    allDownloads.push(...validHistory.map((s: any) => ({
+                    downloads.push(...validHistory.map((s: any) => ({
                         id: s.nzo_id, name: s.name, progress: s.status === 'Completed' ? "100.0" : "0.0", status: s.status, clientName: client.name, size: s.size
                     })));
                 }
@@ -509,13 +510,13 @@ export const DownloadService = {
             const listRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "listgroups", params: [] }, { headers: { ...baseHeaders, Authorization: `Basic ${auth}` }, timeout: 15000 });
             if (Array.isArray(listRes.data.result)) {
                 const validGroups = listRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
-                allDownloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
+                downloads.push(...validGroups.map((g: any) => ({ id: String(g.NZBID), name: g.NZBName, progress: ((g.DownloadedSizeMB / g.FileSizeMB) * 100).toFixed(1), status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB" })));
             }
             try {
                 const historyRes = await axios.post(`${cleanUrl}/jsonrpc`, { method: "history", params: [] }, { headers: { ...baseHeaders, Authorization: `Basic ${auth}` }, timeout: 15000 });
                 if (Array.isArray(historyRes.data.result)) {
                     const validHistory = historyRes.data.result.filter((g: any) => isAllowedCategory(g.Category));
-                    allDownloads.push(...validHistory.map((g: any) => ({
+                    downloads.push(...validHistory.map((g: any) => ({
                         id: String(g.NZBID), name: g.Name, progress: g.Status.includes('SUCCESS') ? "100.0" : "0.0", status: g.Status, clientName: client.name, size: g.FileSizeMB + " MB"
                     })));
                 }
@@ -526,7 +527,8 @@ export const DownloadService = {
           // the importer/cron lookup fail later as a generic "not found" rather than an auth problem.
           Logger.log(`[Download Service] Could not list active downloads from "${rawClient?.name || 'client'}": ${getErrorMessage(err)}`, 'warn');
       }
-    }
-    return allDownloads;
+      return downloads;
+    }));
+    return perClient.flatMap(r => r.status === 'fulfilled' ? r.value : []);
   }
 };

@@ -17,24 +17,24 @@ export async function GET() {
 
     if (!session || !userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    // 1. STANDARD USER NOTIFICATIONS
-    // We now include DOWNLOADING and MANUAL_DDL to alert them when an admin approves a request
-    const activeComics = await prisma.request.findMany({
-      where: { userId, status: { in: ['DOWNLOADING', 'MANUAL_DDL', 'IMPORTED', 'COMPLETED'] }, notified: false },
-      orderBy: { updatedAt: 'desc' }
-    });
-
-    const newTrophies = await prisma.userTrophy.findMany({
-      where: { userId, notified: false },
-      include: { trophy: true },
-      orderBy: { earnedAt: 'desc' }
-    });
-
-    const newReports = await prisma.issueReport.findMany({
+    // 1. STANDARD USER NOTIFICATIONS — independent queries, run in parallel (polled every 60s/session).
+    // We include DOWNLOADING and MANUAL_DDL to alert them when an admin approves a request.
+    const [activeComics, newTrophies, newReports] = await Promise.all([
+      prisma.request.findMany({
+        where: { userId, status: { in: ['DOWNLOADING', 'MANUAL_DDL', 'IMPORTED', 'COMPLETED'] }, notified: false },
+        orderBy: { updatedAt: 'desc' }
+      }),
+      prisma.userTrophy.findMany({
+        where: { userId, notified: false },
+        include: { trophy: true },
+        orderBy: { earnedAt: 'desc' }
+      }),
+      prisma.issueReport.findMany({
         where: { userId, status: 'CLOSED', notified: false },
         include: { series: true },
         orderBy: { updatedAt: 'desc' }
-    });
+      }),
+    ]);
 
     let formatted = [
         ...activeComics.map(c => ({ id: c.id, type: 'comic', status: c.status, title: c.activeDownloadName, imageUrl: c.imageUrl, date: c.updatedAt })),
@@ -45,42 +45,40 @@ export async function GET() {
     // 2. DYNAMIC ADMIN ALERTS
     // These do not use the 'notified' flag, they simply show up if there is work to be done.
     if (role === 'ADMIN') {
-        const pendingReqs = await prisma.request.findMany({
-            where: { status: 'PENDING_APPROVAL' },
-            include: { user: { select: { username: true } } },
-            orderBy: { createdAt: 'desc' }
-        });
-
-        const pendingUsers = await prisma.user.findMany({
-            where: { isApproved: false },
-            orderBy: { createdAt: 'desc' }
-        });
-
-        const openReports = await prisma.issueReport.findMany({
-            where: { status: 'OPEN' },
-            include: { series: { select: { name: true } }, user: { select: { username: true } } },
-            orderBy: { createdAt: 'desc' }
-        });
-
-        const stalledReqs = await prisma.request.findMany({
-            where: { status: 'STALLED' },
-            include: { user: { select: { username: true } } },
-            orderBy: { updatedAt: 'desc' }
-        });
-
-        const unmatchedSeriesCount = await prisma.series.count({
-            where: { matchState: 'UNMATCHED' }
-        });
-
-        let looseFilesCount = 0;
-        try {
-            const fs = await import('fs');
-            const unmatchedDir = UNMATCHED_DIR;
-            if (fs.existsSync(unmatchedDir)) {
-                const files = await fs.promises.readdir(unmatchedDir);
-                looseFilesCount = files.filter(f => COMIC_EXT_REGEX.test(f)).length;
-            }
-        } catch (e) {}
+        // All independent — run them (and the loose-file readdir) concurrently.
+        const [pendingReqs, pendingUsers, openReports, stalledReqs, unmatchedSeriesCount, looseFilesCount] = await Promise.all([
+            prisma.request.findMany({
+                where: { status: 'PENDING_APPROVAL' },
+                include: { user: { select: { username: true } } },
+                orderBy: { createdAt: 'desc' }
+            }),
+            prisma.user.findMany({
+                where: { isApproved: false },
+                orderBy: { createdAt: 'desc' }
+            }),
+            prisma.issueReport.findMany({
+                where: { status: 'OPEN' },
+                include: { series: { select: { name: true } }, user: { select: { username: true } } },
+                orderBy: { createdAt: 'desc' }
+            }),
+            prisma.request.findMany({
+                where: { status: 'STALLED' },
+                include: { user: { select: { username: true } } },
+                orderBy: { updatedAt: 'desc' }
+            }),
+            prisma.series.count({ where: { matchState: 'UNMATCHED' } }),
+            (async () => {
+                try {
+                    const fs = await import('fs');
+                    const unmatchedDir = UNMATCHED_DIR;
+                    if (fs.existsSync(unmatchedDir)) {
+                        const files = await fs.promises.readdir(unmatchedDir);
+                        return files.filter(f => COMIC_EXT_REGEX.test(f)).length;
+                    }
+                } catch (e) {}
+                return 0;
+            })(),
+        ]);
 
         const totalUnmatched = unmatchedSeriesCount + looseFilesCount;
 

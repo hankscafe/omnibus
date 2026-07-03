@@ -732,11 +732,21 @@ export function initWorker() {
                     const skeletonsCreated = monitorData.skeletons_created || 0;
                     if (Array.isArray(monitorData.notes)) for (const n of monitorData.notes) details += `${n}\n`;
 
-                    const allRequests = await prisma.request.findMany();
+                    // Only load requests that could match a candidate (same volumeId) instead of every
+                    // request ever — the dedup below never matches across different volumeIds, so a
+                    // whole-table load just to filter by volumeId scaled with request history and could
+                    // OOM the worker on a large, long-lived instance.
+                    const candidateVolumeIds = [...new Set((monitorData.candidates || []).map((c: any) => c.volume_id).filter(Boolean))] as string[];
+                    const existingReqs: any[] = candidateVolumeIds.length
+                        ? await prisma.request.findMany({
+                            where: { volumeId: { in: candidateVolumeIds } },
+                            select: { id: true, volumeId: true, activeDownloadName: true, status: true }
+                        })
+                        : [];
 
                     // Request creation / UNRELEASED upgrade from the engine's candidates.
                     for (const c of (monitorData.candidates || [])) {
-                        const alreadyReq = allRequests.find(r => {
+                        const alreadyReq = existingReqs.find(r => {
                             if (r.volumeId !== c.volume_id) return false;
                             const match = r.activeDownloadName?.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
                             const reqNum = match ? match[1] : null;
@@ -767,7 +777,7 @@ export function initWorker() {
                                     imageUrl: c.image_url || null
                                 }
                             });
-                            allRequests.push(newReq);
+                            existingReqs.push(newReq);
                             if (c.is_released) {
                                 searchAndDownload(newReq.id, c.search_name, c.issue_year, c.publisher, c.is_manga).catch(() => {});
                                 newRequestsFound++;
@@ -775,10 +785,22 @@ export function initWorker() {
                         }
                     }
 
-                    // Phase 3 -- UNRELEASED upgrade sweep. Re-fetch series+issues so the engine-created
-                    // skeletons (with releaseDates) are visible to this pass.
-                    const localSeriesList = await prisma.series.findMany({ include: { issues: true } });
-                    const unreleasedRequests = allRequests.filter(r => r.status === 'UNRELEASED');
+                    // Phase 3 -- UNRELEASED upgrade sweep. Load only the UNRELEASED requests and only the
+                    // series they reference (each issue projected to number + releaseDate) instead of the
+                    // entire library nested under every series — the old `series.findMany({ include: issues })`
+                    // hydrated the whole Issue table into memory every tick. Queried AFTER the candidate loop
+                    // so this-tick creations/upgrades are reflected.
+                    const unreleasedRequests = await prisma.request.findMany({
+                        where: { status: 'UNRELEASED' },
+                        select: { id: true, volumeId: true, activeDownloadName: true }
+                    });
+                    const unreleasedVolumeIds = [...new Set(unreleasedRequests.map(r => r.volumeId).filter(Boolean))] as string[];
+                    const localSeriesList = unreleasedVolumeIds.length
+                        ? await prisma.series.findMany({
+                            where: { OR: [{ metadataId: { in: unreleasedVolumeIds } }, { id: { in: unreleasedVolumeIds } }] },
+                            select: { id: true, metadataId: true, publisher: true, isManga: true, issues: { select: { number: true, releaseDate: true } } }
+                        })
+                        : [];
                     for (const req of unreleasedRequests) {
                         // Unified utility (negative-number aware) replaces the old inline extractor.
                         const reqNumString = extractIssueNumber(req.activeDownloadName || "");

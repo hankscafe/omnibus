@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use rayon::prelude::*;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -695,6 +695,60 @@ fn first_image_from_zip(archive_path: &Path) -> Result<Option<(Vec<u8>, String)>
     }
 }
 
+/// Resolve a reader page name to the actual zip entry, mirroring the Node reader route's fallbacks:
+/// exact match → backslash-normalized → basename match (case-sensitive, like adm-zip).
+fn resolve_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, entry_name: &str) -> Option<String> {
+    if archive.by_name(entry_name).is_ok() {
+        return Some(entry_name.to_string());
+    }
+    let fwd = entry_name.replace('\\', "/");
+    if fwd != entry_name && archive.by_name(&fwd).is_ok() {
+        return Some(fwd);
+    }
+    let target_base = entry_name.rsplit(['/', '\\']).next().unwrap_or(entry_name);
+    for i in 0..archive.len() {
+        if let Ok(e) = archive.by_index(i) {
+            let n = e.name().to_string();
+            let base = n.rsplit(['/', '\\']).next().unwrap_or(&n);
+            if base == target_base {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Extract a single named page from a zip/cbz, resize it to fit `max_width` (never enlarging), and
+/// re-encode as WebP at `quality`. Returns None when the entry isn't found. This is the reader
+/// page-serving offload: it keeps the whole-archive buffer + image work off the Node event loop. These
+/// are display images, so it trades byte-for-byte parity with the Node sharp pipeline for that — the
+/// Node route keeps a local sharp fallback (and still owns the auto-crop path, which has no clean
+/// image-crate equivalent).
+pub fn extract_page_webp(archive_path: &Path, entry_name: &str, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
+    let file = File::open(archive_path)?;
+    extract_page_webp_from_reader(file, entry_name, max_width, quality)
+}
+
+fn extract_page_webp_from_reader<R: Read + Seek>(reader: R, entry_name: &str, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
+    let mut archive = zip::ZipArchive::new(reader)?;
+    let name = match resolve_zip_entry(&mut archive, entry_name) {
+        Some(n) => n,
+        None => return Ok(None),
+    };
+    let mut buf = Vec::new();
+    archive.by_name(&name)?.read_to_end(&mut buf)?;
+
+    let img = image::load_from_memory(&buf)?;
+    let (w, h) = (img.width(), img.height());
+    let out = if w > max_width && w > 0 {
+        let nh = (((h as u64) * (max_width as u64)) / (w as u64)).max(1) as u32;
+        img.resize_exact(max_width, nh, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    Ok(Some(encode_to_webp(&out, quality)?))
+}
+
 /// Ensures `<folder>` has a usable cover. If one already exists (custom upload, a packed cover, or a
 /// prior extraction) its path is returned untouched; otherwise the first page of `archive_path` is
 /// written to `<folder>/cover.<ext>`. Best-effort — returns None on any failure. Only writes formats
@@ -778,6 +832,39 @@ mod tests {
         // No image pages → None (caller returns "no cover" rather than falling back).
         assert_eq!(first_image_in_listing("ComicInfo.xml\nnotes.txt\n"), None);
         assert_eq!(first_image_in_listing(""), None);
+    }
+
+    #[test]
+    fn extract_page_webp_resolves_entry_and_encodes() {
+        use std::io::{Cursor, Write};
+        // Build an in-memory cbz: a junk entry + a 2000x100 page.
+        let mut zip_buf: Vec<u8> = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut zip_buf));
+            let opts: FileOptions = FileOptions::default();
+            let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2000, 100, image::Rgb([200, 10, 10])));
+            let mut png: Vec<u8> = Vec::new();
+            img.write_to(&mut Cursor::new(&mut png), image::ImageOutputFormat::Png).unwrap();
+            zw.start_file("ComicInfo.xml", opts).unwrap();
+            zw.write_all(b"<ComicInfo/>").unwrap();
+            zw.start_file("page1.png", opts).unwrap();
+            zw.write_all(&png).unwrap();
+            zw.finish().unwrap();
+        }
+
+        let is_webp = |b: &[u8]| b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP";
+
+        // Exact name → valid WebP.
+        let out = extract_page_webp_from_reader(Cursor::new(&zip_buf), "page1.png", 1600, 80.0).unwrap().unwrap();
+        assert!(is_webp(&out), "expected a WebP payload");
+
+        // Basename fallback (a path prefix that isn't a real entry still resolves by file name).
+        let out2 = extract_page_webp_from_reader(Cursor::new(&zip_buf), "some/dir/page1.png", 1600, 80.0).unwrap();
+        assert!(out2.is_some());
+
+        // Unknown entry → None (not an error).
+        let out3 = extract_page_webp_from_reader(Cursor::new(&zip_buf), "nope.png", 1600, 80.0).unwrap();
+        assert!(out3.is_none());
     }
 
     #[test]

@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     fsPromisesStat: vi.fn(),
     fsPromisesReadFile: vi.fn(),
     fsPromisesUtimes: vi.fn().mockResolvedValue(true),
+    // global fetch (engine page offload)
+    fetch: vi.fn(),
     zipGetEntry: vi.fn(),
     zipGetEntries: vi.fn().mockReturnValue([]),
     zipGetData: vi.fn(),
@@ -97,6 +99,9 @@ describe('API Route: Reader Image Serving', () => {
         // Source-file stat (async) resolves so the route proceeds; utimes is best-effort.
         mocks.fsPromisesStat.mockResolvedValue({ mtimeMs: 12345, size: 50000 });
         mocks.fsPromisesUtimes.mockResolvedValue(true);
+        // Default: engine offload unavailable → the route falls back to local sharp extraction.
+        vi.stubGlobal('fetch', mocks.fetch);
+        mocks.fetch.mockRejectedValue(new Error('engine unavailable'));
     });
 
     it('should reject unauthorized paths outside the library root', async () => {
@@ -130,8 +135,25 @@ describe('API Route: Reader Image Serving', () => {
 
         const req = new NextRequest('http://localhost/api/reader/image?path=/data/comics/batman.cbz&page=page1.jpg');
         const res = await GET(req);
-        
+
         expect(res.status).toBe(200);
         expect(mocks.sharpToBuffer).toHaveBeenCalled();
+    });
+
+    it('should serve engine-produced webp bytes (non-crop) without touching the local zip/sharp path', async () => {
+        // Cache miss, engine available and returns webp bytes.
+        mocks.fsPromisesReadFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+        const engineBytes = new Uint8Array([1, 2, 3, 4, 5]).buffer;
+        mocks.fetch.mockResolvedValue({ ok: true, arrayBuffer: async () => engineBytes });
+
+        const req = new NextRequest('http://localhost/api/reader/image?path=/data/comics/batman.cbz&page=page1.jpg');
+        const res = await GET(req);
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toBe('image/webp');
+        expect(mocks.fetch).toHaveBeenCalled();
+        // Offloaded → the local extraction/sharp path is never reached.
+        expect(mocks.zipGetEntry).not.toHaveBeenCalled();
+        expect(mocks.sharpToBuffer).not.toHaveBeenCalled();
     });
 });

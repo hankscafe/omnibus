@@ -12,6 +12,19 @@ import { CACHE_DIR as BASE_CACHE_DIR, isPathWithinRoots } from '@/lib/utils/path
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+
+// Atomic disk-cache write: temp file → rename, so concurrent requests for the same page can't serve a
+// half-written image. Best-effort + non-blocking (fire-and-forget).
+function writePageCacheAtomic(cacheFilePath: string, buffer: Buffer) {
+    const tempFilePath = `${cacheFilePath}.${Date.now()}.${Math.random().toString(36).substring(7)}.tmp`;
+    fs.promises.writeFile(tempFilePath, buffer)
+        .then(() => fs.promises.rename(tempFilePath, cacheFilePath))
+        .catch((err: any) => {
+            Logger.log(`[Reader] Failed to write image cache: ${err.message}`, 'warn');
+            fs.promises.unlink(tempFilePath).catch(() => {});
+        });
+}
 
 // Reader page cache lives in a subfolder of the system cache directory
 const CACHE_DIR = path.join(BASE_CACHE_DIR, 'reader_images');
@@ -148,6 +161,33 @@ export async function GET(request: Request) {
         if (e?.code !== 'ENOENT') Logger.log(`[Reader] Failed to read image cache: ${getErrorMessage(e)}`, 'warn');
     }
 
+    // --- ENGINE OFFLOAD (non-crop pages) ---
+    // Hand the extract + resize + WebP encode to the Rust engine so the whole-archive AdmZip buffer and
+    // sharp don't run on the Node event loop (which serves every request). The auto-crop path has no
+    // clean engine equivalent, so it stays local. Any failure (engine down, older engine without the
+    // route, unreadable page) falls through to the local sharp path below — the reader never breaks.
+    if (!shouldCrop) {
+        try {
+            const engineRes = await fetch(ENGINE_URL + '/api/reader/page', {
+                method: 'POST',
+                headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ path: filePath, entry: pageName, width: 1600, quality: 80 }),
+            });
+            if (engineRes.ok) {
+                const engineBuffer = Buffer.from(await engineRes.arrayBuffer());
+                if (engineBuffer.length > 0) {
+                    writePageCacheAtomic(cacheFilePath, engineBuffer);
+                    return new NextResponse(engineBuffer as unknown as BodyInit, {
+                        headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'public, max-age=86400' },
+                    });
+                }
+            }
+            // Non-OK (e.g. 404 page-not-found, or an older engine) → fall through to the local path.
+        } catch (e) {
+            Logger.log(`[Reader] Engine page offload unavailable, using local extraction: ${getErrorMessage(e)}`, 'debug');
+        }
+    }
+
     const zipInstance = getZipInstance(filePath);
     
     let zipEntry = zipInstance.getEntry(pageName) || zipInstance.getEntry(pageName.replace(/\//g, '\\'));
@@ -179,18 +219,8 @@ export async function GET(request: Request) {
             
         contentType = 'image/webp';
 
-        // --- SAVE TO DISK CACHE (ATOMIC WRITE) ---
-        // Write to a temporary randomized file first, then rename it. 
-        // This prevents corrupted images if two requests try to write the same page simultaneously.
-        const tempFilePath = `${cacheFilePath}.${Date.now()}.${Math.random().toString(36).substring(7)}.tmp`;
-        
-        fs.promises.writeFile(tempFilePath, finalBuffer)
-            .then(() => fs.promises.rename(tempFilePath, cacheFilePath))
-            .catch((err: any) => {
-                Logger.log(`[Reader] Failed to write image cache: ${err.message}`, 'warn');
-                // Attempt to clean up the orphaned temp file
-                fs.promises.unlink(tempFilePath).catch(() => {});
-            });
+        // Save to the disk cache (atomic temp→rename write).
+        writePageCacheAtomic(cacheFilePath, finalBuffer);
 
     } catch (imgErr) {
         if (pageName.toLowerCase().endsWith('.png')) contentType = 'image/png';

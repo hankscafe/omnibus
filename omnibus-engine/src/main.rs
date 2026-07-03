@@ -391,6 +391,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/scan", post(handle_scan))
         .route("/api/converter/cbr-sweep", post(handle_cbr_sweep))
         .route("/api/converter/extract-cover", post(handle_extract_cover))
+        .route("/api/reader/page", post(handle_reader_page))
         .route("/api/watched-sync", post(handle_watched_sync))
         .route("/api/backup", post(handle_backup))
         .route("/api/diagnostics/ghosts", post(handle_ghost_check))
@@ -604,6 +605,51 @@ async fn handle_extract_cover(
                 .body(axum::body::Body::from(bytes))
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
         }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ReaderPageRequest {
+    path: String,
+    /// The zip entry name of the page (the reader already knows it from the page list).
+    entry: String,
+    #[serde(default = "default_reader_width")]
+    width: u32,
+    #[serde(default = "default_reader_quality")]
+    quality: f32,
+}
+fn default_reader_width() -> u32 { 1600 }
+fn default_reader_quality() -> f32 { 80.0 }
+
+/// On-demand reader page: extract a named page from a cbz/zip, resize to `width`, and return WebP
+/// bytes — moving the whole-archive buffer + image work off the Node event loop. Node keeps a local
+/// sharp fallback (and owns the auto-crop path), so this only needs to serve the common non-crop case.
+/// Same path trust model as the cover endpoint (absolute, no `..`; Node auth-gates + range-checks).
+async fn handle_reader_page(
+    Json(req): Json<ReaderPageRequest>,
+) -> Result<Response, StatusCode> {
+    if !is_absolute_non_traversing(&req.path) {
+        log::warn!("[Reader Page] Rejected non-absolute or traversing path: {}", req.path);
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let path = req.path.clone();
+    let entry = req.entry.clone();
+    let width = req.width.clamp(1, 10_000);
+    let quality = req.quality.clamp(1.0, 100.0);
+
+    let out = tokio::task::spawn_blocking(move || {
+        converter::extract_page_webp(std::path::Path::new(&path), &entry, width, quality)
+    })
+    .await
+    .map_err(|e| { log::error!("[Reader Page] join error: {:?}", e); StatusCode::INTERNAL_SERVER_ERROR })?
+    .map_err(|e| { log::warn!("[Reader Page] extraction failed for {}: {:?}", req.path, e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    match out {
+        Some(bytes) => Response::builder()
+            .header(header::CONTENT_TYPE, "image/webp")
+            .body(axum::body::Body::from(bytes))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR),
         None => Err(StatusCode::NOT_FOUND),
     }
 }

@@ -165,6 +165,7 @@ model Series {
   @@index([name]) // library default sort (alpha_asc/desc) — without this, every paged load full-scans + sorts the whole table to take 24
   @@index([year]) // library year sorts + era range filters (gte/lt on year)
   @@index([publisher]) // library publisher filter + the distinct-publisher dropdown scan
+  @@index([folderPath]) // series-detail exact-folder fallback lookup (was a whole-table scan)
   @@unique([metadataSource, metadataId])
 }
 
@@ -213,6 +214,7 @@ model Issue {
   @@index([metadataSource])
   @@index([releaseDate]) // global calendar range-scans Issue.releaseDate (ISO YYYY-MM-DD, lexical = chronological)
   @@index([seriesId, releaseDate]) // library-wide issues view: per-series releaseDate scans when filtered by a Series field
+  @@index([filePath]) // reader progress GET/POST resolve an issue by its exact stored path (per page-turn)
 }
 
 model IssueReport {

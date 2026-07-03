@@ -18,30 +18,29 @@ export async function evaluateTrophies(userId: string) {
         
         Logger.log(`[Trophy Debug] Evaluating ${unearnedTrophies.length} unearned trophies for user ${userId}...`, 'debug');
 
-        // 3. Gather User Stats
-        // READ_COUNT: Number of fully completed issues
-        const readCount = await prisma.readProgress.count({
-            where: { userId, isCompleted: true }
-        });
+        // 3. Gather only the stats an unearned trophy actually needs, and run them in parallel. This
+        // is fire-and-forget from every progress save, so skipping unneeded queries (and not hydrating
+        // full issue+series rows just to count publishers) keeps it off the DB hot path.
+        const needsRead = unearnedTrophies.some(t => t.actionType === 'READ_COUNT');
+        const needsRequest = unearnedTrophies.some(t => t.actionType === 'REQUEST_COUNT');
+        const needsPublisher = unearnedTrophies.some(t => t.actionType === 'PUBLISHER_COUNT');
 
-        // REQUEST_COUNT: Total requests made by the user
-        const requestCount = await prisma.request.count({
-            where: { userId }
-        });
+        const [readCount, requestCount, publisherCount] = await Promise.all([
+            // READ_COUNT: Number of fully completed issues
+            needsRead ? prisma.readProgress.count({ where: { userId, isCompleted: true } }) : Promise.resolve(0),
+            // REQUEST_COUNT: Total requests made by the user
+            needsRequest ? prisma.request.count({ where: { userId } }) : Promise.resolve(0),
+            // PUBLISHER_COUNT: Unique publishers from completed reads — select only the publisher, not
+            // the whole issue + series row.
+            needsPublisher ? (async () => {
+                const rows = await prisma.readProgress.findMany({
+                    where: { userId, isCompleted: true },
+                    select: { issue: { select: { series: { select: { publisher: true } } } } },
+                });
+                return new Set(rows.map(r => r.issue?.series?.publisher).filter(Boolean)).size;
+            })() : Promise.resolve(0),
+        ]);
 
-        // PUBLISHER_COUNT: Unique publishers from their completed reads
-        const completedReads = await prisma.readProgress.findMany({
-            where: { userId, isCompleted: true },
-            include: { issue: { include: { series: true } } }
-        });
-        
-        const publishers = new Set(
-            completedReads
-                .map(r => r.issue?.series?.publisher)
-                .filter(Boolean)
-        );
-        const publisherCount = publishers.size;
-        
         Logger.log(`[Trophy Debug] User Stats - Read: ${readCount}, Requests: ${requestCount}, Publishers: ${publisherCount}`, 'debug');
 
         // 4. Evaluate Unearned Trophies against the gathered stats
@@ -72,27 +71,18 @@ export async function evaluateTrophies(userId: string) {
             if (achieved) newlyEarned.push(trophy);
         }
 
-        // 5. Award Trophies & Send In-App Notifications!
+        // 5. Award Trophies. (There is no Notification model in the schema — the old
+        // `prisma.notification.create` call here threw on every award, and because the whole function
+        // is wrapped in one try/catch it aborted the loop, so a user earning several trophies at once
+        // only ever recorded the first. Award them directly instead.)
         for (const trophy of newlyEarned) {
             Logger.log(`[Trophy] Awarding achievement '${trophy.name}' to user ${userId}!`, 'success');
-            
+
             // Add to UserTrophy link table
             await prisma.userTrophy.create({
                 data: {
                     userId,
                     trophyId: trophy.id
-                }
-            });
-
-            // Trigger the Notification Bell alert on the frontend
-            await (prisma as any).notification.create({
-                data: {
-                    userId,
-                    type: 'trophy',
-                    title: trophy.name,
-                    description: `You unlocked a new achievement: ${trophy.name}!`,
-                    imageUrl: trophy.iconUrl,
-                    referenceId: trophy.id
                 }
             });
         }

@@ -1,10 +1,5 @@
 // src/lib/search-engine.ts
-import axios from 'axios';
 import { prisma } from '@/lib/db';
-import { DownloadService } from './download-clients';
-import { getCustomHeaders } from './utils/headers';
-import { getErrorMessage } from './utils/error';
-import { Logger } from './logger';
 
 export async function getCustomAcronyms(): Promise<Record<string, string>> {
     const acronyms = await prisma.searchAcronym.findMany();
@@ -127,83 +122,15 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
         }
     }
 
+    // The bare main-title queries (e.g. "X Men" / "X Men 2026" from a colon-split "X-Men: Outback #1")
+    // live in primaryQueries; the full, specific name variants (series + subtitle + issue number) live in
+    // secondaryQueries. Search the SPECIFIC variants FIRST so a series whose name legitimately contains a
+    // colon/dash isn't immediately matched against its entire line by an over-broad title-only query —
+    // which also drops the issue number, disabling the indexer's issue filter and letting any issue win.
+    // The broad title query is retained as a fallback for when the specific variants find nothing.
     if (prioritizePacks && usePacks) {
-        return [...Array.from(packQueries), ...Array.from(primaryQueries), ...Array.from(secondaryQueries)];
+        return [...Array.from(packQueries), ...Array.from(secondaryQueries), ...Array.from(primaryQueries)];
     }
 
-    return [...Array.from(primaryQueries), ...Array.from(secondaryQueries), ...Array.from(packQueries)];
+    return [...Array.from(secondaryQueries), ...Array.from(primaryQueries), ...Array.from(packQueries)];
 }
-
-export const SearchEngine = {
-    async performSmartSearch(query: string, isManga: boolean = false) {
-        const settings = await prisma.systemSetting.findMany();
-        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-
-        if (!config.prowlarr_url || !config.prowlarr_key) {
-            throw new Error("Prowlarr not configured");
-        }
-
-        const indexerConfigs = await prisma.indexer.findMany();
-        const customHeaders = await getCustomHeaders();
-        const cleanUrl = config.prowlarr_url.replace(/\/$/, "");
-
-        Logger.log(`[SearchEngine Debug] Hitting Prowlarr endpoint: ${cleanUrl}/api/v1/search with query: ${query}`, 'debug');
-
-        const res = await axios.get(`${cleanUrl}/api/v1/search`, {
-            params: { 
-                query, 
-                type: 'search',
-                limit: 100, // Explicitly set the limit to fix Usenet indexers
-                offset: 0
-            }, 
-            headers: { 
-                'X-Api-Key': config.prowlarr_key,
-                ...customHeaders 
-            },
-            timeout: 30000
-        });
-
-        const results = res.data;
-
-        if (!Array.isArray(results) || results.length === 0) {
-            return { success: false, message: "No results found in Prowlarr" };
-        }
-
-        const scoredResults = results.map((release: any) => {
-            const idxConfig = indexerConfigs.find(c => c.id === release.indexerId);
-            const priority = idxConfig ? idxConfig.priority : 1; 
-            const seedTime = idxConfig ? idxConfig.seedTime : 0; 
-
-            const score = (priority * 1000000) + release.seeders;
-            Logger.log(`[SearchEngine Debug] Scored release "${release.title}": Priority [${priority}] + Seeders [${release.seeders}] = Total Score: ${score}`, 'debug');
-
-            return {
-                ...release,
-                _score: score,
-                _priority: priority,
-                _seedTime: seedTime
-            };
-        });
-
-        scoredResults.sort((a: any, b: any) => b._score - a._score);
-        const bestMatch = scoredResults[0];
-
-        try {
-            const downloadLink = bestMatch.magnetUrl || bestMatch.downloadUrl;
-            if (!downloadLink) return { success: false, message: "Best match had no download link" };
-
-            const clients = await prisma.downloadClient.findMany();
-            if (clients.length === 0) return { success: false, message: "No download client configured." };
-            const client = clients[0]; 
-
-            await DownloadService.addDownload(client, downloadLink, bestMatch.title, bestMatch._seedTime || 0, 0, isManga);
-
-            const trackingHash = bestMatch.infoHash || bestMatch.guid || downloadLink;
-
-            return { success: true, release: bestMatch.title, indexer: bestMatch.indexer, downloadLink: trackingHash };
-
-        } catch (e: any) {
-            return { success: false, message: `Download client error: ${getErrorMessage(e)}` };
-        }
-    }
-};

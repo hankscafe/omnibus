@@ -81,7 +81,11 @@ export async function GET() {
                     { name: 'bookmarks', model: prisma.bookmark },
                     { name: 'dailyReadingStats', model: prisma.dailyReadingStat },
                     { name: 'dailyIssueReads', model: prisma.dailyIssueRead },
-                    { name: 'auditLogs', model: prisma.auditLog }
+                    { name: 'auditLogs', model: prisma.auditLog },
+                    // Permissions + per-user reader settings — historically backed up by neither the
+                    // Node route nor the Rust engine; included so they survive a restore round-trip.
+                    { name: 'userLibraryAccess', model: prisma.userLibraryAccess },
+                    { name: 'readerPreferences', model: prisma.readerPreference }
                 ];
 
                 let firstTable = true;

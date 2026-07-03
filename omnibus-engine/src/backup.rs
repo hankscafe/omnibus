@@ -27,27 +27,12 @@ fn mark_naive_timestamps_utc(v: &mut serde_json::Value, re: &regex::Regex) {
     }
 }
 
-pub async fn process_backup(db: PgPool) -> Result<(i32, String)> {
-    // 1. Prepare Encryption Keys (Matching the Node admin/backup route exactly).
-    // SECURITY: mandatory secret check, no literal fallback (parity with backup/route.ts:19-23).
-    let secret = std::env::var("NEXTAUTH_SECRET").unwrap_or_default();
-    if secret.is_empty() || secret == "change_this_to_a_random_secure_string_123!" {
-        anyhow::bail!("Backup failed: NEXTAUTH_SECRET is not configured.");
-    }
-
-    // 16-byte random salt + IV (parity with crypto.randomBytes(16)).
-    let mut salt = [0u8; 16];
-    rand::thread_rng().fill(&mut salt);
-    let mut iv = [0u8; 16];
-    rand::thread_rng().fill(&mut iv);
-
-    // STRENGTHEN KDF: PBKDF2-HMAC-SHA256, 100,000 iterations, 32-byte key.
-    // Byte-identical to Node's crypto.pbkdf2Sync(secret, salt, 100000, 32, 'sha256').
-    let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(secret.as_bytes(), &salt, 100_000, &mut key);
-
-    // 2. Table mappings (JSON Key -> PostgreSQL Table Name)
-    let tables = vec![
+/// The set of tables the scheduled backup exports, as `(json_key, "PgTableName")` pairs.
+/// MUST stay in lock-step with the Node backup route (`admin/backup/route.ts`) and the Node
+/// restore route (`admin/restore/route.ts`) — a table exported here but not restored there (or
+/// vice versa) is a silent data-loss bug. The `backup_table_set_matches_restore` test guards this.
+fn backup_tables() -> Vec<(&'static str, &'static str)> {
+    vec![
         ("users", "User"),
         ("settings", "SystemSetting"),
         ("libraries", "Library"),
@@ -68,7 +53,47 @@ pub async fn process_backup(db: PgPool) -> Result<(i32, String)> {
         ("userTrophies", "UserTrophy"),
         ("issueReports", "IssueReport"),
         ("digestHistory", "DigestHistory"),
-    ];
+        // User data + config previously omitted (silent loss on migration/restore) — kept in
+        // lock-step with the Node backup route (admin/backup/route.ts). jobLogs and jobLocks are
+        // intentionally excluded (ephemeral diagnostics / runtime locks that regenerate).
+        ("hosterAccounts", "HosterAccount"),
+        ("apiKeys", "ApiKey"),
+        ("opdsKeys", "OpdsKey"),
+        ("koreaderSyncs", "KoreaderSync"),
+        ("favorites", "Favorite"),
+        ("reviews", "Review"),
+        ("bookmarks", "Bookmark"),
+        ("dailyReadingStats", "DailyReadingStat"),
+        ("dailyIssueReads", "DailyIssueRead"),
+        ("auditLogs", "AuditLog"),
+        // Permissions + per-user reader settings — backed up by neither side historically; included
+        // here (and in the Node route) so they survive a backup/restore round-trip.
+        ("userLibraryAccess", "UserLibraryAccess"),
+        ("readerPreferences", "ReaderPreference"),
+    ]
+}
+
+pub async fn process_backup(db: PgPool) -> Result<(i32, String)> {
+    // 1. Prepare Encryption Keys (Matching the Node admin/backup route exactly).
+    // SECURITY: mandatory secret check, no literal fallback (parity with backup/route.ts:19-23).
+    let secret = std::env::var("NEXTAUTH_SECRET").unwrap_or_default();
+    if secret.is_empty() || secret == "change_this_to_a_random_secure_string_123!" {
+        anyhow::bail!("Backup failed: NEXTAUTH_SECRET is not configured.");
+    }
+
+    // 16-byte random salt + IV (parity with crypto.randomBytes(16)).
+    let mut salt = [0u8; 16];
+    rand::thread_rng().fill(&mut salt);
+    let mut iv = [0u8; 16];
+    rand::thread_rng().fill(&mut iv);
+
+    // STRENGTHEN KDF: PBKDF2-HMAC-SHA256, 100,000 iterations, 32-byte key.
+    // Byte-identical to Node's crypto.pbkdf2Sync(secret, salt, 100000, 32, 'sha256').
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(secret.as_bytes(), &salt, 100_000, &mut key);
+
+    // 2. Table mappings (JSON Key -> PostgreSQL Table Name)
+    let tables = backup_tables();
 
     let mut inner_data = serde_json::Map::new();
 
@@ -177,5 +202,29 @@ mod tests {
         assert_eq!(row["releaseDate"], "2024-01-15");
         assert_eq!(row["name"], "Saga 2014 012");
         assert_eq!(row["count"], 12);
+    }
+
+    /// Guards against the silent data-loss class where the backup exports a table the restore
+    /// route doesn't restore (or vice versa). This list mirrors the `restoreTable(...)` calls in
+    /// `src/app/api/admin/restore/route.ts` by json key. If you add a table to one side, add it to
+    /// the other and update this set — that is the whole point of the test.
+    #[test]
+    fn backup_table_set_matches_restore() {
+        let restore_keys = [
+            "users", "settings", "libraries", "downloadClients", "discordWebhooks", "indexers",
+            "customHeaders", "searchAcronyms", "trophies", "series", "collections", "readingLists",
+            "issues", "requests", "userTrophies", "readProgresses", "collectionItems",
+            "readingListItems", "issueReports", "digestHistory", "hosterAccounts", "apiKeys",
+            "opdsKeys", "koreaderSyncs", "favorites", "reviews", "bookmarks", "dailyReadingStats",
+            "dailyIssueReads", "auditLogs", "userLibraryAccess", "readerPreferences",
+        ];
+        let mut backup_keys: Vec<&str> = backup_tables().iter().map(|(k, _)| *k).collect();
+        let mut restore_sorted: Vec<&str> = restore_keys.to_vec();
+        backup_keys.sort_unstable();
+        restore_sorted.sort_unstable();
+        assert_eq!(
+            backup_keys, restore_sorted,
+            "backup table set diverged from the Node restore route — this is a data-loss risk"
+        );
     }
 }

@@ -5,6 +5,7 @@ import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { DEFAULT_SCORING_RULES } from "@/lib/utils/defaults"
 import { RECOMMENDED_PUBLISHERS, RECOMMENDED_KEYWORDS } from "@/lib/filter-defaults"
+import { DEFAULT_MANGA_PUBLISHERS, DEFAULT_WESTERN_PUBLISHERS } from "@/lib/utils/default-publishers"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -1143,9 +1144,9 @@ export default function SettingsPage() {
                                 size="sm" 
                                 className="font-bold border border-border shadow-sm text-xs"
                                 onClick={() => setConfig({
-                                    ...config, 
-                                    manga_publishers: "viz media, kodansha, yen press, seven seas, shueisha, shogakukan, tokyopop, dark horse manga, vertical, ghost ship, denpa, fakku, j-novel club, sublime, kuma, ize press, square enix, hakusensha, lezhin", 
-                                    western_publishers: "marvel, dc comics, image comics, idw publishing, dynamite, boom! studios, valiant, archie, oni press, titan comics, vault comics, awa studios, humanoids, 2000 ad, zenescope"
+                                    ...config,
+                                    manga_publishers: DEFAULT_MANGA_PUBLISHERS.join(", "),
+                                    western_publishers: DEFAULT_WESTERN_PUBLISHERS.join(", ")
                                 })}
                             >
                                 Load Default Lists

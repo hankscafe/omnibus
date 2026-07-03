@@ -103,6 +103,11 @@ export async function POST(request: Request) {
             await restoreTable(backup.data.dailyReadingStats, tx.dailyReadingStat);
             await restoreTable(backup.data.dailyIssueReads, tx.dailyIssueRead);
             await restoreTable(backup.data.auditLogs, tx.auditLog);
+
+            // Permissions + per-user reader settings. FK targets (users/libraries/series) are all
+            // restored above; older backups lack these keys and restoreTable no-ops on them.
+            await restoreTable(backup.data.userLibraryAccess, tx.userLibraryAccess);
+            await restoreTable(backup.data.readerPreferences, tx.readerPreference);
             // Generous limit: restore is a one-time op on an idle DB and large libraries are slow.
         }, { maxWait: 15000, timeout: 600000 });
 

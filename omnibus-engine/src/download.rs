@@ -230,7 +230,30 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
     // selected, so reject non-HTTP(S) schemes and hosts that resolve to an internal address.
     validate_download_target(&req.url).await?;
 
-    let client = reqwest::Client::builder().build()?;
+    // Re-validate every redirect hop. validate_download_target only checks the INITIAL url; the default
+    // reqwest policy would otherwise follow a `302 Location: http://169.254.169.254/…` straight past the
+    // guard. This synchronous hook rejects non-HTTP(S) schemes and internal IP-literal targets and caps
+    // the chain. (A redirect to an internal *hostname* can't be DNS-resolved in this sync closure — the
+    // common cloud-metadata / RFC-1918-literal vectors are the ones closed here.)
+    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() > 10 {
+            return attempt.error(std::io::Error::other("too many redirects"));
+        }
+        let url = attempt.url();
+        if !matches!(url.scheme(), "http" | "https") {
+            return attempt.error(std::io::Error::other("redirect to non-HTTP(S) scheme blocked"));
+        }
+        if let Some(host) = url.host_str() {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                if is_blocked_ip(&ip) {
+                    return attempt.error(std::io::Error::other("redirect to internal address blocked"));
+                }
+            }
+        }
+        attempt.follow()
+    });
+    let client = reqwest::Client::builder().redirect(redirect_policy).build()?;
 
     // Each attempt re-establishes the stream AND runs the transfer to completion: a mid-stream 45s stall
     // (or a truncated/too-small file, or an HTML error/challenge page) now consumes a retry instead of

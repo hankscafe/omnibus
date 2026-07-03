@@ -10,6 +10,26 @@ import { recordDailyReading } from '@/lib/reading-stats';
 
 export const dynamic = 'force-dynamic';
 
+// Resolve an Issue from the reader's file path. The client round-trips the exact stored `filePath`,
+// so try that as an indexed equality first (Issue.@@index([filePath])) — this replaces a
+// `LIKE '%fileName%'` full-table scan that ran on every page turn. Only if the exact match misses
+// (casing / separator drift) do we fall back to the old normalized scan.
+async function resolveIssueByPath(filePath: string): Promise<{ id: string } | null> {
+    const exact = await prisma.issue.findFirst({ where: { filePath }, select: { id: true } });
+    if (exact) return exact;
+
+    const normalizedTarget = path.normalize(filePath).replace(/\\/g, '/').toLowerCase();
+    const fileName = path.basename(filePath);
+    const possibleIssues = await prisma.issue.findMany({
+        where: { filePath: { contains: fileName } },
+        select: { id: true, filePath: true },
+    });
+    const match = possibleIssues.find(i =>
+        i.filePath && path.normalize(i.filePath).replace(/\\/g, '/').toLowerCase() === normalizedTarget
+    );
+    return match ? { id: match.id } : null;
+}
+
 // --- NEW: DEDICATED EXACT PROGRESS FETCH ---
 export async function GET(request: Request) {
     try {
@@ -28,17 +48,7 @@ export async function GET(request: Request) {
         const filePath = searchParams.get('path');
         if (!filePath) return NextResponse.json({ currentPage: 0, isCompleted: false });
 
-        const normalizedTarget = path.normalize(filePath).replace(/\\/g, '/').toLowerCase();
-        const fileName = path.basename(filePath);
-
-        // Highly efficient lookup to avoid scanning the entire database
-        const possibleIssues = await prisma.issue.findMany({
-            where: { filePath: { contains: fileName } }
-        });
-
-        const issue = possibleIssues.find(i =>
-            i.filePath && path.normalize(i.filePath).replace(/\\/g, '/').toLowerCase() === normalizedTarget
-        );
+        const issue = await resolveIssueByPath(filePath);
 
         if (!issue) return NextResponse.json({ currentPage: 0, isCompleted: false });
 
@@ -79,16 +89,7 @@ export async function POST(request: Request) {
         const newPage = parseInt(currentPage);
         const total = parseInt(totalPages);
 
-        const normalizedTarget = path.normalize(filePath).replace(/\\/g, '/').toLowerCase();
-        const fileName = path.basename(filePath);
-
-        const possibleIssues = await prisma.issue.findMany({
-            where: { filePath: { contains: fileName } }
-        });
-
-        const issue = possibleIssues.find(i =>
-            i.filePath && path.normalize(i.filePath).replace(/\\/g, '/').toLowerCase() === normalizedTarget
-        );
+        const issue = await resolveIssueByPath(filePath);
 
         if (!issue) return NextResponse.json({ error: "Issue not found" }, { status: 404 });
 

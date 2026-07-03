@@ -106,7 +106,7 @@ impl DiscoverConfig {
         let concepts = item.pointer("/volume/concepts").and_then(|v| v.as_array()).unwrap_or(&empty);
 
         if self.filter_enabled {
-            if !self.blocked_publishers.is_empty() && self.blocked_publishers.iter().any(|bp| pub_name.contains(bp.as_str())) {
+            if !self.blocked_publishers.is_empty() && self.blocked_publishers.iter().any(|bp| contains_word(&pub_name, bp)) {
                 log::debug!("[Discover Sync Debug] Filtered out \"{}\" due to blocked publisher: {}", vol_name, pub_name);
                 return false;
             }

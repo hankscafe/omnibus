@@ -167,7 +167,9 @@ pub fn generate_search_queries(
     let mut secondary_seen: HashSet<String> = HashSet::new();
 
     let base_name = search_name.replace('#', "").trim().to_string();
-    let re_possessive = Regex::new(r"(?i)'s\b|\s s\b").unwrap();
+    // Strip both straight and curly-apostrophe possessives ("Wolverine's" / "Wolverine’s" → "Wolverine")
+    // so a stray "s" token isn't later enforced as a required title word (parity with search-engine.ts).
+    let re_possessive = Regex::new(r"(?i)['’]s\b|\s s\b").unwrap();
     let no_possessive = re_possessive.replace_all(&base_name, "").to_string();
 
     let re_symbols = Regex::new(r"[^a-zA-Z0-9\s]").unwrap();
@@ -357,12 +359,14 @@ fn core_series_words(title: &str, noise: &HashSet<String>) -> Vec<String> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn filter_and_score(
     db: &PgPool,
     mut results: Vec<ProwlarrResult>,
     target_query: &str,
     is_manga: bool,
     req_year: Option<String>,
+    series_year: Option<String>,
     skip_relevance: bool,
     allow_packs_override: Option<bool>,
 ) -> anyhow::Result<Option<ProwlarrResult>> {
@@ -494,7 +498,16 @@ pub async fn filter_and_score(
         let tor_year: Option<String> = re_year_find().captures(&title_lower)
             .and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
 
-        if let Some(req_y) = &req_year {
+        // A pack/collection is dated by its SERIES start year, not the requested issue's release year
+        // (beta.069): "Wolverine Complete Collection (2024)" legitimately serves a 2026 issue. So packs
+        // anchor on series_year (falling back to req_year); single issues stay on the per-issue req_year.
+        let effective_year = if is_pack {
+            series_year.as_ref().or(req_year.as_ref())
+        } else {
+            req_year.as_ref()
+        };
+
+        if let Some(req_y) = effective_year {
             if let Some(ty_str) = &tor_year {
                 if let (Ok(ry), Ok(ty)) = (req_y.parse::<i32>(), ty_str.parse::<i32>()) {
                     if (ry - ty).abs() > 1 { return false; }

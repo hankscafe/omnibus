@@ -6,15 +6,15 @@
 // secret (NEXTAUTH_SECRET) in the X-Internal-Secret header, same as /api/internal/notify.
 import { NextResponse } from 'next/server';
 import { Logger } from '@/lib/logger';
+import { secretsMatch } from '@/lib/api-auth';
 
 type IncomingLine = { level?: string; message?: string };
 
 const ALLOWED_LEVELS = new Set(['info', 'warn', 'error', 'success', 'debug']);
 
 export async function POST(request: Request) {
-    const expected = process.env.NEXTAUTH_SECRET;
     const provided = request.headers.get('x-internal-secret');
-    if (!expected || !provided || provided !== expected) {
+    if (!secretsMatch(provided, process.env.NEXTAUTH_SECRET)) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

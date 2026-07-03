@@ -4,6 +4,7 @@ import { POST } from '@/app/api/progress/route';
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
     findManyIssues: vi.fn(),
+    findFirstIssue: vi.fn(),
     findUniqueProgress: vi.fn(),
     upsertProgress: vi.fn(),
     upsertDailyStat: vi.fn(),
@@ -19,7 +20,7 @@ vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn()
 // 3. Mock Prisma
 vi.mock('@/lib/db', () => ({
     prisma: {
-        issue: { findMany: mocks.findManyIssues },
+        issue: { findMany: mocks.findManyIssues, findFirst: mocks.findFirstIssue },
         readProgress: { findUnique: mocks.findUniqueProgress, upsert: mocks.upsertProgress },
         dailyReadingStat: { upsert: mocks.upsertDailyStat },
         dailyIssueRead: { upsert: mocks.upsertDailyIssueRead }
@@ -52,8 +53,8 @@ describe('API Route: Reading Progress Tracker', () => {
     it('should mark a book as completed if the user is within 2 pages of the end', async () => {
         mocks.getServerSession.mockResolvedValueOnce({ user: { id: 'user_1' } });
         
-        // Mock the DB finding the physical file path
-        mocks.findManyIssues.mockResolvedValueOnce([{ id: 'issue_1', filePath: '/comics/batman.cbz' }]);
+        // Mock the DB resolving the issue by its exact stored path (the indexed fast path)
+        mocks.findFirstIssue.mockResolvedValueOnce({ id: 'issue_1' });
         // Mock that the user hasn't read this before
         mocks.findUniqueProgress.mockResolvedValueOnce(null);
 
@@ -75,8 +76,8 @@ describe('API Route: Reading Progress Tracker', () => {
     
     it('should correctly calculate pages read today and update the heatmap stats', async () => {
         mocks.getServerSession.mockResolvedValueOnce({ user: { id: 'user_1' } });
-        mocks.findManyIssues.mockResolvedValueOnce([{ id: 'issue_1', filePath: '/comics/batman.cbz' }]);
-        
+        mocks.findFirstIssue.mockResolvedValueOnce({ id: 'issue_1' });
+
         // Simulate the user had previously stopped on page 10
         mocks.findUniqueProgress.mockResolvedValueOnce({ currentPage: 10 });
         

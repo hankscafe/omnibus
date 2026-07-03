@@ -34,7 +34,9 @@ async fn encryption_key(db: &PgPool) -> Option<[u8; 32]> {
             .flatten();
     let secret = db_key
         .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("NEXTAUTH_SECRET").ok())
+        // Refuse to derive a key from the shipped placeholder NEXTAUTH_SECRET (parity with Node's
+        // encryption.ts) — otherwise secrets would be "encrypted" under a value that is public in the repo.
+        .or_else(|| std::env::var("NEXTAUTH_SECRET").ok().filter(|s| !s.is_empty() && !crate::is_placeholder_secret(s)))
         .filter(|s| !s.is_empty())?;
     Some(derive_key(&secret))
 }

@@ -16,8 +16,12 @@ struct ComicInfo {
     series: Option<String>,
     number: Option<String>,
     year: Option<i32>,
+    #[serde(default)]
+    volume: Option<String>,
     publisher: Option<String>,
     manga: Option<String>,
+    #[serde(default)]
+    universe: Option<String>,
     #[serde(default)]
     series_group: Option<String>,
     #[serde(default)]
@@ -83,7 +87,7 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
         let path = entry.path();
         if path.is_file() {
             let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-            if matches!(ext.as_str(), "cbz" | "cbr" | "zip" | "rar" | "cb7") {
+            if matches!(ext.as_str(), "cbz" | "cbr" | "zip" | "rar" | "cb7" | "epub") {
                 files_to_process.push(path);
             }
         }
@@ -152,6 +156,12 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
         anyhow::bail!("No libraries configured in the database!");
     }
 
+    // Manga-detection waterfall inputs, loaded once per job (parity with the scanner): publisher
+    // lists + a shared HTTP client for the AniList fallback. Used only for NEW series whose ComicInfo
+    // <Manga> tag didn't already settle it.
+    let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings(&db).await;
+    let manga_http = reqwest::Client::new();
+
     let mut success_count = 0;
     let mut unmatched_count = 0;
     let mut synced_series_ids = std::collections::HashSet::new();
@@ -167,7 +177,15 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
 
             let series_name = info.series.clone().unwrap_or_else(|| "Unknown".to_string());
             let publisher = info.publisher.clone().unwrap_or_else(|| "Other".to_string());
-            let year = info.year.unwrap_or(2025);
+            // ComicInfo <Volume> usually holds the start year; fall back to <Year> (parity with
+            // parseComicInfo / metadata-extractor.ts). 0 means "unknown" — rendered as "" in the
+            // naming patterns below so an empty (year) is cleaned up rather than printed as "0".
+            let year = info.volume.as_deref()
+                .and_then(|v| v.trim().parse::<i32>().ok())
+                .filter(|y| *y != 0)
+                .or_else(|| info.year.filter(|y| *y != 0))
+                .unwrap_or(0);
+            let year_str = if year != 0 { year.to_string() } else { String::new() };
             let issue_num = info.number.clone().unwrap_or_else(|| "1".to_string());
             
             let manga_str = info.manga.as_deref().unwrap_or("").to_lowercase();
@@ -233,9 +251,22 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                 dest_folder = PathBuf::from(series_row.get::<String, _>("folderPath"));
             } else {
                 series_id = uuid::Uuid::new_v4().to_string();
+
+                // The ComicInfo <Manga> tag is honored above; for a NEW series that the tag didn't
+                // mark as manga, run the full detection waterfall (manga-publisher list → western
+                // bypass → AniList) so an untagged manga dropped into /watched is filed correctly
+                // instead of landing in the comics library (parity with Node's watched-sync detectManga).
+                if !is_manga {
+                    is_manga = crate::manga_detector::detect_manga(
+                        &manga_http, &series_name, &publisher, year, &manga_pubs, &western_pubs,
+                    ).await;
+                }
+
+                // Library selection tiers (parity with Node: default+match → any match → first):
+                // a matching default library wins, else any library whose isManga matches, else the
+                // first library. Without the middle tier a non-default manga library is never chosen.
                 let mut fallback_lib_path = String::new();
                 let mut fallback_lib_id = String::new();
-                
                 for lib in &libraries {
                     let lib_manga: bool = lib.get("isManga");
                     let lib_default: bool = lib.get("isDefault");
@@ -246,18 +277,30 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                     }
                 }
                 if fallback_lib_path.is_empty() {
+                    for lib in &libraries {
+                        let lib_manga: bool = lib.get("isManga");
+                        if lib_manga == is_manga {
+                            fallback_lib_path = lib.get("path");
+                            fallback_lib_id = lib.get("id");
+                            break;
+                        }
+                    }
+                }
+                if fallback_lib_path.is_empty() {
                     fallback_lib_path = libraries[0].get("path");
                     fallback_lib_id = libraries[0].get("id");
                 }
-                
+
                 target_lib_id = fallback_lib_id;
                 let series_group_fs = clean_fs_name(&info.series_group.clone().unwrap_or_default());
-                let rel_folder = folder_pattern
+                let universe_fs = clean_fs_name(&info.universe.clone().unwrap_or_default());
+                let rel_folder = clean_naming_leftovers(&folder_pattern
                     .replace("{Publisher}", &clean_fs_name(&publisher))
                     .replace("{Series}", &clean_fs_name(&series_name))
-                    .replace("{Year}", &year.to_string())
-                    .replace("{VolumeYear}", &year.to_string())
-                    .replace("{SeriesGroup}", &series_group_fs);
+                    .replace("{Year}", &year_str)
+                    .replace("{VolumeYear}", &year_str)
+                    .replace("{UniverseName}", &universe_fs)
+                    .replace("{SeriesGroup}", &series_group_fs));
                 // Build the path one segment at a time, dropping any that resolved to empty (e.g. a
                 // blank {SeriesGroup}) — a leading "" segment would otherwise make join() absolute on Unix.
                 let mut folder = PathBuf::from(&fallback_lib_path);
@@ -272,18 +315,24 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
             let formatted_num = if issue_num.len() == 1 { format!("0{}", issue_num) } else { issue_num.clone() };
             let pattern_to_use = if is_manga { &manga_file_pattern } else { &file_pattern };
             
-            let new_filename = pattern_to_use
+            let new_filename = clean_naming_leftovers(&pattern_to_use
                 .replace("{Publisher}", &clean_fs_name(&publisher))
                 .replace("{Series}", &clean_fs_name(&series_name))
-                .replace("{Year}", &year.to_string())
-                .replace("{VolumeYear}", &year.to_string())
-                .replace("{IssueYear}", &year.to_string())
+                .replace("{Year}", &year_str)
+                .replace("{VolumeYear}", &year_str)
+                .replace("{IssueYear}", &year_str)
                 .replace("{Issue}", &formatted_num)
                 .replace("{IssueTitle}", &clean_fs_name(&info.title.clone().unwrap_or_default()))
-                .replace("{SeriesGroup}", &clean_fs_name(&info.series_group.clone().unwrap_or_default()))
-                .trim().to_string();
+                .replace("{UniverseName}", &clean_fs_name(&info.universe.clone().unwrap_or_default()))
+                .replace("{SeriesGroup}", &clean_fs_name(&info.series_group.clone().unwrap_or_default())));
 
-            let final_dest = dest_folder.join(format!("{}.cbz", new_filename));
+            // Converted archives (cbr/rar/cb7) and zip/cbz all normalize to .cbz; an .epub is left as
+            // .epub so a renamed EPUB isn't mislabeled as a comic archive.
+            let dest_ext = match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
+                Some("epub") => "epub",
+                _ => "cbz",
+            };
+            let final_dest = dest_folder.join(format!("{}.{}", new_filename, dest_ext));
 
             if robust_move(&path, &final_dest).is_ok() {
                 // Move sibling images (Cover scans) utilizing the original path
@@ -440,6 +489,9 @@ fn extract_comicinfo(path: &Path) -> Option<ComicInfo> {
             if file.name().eq_ignore_ascii_case("comicinfo.xml") {
                 let mut xml_content = String::new();
                 if file.read_to_string(&mut xml_content).is_ok() {
+                    // Sanitize bare ampersands so a "Cloak & Dagger"-style tag doesn't fail parse and
+                    // needlessly route the file to /unmatched (parity with scanner.rs + Node extractor).
+                    let xml_content = crate::scanner::sanitize_xml_ampersands(&xml_content);
                     return quick_xml::de::from_str(&xml_content).ok();
                 }
             }
@@ -493,6 +545,17 @@ fn clean_fs_name(input: &str) -> String {
     input.replace(&['<', '>', ':', '"', '/', '\\', '|', '?', '*'][..], "").trim().to_string()
 }
 
+/// Removes the debris an unfilled naming variable leaves behind — empty `()`/`[]` groups (e.g. a
+/// blank `{Year}` inside `({Year})`) and collapsed whitespace — then trims (parity with importer.ts).
+fn clean_naming_leftovers(input: &str) -> String {
+    static EMPTY_PARENS: OnceLock<Regex> = OnceLock::new();
+    static EMPTY_BRACKETS: OnceLock<Regex> = OnceLock::new();
+    static MULTI_WS: OnceLock<Regex> = OnceLock::new();
+    let no_parens = EMPTY_PARENS.get_or_init(|| Regex::new(r"\(\s*\)").unwrap()).replace_all(input, "");
+    let no_brackets = EMPTY_BRACKETS.get_or_init(|| Regex::new(r"\[\s*\]").unwrap()).replace_all(&no_parens, "");
+    MULTI_WS.get_or_init(|| Regex::new(r"\s+").unwrap()).replace_all(&no_brackets, " ").trim().to_string()
+}
+
 /// Splits a comma-separated ComicInfo field into a JSON array string (e.g. "A, B" -> `["A","B"]`).
 fn split_to_json(s: Option<&str>) -> String {
     match s {
@@ -513,6 +576,14 @@ mod tests {
         assert_eq!(clean_fs_name("Bat: Man?"), "Bat Man");
         assert_eq!(clean_fs_name("  A/B\\C|D  "), "ABCD");
         assert_eq!(clean_fs_name("Plain Name"), "Plain Name");
+    }
+
+    #[test]
+    fn naming_leftovers_cleaned() {
+        // Blank {Year} inside "({Year})" leaves "()" — must be removed, not printed.
+        assert_eq!(clean_naming_leftovers("Saga ()"), "Saga");
+        assert_eq!(clean_naming_leftovers("Saga [] #01"), "Saga #01");
+        assert_eq!(clean_naming_leftovers("Saga  (2014)  #01"), "Saga (2014) #01");
     }
 
     #[test]

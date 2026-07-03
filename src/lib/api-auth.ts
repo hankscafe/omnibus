@@ -3,6 +3,16 @@ import { prisma } from './db';
 import crypto from 'crypto';
 import { Logger } from './logger';
 
+/// Constant-time equality for shared secrets. Guards length first (timingSafeEqual throws on unequal
+/// buffer lengths), then compares in constant time so the endpoint can't be used as a byte-by-byte
+/// timing oracle for NEXTAUTH_SECRET. Mirrors the engine's constant-time secrets_match.
+export function secretsMatch(provided: string | null | undefined, expected: string | null | undefined): boolean {
+    if (!provided || !expected) return false;
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export async function validateApiKey(req: Request) {
     const authHeader = req.headers.get('authorization') || '';
     const tokenFromBearer = authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : null;

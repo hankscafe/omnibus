@@ -197,6 +197,10 @@ export function initWorker() {
                     let dynamicYear: string | null = year ? String(year) : null;
                     let allowPacksForThisRequest = false;
                     let failedItems: string[] = [];
+                    // Release date of the specifically-requested issue (when resolvable), used in the
+                    // no-result branch below to park a not-yet-released issue as UNRELEASED instead of
+                    // STALLED so the Series Monitor retries it once it drops (parity with main beta.059).
+                    let requestedIssueReleaseDate: string | null = null;
                     if (freshReq) {
                         try { failedItems = JSON.parse((freshReq as any).failedLinks || "[]"); } catch { failedItems = []; }
                         if (freshReq.volumeId && freshReq.volumeId !== "0") {
@@ -217,6 +221,7 @@ export function initWorker() {
                                     const allSeriesIssues = await prisma.issue.findMany({ where: { seriesId: localSeries.id } });
                                     const issueSkeleton = allSeriesIssues.find(i => isSameIssue(i.number, issueNumMatch[1]));
                                     if (issueSkeleton && issueSkeleton.releaseDate) {
+                                        requestedIssueReleaseDate = issueSkeleton.releaseDate;
                                         const parsedIssueYear = issueSkeleton.releaseDate.split('-')[0];
                                         if (parsedIssueYear && /^\d{4}$/.test(parsedIssueYear) && parsedIssueYear !== dynamicYear) {
                                             Logger.log(`[BullMQ] Overriding series year (${dynamicYear}) with issue release year (${parsedIssueYear}) for ${name}`, 'info');
@@ -260,6 +265,18 @@ export function initWorker() {
                                     where: { id: requestId },
                                     data: { status: 'MANUAL_DDL', downloadLink: resultData.manual_ddl.url, activeDownloadName: resultData.manual_ddl.name || name }
                                 });
+                                break;
+                            }
+
+                            // If the requested issue simply isn't out yet, park it as UNRELEASED (not
+                            // STALLED) so the Series Monitor's existing UNRELEASED→PENDING refire picks
+                            // it up once it drops — instead of stranding it as a failure that never
+                            // retries (parity with main beta.059). Only for the plain no-match case:
+                            // stall_for_review means editions WERE found (so the issue is released) and
+                            // genuinely need admin disambiguation.
+                            if (!resultData.stall_for_review && requestedIssueReleaseDate && !isReleasedYet(requestedIssueReleaseDate, null)) {
+                                Logger.log(`[BullMQ] No match for ${name} yet — issue not released until ${requestedIssueReleaseDate}. Parking as UNRELEASED for the monitor to retry.`, 'info');
+                                await prisma.request.update({ where: { id: requestId }, data: { status: 'UNRELEASED' } });
                                 break;
                             }
 
@@ -893,14 +910,11 @@ export function initWorker() {
                     if (candidateIssues.length === 0) break;
 
                     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-                    await prisma.digestHistory.deleteMany({ 
-                        where: { sentAt: { lt: fourteenDaysAgo } } 
-                    });
-                    await prisma.systemSetting.deleteMany({ 
-                        where: { key: 'weekly_digest_history' } 
+                    await prisma.digestHistory.deleteMany({
+                        where: { sentAt: { lt: fourteenDaysAgo } }
                     });
 
-                    const digestHistory = await prisma.digestHistory.findMany({ 
+                    const digestHistory = await prisma.digestHistory.findMany({
                         select: { seriesId: true, issueNum: true } 
                     });
                     const sentSet = new Set(digestHistory.map(h => `${h.seriesId}_${h.issueNum}`));

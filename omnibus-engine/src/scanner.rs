@@ -93,7 +93,7 @@ fn parse_comic_info(path: &Path) -> Option<ScanComicInfo> {
 }
 
 /// Replaces `&` that is not the start of a valid XML entity with `&amp;`.
-fn sanitize_xml_ampersands(input: &str) -> String {
+pub(crate) fn sanitize_xml_ampersands(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for (idx, c) in input.char_indices() {
         if c == '&' {
@@ -802,9 +802,42 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         if let Ok(t) = res { parsed_files.push(t); }
     }
 
+    // Pre-load existing issue numbers for every affected series in ONE query (not N+1). Issue has no
+    // (seriesId, number) unique constraint, so this map is the guard that stops a renamed/re-pathed
+    // file from inserting a DUPLICATE issue row: a same-number match updates the existing row's path
+    // instead (parity with the importer / watched-sync dedupe). Newly-inserted numbers are folded back
+    // in so two new files sharing a number within one scan don't both insert.
+    let involved_series: Vec<String> = parsed_files.iter().map(|(sid, _, _)| sid.clone())
+        .collect::<std::collections::HashSet<_>>().into_iter().collect();
+    let mut series_issue_nums: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
+    if !involved_series.is_empty() {
+        let rows = sqlx::query(r#"SELECT "seriesId", id, number FROM "Issue" WHERE "seriesId" = ANY($1)"#)
+            .bind(&involved_series)
+            .fetch_all(&db).await.unwrap_or_default();
+        for r in rows {
+            series_issue_nums.entry(r.get::<String, _>("seriesId")).or_default()
+                .push((r.get::<String, _>("id"), r.get::<String, _>("number")));
+        }
+    }
+
     for (series_id, file, info) in parsed_files {
         let file_name = Path::new(&file).file_name().unwrap_or_default().to_string_lossy().to_string();
         let issue_num = issue_number_from_filename(&file_name);
+
+        // Dedupe against the series' existing issues by number. On a match the file was renamed/moved —
+        // repoint the existing row's filePath rather than inserting a second row for the same issue.
+        let dup_id: Option<String> = series_issue_nums.get(&series_id)
+            .and_then(|v| v.iter().find(|(_, n)| crate::metadata::is_same_issue(n, &issue_num)).map(|(id, _)| id.clone()));
+        if let Some(eid) = dup_id {
+            if let Err(e) = sqlx::query(
+                r#"UPDATE "Issue" SET "filePath"=$1, status='DOWNLOADED', "updatedAt"=NOW() WHERE id=$2"#,
+            )
+            .bind(&file).bind(&eid).execute(&db).await
+            {
+                log::error!("[Scanner Debug] Failed to repoint existing issue {}: {:?}", file, e);
+            }
+            continue;
+        }
 
         let derived = info.as_ref().map(derive_meta);
         let (issue_meta_id, issue_source, issue_match_state) = match &derived {
@@ -834,6 +867,9 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             log::error!("[Scanner Debug] Failed to append issue {}: {:?}", file, e);
             continue;
         }
+        // Track the just-inserted number so another file with the same number later in this batch
+        // dedupes against it instead of inserting a second row.
+        series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone()));
         issues_inserted += 1;
     }
 

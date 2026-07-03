@@ -150,7 +150,7 @@ struct AppState {
 
 /// Known throwaway secrets shipped in the example compose files. Treated as "no secret configured"
 /// so a deployer who never overrode them cannot run with a value that is public in the repo.
-fn is_placeholder_secret(s: &str) -> bool {
+pub(crate) fn is_placeholder_secret(s: &str) -> bool {
     let l = s.to_ascii_lowercase();
     l.contains("change_me") || l.contains("change_this")
 }
@@ -897,7 +897,7 @@ async fn handle_search(
             annas_archive::search(&state.db, &state.limiter, &queries, false, is_manga).await
         } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } },
         async { if run_prow {
-            prowlarr::search(&state.db, &state.limiter, &queries, is_manga).await
+            prowlarr::search(&state.db, &state.limiter, &queries, is_manga, true).await
         } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } }
     );
 
@@ -950,7 +950,7 @@ async fn handle_search(
                 // GetComics results are already relevance-filtered in getcomics::search → operator
                 // junk/exclude lists + scoring only (skip_relevance = true).
                 if let Ok(Some(mut best_ddl)) = search_engine::filter_and_score(
-                    &state.db, get_res.clone(), &payload.name, is_manga, req_year.clone(), true, Some(use_packs)
+                    &state.db, get_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), true, Some(use_packs)
                 ).await {
                     // Resolve the article to concrete hoster links; scrape_deep_link drops disabled
                     // hosters, so an empty list means no enabled hoster can serve this match.
@@ -995,7 +995,7 @@ async fn handle_search(
                 if annas_res.is_empty() { continue; }
                 // Anna's Archive results aren't pre-filtered (unlike GetComics) → full relevance scoring.
                 if let Ok(Some(mut best_aa)) = search_engine::filter_and_score(
-                    &state.db, annas_res.clone(), &payload.name, is_manga, req_year.clone(), false, Some(use_packs)
+                    &state.db, annas_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), false, Some(use_packs)
                 ).await {
                     // The result's download_url is already the resolvable /md5/ link — emit one candidate
                     // tagged for the existing Node resolver (premium key → stream; keyless → MANUAL_DDL).
@@ -1009,7 +1009,7 @@ async fn handle_search(
             "prowlarr" => {
                 if prow_res.is_empty() { continue; }
                 if let Ok(Some(best_prow)) = search_engine::filter_and_score(
-                    &state.db, prow_res.clone(), &payload.name, is_manga, req_year.clone(), false, Some(use_packs)
+                    &state.db, prow_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), false, Some(use_packs)
                 ).await {
                     log::info!("[Prowlarr] Matched an indexer release for {}.", payload.name);
                     best_match = Some(best_prow);
@@ -1055,7 +1055,7 @@ async fn handle_interactive_search(
     let annas_enabled = annas_archive::is_interactive_enabled(&state.db).await;
 
     let (prow_res, get_res, annas_res) = tokio::join!(
-        prowlarr::search(&state.db, &state.limiter, &queries, is_manga),
+        prowlarr::search(&state.db, &state.limiter, &queries, is_manga, false),
         getcomics::search(&state.db, &state.limiter, &queries, true, &payload.query, payload.year.as_deref(), payload.year.as_deref(), is_manga, None),
         async {
             if annas_enabled {

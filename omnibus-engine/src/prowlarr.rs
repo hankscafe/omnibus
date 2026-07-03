@@ -78,7 +78,12 @@ fn map_raw_result(item: RawProwlarrResult) -> ProwlarrResult {
     }
 }
 
-pub async fn search(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, queries: &[String], is_manga: bool) -> anyhow::Result<Vec<ProwlarrResult>> {    let prowlarr_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_url'"#).fetch_optional(db).await?;
+/// `exhaustive`: when true (automated search), results are accumulated + deduped across EVERY query
+/// so the downstream relevance filter (`filter_and_score`) sees the full pool — otherwise a first
+/// query that returns only irrelevant hits would shadow a later, more-specific query and yield no
+/// match at all (the queries are ordered specific-first, so the good query often comes later). When
+/// false (interactive search), the first non-empty query wins to keep the UI response fast.
+pub async fn search(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, queries: &[String], is_manga: bool, exhaustive: bool) -> anyhow::Result<Vec<ProwlarrResult>> {    let prowlarr_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_url'"#).fetch_optional(db).await?;
     let prowlarr_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_key'"#).fetch_optional(db).await?;
     let prowlarr_key = crate::secret_crypto::decrypt_setting(db, prowlarr_key).await;
     let prowlarr_cats: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_categories'"#).fetch_optional(db).await?;
@@ -108,7 +113,10 @@ pub async fn search(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, que
     let custom_headers = sqlx::query(r#"SELECT key, value FROM "CustomHeader""#).fetch_all(db).await.unwrap_or_default();
     let client = crate::shared_http_client();
 
-    // Loop through the fuzzy queries until we find a match!
+    // Loop through the fuzzy queries. In exhaustive mode we visit every query and accumulate a deduped
+    // pool; otherwise we return the first query that yields any results.
+    let mut combined: Vec<ProwlarrResult> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for q in queries {
         log::info!("[Prowlarr] Searching for: \"{}\"", q);
         let mut req_url = format!("{}/api/v1/search?query={}&type=search&limit=100&offset=0", clean_url, urlencoding::encode(q));
@@ -159,14 +167,36 @@ pub async fn search(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, que
 
         let mapped_results: Vec<ProwlarrResult> = raw_results.into_iter().map(map_raw_result).collect();
 
-        // If we found results, instantly return them!
-        if !mapped_results.is_empty() {
-            log::info!("[Prowlarr] Found {} mapped results for \"{}\"", mapped_results.len(), q);
+        if mapped_results.is_empty() {
+            continue;
+        }
+        log::info!("[Prowlarr] Found {} mapped results for \"{}\"", mapped_results.len(), q);
+
+        // Interactive: first non-empty query wins (fast response).
+        if !exhaustive {
             return Ok(mapped_results);
+        }
+
+        // Automated: accumulate across all queries, deduping on guid → downloadUrl → title so the
+        // same release surfacing under overlapping queries isn't counted twice.
+        for r in mapped_results {
+            let dedup_key = if !r.guid.is_empty() {
+                r.guid.clone()
+            } else if !r.download_url.is_empty() {
+                r.download_url.clone()
+            } else {
+                r.title.clone()
+            };
+            if seen.insert(dedup_key) {
+                combined.push(r);
+            }
         }
     }
 
-    Ok(vec![])
+    if exhaustive && !combined.is_empty() {
+        log::info!("[Prowlarr] Accumulated {} deduped results across {} queries.", combined.len(), queries.len());
+    }
+    Ok(combined)
 }
 
 #[cfg(test)]

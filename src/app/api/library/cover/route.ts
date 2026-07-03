@@ -98,30 +98,34 @@ export async function GET(request: NextRequest) {
       return getFallbackImage();
     }
 
-    if (!fs.existsSync(realTarget)) {
+    // Async stat (also serves as the existence check) — this route is hit for every grid card and
+    // discover tile, so blocking the event loop with sync fs here serializes the whole Node worker.
+    let stat;
+    try {
+        stat = await fs.promises.stat(realTarget);
+    } catch {
         return getFallbackImage();
     }
-
-    const stat = fs.statSync(realTarget);
     const contentTypeFor = (ext: string) => ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
 
     if (stat.isDirectory()) {
         const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
         for (const pc of possibleCovers) {
             const coverPath = path.join(realTarget, pc);
-            if (fs.existsSync(coverPath)) {
-                const buffer = fs.readFileSync(coverPath);
+            try {
+                // Read directly and let a missing file throw (one syscall instead of exists + read).
+                const buffer = await fs.promises.readFile(coverPath);
                 const ext = path.extname(pc).toLowerCase();
                 return new NextResponse(buffer, {
                     headers: { 'Content-Type': contentTypeFor(ext), 'Cache-Control': 'public, max-age=86400' }
                 });
-            }
+            } catch { /* try the next candidate */ }
         }
         return getFallbackImage();
     }
 
     const ext = path.extname(realTarget).toLowerCase();
-    const buffer = fs.readFileSync(realTarget);
+    const buffer = await fs.promises.readFile(realTarget);
 
     return new NextResponse(buffer, {
         headers: {

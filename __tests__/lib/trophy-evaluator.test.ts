@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
     countRequests: vi.fn(),
     findManyReads: vi.fn(),
     createUserTrophy: vi.fn(),
-    createNotification: vi.fn(),
     log: vi.fn()
 }));
 
@@ -19,8 +18,7 @@ vi.mock('@/lib/db', () => ({
         userTrophy: { findMany: mocks.findManyUserTrophies, create: mocks.createUserTrophy },
         trophy: { findMany: mocks.findManyTrophies },
         readProgress: { count: mocks.countReadProgress, findMany: mocks.findManyReads },
-        request: { count: mocks.countRequests },
-        notification: { create: mocks.createNotification }
+        request: { count: mocks.countRequests }
     }
 }));
 
@@ -57,13 +55,11 @@ describe('Gamification: Trophy Evaluator', () => {
 
         await evaluateTrophies('user_1');
 
-        // Assert the database link was created
+        // Assert the database link was created (there is no Notification model — awarding the
+        // UserTrophy row is the whole effect).
         expect(mocks.createUserTrophy).toHaveBeenCalledWith({
             data: { userId: 'user_1', trophyId: 't1' }
         });
-        
-        // Assert the notification bell was triggered
-        expect(mocks.createNotification).toHaveBeenCalled();
     });
 
     it('should NOT award a PUBLISHER_COUNT trophy if they only read comics from the same publisher', async () => {

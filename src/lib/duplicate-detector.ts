@@ -23,9 +23,26 @@ export interface DuplicateGroup {
 }
 
 export async function findDuplicateGroups(): Promise<DuplicateGroup[]> {
-    const issues = await prisma.issue.findMany({
+    // Let the DB find the (series, number) pairs that actually have more than one file-bearing record
+    // instead of hydrating every downloaded issue (+ its full Series row) into Node. This health check
+    // runs every 15 min, so on a 100k-issue library the old full scan moved hundreds of MB each time.
+    const candidates = await prisma.issue.groupBy({
+        by: ['seriesId', 'number'],
         where: { filePath: { not: null } },
-        include: { series: true },
+        _count: { seriesId: true },
+        having: { seriesId: { _count: { gt: 1 } } },
+    });
+    if (candidates.length === 0) return [];
+
+    // Fetch only the issues in the candidate series, selecting just the fields we use. Numbers that
+    // aren't actually duplicated fall out via the `group.length < 2` check below.
+    const seriesIds = [...new Set(candidates.map(c => c.seriesId))];
+    const issues = await prisma.issue.findMany({
+        where: { filePath: { not: null }, seriesId: { in: seriesIds } },
+        select: {
+            id: true, number: true, seriesId: true, filePath: true,
+            series: { select: { name: true } },
+        },
     });
 
     // Group by (series, issue number) in memory first — cheap, no filesystem access.

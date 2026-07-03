@@ -101,7 +101,12 @@ export async function GET(request: Request) {
     const duplicatesList: any[] = [];
 
     if (seriesRecord) {
-        let existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
+        // First pass only needs the fields the dedup ranking + file-sync use — avoid hydrating every
+        // wide Issue row twice (the post-reconciliation re-fetch below reads the full rows).
+        let existingIssues: any[] = await prisma.issue.findMany({
+            where: { seriesId: seriesRecord.id },
+            select: { id: true, number: true, metadataId: true, filePath: true },
+        });
         const dbIssueMap = new Map();
         const idsToDelete: string[] = [];
         
@@ -202,6 +207,16 @@ export async function GET(request: Request) {
         }
 
         existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
+
+        // Batch the on-disk existence checks instead of a blocking fs.existsSync per issue — a
+        // 1,000-issue series would otherwise stall the Node event loop with 1,000 sync stat calls.
+        const existingPaths = new Set<string>();
+        await Promise.all(
+            existingIssues
+                .filter(i => i.filePath)
+                .map(async (i) => { try { await fs.promises.access(i.filePath!); existingPaths.add(i.filePath!); } catch { /* gone */ } })
+        );
+
         for (const issue of existingIssues) {
             const fileName = issue.filePath ? path.basename(issue.filePath) : null;
             const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
@@ -226,7 +241,7 @@ export async function GET(request: Request) {
                 readProgress: prog.readProgress
             };
 
-            if (issue.filePath && fs.existsSync(issue.filePath)) downloadedIssues.push(formatted);
+            if (issue.filePath && existingPaths.has(issue.filePath)) downloadedIssues.push(formatted);
             else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingIssues.push(formatted);
         }
     }

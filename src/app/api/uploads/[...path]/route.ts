@@ -14,7 +14,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ path
         const baseDir = path.resolve(configDir, 'uploads');
         const filePath = path.resolve(baseDir, ...pathArray);
 
-        if (!filePath.startsWith(baseDir)) {
+        // Separator-aware containment: a bare startsWith would let a sibling dir like
+        // "<config>/uploads-x" satisfy the "<config>/uploads" check.
+        if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
             return new NextResponse("Forbidden", { status: 403 });
         }
 

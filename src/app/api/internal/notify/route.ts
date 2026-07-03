@@ -8,11 +8,11 @@ import { NextResponse } from 'next/server';
 import { SystemNotifier } from '@/lib/notifications';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { secretsMatch } from '@/lib/api-auth';
 
 export async function POST(request: Request) {
-    const expected = process.env.NEXTAUTH_SECRET;
     const provided = request.headers.get('x-internal-secret');
-    if (!expected || !provided || provided !== expected) {
+    if (!secretsMatch(provided, process.env.NEXTAUTH_SECRET)) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

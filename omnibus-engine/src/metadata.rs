@@ -480,7 +480,7 @@ async fn get_series_ended_cutoff(db: &PgPool) -> Option<(i64, i32)> {
     Some((chrono::Utc::now().timestamp_millis() - window_ms, months))
 }
 
-async fn metron_auth(db: &PgPool) -> Option<(String, String)> {
+pub(crate) async fn metron_auth(db: &PgPool) -> Option<(String, String)> {
     let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('metron_user','metron_pass')"#)
         .fetch_all(db).await.unwrap_or_default();
     let mut user = String::new();

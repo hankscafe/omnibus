@@ -8,6 +8,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +21,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
     const resolvedParams = await params;
     const issueId = resolvedParams.issueId;
     const pageIndex = parseInt(resolvedParams.pageIndex);
+    if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+        return new Response('Page Not Found', { status: 404 });
+    }
 
     const issue = await prisma.issue.findUnique({ where: { id: issueId }, include: { series: { select: { libraryId: true } } } });
     if (!issue || !issue.filePath || !fs.existsSync(issue.filePath)) {
@@ -30,6 +34,36 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
     const accessibleLibs = await getAccessibleLibraryIds(auth.user?.id, auth.user?.role);
     if (!canAccessLibraryId(accessibleLibs, issue.series?.libraryId)) {
         return new Response('Forbidden', { status: 403 });
+    }
+
+    // --- ENGINE OFFLOAD ---
+    // Hand list + sort + extract + resize + WebP encode to the Rust engine (index mode of the same
+    // endpoint the web reader uses), keeping the whole-archive AdmZip buffer off the Node event loop.
+    // The engine natural-sorts with the same filter as the local path below, so page indexes line up.
+    // Output becomes resized WebP instead of the original bytes — PSE clients negotiate off
+    // Content-Type, and 1600px WebP is what the web reader already serves. Any engine failure
+    // (down, older binary, unreadable page) falls through to the local extraction path.
+    try {
+        const engineRes = await fetch(ENGINE_URL + '/api/reader/page', {
+            method: 'POST',
+            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ path: issue.filePath, index: pageIndex, width: 1600, quality: 80 }),
+        });
+        if (engineRes.ok) {
+            const engineBuffer = Buffer.from(await engineRes.arrayBuffer());
+            if (engineBuffer.length > 0) {
+                Logger.log(`[OPDS Debug] Served page ${pageIndex} of Issue [${issueId}] via engine (${Math.round(engineBuffer.length / 1024)}KB webp)`, 'debug');
+                return new Response(engineBuffer as unknown as BodyInit, {
+                    headers: {
+                        'Content-Type': 'image/webp',
+                        'Cache-Control': 'public, max-age=86400, immutable'
+                    }
+                });
+            }
+        }
+        // Non-OK (including an engine 404 for out-of-bounds) → let the local path decide.
+    } catch (e) {
+        Logger.log(`[OPDS Page] Engine offload unavailable, using local extraction: ${getErrorMessage(e)}`, 'debug');
     }
 
     try {

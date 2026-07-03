@@ -9,6 +9,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { cleanupEmptyDirs } from '@/lib/utils/safe-fs';
+import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,6 +19,40 @@ export async function POST(request: NextRequest) {
     const { seriesIds, folderPattern, filePattern } = await request.json();
 
     if (!seriesIds || !folderPattern || !filePattern) return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
+
+    // --- ENGINE OFFLOAD ---
+    // The engine runs the identical standardize pipeline (per-file relocation, conflict guard,
+    // empty-dir cleanup, Issue/Series DB updates) without holding the Node event loop for what can
+    // be hundreds of moves. Synchronous by design: the UI needs the summary + newPath from the
+    // response. engineFetchLong disables undici's idle timeouts for large jobs. Any failure falls
+    // through to the identical local loop below.
+    try {
+        const engineRes = await engineFetchLong(ENGINE_URL + '/api/library/rename', {
+            method: 'POST',
+            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ series_ids: seriesIds, folder_pattern: folderPattern, file_pattern: filePattern }),
+        });
+        if (engineRes.ok) {
+            const data = await engineRes.json();
+            await AuditLogger.log('BULK_RENAME_FILES', {
+                seriesRenamed: data.foldersRenamed,
+                filesRenamed: data.filesRenamed,
+                conflicts: data.conflicts,
+                folderPattern,
+                filePattern
+            }, (token.id || token.sub) as string);
+            return NextResponse.json({
+                success: true,
+                filesRenamed: data.filesRenamed,
+                foldersRenamed: data.foldersRenamed,
+                conflicts: data.conflicts,
+                newPath: data.newPath
+            });
+        }
+        Logger.log(`[Library Rename API] Engine returned ${engineRes.status}, using local rename loop.`, 'warn');
+    } catch (e) {
+        Logger.log(`[Library Rename API] Engine offload unavailable, using local rename loop: ${getErrorMessage(e)}`, 'debug');
+    }
 
     const seriesList = await prisma.series.findMany({
         where: { id: { in: seriesIds } }

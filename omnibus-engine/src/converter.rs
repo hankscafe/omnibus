@@ -86,6 +86,12 @@ fn is_image_name(name: &str) -> bool {
     [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"].iter().any(|e| lower.ends_with(e))
 }
 
+/// Archive formats Omnibus can import (parity with Node COMIC_EXT_REGEX).
+fn is_comic_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    [".cbz", ".cbr", ".zip", ".rar", ".cb7", ".epub"].iter().any(|e| lower.ends_with(e))
+}
+
 /// Image entries in an `unrar lb` (bare listing) output.
 fn count_image_lines(listing: &str) -> usize {
     listing.lines().filter(|line| is_image_name(line.trim())).count()
@@ -735,8 +741,50 @@ fn extract_page_webp_from_reader<R: Read + Seek>(reader: R, entry_name: &str, ma
         Some(n) => n,
         None => return Ok(None),
     };
+    extract_named_entry_webp(&mut archive, &name, max_width, quality)
+}
+
+/// The zip's image pages in the OPDS manifest order: non-directory, no macOS junk, image extension,
+/// natural-sorted by full entry name (parity with the Node OPDS page route's
+/// `localeCompare(undefined, { numeric: true, sensitivity: 'base' })` sort — indexes must line up
+/// with what the same book's earlier page requests resolved to).
+fn sorted_image_entries<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Vec<String> {
+    let mut pages: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(e) = archive.by_index(i) {
+            if e.is_dir() { continue; }
+            let name = e.name().to_string();
+            if name.to_lowercase().contains("__macosx") { continue; }
+            if is_image_name(&name) { pages.push(name); }
+        }
+    }
+    pages.sort_by(|a, b| natural_cmp(a, b));
+    pages
+}
+
+/// Extract the Nth image page (0-based, natural-sorted) from a zip/cbz, resized + WebP-encoded like
+/// [`extract_page_webp`]. This is the OPDS-PSE offload: PSE clients address pages by index, not entry
+/// name. Returns None when the index is out of bounds (the Node route maps that to 404).
+pub fn extract_page_index_webp(archive_path: &Path, index: usize, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
+    let file = File::open(archive_path)?;
+    extract_page_index_webp_from_reader(file, index, max_width, quality)
+}
+
+fn extract_page_index_webp_from_reader<R: Read + Seek>(reader: R, index: usize, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
+    let mut archive = zip::ZipArchive::new(reader)?;
+    let pages = sorted_image_entries(&mut archive);
+    let name = match pages.get(index) {
+        Some(n) => n.clone(),
+        None => return Ok(None),
+    };
+    extract_named_entry_webp(&mut archive, &name, max_width, quality)
+}
+
+/// Shared tail of the page-serving paths: read `name` out of the archive, resize to fit `max_width`
+/// (never enlarging), encode as WebP.
+fn extract_named_entry_webp<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, name: &str, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
     let mut buf = Vec::new();
-    archive.by_name(&name)?.read_to_end(&mut buf)?;
+    archive.by_name(name)?.read_to_end(&mut buf)?;
 
     let img = image::load_from_memory(&buf)?;
     let (w, h) = (img.width(), img.height());
@@ -814,6 +862,97 @@ pub fn first_comic_file(folder: &Path) -> Option<PathBuf> {
     comics.into_iter().next()
 }
 
+// ============================================================================
+// Nested-pack handling (importer offload)
+//
+// Batch downloads frequently arrive as one ZIP containing many comic archives.
+// The Node importer used AdmZip for both the detection count and the extraction,
+// which loads the entire pack (often multi-GB) into the Node heap. These helpers
+// stream from the file instead and keep the work off the Node event loop.
+// ============================================================================
+
+/// Comic archives nested inside a zip/cbz (non-directory entries with a comic extension) —
+/// the importer's batch-payload detection (parity with importer.ts COMIC_EXT_REGEX filter).
+pub fn list_nested_archives(archive_path: &Path) -> Result<Vec<String>> {
+    let mut archive = zip::ZipArchive::new(File::open(archive_path)?)?;
+    let mut found = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(e) = archive.by_index(i) {
+            if !e.is_dir() && is_comic_name(e.name()) {
+                found.push(e.name().to_string());
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The true comic extension for a file signature: `Rar!` → cbr, `PK` zip header → cbz.
+fn magic_true_ext(sig: &[u8]) -> Option<&'static str> {
+    if sig.len() >= 4 && sig == [0x52, 0x61, 0x72, 0x21] { return Some(".cbr"); }
+    if sig.len() >= 4 && sig[..4] == [0x50, 0x4B, 0x03, 0x04] { return Some(".cbz"); }
+    None
+}
+
+/// Whether a fake extension should be corrected — only flips between the zip and rar families,
+/// never touches anything else (parity with importer.ts fixMagicNumberSync).
+fn should_fix_ext(current_ext: &str, true_ext: &str) -> bool {
+    ((current_ext == ".cbz" || current_ext == ".zip") && true_ext == ".cbr")
+        || ((current_ext == ".cbr" || current_ext == ".rar") && true_ext == ".cbz")
+}
+
+/// Renames `path` to match its magic-byte container format when the extension lies
+/// (parity with importer.ts fixMagicNumberSync). Best-effort: any failure returns the path unchanged.
+fn fix_magic_extension(path: &Path) -> PathBuf {
+    let mut sig = [0u8; 4];
+    let read = File::open(path).and_then(|mut f| f.read(&mut sig));
+    let n = match read { Ok(n) => n, Err(_) => return path.to_path_buf() };
+    let true_ext = match magic_true_ext(&sig[..n]) { Some(e) => e, None => return path.to_path_buf() };
+    let current_ext = format!(".{}", path.extension().unwrap_or_default().to_string_lossy().to_lowercase());
+    if !should_fix_ext(&current_ext, true_ext) {
+        return path.to_path_buf();
+    }
+    let corrected = path.with_extension(&true_ext[1..]);
+    log::info!("[Importer] Detected fake extension ({} -> {}) on {:?}! Renaming to match true signature...",
+        current_ext, true_ext, path.file_name().unwrap_or_default());
+    match fs::rename(path, &corrected) {
+        Ok(_) => corrected,
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+/// Extracts every nested comic archive out of a batch zip into `dest_dir`, streaming entry-by-entry
+/// (never holding the pack in memory). Mirrors the importer's routing rules: flatten to the entry's
+/// basename, timestamp-prefix on name collision, then magic-fix the extension. Returns the final
+/// on-disk paths.
+pub fn extract_nested_archives(archive_path: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>> {
+    fs::create_dir_all(dest_dir)?;
+    let mut archive = zip::ZipArchive::new(File::open(archive_path)?)?;
+    let mut written = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = match archive.by_index(i) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.is_dir() || !is_comic_name(entry.name()) { continue; }
+        let name = entry.name().to_string();
+        let file_name = name.rsplit(['/', '\\']).next().unwrap_or(&name).to_string();
+        let mut dest = dest_dir.join(&file_name);
+        if dest.exists() {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            dest = dest_dir.join(format!("{}_{}", millis, file_name));
+        }
+        log::debug!("[Importer] Extracting nested archive from ZIP to Watched: {}", file_name);
+        let mut out = File::create(&dest)?;
+        std::io::copy(&mut entry, &mut out)?;
+        drop(out);
+        written.push(fix_magic_extension(&dest));
+    }
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -865,6 +1004,134 @@ mod tests {
         // Unknown entry → None (not an error).
         let out3 = extract_page_webp_from_reader(Cursor::new(&zip_buf), "nope.png", 1600, 80.0).unwrap();
         assert!(out3.is_none());
+    }
+
+    #[test]
+    fn extract_page_index_webp_sorts_filters_and_bounds_like_the_opds_route() {
+        use std::io::{Cursor, Write};
+        // Pages written out of order, plus macOS junk, a directory entry, and a non-image —
+        // exactly the noise the Node OPDS route filters before indexing.
+        let mut png1: Vec<u8> = Vec::new();
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2000, 100, image::Rgb([10, 200, 10])))
+            .write_to(&mut Cursor::new(&mut png1), image::ImageOutputFormat::Png).unwrap();
+        let mut png2: Vec<u8> = Vec::new();
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(50, 50, image::Rgb([10, 10, 200])))
+            .write_to(&mut Cursor::new(&mut png2), image::ImageOutputFormat::Png).unwrap();
+
+        let mut zip_buf: Vec<u8> = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut zip_buf));
+            let opts: FileOptions = FileOptions::default();
+            zw.start_file("page10.png", opts).unwrap();
+            zw.write_all(&png2).unwrap();
+            zw.start_file("ComicInfo.xml", opts).unwrap();
+            zw.write_all(b"<ComicInfo/>").unwrap();
+            zw.start_file("__MACOSX/page0.png", opts).unwrap();
+            zw.write_all(&png2).unwrap();
+            zw.add_directory("scans/", opts).unwrap();
+            zw.start_file("page2.png", opts).unwrap();
+            zw.write_all(&png1).unwrap();
+            zw.finish().unwrap();
+        }
+
+        // Natural order after filtering: [page2.png, page10.png].
+        let mut archive = zip::ZipArchive::new(Cursor::new(&zip_buf)).unwrap();
+        assert_eq!(sorted_image_entries(&mut archive), vec!["page2.png", "page10.png"]);
+
+        let is_webp = |b: &[u8]| b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP";
+
+        // Index 0 → page2 (the 2000px one), resized down to 1600 wide.
+        let out = extract_page_index_webp_from_reader(Cursor::new(&zip_buf), 0, 1600, 80.0).unwrap().unwrap();
+        assert!(is_webp(&out), "expected a WebP payload");
+
+        // Index 1 → page10 (50px, under max_width so never enlarged).
+        let out1 = extract_page_index_webp_from_reader(Cursor::new(&zip_buf), 1, 1600, 80.0).unwrap().unwrap();
+        assert!(is_webp(&out1));
+        assert!(out1.len() < out.len(), "the 50px page should encode smaller than the 1600px page");
+
+        // Out of bounds → None (the route serves 404, matching the Node bounds check).
+        assert!(extract_page_index_webp_from_reader(Cursor::new(&zip_buf), 2, 1600, 80.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn magic_fix_decisions_match_the_node_importer() {
+        // Signature detection: Rar! → .cbr, PK zip header → .cbz, anything else → no opinion.
+        assert_eq!(magic_true_ext(&[0x52, 0x61, 0x72, 0x21]), Some(".cbr"));
+        assert_eq!(magic_true_ext(&[0x50, 0x4B, 0x03, 0x04]), Some(".cbz"));
+        assert_eq!(magic_true_ext(&[0x50, 0x4B]), None); // too short
+        assert_eq!(magic_true_ext(b"\x89PNG"), None);
+
+        // Rename only flips between the zip and rar families.
+        assert!(should_fix_ext(".cbz", ".cbr"));
+        assert!(should_fix_ext(".zip", ".cbr"));
+        assert!(should_fix_ext(".cbr", ".cbz"));
+        assert!(should_fix_ext(".rar", ".cbz"));
+        assert!(!should_fix_ext(".cbz", ".cbz")); // already correct
+        assert!(!should_fix_ext(".epub", ".cbz")); // outside both families
+        assert!(!should_fix_ext(".cb7", ".cbz"));
+    }
+
+    #[test]
+    fn nested_archives_are_listed_and_extracted_with_flatten_collision_and_magic_fix() {
+        use std::io::{Cursor, Write};
+
+        // A minimal real zip to use as the nested archives' content (so magic-fix sees "PK").
+        let mut inner_zip: Vec<u8> = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut inner_zip));
+            let opts: FileOptions = FileOptions::default();
+            zw.start_file("page1.jpg", opts).unwrap();
+            zw.write_all(b"fake image bytes").unwrap();
+            zw.finish().unwrap();
+        }
+
+        // The batch pack: two nested comics (one under a folder, one with a lying .cbr extension),
+        // plus junk the importer must ignore (a directory, a loose image, an nfo).
+        let mut pack: Vec<u8> = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut pack));
+            let opts: FileOptions = FileOptions::default();
+            zw.add_directory("scans/", opts).unwrap();
+            zw.start_file("pack/Inner One.cbz", opts).unwrap();
+            zw.write_all(&inner_zip).unwrap();
+            zw.start_file("Disguised.cbr", opts).unwrap(); // PK bytes → should become .cbz on disk
+            zw.write_all(&inner_zip).unwrap();
+            zw.start_file("cover.jpg", opts).unwrap();
+            zw.write_all(b"not an archive").unwrap();
+            zw.start_file("release.nfo", opts).unwrap();
+            zw.write_all(b"junk").unwrap();
+            zw.finish().unwrap();
+        }
+
+        let work = std::env::temp_dir().join(format!("omnibus_nested_test_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&work).unwrap();
+        let pack_path = work.join("batch.zip");
+        fs::write(&pack_path, &pack).unwrap();
+        let dest = work.join("watched");
+
+        // Listing: exactly the two nested comics, junk filtered.
+        let listed = list_nested_archives(&pack_path).unwrap();
+        assert_eq!(listed, vec!["pack/Inner One.cbz", "Disguised.cbr"]);
+
+        // Pre-create a collision for the flattened first entry.
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("Inner One.cbz"), b"pre-existing").unwrap();
+
+        let written = extract_nested_archives(&pack_path, &dest).unwrap();
+        assert_eq!(written.len(), 2);
+
+        // Collision → timestamp-prefixed name, original untouched; content is the real nested bytes.
+        let first_name = written[0].file_name().unwrap().to_string_lossy().to_string();
+        assert!(first_name.ends_with("_Inner One.cbz") , "expected a prefixed collision name, got {}", first_name);
+        assert_eq!(fs::read(dest.join("Inner One.cbz")).unwrap(), b"pre-existing");
+        assert_eq!(fs::read(&written[0]).unwrap(), inner_zip);
+
+        // The lying .cbr (PK bytes) was renamed to .cbz by the magic fix.
+        assert_eq!(written[1].file_name().unwrap().to_string_lossy(), "Disguised.cbz");
+        assert!(written[1].exists());
+        assert!(!dest.join("Disguised.cbr").exists());
+
+        fs::remove_dir_all(&work).unwrap();
     }
 
     #[test]

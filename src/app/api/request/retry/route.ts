@@ -4,10 +4,10 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { DownloadService } from '@/lib/download-clients';
 import { Logger } from '@/lib/logger';
-import { GetComicsService, enabledHostersFromSetting, scrapeDeepLinkViaEngine } from '@/lib/getcomics';
-import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
+import { enabledHostersFromSetting, scrapeDeepLinkViaEngine } from '@/lib/getcomics';
 import { Importer } from '@/lib/importer';
 import { omnibusQueue } from '@/lib/queue';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 export const dynamic = 'force-dynamic';
 
@@ -148,49 +148,74 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: true });
         } 
         
-        // 3. Recovery Fuzzy Search
+        // 3. Recovery Fuzzy Search — fully delegated to the engine's automation search (the last
+        // caller of the duplicate Node GetComics search stack, now retired). The engine generates
+        // the query ladder itself (acronyms included), searches the configured DDL sources, and
+        // returns already-scraped, hoster-ranked links. skip_indexers keeps recovery DDL-only,
+        // matching the old GetComics-only behavior.
         if (ddlEnabled && hasEnabledHosters) {
-            Logger.log(`[Retry] No direct link found for "${req.activeDownloadName || req.id}", attempting recovery fuzzy search...`, 'info');
-            
-            const acronyms = await getCustomAcronyms();
-            const queries = generateSearchQueries(req.activeDownloadName || "", year, acronyms, isManga); 
-            let results: any[] = [];
-            
-            for (const q of queries) {
-                results = await GetComicsService.search(q, false, isManga, req.activeDownloadName || "", year); 
-                if (results.length > 0) break;
-            }
-            
-            if (results.length > 0) {
-                const best = results[0];
-                const { url, hoster } = await scrapeDeepLinkViaEngine(best.downloadUrl, { name: req.activeDownloadName || best.title, year });
+            Logger.log(`[Retry] No direct link found for "${req.activeDownloadName || req.id}", attempting recovery fuzzy search via engine...`, 'info');
 
-                // AIRTIGHT CHECK: Strictly check against enabledHosters
-                if (enabledHosters.includes(hoster)) {
+            let failedItems: string[] = [];
+            try { failedItems = JSON.parse((req as any).failedLinks || "[]"); } catch { failedItems = []; }
+
+            let resultData: any = null;
+            try {
+                const engineRes = await fetch(ENGINE_URL + '/api/automation/search', {
+                    method: 'POST',
+                    headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({
+                        request_id: id,
+                        name: req.activeDownloadName || safeTitle,
+                        year: year || null,
+                        series_year: year || null,
+                        allow_packs: true, // the global allow_bulk_packs setting still gates this engine-side
+                        is_manga: isManga,
+                        skip_indexers: true,
+                        failed_links: failedItems
+                    })
+                });
+                if (engineRes.ok) resultData = await engineRes.json();
+                else Logger.log(`[Retry] Engine recovery search returned ${engineRes.status}.`, 'warn');
+            } catch (e: any) {
+                Logger.log(`[Retry] Engine recovery search unavailable: ${e.message}`, 'warn');
+            }
+
+            if (resultData?.success && resultData.best_match?.protocol === 'ddl') {
+                const best = resultData.best_match;
+                const candidates: { url: string, hoster: string }[] =
+                    (Array.isArray(resultData.ddl_candidates) && resultData.ddl_candidates.length > 0)
+                        ? resultData.ddl_candidates
+                        : [{ url: best.downloadUrl, hoster: best.indexer }];
+
+                // AIRTIGHT CHECK: take the first candidate on an enabled hoster (the engine already
+                // ranks them by the user's hoster priority).
+                const cand = candidates.find(c => enabledHosters.includes(c.hoster));
+                if (cand) {
                     const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
 
                     const duplicateDownload = await prisma.request.findFirst({
                         where: {
-                            downloadLink: url,
+                            downloadLink: cand.url,
                             status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
                             id: { not: id }
                         }
                     });
-            
+
                     if (duplicateDownload) {
-                         Logger.log(`[Retry] Batch pack already downloading or downloaded (${url}). Queuing for batch extraction.`, 'info');
+                         Logger.log(`[Retry] Batch pack already downloading or downloaded (${cand.url}). Queuing for batch extraction.`, 'info');
                          await prisma.request.update({
                              where: { id },
-                             data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeSearchTitle, downloadLink: url, failedLinks: "[]" }
+                             data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeSearchTitle, downloadLink: cand.url, failedLinks: "[]" }
                          });
-                         return NextResponse.json({ success: true, message: `Link recovered via ${hoster.startsWith('getcomics') ? 'Direct' : hoster} and queued for batch extraction.` });
+                         return NextResponse.json({ success: true, message: `Link recovered via ${cand.hoster.startsWith('getcomics') ? 'Direct' : cand.hoster} and queued for batch extraction.` });
                     }
                     await prisma.request.update({
                         where: { id },
-                        data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: url, activeDownloadName: safeSearchTitle, failedLinks: "[]" }
+                        data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, downloadLink: cand.url, activeDownloadName: safeSearchTitle, failedLinks: "[]" }
                     });
 
-                    DownloadService.downloadDirectFile(url, safeSearchTitle, config.download_path, req.id, hoster)
+                    DownloadService.downloadDirectFile(cand.url, safeSearchTitle, config.download_path, req.id, cand.hoster)
                         .then(async (success) => {
                             if (success) {
                                 await new Promise(r => setTimeout(r, 2000));
@@ -198,10 +223,19 @@ export async function POST(request: NextRequest) {
                             }
                         })
                         .catch(() => {});
-                    return NextResponse.json({ success: true, message: `Link recovered via ${hoster.startsWith('getcomics') ? 'Direct' : hoster} and download started.` });
+                    return NextResponse.json({ success: true, message: `Link recovered via ${cand.hoster.startsWith('getcomics') ? 'Direct' : cand.hoster} and download started.` });
                 } else {
-                    Logger.log(`[Retry] Recovered hoster (${hoster}) is disabled in settings.`, 'warn');
+                    Logger.log(`[Retry] Recovered link's hosters are all disabled in settings.`, 'warn');
                 }
+            } else if (resultData?.manual_ddl?.url) {
+                // The engine matched but only on a Cloudflare-gated/disabled hoster — hold the link
+                // for one-click manual pickup instead of failing (same seam as the automation queue).
+                Logger.log(`[Retry] Recovery found a manual-only link for "${req.activeDownloadName || req.id}". Holding as MANUAL_DDL.`, 'info');
+                await prisma.request.update({
+                    where: { id },
+                    data: { status: 'MANUAL_DDL', downloadLink: resultData.manual_ddl.url, activeDownloadName: resultData.manual_ddl.name || req.activeDownloadName || safeTitle }
+                });
+                return NextResponse.json({ success: true, message: 'Link recovered but requires a manual download. Check the Active Downloads queue.' });
             }
         } else {
             Logger.log(`[Retry] Direct Downloads disabled in settings. Skipping recovery fuzzy search.`, 'info');

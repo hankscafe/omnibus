@@ -11,6 +11,7 @@ import { promisify } from 'util';
 import { getErrorMessage } from './utils/error';
 import { CACHE_DIR } from '@/lib/utils/paths';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,7 +34,29 @@ async function readFileSignature(filePath: string): Promise<Buffer> {
 export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
     if (!cbrPath || !cbrPath.toLowerCase().match(/\.(cbr|rar|cb7)$/)) return null;
     const cbzPath = cbrPath.replace(/\.(cbr|rar|cb7)$/i, '.cbz');
-         
+
+    // --- ENGINE OFFLOAD ---
+    // The Rust engine runs the identical pipeline (unrar-primary native extraction, WebP settings,
+    // Issue.filePath repoint) without tying up the Node event loop or heap. Any failure falls
+    // through to the local pipeline below, so conversion never breaks on an older/down engine.
+    try {
+        const engineRes = await fetch(ENGINE_URL + '/api/converter/convert-file', {
+            method: 'POST',
+            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ path: cbrPath }),
+        });
+        if (engineRes.ok) {
+            const data = await engineRes.json();
+            if (data?.path) {
+                Logger.log(`[Converter] Engine converted ${path.basename(cbrPath)} -> ${path.basename(data.path)}`, 'success');
+                return data.path;
+            }
+        }
+    } catch (e) {
+        Logger.log(`[Converter] Engine conversion unavailable, using local pipeline: ${getErrorMessage(e)}`, 'debug');
+    }
+
+
     // --- THE FIX: Safe local fallback path to /config/cache ---
     const tempDir = path.join(CACHE_DIR, `cbr_${crypto.randomBytes(8).toString('hex')}`);
     try {

@@ -35,6 +35,10 @@ struct ScanComicInfo {
 struct DerivedMeta {
     cv_id: Option<i32>,
     metron_id: Option<i32>,
+    /// Raw issue ids, kept so the dynamic issue→volume resolution can tell WHICH provider the
+    /// file carries evidence for (parity with parseComicInfo's cvIssueId/metronIssueId locals).
+    cv_issue_id: Option<i32>,
+    metron_issue_id: Option<i32>,
     /// String form of (metronId || cvId) — goes into the metadataId column.
     metadata_id: Option<String>,
     /// String form of (metronIssueId || cvIssueId).
@@ -42,6 +46,22 @@ struct DerivedMeta {
     metadata_source: String,
     is_manga: bool,
     parsed_year: Option<i32>,
+}
+
+impl DerivedMeta {
+    /// Recompute the resolved source + series id after dynamic resolution filled in cv_id/metron_id
+    /// (parity with parseComicInfo's resolvedMetaSource/resolvedMetaId, which run AFTER step 3).
+    fn recompute_resolved(&mut self) {
+        self.metadata_source = if self.metron_id.is_some() || self.metron_issue_id.is_some() {
+            "METRON"
+        } else if self.cv_id.is_some() || self.cv_issue_id.is_some() {
+            "COMICVINE"
+        } else {
+            "LOCAL"
+        }
+        .to_string();
+        self.metadata_id = self.metron_id.or(self.cv_id).map(|v| v.to_string());
+    }
 }
 
 fn parse_i32(s: &str) -> Option<i32> {
@@ -179,7 +199,147 @@ fn derive_meta(info: &ScanComicInfo) -> DerivedMeta {
         .filter(|y| *y != 0)
         .or_else(|| info.year.as_deref().and_then(parse_i32).filter(|y| *y != 0));
 
-    DerivedMeta { cv_id, metron_id, metadata_id, metadata_issue_id, metadata_source, is_manga, parsed_year }
+    DerivedMeta { cv_id, metron_id, cv_issue_id, metron_issue_id, metadata_id, metadata_issue_id, metadata_source, is_manga, parsed_year }
+}
+
+// ============================================================================
+// Dynamic issue→volume/series ID resolution (parity with parseComicInfo step 3)
+//
+// Many tagged files carry ONLY an issue id (ComicVineIssueId, or a /4000- Web URL). Node resolves
+// the owning volume id live — CV `issue/4000-{id}?field_list=volume`, or a Metron series-name
+// search — so the series lands MATCHED instead of UNMATCHED. A 24h in-memory cache (keyed by
+// provider + series + year, same as Node's volumeResolutionCache) prevents API hammering during
+// mass scans.
+// ============================================================================
+
+fn resolution_cache() -> &'static tokio::sync::Mutex<HashMap<String, (i32, std::time::Instant)>> {
+    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, (i32, std::time::Instant)>>> = OnceLock::new();
+    CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+const RESOLUTION_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+async fn resolution_cache_get(key: &str) -> Option<i32> {
+    let cache = resolution_cache().lock().await;
+    cache.get(key).filter(|(_, at)| at.elapsed() < RESOLUTION_CACHE_TTL).map(|(v, _)| *v)
+}
+
+async fn resolution_cache_set(key: String, value: i32) {
+    resolution_cache().lock().await.insert(key, (value, std::time::Instant::now()));
+}
+
+/// Provider API bases, overridable for tests (a mock server) — production always uses the defaults.
+fn cv_base_url() -> String {
+    std::env::var("OMNIBUS_CV_BASE_URL").unwrap_or_else(|_| "https://comicvine.gamespot.com".to_string())
+}
+fn metron_base_url() -> String {
+    std::env::var("OMNIBUS_METRON_BASE_URL").unwrap_or_else(|_| "https://metron.cloud".to_string())
+}
+
+/// Metron series-search result selection (parity with parseComicInfo): exact name match with a
+/// ≤1-year variance when both years are known → first plain name match → first result.
+fn pick_metron_series(results: &[serde_json::Value], series_name: &str, parsed_year: Option<i32>) -> Option<i32> {
+    let name_of = |s: &serde_json::Value| -> Option<String> {
+        s.get("name").or_else(|| s.get("series")).and_then(|v| v.as_str()).map(|v| v.to_lowercase())
+    };
+    let target = series_name.to_lowercase();
+    let exact = results.iter().find(|s| {
+        let name_match = name_of(s).as_deref() == Some(target.as_str());
+        let year_began = s.get("year_began").and_then(|y| y.as_i64().or_else(|| y.as_str().and_then(|v| v.parse().ok())));
+        match (parsed_year, year_began) {
+            (Some(py), Some(yb)) => name_match && (yb as i32 - py).abs() <= 1,
+            _ => name_match,
+        }
+    });
+    let fallback = results.iter().find(|s| name_of(s).as_deref() == Some(target.as_str()));
+    let chosen = exact.or(fallback).or_else(|| results.first())?;
+    chosen
+        .get("id")
+        .and_then(|v| v.as_i64().map(|i| i as i32).or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+}
+
+/// Fill in a missing volume/series id when the file only carries an issue id, then recompute the
+/// resolved source + metadata id. Best-effort: any API/credential failure leaves the meta as-is
+/// (the series stays UNMATCHED, exactly like Node's catch branches).
+async fn resolve_dynamic_ids(db: &PgPool, client: &reqwest::Client, d: &mut DerivedMeta, series_name: Option<&str>) {
+    let cache_tail = format!(
+        "{}_{}",
+        series_name.unwrap_or(""),
+        d.parsed_year.map(|y| y.to_string()).unwrap_or_else(|| "unknown".to_string())
+    );
+
+    if d.cv_id.is_none() && d.cv_issue_id.is_some() {
+        let cv_key = format!("CV:{}", cache_tail);
+        if series_name.is_some() {
+            if let Some(cached) = resolution_cache_get(&cv_key).await {
+                d.cv_id = Some(cached);
+                d.recompute_resolved();
+                return;
+            }
+        }
+        let api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
+            .fetch_optional(db).await.ok().flatten();
+        let api_key = crate::secret_crypto::decrypt_setting(db, api_key).await;
+        if let Some(api_key) = api_key.filter(|k| !k.is_empty()) {
+            let issue_id = d.cv_issue_id.unwrap();
+            let url = format!("{}/api/issue/4000-{}/", cv_base_url(), issue_id);
+            let resp = client
+                .get(&url)
+                .query(&[("api_key", api_key.as_str()), ("format", "json"), ("field_list", "volume")])
+                .header("User-Agent", "Omnibus/1.0")
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    if let Ok(body) = r.json::<serde_json::Value>().await {
+                        let vol_id = body.pointer("/results/volume/id").and_then(|v| v.as_i64()).map(|v| v as i32);
+                        if let Some(vol_id) = vol_id {
+                            log::info!("[Scanner] Resolved CV Volume ID {} from Issue ID {}.", vol_id, issue_id);
+                            d.cv_id = Some(vol_id);
+                            if series_name.is_some() {
+                                resolution_cache_set(cv_key, vol_id).await;
+                            }
+                        }
+                    }
+                }
+                _ => log::warn!("[Scanner] Failed to resolve Volume ID from Issue ID: {}", issue_id),
+            }
+        }
+    } else if d.metron_id.is_none() && d.metron_issue_id.is_some() && series_name.is_some() {
+        let series_name = series_name.unwrap();
+        let metron_key = format!("METRON:{}", cache_tail);
+        if let Some(cached) = resolution_cache_get(&metron_key).await {
+            d.metron_id = Some(cached);
+            d.recompute_resolved();
+            return;
+        }
+        if let Some(auth) = crate::metadata::metron_auth(db).await {
+            let url = format!("{}/api/series/?name={}", metron_base_url(), urlencoding::encode(series_name));
+            let resp = client
+                .get(&url)
+                .basic_auth(&auth.0, Some(&auth.1))
+                .header("User-Agent", "Omnibus/1.0")
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    if let Ok(body) = r.json::<serde_json::Value>().await {
+                        let results = body.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                        if let Some(id) = pick_metron_series(&results, series_name, d.parsed_year) {
+                            log::info!("[Scanner] Resolved Metron Series ID {} from Series Name search (Year Checked: {}).", id, d.parsed_year.map(|y| y.to_string()).unwrap_or_else(|| "None".to_string()));
+                            d.metron_id = Some(id);
+                            resolution_cache_set(metron_key, id).await;
+                        }
+                    }
+                }
+                _ => log::warn!("[Scanner] Failed to dynamically resolve Metron Series ID for: {}", series_name),
+            }
+        }
+    }
+
+    d.recompute_resolved();
 }
 
 // ============================================================================
@@ -683,7 +843,15 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
 
         log::debug!("[Scanner Debug] Indexing new folder ({} archives): {}", files.len(), folder_path);
 
-        let derived = info.as_ref().map(derive_meta);
+        let mut derived = info.as_ref().map(derive_meta);
+
+        // Dynamic resolution (parity with parseComicInfo step 3): files tagged with only an issue id
+        // get their owning volume/series id resolved live, so they land MATCHED. Sequential + cached —
+        // one API call per unique series name/year across the whole scan.
+        if let Some(d) = derived.as_mut() {
+            let series_name = info.as_ref().and_then(|i| i.series.as_deref()).map(str::trim).filter(|s| !s.is_empty());
+            resolve_dynamic_ids(&db, &http_client, d, series_name).await;
+        }
 
         let metadata_source = derived
             .as_ref()
@@ -1056,6 +1224,48 @@ mod tests {
         // Metron takes precedence over ComicVine for source + metadata_id.
         assert_eq!(d.metadata_source, "METRON");
         assert_eq!(d.metadata_id.as_deref(), Some("999"));
+    }
+
+    #[test]
+    fn pick_metron_series_prefers_exact_name_and_year() {
+        let results: Vec<serde_json::Value> = vec![
+            serde_json::json!({ "id": 10, "name": "Batman", "year_began": 1940 }),
+            serde_json::json!({ "id": 20, "name": "Batman", "year_began": 2016 }),
+            serde_json::json!({ "id": 30, "name": "Batman Beyond", "year_began": 2016 }),
+        ];
+        // Exact name + year (±1 variance) wins over the earlier plain name match.
+        assert_eq!(pick_metron_series(&results, "Batman", Some(2016)), Some(20));
+        assert_eq!(pick_metron_series(&results, "Batman", Some(2017)), Some(20)); // 1-year variance
+        // No year → first name match.
+        assert_eq!(pick_metron_series(&results, "Batman", None), Some(10));
+        // No name match at all → first result.
+        assert_eq!(pick_metron_series(&results, "Superman", Some(1986)), Some(10));
+        // String ids (Metron sometimes serializes them) still parse.
+        let stringy = vec![serde_json::json!({ "id": "77", "series": "X-Men" })];
+        assert_eq!(pick_metron_series(&stringy, "X-Men", None), Some(77));
+        assert_eq!(pick_metron_series(&[], "X-Men", None), None);
+    }
+
+    #[test]
+    fn recompute_resolved_after_dynamic_resolution() {
+        // A file carrying only a CV issue id starts COMICVINE but with no series metadata id...
+        let info = ScanComicInfo { comic_vine_issue_id: Some("555".to_string()), ..Default::default() };
+        let mut d = derive_meta(&info);
+        assert_eq!(d.metadata_source, "COMICVINE");
+        assert_eq!(d.cv_issue_id, Some(555));
+        assert!(d.metadata_id.is_none());
+
+        // ...and once resolution supplies the volume id, the series id fills in.
+        d.cv_id = Some(4050);
+        d.recompute_resolved();
+        assert_eq!(d.metadata_id.as_deref(), Some("4050"));
+        assert_eq!(d.metadata_source, "COMICVINE");
+
+        // Metron precedence survives recompute (metron id outranks cv id).
+        d.metron_id = Some(9);
+        d.recompute_resolved();
+        assert_eq!(d.metadata_id.as_deref(), Some("9"));
+        assert_eq!(d.metadata_source, "METRON");
     }
 
     #[test]

@@ -15,6 +15,25 @@ import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { WATCHED_DIR } from '@/lib/utils/paths';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+
+// Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
+// engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
+async function engineNestedArchives(archivePath: string, destDir?: string): Promise<{ count: number, entries?: string[], files?: string[] } | null> {
+    try {
+        const res = await fetch(ENGINE_URL + '/api/importer/nested', {
+            method: 'POST',
+            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(destDir ? { path: archivePath, dest_dir: destDir } : { path: archivePath }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return typeof data?.count === 'number' ? data : null;
+    } catch (e: any) {
+        Logger.log(`[Importer] Engine nested-pack offload unavailable, using local AdmZip: ${e.message}`, 'debug');
+        return null;
+    }
+}
 
 function fixMagicNumberSync(filePath: string): string {
     try {
@@ -213,18 +232,29 @@ export const Importer = {
         }
     } else {
         if (inMemoryTrueExt === '.zip' || inMemoryTrueExt === '.cbz') {
-            try {
-                const zip = new AdmZip(sourcePath);
-                const entries = zip.getEntries();
-                const comicFiles = entries.filter((e: any) => !e.isDirectory && COMIC_EXT_REGEX.test(e.entryName));
-                
-                if (comicFiles.length > 0) {
+            // Engine-first: streams the central directory instead of loading a multi-GB pack into
+            // the Node heap just to count its nested archives.
+            const engineList = await engineNestedArchives(sourcePath);
+            if (engineList) {
+                if (engineList.count > 0) {
                     isBatchArchive = true;
-                    nestedArchiveCount = comicFiles.length;
-                    Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(sourcePath)}`, 'debug');
+                    nestedArchiveCount = engineList.count;
+                    Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(sourcePath)} (engine)`, 'debug');
                 }
-            } catch(e: any) {
-                Logger.log(`[Importer Debug] Error inspecting zip for nested archives: ${e.message}`, 'error');
+            } else {
+                try {
+                    const zip = new AdmZip(sourcePath);
+                    const entries = zip.getEntries();
+                    const comicFiles = entries.filter((e: any) => !e.isDirectory && COMIC_EXT_REGEX.test(e.entryName));
+
+                    if (comicFiles.length > 0) {
+                        isBatchArchive = true;
+                        nestedArchiveCount = comicFiles.length;
+                        Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(sourcePath)}`, 'debug');
+                    }
+                } catch(e: any) {
+                    Logger.log(`[Importer Debug] Error inspecting zip for nested archives: ${e.message}`, 'error');
+                }
             }
         }
     }
@@ -264,30 +294,40 @@ export const Importer = {
                 try { await fs.remove(sourcePath); } catch(e) {}
             }
         } else if (isBatchArchive) {
-            try {
-                const zip = new AdmZip(sourcePath);
-                const entries = zip.getEntries();
-                for (const entry of entries) {
-                    if (!entry.isDirectory && COMIC_EXT_REGEX.test(entry.entryName)) {
-                        const fileName = path.basename(entry.entryName);
-                        Logger.log(`[Importer Debug] Extracting nested archive from ZIP to Watched: ${fileName}`, 'debug');
-                        let finalDest = path.join(watchedDir, fileName);
-                        if (fs.existsSync(finalDest)) {
-                            finalDest = path.join(watchedDir, `${Date.now()}_${fileName}`);
-                        }
-                        fs.writeFileSync(finalDest, entry.getData());
-                        
-                        finalDest = fixMagicNumberSync(finalDest);
-
-                        moveSuccessCount++;
-                    }
-                }
+            // Engine-first: streams each nested archive straight to disk (collision naming +
+            // magic-fix included) instead of buffering the whole pack through AdmZip.
+            const engineExtract = await engineNestedArchives(sourcePath, watchedDir);
+            if (engineExtract?.files) {
+                moveSuccessCount = engineExtract.files.length;
                 if (!isFromClient && !trackingHash) {
-                    await fs.remove(sourcePath);
+                    try { await fs.remove(sourcePath); } catch(e) {}
                 }
-            } catch (err: any) {
-                Logger.log(`[Importer] Failed to extract batch archive: ${err.message}`, 'error');
-                return false;
+            } else {
+                try {
+                    const zip = new AdmZip(sourcePath);
+                    const entries = zip.getEntries();
+                    for (const entry of entries) {
+                        if (!entry.isDirectory && COMIC_EXT_REGEX.test(entry.entryName)) {
+                            const fileName = path.basename(entry.entryName);
+                            Logger.log(`[Importer Debug] Extracting nested archive from ZIP to Watched: ${fileName}`, 'debug');
+                            let finalDest = path.join(watchedDir, fileName);
+                            if (fs.existsSync(finalDest)) {
+                                finalDest = path.join(watchedDir, `${Date.now()}_${fileName}`);
+                            }
+                            fs.writeFileSync(finalDest, entry.getData());
+
+                            finalDest = fixMagicNumberSync(finalDest);
+
+                            moveSuccessCount++;
+                        }
+                    }
+                    if (!isFromClient && !trackingHash) {
+                        await fs.remove(sourcePath);
+                    }
+                } catch (err: any) {
+                    Logger.log(`[Importer] Failed to extract batch archive: ${err.message}`, 'error');
+                    return false;
+                }
             }
         }
 

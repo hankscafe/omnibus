@@ -16,6 +16,7 @@ mod discover;
 mod monitor;
 mod download;
 mod log_forward;
+mod renamer;
 mod secret_crypto;
 
 use axum::{routing::{get, post}, Router, Json, extract::{State, Request}, http::{StatusCode, header}, middleware::{self, Next}, response::Response};
@@ -390,7 +391,10 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/repack", post(handle_repack))
         .route("/api/scan", post(handle_scan))
         .route("/api/converter/cbr-sweep", post(handle_cbr_sweep))
+        .route("/api/converter/convert-file", post(handle_convert_file))
         .route("/api/converter/extract-cover", post(handle_extract_cover))
+        .route("/api/importer/nested", post(handle_nested_archives))
+        .route("/api/library/rename", post(handle_bulk_rename))
         .route("/api/reader/page", post(handle_reader_page))
         .route("/api/watched-sync", post(handle_watched_sync))
         .route("/api/backup", post(handle_backup))
@@ -613,7 +617,9 @@ async fn handle_extract_cover(
 struct ReaderPageRequest {
     path: String,
     /// The zip entry name of the page (the reader already knows it from the page list).
-    entry: String,
+    entry: Option<String>,
+    /// 0-based natural-sort page index — the OPDS-PSE addressing mode. Ignored when `entry` is set.
+    index: Option<u32>,
     #[serde(default = "default_reader_width")]
     width: u32,
     #[serde(default = "default_reader_quality")]
@@ -622,9 +628,10 @@ struct ReaderPageRequest {
 fn default_reader_width() -> u32 { 1600 }
 fn default_reader_quality() -> f32 { 80.0 }
 
-/// On-demand reader page: extract a named page from a cbz/zip, resize to `width`, and return WebP
-/// bytes — moving the whole-archive buffer + image work off the Node event loop. Node keeps a local
-/// sharp fallback (and owns the auto-crop path), so this only needs to serve the common non-crop case.
+/// On-demand reader page: extract a page from a cbz/zip (by entry name for the web reader, by
+/// natural-sort index for OPDS-PSE), resize to `width`, and return WebP bytes — moving the
+/// whole-archive buffer + image work off the Node event loop. Node keeps a local fallback for both
+/// callers (and owns the auto-crop path), so this only needs to serve the common case.
 /// Same path trust model as the cover endpoint (absolute, no `..`; Node auth-gates + range-checks).
 async fn handle_reader_page(
     Json(req): Json<ReaderPageRequest>,
@@ -633,13 +640,20 @@ async fn handle_reader_page(
         log::warn!("[Reader Page] Rejected non-absolute or traversing path: {}", req.path);
         return Err(StatusCode::FORBIDDEN);
     }
+    if req.entry.is_none() && req.index.is_none() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let path = req.path.clone();
     let entry = req.entry.clone();
+    let index = req.index;
     let width = req.width.clamp(1, 10_000);
     let quality = req.quality.clamp(1.0, 100.0);
 
     let out = tokio::task::spawn_blocking(move || {
-        converter::extract_page_webp(std::path::Path::new(&path), &entry, width, quality)
+        match entry {
+            Some(entry) => converter::extract_page_webp(std::path::Path::new(&path), &entry, width, quality),
+            None => converter::extract_page_index_webp(std::path::Path::new(&path), index.unwrap_or(0) as usize, width, quality),
+        }
     })
     .await
     .map_err(|e| { log::error!("[Reader Page] join error: {:?}", e); StatusCode::INTERNAL_SERVER_ERROR })?
@@ -652,6 +666,120 @@ async fn handle_reader_page(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR),
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct NestedArchivesRequest {
+    path: String,
+    /// Extraction destination (the WATCHED dir). Omitted = list-only mode, which is how the
+    /// importer detects a batch payload without loading the pack into the Node heap.
+    dest_dir: Option<String>,
+}
+
+/// Importer nested-pack offload: list (detection) or extract (routing to WATCHED) the comic
+/// archives nested inside a batch zip, streaming entry-by-entry instead of buffering the whole
+/// pack. Node keeps its AdmZip path as a full fallback, so failures here just mean a slower import.
+async fn handle_nested_archives(
+    Json(req): Json<NestedArchivesRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !is_absolute_non_traversing(&req.path)
+        || !req.dest_dir.as_deref().is_none_or(is_absolute_non_traversing)
+    {
+        log::warn!("[Importer Nested] Rejected non-absolute or traversing path: {}", req.path);
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let path = req.path.clone();
+    let dest_dir = req.dest_dir.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let archive = std::path::Path::new(&path);
+        match dest_dir {
+            None => converter::list_nested_archives(archive)
+                .map(|entries| serde_json::json!({ "count": entries.len(), "entries": entries })),
+            Some(dest) => converter::extract_nested_archives(archive, std::path::Path::new(&dest))
+                .map(|files| {
+                    let files: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                    serde_json::json!({ "count": files.len(), "files": files })
+                }),
+        }
+    })
+    .await
+    .map_err(|e| { log::error!("[Importer Nested] join error: {:?}", e); StatusCode::INTERNAL_SERVER_ERROR })?
+    .map_err(|e| { log::warn!("[Importer Nested] failed for {}: {:?}", req.path, e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct BulkRenameRequest {
+    series_ids: Vec<String>,
+    folder_pattern: String,
+    file_pattern: String,
+}
+
+/// Bulk rename / standardize, ported from the Node route. Runs SYNCHRONOUSLY (Node calls it via
+/// engineFetchLong and passes the summary straight back to the UI, which navigates to `newPath`),
+/// so this responds only when every move + DB update has finished. Node admin-gates the route and
+/// keeps its local loop as the fallback.
+async fn handle_bulk_rename(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BulkRenameRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if req.series_ids.is_empty() || req.folder_pattern.trim().is_empty() || req.file_pattern.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    match renamer::run_bulk_rename(&state.db, &req.series_ids, &req.folder_pattern, &req.file_pattern).await {
+        Ok(summary) => Ok(Json(serde_json::json!({
+            "filesRenamed": summary.files_renamed,
+            "foldersRenamed": summary.folders_renamed,
+            "conflicts": summary.conflicts,
+            "newPath": summary.last_path,
+        }))),
+        Err(e) => {
+            log::error!("[Renamer] Bulk rename failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ConvertFileRequest {
+    path: String,
+}
+
+/// Path-based CBR→CBZ conversion for the importer, which converts files BEFORE their Issue row
+/// exists (so the issue-id based cbr-sweep can't serve it). Honors the user's WebP settings and,
+/// like the Node converter, repoints any Issue row that already references the old path.
+async fn handle_convert_file(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ConvertFileRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !is_absolute_non_traversing(&req.path) {
+        log::warn!("[Convert File] Rejected non-absolute or traversing path: {}", req.path);
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let (convert_to_webp, webp_quality) = converter::get_webp_settings(&state.db).await;
+    let path = req.path.clone();
+
+    let new_path = tokio::task::spawn_blocking(move || {
+        converter::process_archive(std::path::Path::new(&path), convert_to_webp, webp_quality)
+    })
+    .await
+    .map_err(|e| { log::error!("[Convert File] join error: {:?}", e); StatusCode::INTERNAL_SERVER_ERROR })?
+    .map_err(|e| { log::warn!("[Convert File] conversion failed for {}: {:?}", req.path, e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    let new_path_str = new_path.to_string_lossy().to_string();
+    // Parity with Node convertCbrToCbz: an Issue already pointing at the old file follows it.
+    if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE "filePath" = $2"#)
+        .bind(&new_path_str)
+        .bind(&req.path)
+        .execute(&state.db)
+        .await
+    {
+        log::error!("[Convert File] Converted {} but failed to update its database path: {:?}", new_path_str, e);
+    }
+
+    Ok(Json(serde_json::json!({ "path": new_path_str })))
 }
 
 #[cfg(test)]

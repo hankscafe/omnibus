@@ -18,7 +18,10 @@ const mocks = vi.hoisted(() => ({
     detectManga: vi.fn().mockResolvedValue(false),
     parseComicInfo: vi.fn().mockResolvedValue({}),
     convertCbrToCbz: vi.fn().mockResolvedValue(null),
-    syncSeriesMetadata: vi.fn().mockResolvedValue(true)
+    syncSeriesMetadata: vi.fn().mockResolvedValue(true),
+    // global fetch (engine nested-pack offload)
+    fetch: vi.fn(),
+    zipGetEntries: vi.fn().mockReturnValue([])
 }));
 
 // 2. Deeply Mock Dependencies to save RAM and prevent OOM crashes
@@ -41,6 +44,7 @@ vi.mock('fs-extra', () => ({
         move: vi.fn().mockResolvedValue(true),
         copy: vi.fn().mockResolvedValue(true),
         writeFile: vi.fn().mockResolvedValue(true),
+        writeFileSync: vi.fn(),
         remove: vi.fn().mockResolvedValue(true)
     }
 }));
@@ -62,7 +66,7 @@ vi.mock('@/lib/manga-detector', () => ({ detectManga: mocks.detectManga }));
 vi.mock('@/lib/metadata-extractor', () => ({ parseComicInfo: mocks.parseComicInfo }));
 vi.mock('@/lib/converter', () => ({ convertCbrToCbz: mocks.convertCbrToCbz }));
 vi.mock('@/lib/metadata-fetcher', () => ({ syncSeriesMetadata: mocks.syncSeriesMetadata }));
-vi.mock('adm-zip', () => ({ default: class AdmZipMock { getEntries() { return []; } } }));
+vi.mock('adm-zip', () => ({ default: class AdmZipMock { getEntries() { return mocks.zipGetEntries(); } } }));
 vi.mock('axios');
 
 describe('File System: Importer Engine', () => {
@@ -81,6 +85,11 @@ describe('File System: Importer Engine', () => {
         // CRITICAL FIX: Reset fs.existsSync to TRUE by default so files are "found"
         vi.mocked(fs.existsSync).mockReset();
         vi.mocked(fs.existsSync).mockReturnValue(true);
+
+        // Default: engine offload unavailable → the importer falls back to local AdmZip paths.
+        vi.stubGlobal('fetch', mocks.fetch);
+        mocks.fetch.mockRejectedValue(new Error('engine unavailable'));
+        mocks.zipGetEntries.mockReturnValue([]);
     });
 
     it('should stall the request if the downloaded file is missing from the hard drive', async () => {
@@ -139,5 +148,58 @@ describe('File System: Importer Engine', () => {
                 delay: 600000
             })
         );
+    });
+
+    it('routes a nested batch archive to WATCHED via the engine without touching AdmZip', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Big Pack.cbz'
+        });
+
+        // Engine answers both calls: detection (list) then extraction (files written by the engine).
+        mocks.fetch
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 2, entries: ['a.cbz', 'b.cbr'] }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 2, files: ['/watched/a.cbz', '/watched/b.cbz'] }) });
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        // Detection + extraction both went to the engine; the local AdmZip path never ran.
+        expect(mocks.fetch).toHaveBeenCalledTimes(2);
+        const extractBody = JSON.parse(mocks.fetch.mock.calls[1][1].body);
+        expect(extractBody.path).toContain('Big Pack.cbz');
+        expect(extractBody.dest_dir).toBeTruthy();
+        expect(mocks.zipGetEntries).not.toHaveBeenCalled();
+        // Batch routing completed: request closed out and the watched-folder sync queued.
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'COMPLETED' })
+        }));
+        expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), expect.any(Object));
+        expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+            title: expect.stringContaining('2 Files')
+        }));
+    });
+
+    it('falls back to local AdmZip batch extraction when the engine is down', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Big Pack.cbz'
+        });
+
+        // Engine unreachable (default fetch rejection) → local AdmZip detection + extraction.
+        mocks.zipGetEntries.mockReturnValue([
+            { entryName: 'nested/a.cbz', isDirectory: false, getData: () => Buffer.from('a') },
+            { entryName: 'readme.txt', isDirectory: false, getData: () => Buffer.from('junk') },
+        ]);
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        // Only the nested comic was written to the watched folder.
+        expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledTimes(1);
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'COMPLETED' })
+        }));
+        expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+            title: expect.stringContaining('1 Files')
+        }));
     });
 });

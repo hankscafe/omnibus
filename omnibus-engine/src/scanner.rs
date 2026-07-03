@@ -615,56 +615,75 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
     let cfg = crate::engine_config::EngineConfig::load(&db).await;
     let parse_sem = Arc::new(Semaphore::new(cfg.scan_workers));
 
-    let mut folder_parse_set: JoinSet<(String, Vec<String>, Option<ScanComicInfo>)> = JoinSet::new();
+    // Series name / year / publisher derivation, shared by the parallel phase (for manga detection) and
+    // the insert loop, so the two can't drift.
+    fn derive_folder_basics(info: &Option<ScanComicInfo>, folder_name: &str) -> (String, i32, String) {
+        let derived = info.as_ref().map(derive_meta);
+        let clean_name = info.as_ref().and_then(|i| i.series.clone()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                let stripped = trailing_year_re().replace(folder_name, "").trim().to_string();
+                if stripped.is_empty() { "Unknown Series".to_string() } else { stripped }
+            });
+        let year = derived.as_ref().and_then(|d| d.parsed_year)
+            .or_else(|| any_year_re().captures(folder_name).and_then(|c| c[1].parse::<i32>().ok()))
+            .unwrap_or(0);
+        let publisher = info.as_ref().and_then(|i| i.publisher.clone()).map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+            .unwrap_or_else(|| "Other".to_string());
+        (clean_name, year, publisher)
+    }
+
+    struct ParsedFolder {
+        folder_path: String,
+        files: Vec<String>,
+        info: Option<ScanComicInfo>,
+        clean_name: String,
+        year: i32,
+        publisher: String,
+        is_manga: bool,
+    }
+
+    // Publisher lists are read-only and shared across all folder tasks.
+    let manga_pubs = Arc::new(manga_pubs);
+    let western_pubs = Arc::new(western_pubs);
+
+    let mut folder_parse_set: JoinSet<ParsedFolder> = JoinSet::new();
     for (folder_path, mut files) in new_folders {
         files.sort(); // deterministic "first archive" regardless of walk order
         let sem = parse_sem.clone();
+        let client = http_client.clone();
+        let manga_pubs = manga_pubs.clone();
+        let western_pubs = western_pubs.clone();
         folder_parse_set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             let first = files[0].clone();
             let info = tokio::task::spawn_blocking(move || parse_comic_info(Path::new(&first))).await.unwrap_or(None);
-            (folder_path, files, info)
+
+            let folder_name = Path::new(&folder_path).file_name().unwrap_or_default().to_string_lossy().to_string();
+            let (clean_name, year, publisher) = derive_folder_basics(&info, &folder_name);
+            // 3-tier manga detection runs HERE (in the bounded parallel phase) instead of one-at-a-time in
+            // the sequential insert loop below — otherwise the AniList HTTP call (10s timeout, 3rd tier)
+            // serialized across every unknown-publisher folder during a large first scan.
+            let comicinfo_manga = info.as_ref().map(derive_meta).map(|d| d.is_manga).unwrap_or(false);
+            let is_manga = if comicinfo_manga || lib_is_manga {
+                true
+            } else {
+                crate::manga_detector::detect_manga(&client, &clean_name, &publisher, year, &manga_pubs, &western_pubs).await
+            };
+
+            ParsedFolder { folder_path, files, info, clean_name, year, publisher, is_manga }
         });
     }
-    let mut parsed_folders: Vec<(String, Vec<String>, Option<ScanComicInfo>)> = Vec::new();
+    let mut parsed_folders: Vec<ParsedFolder> = Vec::new();
     while let Some(res) = folder_parse_set.join_next().await {
         if let Ok(t) = res { parsed_folders.push(t); }
     }
 
-    for (folder_path, files, info) in parsed_folders {
-        let folder_name = Path::new(&folder_path)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+    for pf in parsed_folders {
+        let ParsedFolder { folder_path, files, info, clean_name, year, publisher, is_manga } = pf;
 
         log::debug!("[Scanner Debug] Indexing new folder ({} archives): {}", files.len(), folder_path);
 
         let derived = info.as_ref().map(derive_meta);
-
-        // Series name: ComicInfo Series, else folder name minus a trailing " (YYYY)", else "Unknown Series".
-        let clean_name = info
-            .as_ref()
-            .and_then(|i| i.series.clone())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                let stripped = trailing_year_re().replace(&folder_name, "").trim().to_string();
-                if stripped.is_empty() { "Unknown Series".to_string() } else { stripped }
-            });
-
-        let year = derived
-            .as_ref()
-            .and_then(|d| d.parsed_year)
-            .or_else(|| any_year_re().captures(&folder_name).and_then(|c| c[1].parse::<i32>().ok()))
-            .unwrap_or(0);
-
-        let publisher = info
-            .as_ref()
-            .and_then(|i| i.publisher.clone())
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .unwrap_or_else(|| "Other".to_string());
 
         let metadata_source = derived
             .as_ref()
@@ -681,13 +700,8 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         };
         let cv_id = derived.as_ref().and_then(|d| d.cv_id);
         let metron_id = derived.as_ref().and_then(|d| d.metron_id);
-        // 3-tier manga detection: ComicInfo Manga tag ‖ Library.isManga ‖ detect_manga (publisher list / AniList).
-        let comicinfo_manga = derived.as_ref().map(|d| d.is_manga).unwrap_or(false);
-        let is_manga = if comicinfo_manga || lib_is_manga {
-            true
-        } else {
-            crate::manga_detector::detect_manga(&http_client, &clean_name, &publisher, year, &manga_pubs, &western_pubs).await
-        };
+        // is_manga was resolved in the parallel parse phase above (3-tier: ComicInfo Manga tag ‖
+        // Library.isManga ‖ detect_manga publisher-list/AniList).
 
         log::debug!(
             "[Scanner Debug] Extracted -> Name: \"{}\", Year: {}, Publisher: \"{}\", Source: {}, Match: {}, Manga: {}",

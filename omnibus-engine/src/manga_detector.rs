@@ -97,9 +97,15 @@ async fn check_anilist(client: &Client, title: &str, release_year: i32) -> anyho
 
     let data: serde_json::Value = resp.json().await?;
     let media = data["data"]["Page"]["media"].as_array().cloned().unwrap_or_default();
-    let search_title = title.trim().to_lowercase();
+    Ok(anilist_media_matches(&media, title, release_year))
+}
 
-    for m in &media {
+/// True if any AniList media entry's English/Romaji title equals the search title (case-insensitive),
+/// within a ±4-year window of the release year — a same-title match further off is likely a different
+/// work. Split out from the HTTP call so the title/year matching can be unit-tested.
+fn anilist_media_matches(media: &[serde_json::Value], title: &str, release_year: i32) -> bool {
+    let search_title = title.trim().to_lowercase();
+    for m in media {
         let eng = m["title"]["english"].as_str().map(|s| s.trim().to_lowercase()).unwrap_or_default();
         let romaji = m["title"]["romaji"].as_str().map(|s| s.trim().to_lowercase()).unwrap_or_default();
 
@@ -113,9 +119,41 @@ async fn check_anilist(client: &Client, title: &str, release_year: i32) -> anyho
                     }
                 }
             }
-            return Ok(true);
+            return true;
         }
     }
+    false
+}
 
-    Ok(false)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn anilist_matcher_honors_title_and_year_window() {
+        let media = vec![json!({ "title": { "english": "Berserk", "romaji": "Berserk" }, "startDate": { "year": 1989 } })];
+        // Exact title, no year constraint → match.
+        assert!(anilist_media_matches(&media, "berserk", 0));
+        // Within ±4 years → match.
+        assert!(anilist_media_matches(&media, "Berserk", 1991));
+        // Same title but >4 years off → rejected (likely a different work).
+        assert!(!anilist_media_matches(&media, "Berserk", 2010));
+        // Different title → no match.
+        assert!(!anilist_media_matches(&media, "Naruto", 0));
+        // Romaji-only match still counts.
+        let romaji_only = vec![json!({ "title": { "english": null, "romaji": "Kingdom" }, "startDate": { "year": 2006 } })];
+        assert!(anilist_media_matches(&romaji_only, "kingdom", 2007));
+    }
+
+    #[tokio::test]
+    async fn detect_manga_short_circuits_on_known_publishers() {
+        let client = reqwest::Client::new();
+        let manga = vec!["viz media".to_string(), "kodansha".to_string()];
+        let western = vec!["marvel".to_string(), "dc comics".to_string()];
+        // Known manga publisher → true without hitting AniList.
+        assert!(detect_manga(&client, "Any Title", "VIZ Media LLC", 2020, &manga, &western).await);
+        // Known western publisher → false (AniList bypassed).
+        assert!(!detect_manga(&client, "Any Title", "Marvel Comics", 2020, &manga, &western).await);
+    }
 }

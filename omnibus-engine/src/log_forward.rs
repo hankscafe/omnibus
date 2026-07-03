@@ -29,6 +29,13 @@ const SKIP_TARGETS: &[&str] = &[
     "omnibus_engine::log_forward",
 ];
 
+/// A log target is skipped (never forwarded to Node) when it belongs to the HTTP/async plumbing that
+/// the forwarder itself uses — otherwise forwarding a line would emit new reqwest/hyper records and
+/// feed back into the channel endlessly.
+fn is_skipped_target(target: &str) -> bool {
+    SKIP_TARGETS.iter().any(|t| target.starts_with(t))
+}
+
 struct ForwardingLogger {
     inner: env_logger::Logger,
 }
@@ -47,7 +54,7 @@ impl log::Log for ForwardingLogger {
             return;
         }
         let target = record.target();
-        if SKIP_TARGETS.iter().any(|t| target.starts_with(t)) {
+        if is_skipped_target(target) {
             return;
         }
         if let Some(tx) = SENDER.get() {
@@ -121,4 +128,22 @@ pub fn spawn_forwarder() {
             batch.clear();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skip_targets_block_self_traffic_but_allow_engine_modules() {
+        // The forwarder's own HTTP/async plumbing is skipped (prefix match, so submodules too).
+        assert!(is_skipped_target("hyper"));
+        assert!(is_skipped_target("hyper::client::conn"));
+        assert!(is_skipped_target("reqwest::connect"));
+        assert!(is_skipped_target("omnibus_engine::log_forward"));
+        // Real engine work is forwarded.
+        assert!(!is_skipped_target("omnibus_engine::scanner"));
+        assert!(!is_skipped_target("omnibus_engine"));
+        assert!(!is_skipped_target("sqlx::query"));
+    }
 }

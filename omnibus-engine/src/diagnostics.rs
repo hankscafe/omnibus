@@ -210,6 +210,16 @@ pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
     Ok((processed_count, total_size_bytes, format!("Storage scan complete. Processed {} folders. Total Library Size: {} MB.", processed_count, total_mb)))
 }
 
+/// Physical comic files (original-case, forward-slash paths) whose lowercased path is absent from the
+/// DB path set. Split out for testing — the case-fold comparison is where orphan false-positives
+/// historically crept in (e.g. a drive that reports a different filename case than the DB stored).
+fn compute_orphans(
+    physical: std::collections::HashSet<String>,
+    db_lower: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    physical.into_iter().filter(|p| !db_lower.contains(&p.to_lowercase())).collect()
+}
+
 pub async fn run_orphan_scan(db: PgPool) -> Result<Vec<String>> {
     let libs = sqlx::query(r#"SELECT path FROM "Library""#).fetch_all(&db).await?;
     let mut all_physical_files = std::collections::HashSet::new();
@@ -242,11 +252,7 @@ pub async fn run_orphan_scan(db: PgPool) -> Result<Vec<String>> {
 
     // 3. Physical files whose lowercased path is absent from the DB set are orphans. Compare
     //    case-insensitively but return the original-case path so the UI shows the real filename.
-    let orphans: Vec<String> = all_physical_files
-        .into_iter()
-        .filter(|p| !db_files.contains(&p.to_lowercase()))
-        .collect();
-    Ok(orphans)
+    Ok(compute_orphans(all_physical_files, &db_files))
 }
 
 pub async fn run_integrity_scan(db: PgPool) -> Result<(i32, i32, String)> {
@@ -305,4 +311,22 @@ pub async fn run_integrity_scan(db: PgPool) -> Result<(i32, i32, String)> {
     }
 
     Ok((scanned, corrupted_count, format!("Integrity scan complete. Tested {} archives. Found {} corrupted files.", scanned, corrupted_count)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn orphan_detection_is_case_insensitive() {
+        let physical: HashSet<String> = ["C:/Lib/Batman/A.cbz", "C:/Lib/Batman/B.cbz", "C:/Lib/Extra/C.cbz"]
+            .iter().map(|s| s.to_string()).collect();
+        // DB paths are stored lowercased (parity with the scan). A.cbz differs only in case → NOT an
+        // orphan; B is present; C is genuinely absent from the DB → the only orphan.
+        let db_lower: HashSet<String> = ["c:/lib/batman/a.cbz", "c:/lib/batman/b.cbz"]
+            .iter().map(|s| s.to_string()).collect();
+        let orphans = compute_orphans(physical, &db_lower);
+        assert_eq!(orphans, vec!["C:/Lib/Extra/C.cbz".to_string()]);
+    }
 }

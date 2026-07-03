@@ -1,7 +1,7 @@
 use sqlx::{PgPool, Row};
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::OnceLock;
 use regex::Regex;
@@ -480,10 +480,36 @@ pub async fn run_series_json_export(db: &PgPool, series_ids: Option<Vec<String>>
     (exported, total)
 }
 
+/// Reads the archive's ComicInfo.xml entry, if present. Cheap (only the small XML entry is read).
+fn read_comicinfo_from_zip(path: &Path) -> anyhow::Result<Option<String>> {
+    let file = File::open(path)?;
+    let mut archive = ZipArchive::new(file)?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        if entry.name().eq_ignore_ascii_case("comicinfo.xml") {
+            let mut s = String::new();
+            entry.read_to_string(&mut s)?;
+            return Ok(Some(s));
+        }
+    }
+    Ok(None)
+}
+
 /// Rewrites the ZIP to include the new ComicInfo.xml, preserving the source compression of every entry.
 fn inject_xml_into_zip(file_path: &str, xml_content: &str) -> bool {
     let path = Path::new(file_path);
     if !path.exists() { return false; }
+
+    // Skip the full repack when the archive already holds byte-identical ComicInfo.xml. A metadata
+    // sync re-embeds unchanged data every run; rewriting every page entry just to write the same XML
+    // is pure disk churn that scales with total library size. On any read error we fall through and
+    // rewrite (safe default). build_comic_info_xml is deterministic, so unchanged data → identical XML.
+    if let Ok(Some(existing)) = read_comicinfo_from_zip(path) {
+        if existing == xml_content {
+            log::debug!("[Embed Debug] ComicInfo.xml unchanged for {} — skipping repack.", file_path);
+            return true;
+        }
+    }
 
     let tmp_path = path.with_extension("cbz.tmp");
 
@@ -525,6 +551,42 @@ fn inject_xml_into_zip(file_path: &str, xml_content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inject_xml_skips_repack_when_unchanged() {
+        use std::io::{Cursor, Write as _};
+        // Build a cbz with a page + an existing ComicInfo.xml, written to a temp file.
+        let build = |xml: &str| -> Vec<u8> {
+            let mut buf = Vec::new();
+            {
+                let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+                let opts: FileOptions = FileOptions::default();
+                zw.start_file("page1.jpg", opts).unwrap();
+                zw.write_all(b"not-a-real-image").unwrap();
+                zw.start_file("ComicInfo.xml", opts).unwrap();
+                zw.write_all(xml.as_bytes()).unwrap();
+                zw.finish().unwrap();
+            }
+            buf
+        };
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("omni_inject_test_{}.cbz", std::process::id()));
+        std::fs::write(&path, build("<ComicInfo>OLD</ComicInfo>")).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        // Same XML → skipped: the file bytes are untouched (no repack).
+        assert!(inject_xml_into_zip(path.to_str().unwrap(), "<ComicInfo>OLD</ComicInfo>"));
+        assert_eq!(std::fs::read(&path).unwrap(), before, "unchanged XML must not rewrite the archive");
+
+        // Different XML → repacked: the embedded ComicInfo.xml now reflects the new content.
+        assert!(inject_xml_into_zip(path.to_str().unwrap(), "<ComicInfo>NEW</ComicInfo>"));
+        assert_eq!(
+            read_comicinfo_from_zip(&path).unwrap().as_deref(),
+            Some("<ComicInfo>NEW</ComicInfo>")
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn strip_html_removes_tags() {

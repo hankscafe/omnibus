@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { DownloadService } from '@/lib/download-clients';
 import { Logger } from '@/lib/logger';
-import { GetComicsService, enabledHostersFromSetting } from '@/lib/getcomics';
+import { GetComicsService, enabledHostersFromSetting, scrapeDeepLinkViaEngine } from '@/lib/getcomics';
 import { getCustomAcronyms, generateSearchQueries } from '@/lib/search-engine'; 
 import { Importer } from '@/lib/importer';
 import { omnibusQueue } from '@/lib/queue';
@@ -103,9 +103,12 @@ export async function POST(request: NextRequest) {
         // 1. GetComics Scrape Retry
         if (req.downloadLink && req.downloadLink.includes('getcomics.org') && !req.downloadLink.match(/\.(cbz|cbr|zip)$/i)) {
             Logger.log(`[Retry] Scraping fresh link for: ${req.downloadLink}`, 'info');
-            
-            const { url, hoster } = await GetComicsService.scrapeDeepLink(req.downloadLink);
-            
+
+            // Section-targeting scrape via the engine: on a multi-pack article it targets the requested
+            // issue's archive instead of grabbing an arbitrary one (empty hoster / ambiguous → fall
+            // through to the recovery search below).
+            const { url, hoster } = await scrapeDeepLinkViaEngine(req.downloadLink, { name: req.activeDownloadName, year });
+
             // AIRTIGHT CHECK: Strictly check against enabledHosters
             if (enabledHosters.includes(hoster)) {
                 await prisma.request.update({
@@ -160,8 +163,8 @@ export async function POST(request: NextRequest) {
             
             if (results.length > 0) {
                 const best = results[0];
-                const { url, hoster } = await GetComicsService.scrapeDeepLink(best.downloadUrl);
-                
+                const { url, hoster } = await scrapeDeepLinkViaEngine(best.downloadUrl, { name: req.activeDownloadName || best.title, year });
+
                 // AIRTIGHT CHECK: Strictly check against enabledHosters
                 if (enabledHosters.includes(hoster)) {
                     const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();

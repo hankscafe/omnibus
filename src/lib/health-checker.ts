@@ -310,7 +310,7 @@ export async function runSystemHealthCheck() {
                 name: 'Duplicate Files',
                 status: 'warning',
                 message: `${perSeries.size} series contain duplicate files (${dupeGroups.length} duplicated issue${dupeGroups.length > 1 ? 's' : ''}). Review and clean them up in Diagnostics.`,
-                actionLink: '/admin/diagnostics',
+                actionLink: '/admin/diagnostics?tab=duplicates',
                 details,
             });
 

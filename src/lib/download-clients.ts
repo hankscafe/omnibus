@@ -330,66 +330,15 @@ export const DownloadService = {
 
           Logger.log(`[Internal DL] Starting download: ${finalFilename}`, 'info');
 
-          let response: any;
-          let attempt = 0;
-          const maxAttempts = 3;
-          let abortController = new AbortController();
-          
-          let megaStream: any = null;
+          // Only Mega reaches here — every other hoster is streamed by the engine above (which returns
+          // or throws before this point). The Mega SDK stream stays in Node because its JS-only SDK
+          // can't be driven from the Rust engine.
+          const megaFileNode = resolvedHoster?.megaFileNode;
+          if (!megaFileNode) throw new Error("Mega stream requested but no file node was resolved.");
 
-          while (attempt < maxAttempts) {
-              attempt++;
-              abortController = new AbortController(); 
-              try {
-                  if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
-                      megaStream = resolvedHoster.megaFileNode.download();
-                      break;
-                  } else {
-                      const requestHeaders: any = { 
-                          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                          'Accept': 'application/zip, application/x-rar-compressed, application/octet-stream, */*',
-                          'Referer': 'https://getcomics.org/' 
-                      };
-                      
-                      if (resolvedHoster?.headers) {
-                          Object.assign(requestHeaders, resolvedHoster.headers);
-                      }
-
-                      response = await axios({
-                          method: 'get',
-                          url: finalDownloadUrl,
-                          responseType: 'stream',
-                          headers: requestHeaders,
-                          maxRedirects: 5,
-                          beforeRedirect: assertSafeRedirect,
-                          timeout: 60000,
-                          signal: abortController.signal
-                      });
-                      break; 
-                  }
-              } catch (err: any) {
-                  if (attempt >= maxAttempts) throw err; 
-                  const status = err.response?.status;
-                  Logger.log(`[Internal DL] Attempt ${attempt} failed (Status: ${status || err.message}). Retrying in 3s...`, 'warn');
-                  await new Promise(r => setTimeout(r, 3000));
-              }
-          }
-
-          if (response && !resolvedHoster?.isMegaStream) {
-              const contentType = (response.headers['content-type'] || '').toLowerCase();
-              if (contentType.includes('text/html')) {
-                  throw new Error("Download URL returned an HTML webpage instead of a comic file.");
-              }
-          }
-
+          const megaStream = megaFileNode.download();
           const writer = fs.createWriteStream(partFilePath);
-          
-          let totalLength = 0;
-          if (resolvedHoster?.isMegaStream && resolvedHoster?.megaFileNode) {
-              totalLength = resolvedHoster.megaFileNode.size;
-          } else if (response?.headers) {
-              totalLength = parseInt(response.headers['content-length'] || '0');
-          }
+          const totalLength = megaFileNode.size || 0;
 
           let downloadedBytes = 0;
           let lastUpdate = 0;
@@ -399,14 +348,13 @@ export const DownloadService = {
               if (stallTimer) clearTimeout(stallTimer);
               stallTimer = setTimeout(() => {
                   Logger.log(`[Internal DL] Data stream stalled for 45 seconds. Killing connection to trigger retry.`, 'error');
-                  abortController.abort(new Error("Download stalled for 45 seconds"));
-                  if (megaStream) megaStream.destroy(new Error("Download stalled"));
+                  megaStream.destroy(new Error("Download stalled"));
               }, 45000);
           };
 
-          resetStallTimer(); 
+          resetStallTimer();
 
-          const dataStream = megaStream || response.data;
+          const dataStream = megaStream;
 
           dataStream.on('data', (chunk: Buffer) => {
               resetStallTimer(); 

@@ -56,7 +56,12 @@ export async function POST(request: Request) {
 
             const totalGhosts = ghostSeries.length + ghostIssues.length;
             Logger.log(`Manual Ghost Scan complete via Rust. Found ${totalGhosts} issues.`, totalGhosts > 0 ? "warn" : "success");
-            
+
+            // The scan is a state mutation (it flips missing issues to status='MISSING' in the engine),
+            // so record who ran it and what it flagged — the purge below is already audited, this covers
+            // the detection step.
+            await AuditLogger.log('GHOST_SCAN', { seriesFlagged: ghostSeries.length, issuesFlaggedMissing: ghostIssues.length }, userId).catch(() => {});
+
             return NextResponse.json({ ghosts: [...ghostSeries, ...ghostIssues] });
         }
 
@@ -110,6 +115,10 @@ export async function POST(request: Request) {
             }));
 
             Logger.log(`Manual Integrity Scan complete via Rust. Found ${corrupted.length} corrupted files.`, corrupted.length > 0 ? "error" : "success");
+
+            // Also a mutation (marks bad archives status='CORRUPTED' in the engine) — audit the run.
+            await AuditLogger.log('INTEGRITY_SCAN', { archivesFlaggedCorrupted: corrupted.length }, userId).catch(() => {});
+
             return NextResponse.json({ corrupted });
         }
 
@@ -122,18 +131,35 @@ export async function POST(request: Request) {
 
         if (action === 'delete-duplicates') {
             const { idsToDelete, deletePhysical } = payload;
+
+            // Only ever delete files that live under a configured library root (defense-in-depth: the
+            // path comes from the DB, but a corrupted row must never let us rm outside the library).
+            const libraries = await prisma.library.findMany();
+            const authorizedRoots = libraries
+                .map(l => path.resolve(l.path).toLowerCase())
+                .map(root => root.endsWith(path.sep) ? root : root + path.sep);
+            const isAuthorizedChild = (p: string) => {
+                const resolved = path.resolve(p).toLowerCase();
+                return authorizedRoots.some(root => resolved.startsWith(root) && resolved.length > root.length);
+            };
+
+            let filesDeleted = 0;
             for (const id of idsToDelete) {
                 const issue = await prisma.issue.findUnique({ where: { id } });
-                if (issue) {
-                    if (deletePhysical && issue.filePath && fs.existsSync(issue.filePath)) {
+                if (!issue) continue;
+                if (deletePhysical && issue.filePath && fs.existsSync(issue.filePath)) {
+                    if (isAuthorizedChild(issue.filePath)) {
                         await fs.remove(issue.filePath);
+                        filesDeleted++;
+                    } else {
+                        Logger.log(`[Diagnostics API] Blocked duplicate file deletion outside library roots: ${issue.filePath}`, 'warn');
                     }
-                    await prisma.issue.delete({ where: { id } });
                 }
+                await prisma.issue.delete({ where: { id } });
             }
-            
-            await AuditLogger.log('DELETE_DUPLICATE_ISSUES', { issuesDeleted: idsToDelete }, userId);
-            Logger.log(`Resolved duplicates: Deleted ${idsToDelete.length} records.`, "success");
+
+            await AuditLogger.log('DELETE_DUPLICATE_ISSUES', { issuesDeleted: idsToDelete, filesDeleted }, userId);
+            Logger.log(`Resolved duplicates: removed ${idsToDelete.length} record(s), ${filesDeleted} file(s).`, "success");
             return NextResponse.json({ success: true });
         }
 

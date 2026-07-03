@@ -405,6 +405,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/download/stream", post(handle_download_stream))
         .route("/api/automation/search", post(handle_search))
         .route("/api/search/interactive", post(handle_interactive_search))
+        .route("/api/getcomics/scrape", post(handle_getcomics_scrape))
         .layer(middleware::from_fn_with_state(shared_state.clone(), require_internal_auth))
         .with_state(shared_state);
 
@@ -1071,6 +1072,45 @@ async fn handle_interactive_search(
         getcomics: get_res.unwrap_or_default(),
         annas_archive: annas_res.unwrap_or_default(),
     })
+}
+
+#[derive(serde::Deserialize)]
+struct ScrapeRequest {
+    url: String,
+    /// The requested issue number, when the request names one — enables multi-pack section targeting.
+    #[serde(default)]
+    issue_num: Option<f32>,
+    /// Dynamic per-issue year, to disambiguate same-numbered issues across volumes.
+    #[serde(default)]
+    year: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ScrapeResponse {
+    success: bool,
+    /// True when the article is a multi-pack page and no single archive cleanly contains the requested
+    /// issue — the caller should NOT grab an arbitrary archive (it may be the wrong volume).
+    ambiguous: bool,
+    /// Ranked enabled-hoster links (highest priority first); empty when none resolved.
+    links: Vec<getcomics::DeepLinkResult>,
+}
+
+/// Resolve a GetComics article page to concrete, enabled-hoster download links — the same
+/// section-targeting logic the automated search uses. Node's retry/manual routes forward here instead
+/// of their own flat scraper so a multi-pack article can't hand back the wrong volume's archive.
+async fn handle_getcomics_scrape(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ScrapeRequest>,
+) -> Json<ScrapeResponse> {
+    let target = payload.issue_num.map(|n| getcomics::DeepLinkTarget { issue_num: n, year: payload.year.clone() });
+    match getcomics::scrape_deep_link(&state.db, &state.limiter, &payload.url, target.as_ref()).await {
+        Ok(getcomics::DeepLinkOutcome::Links(links)) => Json(ScrapeResponse { success: true, ambiguous: false, links }),
+        Ok(getcomics::DeepLinkOutcome::Ambiguous) => Json(ScrapeResponse { success: false, ambiguous: true, links: Vec::new() }),
+        Err(e) => {
+            log::warn!("[GetComics] scrape endpoint failed for {}: {:?}", payload.url, e);
+            Json(ScrapeResponse { success: false, ambiguous: false, links: Vec::new() })
+        }
+    }
 }
 
 async fn handle_watched_sync(State(state): State<Arc<AppState>>) -> StatusCode {

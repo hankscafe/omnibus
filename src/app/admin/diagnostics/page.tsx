@@ -6,8 +6,14 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Loader2, ShieldAlert, Ghost, FileQuestion, FileWarning, Trash2, CheckCircle2, Search, ArrowLeft, EyeOff } from "lucide-react"
+import { Loader2, ShieldAlert, Ghost, FileQuestion, FileWarning, Trash2, CheckCircle2, Search, ArrowLeft, EyeOff, Files, Star } from "lucide-react"
 import Link from "next/link"
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
+
+// Stable key per duplicate group. seriesId + issue number identifies the group; the index keeps it
+// unique even in the impossible event of a collision.
+const groupKey = (g: any, idx: number) => `${g.seriesId}_${g.issueNumber}_${idx}`;
+const DELETE_ALL = '__DELETE_ALL__';
 
 export default function DiagnosticsPage() {
     // PROPER REACT WAY TO SET DOCUMENT TITLE
@@ -27,10 +33,14 @@ export default function DiagnosticsPage() {
     const [selectedOrphans, setSelectedOrphans] = useState<Set<string>>(new Set());
 
     const [duplicates, setDuplicates] = useState<any[] | null>(null);
+    // Per-group keeper selection: groupKey -> the file id to KEEP (or DELETE_ALL to remove every copy).
+    const [keepMap, setKeepMap] = useState<Record<string, string>>({});
+    // Files queued for a confirmed deletion.
+    const [pendingDelete, setPendingDelete] = useState<{ ids: string[]; label: string } | null>(null);
 
     const { toast } = useToast();
 
-    const runScan = async (type: 'scan-ghosts' | 'scan-orphans' | 'scan-integrity') => {
+    const runScan = async (type: 'scan-ghosts' | 'scan-orphans' | 'scan-integrity' | 'scan-duplicates') => {
         setIsScanning(true);
         try {
             const res = await fetch('/api/admin/diagnostics', {
@@ -39,19 +49,68 @@ export default function DiagnosticsPage() {
                 body: JSON.stringify({ action: type })
             });
             const data = await res.json();
-            
+
             if (type === 'scan-ghosts') setGhosts(data.ghosts);
             if (type === 'scan-orphans') {
                 setOrphans(data.orphans);
                 setSelectedOrphans(new Set()); // Reset selection on new scan
             }
             if (type === 'scan-integrity') setCorrupted(data.corrupted);
-            
+            if (type === 'scan-duplicates') {
+                const groups: any[] = data.duplicates || [];
+                setDuplicates(groups);
+                // Default keeper for each group is the largest file (usually the most complete copy).
+                const km: Record<string, string> = {};
+                groups.forEach((g, idx) => {
+                    const largest = [...g.files].sort((a: any, b: any) => (b.size || 0) - (a.size || 0))[0];
+                    km[groupKey(g, idx)] = largest?.id ?? DELETE_ALL;
+                });
+                setKeepMap(km);
+            }
+
             toast({ title: "Scan Complete" });
         } catch (e) {
             toast({ title: "Scan Failed", variant: "destructive" });
         } finally {
             setIsScanning(false);
+        }
+    };
+
+    // Deep-link support: /admin/diagnostics?tab=duplicates (from the dashboard health alert) lands on
+    // the right tab and kicks off the scan immediately. Read from the URL directly to avoid pulling in
+    // useSearchParams (which would force a Suspense boundary on this client page).
+    useEffect(() => {
+        const tab = new URLSearchParams(window.location.search).get('tab');
+        if (tab === 'duplicates' || tab === 'orphans' || tab === 'integrity' || tab === 'ghosts') {
+            setActiveTab(tab);
+            if (tab === 'duplicates') runScan('scan-duplicates');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Delete every copy the admin didn't mark "keep" for this group. DELETE_ALL removes them all.
+    const idsToDeleteFor = (group: any, key: string): string[] => {
+        const keepId = keepMap[key];
+        return group.files
+            .filter((f: any) => keepId === DELETE_ALL || f.id !== keepId)
+            .map((f: any) => f.id);
+    };
+
+    const runDelete = async (ids: string[]) => {
+        setIsResolving(true);
+        try {
+            await fetch('/api/admin/diagnostics', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete-duplicates', payload: { idsToDelete: ids, deletePhysical: true } })
+            });
+            toast({ title: "Duplicates Removed", description: `${ids.length} file${ids.length > 1 ? 's' : ''} deleted from disk.` });
+            await runScan('scan-duplicates');
+        } catch (e) {
+            toast({ title: "Deletion Failed", variant: "destructive" });
+        } finally {
+            setIsResolving(false);
+            setPendingDelete(null);
         }
     };
 
@@ -127,12 +186,19 @@ export default function DiagnosticsPage() {
                 >
                     <FileQuestion className="w-4 h-4 mr-2" /> Orphaned Files
                 </Button>
-                <Button 
-                    variant={activeTab === 'integrity' ? 'default' : 'ghost'} 
-                    onClick={() => setActiveTab('integrity')} 
+                <Button
+                    variant={activeTab === 'integrity' ? 'default' : 'ghost'}
+                    onClick={() => setActiveTab('integrity')}
                     className={activeTab === 'integrity' ? 'bg-primary hover:bg-primary/90 text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}
                 >
                     <FileWarning className="w-4 h-4 mr-2" /> Archive Integrity
+                </Button>
+                <Button
+                    variant={activeTab === 'duplicates' ? 'default' : 'ghost'}
+                    onClick={() => setActiveTab('duplicates')}
+                    className={activeTab === 'duplicates' ? 'bg-primary hover:bg-primary/90 text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}
+                >
+                    <Files className="w-4 h-4 mr-2" /> Duplicates
                 </Button>
             </div>
 
@@ -297,10 +363,10 @@ export default function DiagnosticsPage() {
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
                     <div className="flex justify-between items-center bg-primary/10 border border-primary/20 p-4 rounded-xl">
                         <div>
-                            <h3 className="font-bold text-primary">Duplicate File Scanner</h3>
-                            <p className="text-sm text-primary/80">Finds issues in the same series that share the exact same issue number (e.g. multiple versions of Issue #1).</p>
+                            <h3 className="font-bold text-primary">Duplicate Resolver</h3>
+                            <p className="text-sm text-primary/80">Finds issues in the same series that share the exact same issue number (e.g. multiple versions of Issue #1). Pick the copy to <strong>keep</strong> in each group — the rest are deleted from disk.</p>
                         </div>
-                        <Button onClick={() => runScan('scan-duplicates' as any)} disabled={isScanning} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+                        <Button onClick={() => runScan('scan-duplicates')} disabled={isScanning} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold shrink-0">
                             {isScanning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Search className="w-4 h-4 mr-2" />} Find Duplicates
                         </Button>
                     </div>
@@ -314,36 +380,90 @@ export default function DiagnosticsPage() {
 
                     {duplicates && duplicates.length > 0 && (
                         <Card className="border-primary/20 bg-background overflow-hidden p-4 space-y-4">
-                            <div className="border-b border-border pb-4">
-                                <span className="font-bold text-primary">Found {duplicates.length} duplicate groups</span>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+                                <span className="font-bold text-primary">Found {duplicates.length} duplicate group{duplicates.length > 1 ? 's' : ''}</span>
+                                <Button size="sm" variant="destructive" disabled={isResolving} onClick={() => {
+                                    const ids = duplicates.flatMap((g, idx) => idsToDeleteFor(g, groupKey(g, idx)));
+                                    if (ids.length === 0) { toast({ title: "Nothing to delete", description: "Every group is set to keep all copies." }); return; }
+                                    setPendingDelete({ ids, label: `Delete ${ids.length} duplicate file${ids.length > 1 ? 's' : ''} across ${duplicates.length} group${duplicates.length > 1 ? 's' : ''}, keeping your selected copy in each?` });
+                                }}>
+                                    {isResolving ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <Trash2 className="w-4 h-4 mr-2"/>} Resolve All (keep selected)
+                                </Button>
                             </div>
-                            {duplicates.map((group, idx) => (
-                                <div key={idx} className="bg-muted/30 border border-border rounded-lg p-4">
-                                    <h4 className="font-bold text-foreground mb-3">{group.seriesName} <Badge variant="secondary">Issue #{group.issueNumber}</Badge></h4>
-                                    <div className="space-y-2">
-                                        {group.files.map((file: any, fIdx: number) => (
-                                            <div key={file.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-background p-3 rounded border border-border">
-                                                <div className="min-w-0">
-                                                    <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
-                                                    <p className="text-xs text-muted-foreground font-mono">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                                                </div>
-                                                <Button size="sm" variant="destructive" className="shrink-0" onClick={async () => {
-                                                    setIsResolving(true);
-                                                    await fetch('/api/admin/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete-duplicates', payload: { idsToDelete: [file.id], deletePhysical: true } }) });
-                                                    runScan('scan-duplicates' as any);
-                                                    setIsResolving(false);
-                                                }}>
-                                                    <Trash2 className="w-4 h-4 mr-2" /> Delete
-                                                </Button>
-                                            </div>
-                                        ))}
+
+                            {duplicates.map((group, idx) => {
+                                const key = groupKey(group, idx);
+                                const keepId = keepMap[key];
+                                const deleteCount = idsToDeleteFor(group, key).length;
+                                return (
+                                    <div key={key} className="bg-muted/30 border border-border rounded-lg p-4">
+                                        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                                            <h4 className="font-bold text-foreground">{group.seriesName} <Badge variant="secondary">Issue #{group.issueNumber}</Badge></h4>
+                                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    name={`keep-${key}`}
+                                                    checked={keepId === DELETE_ALL}
+                                                    onChange={() => setKeepMap(m => ({ ...m, [key]: DELETE_ALL }))}
+                                                    className="accent-red-600"
+                                                />
+                                                Delete all copies
+                                            </label>
+                                        </div>
+                                        <div className="space-y-2">
+                                            {group.files.map((file: any) => {
+                                                const isKeep = keepId === file.id;
+                                                const willDelete = keepId === DELETE_ALL || !isKeep;
+                                                return (
+                                                    <label
+                                                        key={file.id}
+                                                        className={`flex items-center gap-3 p-3 rounded border cursor-pointer transition-colors ${isKeep ? 'border-green-500/60 bg-green-500/5' : willDelete ? 'border-red-500/30 bg-red-500/5' : 'border-border bg-background'}`}
+                                                    >
+                                                        <input
+                                                            type="radio"
+                                                            name={`keep-${key}`}
+                                                            checked={isKeep}
+                                                            onChange={() => setKeepMap(m => ({ ...m, [key]: file.id }))}
+                                                            className="accent-green-600 shrink-0"
+                                                        />
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
+                                                            <p className="text-xs text-muted-foreground font-mono truncate" title={file.path}>{file.path}</p>
+                                                            <p className="text-xs text-muted-foreground">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                                                        </div>
+                                                        {isKeep
+                                                            ? <Badge className="shrink-0 bg-green-600 text-white hover:bg-green-600"><Star className="w-3 h-3 mr-1" /> Keep</Badge>
+                                                            : <Badge variant="outline" className="shrink-0 border-red-500/40 text-red-500"><Trash2 className="w-3 h-3 mr-1" /> Delete</Badge>}
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                        <div className="flex justify-end mt-3">
+                                            <Button size="sm" variant="destructive" disabled={isResolving || deleteCount === 0} onClick={() => {
+                                                const ids = idsToDeleteFor(group, key);
+                                                setPendingDelete({ ids, label: `Delete ${ids.length} copy/copies of ${group.seriesName} #${group.issueNumber}${keepId === DELETE_ALL ? ' (keeping none)' : ', keeping the selected copy'}?` });
+                                            }}>
+                                                <Trash2 className="w-4 h-4 mr-2" /> Delete {deleteCount} in this group
+                                            </Button>
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </Card>
                     )}
                 </div>
             )}
+
+            <ConfirmationDialog
+                isOpen={!!pendingDelete}
+                onClose={() => setPendingDelete(null)}
+                onConfirm={() => { if (pendingDelete) runDelete(pendingDelete.ids); }}
+                title="Delete duplicate files?"
+                description={`${pendingDelete?.label ?? ''} This permanently removes the file(s) from disk and cannot be undone.`}
+                confirmText="Delete"
+                variant="destructive"
+                isLoading={isResolving}
+            />
         </div>
     )
 }

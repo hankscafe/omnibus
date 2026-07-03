@@ -8,6 +8,45 @@ import { markSystemFlag } from './utils/system-flags';
 import { STOP_WORDS as stopWords, BOUNDED_VARIANT_KEYWORDS as boundedVariantKeywords, OPEN_VARIANT_KEYWORDS as openVariantKeywords } from './utils/search-terms';
 import { normalizeRequestName } from './search-engine';
 import { parseIssueRange } from './utils/issue-parser';
+import { ENGINE_URL, engineHeaders } from './engine';
+
+/**
+ * Resolve a GetComics article to a concrete hoster link via the Rust engine's section-targeting
+ * scraper (/api/getcomics/scrape) — instead of the flat Node scrapeDeepLink, which can hand back the
+ * wrong volume's archive from a multi-pack page. Pass the request `name` (and per-issue `year`) so the
+ * engine can target the section for the requested issue. Returns the top enabled-hoster link; `hoster`
+ * is empty when nothing resolved, and `ambiguous` is true when the article is a multi-pack page with no
+ * clean match (the caller should NOT grab an arbitrary archive — fall back to a fresh search instead).
+ */
+export async function scrapeDeepLinkViaEngine(
+    articleUrl: string,
+    opts?: { name?: string | null; year?: string | null }
+): Promise<{ url: string; hoster: string; ambiguous: boolean }> {
+    // Only target when the name explicitly names an issue (same marker rule as the engine's caller).
+    let issueNum: number | null = null;
+    if (opts?.name) {
+        const m = opts.name.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?)/i);
+        if (m) { const n = parseFloat(m[1]); if (!isNaN(n)) issueNum = n; }
+    }
+    try {
+        const res = await fetch(ENGINE_URL + '/api/getcomics/scrape', {
+            method: 'POST',
+            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ url: articleUrl, issue_num: issueNum, year: opts?.year ?? null }),
+        });
+        if (!res.ok) {
+            Logger.log(`[GetComics] engine scrape returned ${res.status} for ${articleUrl}`, 'warn');
+            return { url: '', hoster: '', ambiguous: false };
+        }
+        const data = await res.json();
+        if (data.ambiguous) return { url: '', hoster: '', ambiguous: true };
+        const first = Array.isArray(data.links) && data.links.length > 0 ? data.links[0] : null;
+        return first ? { url: first.url, hoster: first.hoster, ambiguous: false } : { url: '', hoster: '', ambiguous: false };
+    } catch (e) {
+        Logger.log(`[GetComics] engine scrape failed for ${articleUrl}: ${getErrorMessage(e)}`, 'warn');
+        return { url: '', hoster: '', ambiguous: false };
+    }
+}
 
 // --- Shared hoster-priority helpers (kept in lock-step with the Rust engine's getcomics.rs) ---
 
@@ -414,128 +453,13 @@ async search(query: string, isInteractive: boolean = false, isManga: boolean = f
     });
   },
 
+  /**
+   * @deprecated The flat Node scraper was replaced by the engine's section-targeting scraper, so a
+   * multi-pack article no longer hands back the wrong volume's archive. Kept as a thin delegate for any
+   * legacy caller; prefer scrapeDeepLinkViaEngine(url, { name, year }) so the requested issue is targeted.
+   */
   async scrapeDeepLink(articleUrl: string): Promise<{ url: string, isDirect: boolean, hoster: string }> {
-      try {
-          Logger.log(`[GetComics] Rate-limit throttle: Delaying scrape for 2.5s...`, 'info');
-          await new Promise(resolve => setTimeout(resolve, 2500));
-
-          const data = await fetchGetComicsHtml(articleUrl);
-          const $ = cheerio.load(data);
-
-          let foundLinks: { url: string, isDirect: boolean, hoster: string }[] = [];
-
-          const decodeLink = (rawHref: string): string | null => {
-            if (!rawHref) return null;
-            if (rawHref.includes('go.php-url=')) {
-                try {
-                    const encoded = rawHref.split('go.php-url=')[1];
-                    return Buffer.from(encoded, 'base64').toString('utf-8');
-                } catch (e) { return null; }
-            }
-            return rawHref; 
-          };
-
-          // Classify a decoded URL into a hoster key. GetComics is split: `getcomics_direct` (comicfiles
-          // CDN — fast, no challenge) vs `getcomics_main` (getcomics.org/dls/… — Cloudflare-gated, needs a
-          // solver). URL checks win over the main-button flag. Kept in lock-step with Rust get_hoster_from_url.
-          const getHosterFromUrl = (rawUrl: string, isMainServerBtn: boolean) => {
-              const url = rawUrl.toLowerCase();
-              // Fast GetComics file CDN — never Cloudflare-gated. Keep high priority.
-              if (url.includes('comicfiles') || url.includes('comic-files')) return 'getcomics_direct';
-              // GetComics' own "main server" endpoint sits behind Cloudflare. Last resort.
-              if (url.includes('/dls/') && url.includes('getcomics')) return 'getcomics_main';
-              if (url.includes('mediafire.com')) return 'mediafire';
-              if (url.includes('mega.nz') || url.includes('mega.co.nz')) return 'mega';
-              if (url.includes('pixeldrain.com')) return 'pixeldrain';
-              if (url.includes('terabox.com') || url.includes('teraboxapp.com')) return 'terabox';
-              if (url.includes('rootz')) return 'rootz';
-              if (url.includes('vikingfile')) return 'vikingfile';
-              // A "main server / download now" button we couldn't classify by URL is GetComics' gated path.
-              if (isMainServerBtn) return 'getcomics_main';
-              return 'unknown';
-          };
-
-          $('a').each((i, el) => {
-              const text = $(el).text().toLowerCase();
-              const titleAttr = ($(el).attr('title') || "").toLowerCase();
-              const rawHref = $(el).attr('href') || "";
-              const btnClass = ($(el).attr('class') || "").toLowerCase();
-
-              const decoded = decodeLink(rawHref);
-              if (!decoded) return;
-
-              Logger.log(`[GetComics Debug] Decoded raw deep link: ${decoded}`, 'debug');
-
-              // Ensure we accurately target the actual download button, even if text varies slightly
-              const isMainServerBtn = text.includes('main server') || 
-                                      titleAttr.includes('main server') || 
-                                      text.includes('download now') || 
-                                      text.includes('direct download') || 
-                                      (btnClass.includes('aio-button') && text.includes('download'));
-              
-              if (isMainServerBtn && !rawHref.includes('go.php') && !decoded.match(/\.(cbz|cbr|zip)$/i)) {
-                  // THE FIX: Allow native GetComics file servers (like dl.getcomics.org or comicfiles) 
-                  // to bypass the strict file extension check, but do NOT allow this block to trust 
-                  // the word 'getcomics' on every anchor tag on the webpage.
-                  if (!decoded.includes('comicfiles') && !decoded.includes('comic-files') && !decoded.includes('getcomics')) {
-                      return;
-                  }
-              }
-
-              const hoster = getHosterFromUrl(decoded, isMainServerBtn);
-
-              if (hoster !== 'unknown') {
-                  foundLinks.push({
-                      url: decoded,
-                      isDirect: hoster.startsWith('getcomics'),
-                      hoster
-                  });
-              }
-          });
-
-          const setting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
-          let prefs = parseHosterPrefs(setting?.value);
-          // An explicit empty array means "no preference" here (not "disable all") — fall back to the
-          // default prefs so a degenerate setting still resolves a link (parity with prior behavior).
-          if (prefs.length === 0) prefs = defaultHosterPrefs();
-          // Only hosters that are PRESENT and ENABLED in the priority list are eligible — a hoster toggled
-          // off, OR absent from the list entirely, is never used (kept in lock-step with the Rust engine).
-          const enabledOrder = prefs.filter(p => p.enabled).map(p => p.hoster);
-
-          const beforeCount = foundLinks.length;
-          foundLinks = foundLinks.filter(l => enabledOrder.includes(l.hoster));
-          if (foundLinks.length < beforeCount) {
-              Logger.log(`[GetComics] Ignored ${beforeCount - foundLinks.length} links from disabled/unlisted hosters.`, 'info');
-          }
-
-          if (foundLinks.length === 0) {
-              return { url: articleUrl, isDirect: false, hoster: 'unknown' };
-          }
-
-          const foundHosterNames = [...new Set(foundLinks.map(l => l.hoster))];
-          Logger.log(`[GetComics] Found ${foundLinks.length} valid links. Available Hosters: ${foundHosterNames.join(', ')}`, 'info');
-
-          // Sort by enabled-priority position.
-          const rank = (hoster: string): number => {
-              const idx = enabledOrder.indexOf(hoster);
-              return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
-          };
-          foundLinks.sort((a, b) => rank(a.hoster) - rank(b.hoster));
-
-          const selectedHoster = foundLinks[0].hoster;
-          const topPriority = enabledOrder[0];
-
-          if (selectedHoster !== topPriority) {
-              Logger.log(`[GetComics] Preferred hoster '${topPriority}' not found. Falling back to next available: '${selectedHoster}'`, 'warn');
-          } else {
-              Logger.log(`[GetComics] Successfully selected top priority hoster: ${selectedHoster}`, 'success');
-          }
-
-          return foundLinks[0];
-
-      } catch (error: unknown) {
-          Logger.log(`[GetComics Scrape] Failed to parse deep link: ${getErrorMessage(error)}`, 'error');
-          return { url: articleUrl, isDirect: false, hoster: 'unknown' };
-      }
+      const { url, hoster } = await scrapeDeepLinkViaEngine(articleUrl);
+      return { url: url || articleUrl, isDirect: hoster.startsWith('getcomics'), hoster: hoster || 'unknown' };
   }
 };

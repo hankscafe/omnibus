@@ -5,7 +5,7 @@ import path from 'path'; // <-- Added path for safe joining
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { DownloadService } from '@/lib/download-clients';
-import { GetComicsService, enabledHostersFromSetting } from '@/lib/getcomics';
+import { enabledHostersFromSetting, scrapeDeepLinkViaEngine } from '@/lib/getcomics';
 import { evaluateTrophies } from '@/lib/trophy-evaluator';
 import { Importer } from '@/lib/importer';
 import { getErrorMessage } from '@/lib/utils/error';
@@ -204,8 +204,10 @@ export async function POST(request: NextRequest) {
         } 
         else if (source === 'getcomics') {
             if (searchResult && searchResult.downloadUrl) {
-                const { url, hoster } = await GetComicsService.scrapeDeepLink(searchResult.downloadUrl);
-                
+                // Section-targeting scrape via the engine (multi-pack articles resolve to the requested
+                // issue's archive, not an arbitrary one).
+                const { url, hoster } = await scrapeDeepLinkViaEngine(searchResult.downloadUrl, { name: name || searchResult.title, year });
+
                 const hpSetting = await prisma.systemSetting.findUnique({ where: { key: 'hoster_priority' } });
                 // Enabled hosters (migrates the legacy `getcomics` key → direct + main).
                 const enabledHosters = enabledHostersFromSetting(hpSetting?.value);

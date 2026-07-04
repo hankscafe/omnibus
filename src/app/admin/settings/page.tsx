@@ -29,6 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
+import { copyText } from "@/lib/utils/clipboard"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
@@ -877,9 +878,9 @@ export default function SettingsPage() {
       }
   }
 
-  const copyToClipboard = (text: string) => {
-      navigator.clipboard.writeText(text);
-      toast({ title: "Copied!", description: "API Key copied to clipboard." });
+  const copyToClipboard = async (text: string) => {
+      if (await copyText(text)) toast({ title: "Copied!", description: "API Key copied to clipboard." });
+      else toast({ title: "Copy failed", description: "Select the text and copy it manually.", variant: "destructive" });
   }
 
   const StatusBox = ({ result }: { result: { success: boolean, text: string } | null }) => {

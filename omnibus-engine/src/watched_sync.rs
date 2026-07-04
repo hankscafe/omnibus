@@ -403,6 +403,11 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                 let issue_summary = info.summary.clone().unwrap_or_default();
                 let file_path_str = final_dest.to_string_lossy().to_string();
 
+                // pageCount feeds OPDS-PSE (pse:count); 0 for a not-yet-converted RAR.
+                let count_path = final_dest.clone();
+                let page_count = tokio::task::spawn_blocking(move || crate::converter::count_zip_pages(&count_path))
+                    .await.ok().flatten().unwrap_or(0);
+
                 // Dedupe: update an existing issue with the same number instead of inserting a duplicate.
                 let existing_issue_id: Option<String> = sqlx::query(
                     r#"SELECT id, number FROM "Issue" WHERE "seriesId" = $1"#,
@@ -434,22 +439,23 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                                characters=CASE WHEN characters IS NOT NULL AND characters <> '' AND characters <> '[]' THEN characters ELSE $7 END,
                                "metadataId"=CASE WHEN "metadataId" IS NULL OR "metadataId" = '' OR "metadataId" LIKE 'unmatched%' THEN $8 ELSE "metadataId" END,
                                "metadataSource"=CASE WHEN "metadataSource" = 'LOCAL' THEN $9 ELSE "metadataSource" END,
-                               "matchState"=CASE WHEN "matchState" = 'UNMATCHED' THEN $10 ELSE "matchState" END
-                           WHERE id=$11"#,
+                               "matchState"=CASE WHEN "matchState" = 'UNMATCHED' THEN $10 ELSE "matchState" END,
+                               "pageCount"=CASE WHEN $11 > 0 THEN $11 ELSE "pageCount" END
+                           WHERE id=$12"#,
                     )
                     .bind(&issue_num).bind(&file_path_str).bind(&issue_title).bind(&issue_summary)
                     .bind(&writers_json).bind(&artists_json).bind(&characters_json)
-                    .bind(&issue_meta_id).bind(&issue_meta_source).bind(issue_match_state).bind(&eid)
+                    .bind(&issue_meta_id).bind(&issue_meta_source).bind(issue_match_state).bind(page_count).bind(&eid)
                     .execute(&db).await
                 } else {
                     sqlx::query(
-                        r#"INSERT INTO "Issue" (id, "seriesId", number, status, "filePath", name, description, writers, artists, characters, "matchState", "metadataId", "metadataSource", "createdAt")
-                           VALUES ($1, $2, $3, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())"#,
+                        r#"INSERT INTO "Issue" (id, "seriesId", number, status, "filePath", name, description, writers, artists, characters, "matchState", "metadataId", "metadataSource", "pageCount", "createdAt")
+                           VALUES ($1, $2, $3, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())"#,
                     )
                     .bind(&issue_id).bind(&series_id).bind(&issue_num).bind(&file_path_str)
                     .bind(&issue_title).bind(&issue_summary)
                     .bind(&writers_json).bind(&artists_json).bind(&characters_json)
-                    .bind(issue_match_state).bind(&issue_meta_id).bind(&issue_meta_source)
+                    .bind(issue_match_state).bind(&issue_meta_id).bind(&issue_meta_source).bind(page_count)
                     .execute(&db).await
                 };
 

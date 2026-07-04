@@ -91,6 +91,17 @@ fn web_re_metron_issue() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)metron\.cloud/issue/(\d+)").unwrap())
 }
 
+/// Off-thread page count for an on-disk archive; 0 when unreadable (a real RAR stays 0 until CBZ
+/// conversion counts it, matching the Node importer's zip-only counting).
+async fn count_pages_blocking(file: &str) -> i32 {
+    let f = file.to_string();
+    tokio::task::spawn_blocking(move || crate::converter::count_zip_pages(Path::new(&f)))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
 /// Reads ComicInfo.xml out of a CBZ/ZIP. RAR/CBR is not a zip, so it returns None
 /// (matches Node's AdmZip, which also can't read ComicInfo from a real RAR).
 fn parse_comic_info(path: &Path) -> Option<ScanComicInfo> {
@@ -940,10 +951,13 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
                 None => (format!("unmatched_{}", Uuid::new_v4()), "UNMATCHED"),
             };
 
+            // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
+            let page_count = count_pages_blocking(file).await;
+
             if let Err(e) = sqlx::query(
                 r#"INSERT INTO "Issue"
-                   (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, NOW(), NOW())"#,
+                   (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount", "createdAt", "updatedAt")
+                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, NOW(), NOW())"#,
             )
             .bind(&issue_id)
             .bind(&series_id)
@@ -952,6 +966,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             .bind(issue_match_state)
             .bind(&issue_num)
             .bind(file)
+            .bind(page_count)
             .execute(&db)
             .await
             {
@@ -1011,10 +1026,14 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         let dup_id: Option<String> = series_issue_nums.get(&series_id)
             .and_then(|v| v.iter().find(|(_, n)| crate::metadata::is_same_issue(n, &issue_num)).map(|(id, _)| id.clone()));
         if let Some(eid) = dup_id {
+            // Repointed file: refresh the page count too (a 0-count row may finally have a readable zip).
+            let page_count = count_pages_blocking(&file).await;
             if let Err(e) = sqlx::query(
-                r#"UPDATE "Issue" SET "filePath"=$1, status='DOWNLOADED', "updatedAt"=NOW() WHERE id=$2"#,
+                r#"UPDATE "Issue" SET "filePath"=$1, status='DOWNLOADED',
+                       "pageCount"=CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END,
+                       "updatedAt"=NOW() WHERE id=$3"#,
             )
-            .bind(&file).bind(&eid).execute(&db).await
+            .bind(&file).bind(page_count).bind(&eid).execute(&db).await
             {
                 log::error!("[Scanner Debug] Failed to repoint existing issue {}: {:?}", file, e);
             }
@@ -1031,10 +1050,11 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         };
 
         let issue_id = Uuid::new_v4().to_string();
+        let page_count = count_pages_blocking(&file).await;
         if let Err(e) = sqlx::query(
             r#"INSERT INTO "Issue"
-               (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, NOW(), NOW())"#,
+               (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, NOW(), NOW())"#,
         )
         .bind(&issue_id)
         .bind(&series_id)
@@ -1043,6 +1063,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         .bind(issue_match_state)
         .bind(&issue_num)
         .bind(&file)
+        .bind(page_count)
         .execute(&db)
         .await
         {
@@ -1108,6 +1129,56 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             }
             if covered > 0 { log::info!("[Cover] Backfilled {} archive cover(s).", covered); }
         }
+    }
+
+    // ---------------------------------------------------------
+    // 5D. PAGE-COUNT BACKFILL → heal rows indexed before pageCount was written
+    // ---------------------------------------------------------
+    // OPDS-PSE clients read Issue.pageCount as pse:count; rows scanned before the engine wrote it
+    // (or whose archive was a RAR at the time) sit at 0 and render as unopenable "0 pages" books.
+    // Bounded-parallel recount of this library's 0-count file-backed issues. Cheap on re-scans:
+    // only rows still at 0 are touched, and counting reads just the zip central directory.
+    let zero_rows = sqlx::query(
+        r#"SELECT i.id, i."filePath" FROM "Issue" i
+           JOIN "Series" s ON i."seriesId" = s.id
+           WHERE s."libraryId" = $1 AND i."pageCount" = 0 AND i."filePath" IS NOT NULL"#,
+    )
+    .bind(&library_id)
+    .fetch_all(&db)
+    .await
+    .unwrap_or_default();
+
+    if !zero_rows.is_empty() {
+        log::info!("[Scan] Backfilling page counts for {} issue(s) with none recorded.", zero_rows.len());
+        let count_sem = Arc::new(Semaphore::new(cfg.scan_workers));
+        let mut count_set: JoinSet<(String, Option<i32>)> = JoinSet::new();
+        for row in zero_rows {
+            let id: String = row.get("id");
+            let file_path: String = row.get("filePath");
+            let sem = count_sem.clone();
+            count_set.spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                let count = tokio::task::spawn_blocking(move || {
+                    crate::converter::count_zip_pages(Path::new(&file_path))
+                })
+                .await
+                .ok()
+                .flatten();
+                (id, count)
+            });
+        }
+        let mut backfilled = 0;
+        while let Some(res) = count_set.join_next().await {
+            if let Ok((id, Some(count))) = res {
+                if count > 0
+                    && sqlx::query(r#"UPDATE "Issue" SET "pageCount" = $1 WHERE id = $2"#)
+                        .bind(count).bind(&id).execute(&db).await.is_ok()
+                {
+                    backfilled += 1;
+                }
+            }
+        }
+        if backfilled > 0 { log::info!("[Scan] Backfilled page counts for {} issue(s).", backfilled); }
     }
 
     let duration = start_time.elapsed();

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { ArrowLeft, Webhook, Terminal, Copy, Check, FileJson, Play, Loader2, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
+import { copyText } from "@/lib/utils/clipboard"
 
 export default function ApiGuidePage() {
   const [copied, setCopied] = useState(false);
@@ -75,11 +76,14 @@ export default function ApiGuidePage() {
                 label: Downloads
                 format: number`;
 
-  const handleCopyYaml = () => {
-    navigator.clipboard.writeText(yamlCode);
-    setCopied(true);
-    toast({ title: "Copied to Clipboard", description: "You can now paste this into your services.yaml" });
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyYaml = async () => {
+    if (await copyText(yamlCode)) {
+        setCopied(true);
+        toast({ title: "Copied to Clipboard", description: "You can now paste this into your services.yaml" });
+        setTimeout(() => setCopied(false), 2000);
+    } else {
+        toast({ title: "Copy failed", description: "Select the YAML and copy it manually.", variant: "destructive" });
+    }
   };
 
   return (

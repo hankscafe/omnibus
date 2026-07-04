@@ -341,10 +341,18 @@ pub async fn process_cbr_sweep(db: PgPool, issue_id: Option<String>) -> anyhow::
     while let Some(res) = join_set.join_next().await {
         match res {
             Ok(Ok((issue_id, new_path))) => {
+                // The freshly-built CBZ finally has a countable page count (the source RAR didn't) —
+                // record it so OPDS-PSE stops advertising the issue as "0 pages".
+                let pages = count_zip_pages(Path::new(&new_path)).unwrap_or(0);
                 // The file is already converted on disk; if the DB update fails the record would point at a
                 // deleted .cbr, so surface it rather than silently counting a success.
-                if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE id = $2"#)
+                if let Err(e) = sqlx::query(
+                    r#"UPDATE "Issue" SET "filePath" = $1,
+                           "pageCount" = CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END
+                       WHERE id = $3"#
+                )
                     .bind(&new_path)
+                    .bind(pages)
                     .bind(&issue_id)
                     .execute(&db).await
                 {
@@ -762,6 +770,20 @@ fn sorted_image_entries<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Vec
     pages
 }
 
+/// Page count of a zip-family archive (cbz/zip/epub, including ZIPs in disguise — the signature,
+/// not the extension, decides readability): image entries with the same filter as the OPDS/reader
+/// paths. None when the file isn't a readable zip (a real RAR counts as None, not 0 — its count
+/// becomes known after CBZ conversion). Feeds Issue.pageCount, which OPDS-PSE clients read as
+/// pse:count — a 0 there renders as an unopenable "0 pages" book in reader apps.
+pub fn count_zip_pages(path: &Path) -> Option<i32> {
+    if !is_zip_signature(&read_file_signature(path)) {
+        return None;
+    }
+    let file = File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    Some(sorted_image_entries(&mut archive).len() as i32)
+}
+
 /// Extract the Nth image page (0-based, natural-sorted) from a zip/cbz, resized + WebP-encoded like
 /// [`extract_page_webp`]. This is the OPDS-PSE offload: PSE clients address pages by index, not entry
 /// name. Returns None when the index is out of bounds (the Node route maps that to 404).
@@ -1051,6 +1073,40 @@ mod tests {
 
         // Out of bounds → None (the route serves 404, matching the Node bounds check).
         assert!(extract_page_index_webp_from_reader(Cursor::new(&zip_buf), 2, 1600, 80.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn count_zip_pages_counts_filtered_images_only() {
+        use std::io::{Cursor, Write};
+        let mut zip_buf: Vec<u8> = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut zip_buf));
+            let opts: FileOptions = FileOptions::default();
+            zw.start_file("page1.jpg", opts).unwrap();
+            zw.write_all(b"a").unwrap();
+            zw.start_file("sub/page2.PNG", opts).unwrap();
+            zw.write_all(b"b").unwrap();
+            zw.start_file("ComicInfo.xml", opts).unwrap();
+            zw.write_all(b"<ComicInfo/>").unwrap();
+            zw.start_file("__MACOSX/page1.jpg", opts).unwrap();
+            zw.write_all(b"junk").unwrap();
+            zw.add_directory("scans/", opts).unwrap();
+            zw.finish().unwrap();
+        }
+        let work = std::env::temp_dir().join(format!("omnibus_count_test_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&work).unwrap();
+        let cbz = work.join("book.cbz");
+        fs::write(&cbz, &zip_buf).unwrap();
+
+        assert_eq!(count_zip_pages(&cbz), Some(2));
+
+        // Not a zip → None (unknown), never a misleading 0.
+        let rar = work.join("book.cbr");
+        fs::write(&rar, b"Rar!\x1a\x07\x00junk").unwrap();
+        assert_eq!(count_zip_pages(&rar), None);
+        assert_eq!(count_zip_pages(&work.join("missing.cbz")), None);
+
+        fs::remove_dir_all(&work).unwrap();
     }
 
     #[test]

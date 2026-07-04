@@ -20,6 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
+import { copyText } from "@/lib/utils/clipboard"
 import { Switch } from "@/components/ui/switch"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -546,12 +547,15 @@ function LibraryContent() {
       }
   }
 
-  const copyToClipboard = () => {
+  const copyToClipboard = async () => {
     if (editing?.path) {
-      navigator.clipboard.writeText(editing.path);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      toastRef.current({ title: "Path Copied" });
+      if (await copyText(editing.path)) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        toastRef.current({ title: "Path Copied" });
+      } else {
+        toastRef.current({ title: "Copy failed", description: editing.path, variant: "destructive" });
+      }
     }
   };
 

@@ -769,9 +769,16 @@ async fn handle_convert_file(
     .map_err(|e| { log::warn!("[Convert File] conversion failed for {}: {:?}", req.path, e); StatusCode::INTERNAL_SERVER_ERROR })?;
 
     let new_path_str = new_path.to_string_lossy().to_string();
-    // Parity with Node convertCbrToCbz: an Issue already pointing at the old file follows it.
-    if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE "filePath" = $2"#)
+    // Parity with Node convertCbrToCbz: an Issue already pointing at the old file follows it —
+    // and gains its now-countable page count (OPDS-PSE pse:count).
+    let pages = converter::count_zip_pages(&new_path).unwrap_or(0);
+    if let Err(e) = sqlx::query(
+        r#"UPDATE "Issue" SET "filePath" = $1,
+               "pageCount" = CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END
+           WHERE "filePath" = $3"#
+    )
         .bind(&new_path_str)
+        .bind(pages)
         .bind(&req.path)
         .execute(&state.db)
         .await

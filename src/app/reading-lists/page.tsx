@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
+import { copyText } from "@/lib/utils/clipboard"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { 
     BookOpen, Trash2, Plus, GripVertical, Loader2, Image as ImageIcon, 
@@ -397,9 +398,9 @@ function ReadingListsContent() {
         const data = await res.json();
         if (res.ok) {
             const url = `${window.location.origin}/reading-lists/shared/${data.shareId}`;
-            navigator.clipboard.writeText(url);
-            toast({ title: "Link Copied!", description: "Share link copied to clipboard." });
-            fetchLists(listId); 
+            if (await copyText(url)) toast({ title: "Link Copied!", description: "Share link copied to clipboard." });
+            else toast({ title: "Copy failed", description: url, variant: "destructive" });
+            fetchLists(listId);
         } else {
             throw new Error(data.error);
         }
@@ -689,11 +690,11 @@ function ReadingListsContent() {
                                       size="sm" 
                                       variant="outline" 
                                       className="h-10 sm:h-auto font-bold border-border"
-                                      onClick={() => {
+                                      onClick={async () => {
                                           if ((activeList as any).shareId) {
                                               const url = `${window.location.origin}/reading-lists/shared/${(activeList as any).shareId}`;
-                                              navigator.clipboard.writeText(url);
-                                              toast({ title: "Link Copied!" });
+                                              if (await copyText(url)) toast({ title: "Link Copied!" });
+                                              else toast({ title: "Copy failed", description: url, variant: "destructive" });
                                           } else {
                                               handleShareList(activeList.id);
                                           }

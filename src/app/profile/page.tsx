@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
+import { copyText } from "@/lib/utils/clipboard"
 import Link from "next/link"
 import { useColorTheme } from "@/components/ThemeProvider"
 import { COMIC_EXT_REGEX } from "@/lib/utils/formats"
@@ -738,9 +739,9 @@ export default function ProfilePage() {
       }
   }
 
-  const copyToClipboard = (text: string) => {
-      navigator.clipboard.writeText(text);
-      toast({ title: "Copied!", description: "API Key copied to clipboard." });
+  const copyToClipboard = async (text: string) => {
+      if (await copyText(text)) toast({ title: "Copied!", description: "API Key copied to clipboard." });
+      else toast({ title: "Copy failed", description: "Select the key text and copy it manually.", variant: "destructive" });
   }
 
   // --- Avatar/Banner Handlers ---

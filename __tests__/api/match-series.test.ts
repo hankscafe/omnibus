@@ -24,7 +24,8 @@ const mocks = vi.hoisted(() => ({
     updateSeries: vi.fn(),
     deleteSeries: vi.fn(),
     transaction: vi.fn(),
-    safeRelocateFolder: vi.fn()
+    safeRelocateFolder: vi.fn(),
+    moveFileSafe: vi.fn()
 }));
 
 // 2. Mock Server Dependencies
@@ -93,6 +94,7 @@ vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: vi.fn() } }));
 // Non-destructive folder relocator — mocked so we can assert the route surfaces its conflict count.
 vi.mock('@/lib/utils/safe-fs', () => ({
     safeRelocateFolder: mocks.safeRelocateFolder,
+    moveFileSafe: mocks.moveFileSafe,
     cleanupEmptyDirs: vi.fn()
 }));
 
@@ -122,6 +124,7 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         mocks.createSeries.mockResolvedValue({ id: 'series_123', folderPath: '/comics/Batman' });
         mocks.updateSeries.mockResolvedValue({ id: 'series_123', folderPath: '/comics/Batman' });
         mocks.safeRelocateFolder.mockResolvedValue({ conflicts: 0 });
+        mocks.moveFileSafe.mockResolvedValue(undefined);
     });
 
     it('should query ComicVine by default if metadataSource is not provided', async () => {
@@ -331,6 +334,8 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
 
         const data = await res.json();
         expect(data.conflicts).toBe(1);
+        // No move of any kind (cross-device-safe or otherwise) — the loose file stays put.
+        expect(mocks.moveFileSafe).not.toHaveBeenCalled();
         expect(vi.mocked(fs.promises.rename)).not.toHaveBeenCalled();
     });
 });

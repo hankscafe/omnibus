@@ -7,7 +7,7 @@ import path from 'path';
 // the test actually proves the non-destructive behavior (the whole point of the data-loss fix).
 vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
-import { safeRelocateFolder, cleanupEmptyDirs } from '@/lib/utils/safe-fs';
+import { safeRelocateFolder, cleanupEmptyDirs, moveFileSafe } from '@/lib/utils/safe-fs';
 
 let root: string;
 
@@ -15,6 +15,7 @@ beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'omnibus-safefs-'));
 });
 afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.remove(root).catch(() => {});
 });
 
@@ -52,6 +53,52 @@ describe('safeRelocateFolder', () => {
         expect(conflicts).toBe(0);
         expect(await fs.readFile(path.join(dest, 'A.cbz'), 'utf8')).toBe('a');
         expect(await fs.pathExists(src)).toBe(false);
+    });
+});
+
+describe('moveFileSafe', () => {
+    it('moves a file normally when rename works (same device)', async () => {
+        const src = path.join(root, 'a.cbz');
+        const dest = path.join(root, 'lib', 'a.cbz');
+        await fs.ensureDir(path.dirname(dest));
+        await fs.writeFile(src, 'bytes');
+
+        await moveFileSafe(src, dest);
+
+        expect(await fs.readFile(dest, 'utf8')).toBe('bytes');
+        expect(await fs.pathExists(src)).toBe(false);
+    });
+
+    it('falls back to copy+delete on EXDEV (cross-device Docker mounts, discussion #169)', async () => {
+        const src = path.join(root, 'b.cbz');
+        const dest = path.join(root, 'lib2', 'b.cbz');
+        await fs.ensureDir(path.dirname(dest));
+        await fs.writeFile(src, 'cross-device bytes');
+
+        // Simulate the kernel refusing a cross-filesystem rename.
+        const renameSpy = vi.spyOn(fs, 'rename')
+            .mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }) as never);
+
+        await moveFileSafe(src, dest);
+
+        expect(renameSpy).toHaveBeenCalled();
+        expect(await fs.readFile(dest, 'utf8')).toBe('cross-device bytes');
+        expect(await fs.pathExists(src)).toBe(false); // source cleaned up after the copy
+    });
+
+    it('rethrows non-EXDEV errors without attempting a copy', async () => {
+        const src = path.join(root, 'c.cbz');
+        const dest = path.join(root, 'lib3', 'c.cbz');
+        await fs.ensureDir(path.dirname(dest));
+        await fs.writeFile(src, 'locked');
+
+        vi.spyOn(fs, 'rename')
+            .mockRejectedValueOnce(Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) as never);
+
+        await expect(moveFileSafe(src, dest)).rejects.toThrow('EPERM');
+        // No sneaky copy behind the failure — source intact, destination untouched.
+        expect(await fs.pathExists(src)).toBe(true);
+        expect(await fs.pathExists(dest)).toBe(false);
     });
 });
 

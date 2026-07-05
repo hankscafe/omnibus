@@ -18,7 +18,7 @@ import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
-import { safeRelocateFolder } from '@/lib/utils/safe-fs';
+import { safeRelocateFolder, moveFileSafe } from '@/lib/utils/safe-fs';
 
 export async function POST(request: Request) {
   try {
@@ -234,7 +234,9 @@ export async function POST(request: Request) {
             conflicts++;
             looseFileConflict = true;
         } else {
-            await fs.promises.rename(oldFolderPath, targetFilePath);
+            // Cross-device-safe: /unmatched and the library are separate mounts in most Docker setups,
+            // where a raw rename dies with EXDEV (discussion #169).
+            await moveFileSafe(oldFolderPath, targetFilePath);
         }
     } else if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
         // Non-destructive folder relocate/merge: a pre-existing target is merged into, never deleted, and
@@ -331,11 +333,11 @@ export async function POST(request: Request) {
                         if (fs.existsSync(newFilePath)) {
                             Logger.log(`[Match Series] Conflict: "${newFileName}" already exists in the target folder; not overwriting.`, 'warn');
                             conflicts++;
-                            if (isFile) { try { await fs.promises.rename(oldFilePath, oldFolderPath); } catch (e) {} }
+                            if (isFile) { try { await moveFileSafe(oldFilePath, oldFolderPath); } catch (e) {} }
                             continue;
                         }
                         Logger.log(`[Match Series Debug] Executing OS File Rename: ${file} -> ${newFileName}`, 'debug');
-                        await fs.promises.rename(oldFilePath, newFilePath);
+                        await moveFileSafe(oldFilePath, newFilePath);
                     }
 
                     // 2. Inline Database Update (No more silent transaction rollbacks!)

@@ -7,6 +7,7 @@ import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
+import { moveFileSafe } from '@/lib/utils/safe-fs';
 
 export async function POST(request: NextRequest) {
     try {
@@ -113,7 +114,9 @@ export async function POST(request: NextRequest) {
                     Logger.log(`[Issue Link Debug] Target file already exists! Appended '(Linked)' to prevent overwrite: ${finalFilePath}`, 'debug');
                 }
                 Logger.log(`[Issue Link Debug] Executing OS rename: [${oldFilePath}] -> [${finalFilePath}]`, 'debug');
-                await fs.promises.rename(oldFilePath, finalFilePath);
+                // Cross-device-safe: the unmatched source and the series folder are separate mounts in
+                // most Docker setups, where a raw rename dies with EXDEV (discussion #169).
+                await moveFileSafe(oldFilePath, finalFilePath);
             } else {
                 Logger.log(`[Issue Link Debug] Old file path perfectly matches new file path. Skipping physical OS rename.`, 'debug');
             }

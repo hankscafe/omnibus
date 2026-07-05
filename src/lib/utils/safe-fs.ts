@@ -35,6 +35,24 @@ export async function cleanupEmptyDirs(startDir: string, libraryRoot: string): P
 }
 
 /**
+ * Move a single FILE, surviving filesystem boundaries. A plain `fs.rename` throws EXDEV when the
+ * source and destination sit on different devices — the NORM in Docker setups where /unmatched and
+ * the libraries are separate bind mounts or physical drives (GitHub discussion #169: Smart Matcher
+ * failed with "EXDEV: cross-device link not permitted"). On EXDEV this falls back to copy + delete.
+ * Never overwrites: callers guard collisions first, and the copy branch errors on an existing target.
+ */
+export async function moveFileSafe(src: string, dest: string): Promise<void> {
+    try {
+        await fs.rename(src, dest);
+    } catch (e: any) {
+        if (e?.code !== 'EXDEV') throw e;
+        Logger.log(`[safe-fs] Cross-device move detected (EXDEV); copying instead: ${src} -> ${dest}`, 'debug');
+        await fs.copy(src, dest, { overwrite: false, errorOnExist: true });
+        await fs.remove(src);
+    }
+}
+
+/**
  * Relocate the contents of `srcDir` into `destDir` WITHOUT ever overwriting. If `destDir` doesn't exist
  * this is a plain rename; if it exists, entries are merged one-by-one (recursing into subdirectories),
  * and any entry that already exists at the destination is LEFT IN PLACE (counted as a conflict) instead

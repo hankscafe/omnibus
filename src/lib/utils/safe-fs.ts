@@ -37,18 +37,30 @@ export async function cleanupEmptyDirs(startDir: string, libraryRoot: string): P
 /**
  * Move a single FILE, surviving filesystem boundaries. A plain `fs.rename` throws EXDEV when the
  * source and destination sit on different devices — the NORM in Docker setups where /unmatched and
- * the libraries are separate bind mounts or physical drives (GitHub discussion #169: Smart Matcher
- * failed with "EXDEV: cross-device link not permitted"). On EXDEV this falls back to copy + delete.
- * Never overwrites: callers guard collisions first, and the copy branch errors on an existing target.
+ * the libraries are separate bind mounts or physical drives (GitHub discussion #169 / issue #170:
+ * Smart Matcher failed with "EXDEV: cross-device link not permitted").
+ *
+ * On EXDEV: copy to a temp name BESIDE the destination, then rename into place (same-filesystem →
+ * atomic), then delete the source. A crash mid-copy can therefore never leave a partial file at the
+ * real filename — only a stale `.omnitmp` that never matches the comic-extension filters.
+ * Never overwrites: callers guard collisions first, and the fallback's final rename refuses an
+ * existing target.
  */
 export async function moveFileSafe(src: string, dest: string): Promise<void> {
     try {
         await fs.rename(src, dest);
     } catch (e: any) {
         if (e?.code !== 'EXDEV') throw e;
-        Logger.log(`[safe-fs] Cross-device move detected (EXDEV); copying instead: ${src} -> ${dest}`, 'debug');
-        await fs.copy(src, dest, { overwrite: false, errorOnExist: true });
-        await fs.remove(src);
+        Logger.log(`[safe-fs] Cross-device move detected (EXDEV); staging a copy instead: ${src} -> ${dest}`, 'debug');
+        const tmp = `${dest}.${Date.now()}.${Math.random().toString(36).slice(2)}.omnitmp`;
+        try {
+            await fs.copy(src, tmp);
+            await fs.move(tmp, dest, { overwrite: false }); // same device now → atomic rename
+            await fs.remove(src);
+        } catch (fallbackErr) {
+            await fs.remove(tmp).catch(() => {});
+            throw fallbackErr;
+        }
     }
 }
 

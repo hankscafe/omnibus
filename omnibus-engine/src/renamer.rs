@@ -141,15 +141,32 @@ fn cleanup_empty_dirs(start: &Path, library_root: &Path) {
     }
 }
 
-/// Move with a copy+delete fallback for cross-device targets (parity with fs-extra's move).
+/// Move with a cross-device fallback (parity with Node's moveFileSafe in safe-fs.ts): on rename
+/// failure, copy to a temp name BESIDE the destination, rename it into place (same-filesystem →
+/// atomic), then delete the source. A crash mid-copy can never leave a partial file at the real
+/// filename — only a stale `.omnitmp` that no comic-extension filter matches.
 fn move_file(src: &Path, dst: &Path) -> std::io::Result<()> {
-    match fs::rename(src, dst) {
-        Ok(_) => Ok(()),
-        Err(_) => {
-            fs::copy(src, dst)?;
-            fs::remove_file(src)
-        }
+    if fs::rename(src, dst).is_ok() {
+        return Ok(());
     }
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = dst.with_file_name(format!(
+        "{}.{}.omnitmp",
+        dst.file_name().unwrap_or_default().to_string_lossy(),
+        millis
+    ));
+    let staged = (|| {
+        fs::copy(src, &tmp)?;
+        fs::rename(&tmp, dst)?;
+        fs::remove_file(src)
+    })();
+    if staged.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    staged
 }
 
 struct SeriesRow {

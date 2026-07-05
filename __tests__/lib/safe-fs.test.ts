@@ -84,6 +84,27 @@ describe('moveFileSafe', () => {
         expect(renameSpy).toHaveBeenCalled();
         expect(await fs.readFile(dest, 'utf8')).toBe('cross-device bytes');
         expect(await fs.pathExists(src)).toBe(false); // source cleaned up after the copy
+        // The staging temp file was renamed into place, not left behind.
+        const leftovers = (await fs.readdir(path.dirname(dest))).filter(f => f.includes('.omnitmp'));
+        expect(leftovers).toEqual([]);
+    });
+
+    it('cleans up the staging temp and keeps the source when the fallback copy fails', async () => {
+        const src = path.join(root, 'd.cbz');
+        const dest = path.join(root, 'lib4', 'd.cbz');
+        await fs.ensureDir(path.dirname(dest));
+        await fs.writeFile(src, 'original');
+
+        vi.spyOn(fs, 'rename')
+            .mockRejectedValueOnce(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }) as never);
+        vi.spyOn(fs, 'copy')
+            .mockRejectedValueOnce(Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) as never);
+
+        await expect(moveFileSafe(src, dest)).rejects.toThrow('ENOSPC');
+
+        // Source untouched, and neither a destination file nor a stale temp exists.
+        expect(await fs.readFile(src, 'utf8')).toBe('original');
+        expect(await fs.readdir(path.dirname(dest))).toEqual([]);
     });
 
     it('rethrows non-EXDEV errors without attempting a copy', async () => {

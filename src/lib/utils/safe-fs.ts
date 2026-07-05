@@ -38,8 +38,11 @@ export async function cleanupEmptyDirs(startDir: string, libraryRoot: string): P
  * Move a single FILE, surviving filesystem boundaries. A plain `fs.rename` throws EXDEV when the
  * source and destination sit on different devices — the NORM in Docker setups where /unmatched and
  * the libraries are separate bind mounts or physical drives (GitHub discussion #169: Smart Matcher
- * failed with "EXDEV: cross-device link not permitted"). On EXDEV this falls back to copy + delete.
- * Never overwrites: callers guard collisions first, and the copy branch errors on an existing target.
+ * failed with "EXDEV: cross-device link not permitted"). On EXDEV this falls back to copy + delete,
+ * staged through a temp file BESIDE the destination and renamed into place (issue #170): the final
+ * path only ever holds a complete file, so an interrupted copy can never leave a truncated archive
+ * where the library scanner would index it. Never overwrites: callers guard collisions first, and
+ * the fallback re-checks the target before publishing.
  */
 export async function moveFileSafe(src: string, dest: string): Promise<void> {
     try {
@@ -47,7 +50,21 @@ export async function moveFileSafe(src: string, dest: string): Promise<void> {
     } catch (e: any) {
         if (e?.code !== 'EXDEV') throw e;
         Logger.log(`[safe-fs] Cross-device move detected (EXDEV); copying instead: ${src} -> ${dest}`, 'debug');
-        await fs.copy(src, dest, { overwrite: false, errorOnExist: true });
+        if (await fs.pathExists(dest)) {
+            const err: any = new Error(`EEXIST: destination already exists, refusing to overwrite: ${dest}`);
+            err.code = 'EEXIST';
+            throw err;
+        }
+        // .tmp suffix keeps the staged copy invisible to the scanner (not a comic extension); the
+        // random component prevents two concurrent moves of the same title from colliding.
+        const tmp = `${dest}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`;
+        try {
+            await fs.copy(src, tmp, { overwrite: false, errorOnExist: true });
+            await fs.rename(tmp, dest); // same filesystem as dest → atomic publish
+        } catch (copyErr) {
+            await fs.remove(tmp).catch(() => {});
+            throw copyErr;
+        }
         await fs.remove(src);
     }
 }

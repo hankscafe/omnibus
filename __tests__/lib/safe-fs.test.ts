@@ -84,6 +84,42 @@ describe('moveFileSafe', () => {
         expect(renameSpy).toHaveBeenCalled();
         expect(await fs.readFile(dest, 'utf8')).toBe('cross-device bytes');
         expect(await fs.pathExists(src)).toBe(false); // source cleaned up after the copy
+        // Staged-copy publish leaves no .tmp files behind in the destination folder (issue #170).
+        const leftovers = (await fs.readdir(path.dirname(dest))).filter(f => f.endsWith('.tmp'));
+        expect(leftovers).toEqual([]);
+    });
+
+    it('EXDEV fallback refuses to overwrite an existing destination (EEXIST)', async () => {
+        const src = path.join(root, 'd.cbz');
+        const dest = path.join(root, 'lib4', 'd.cbz');
+        await fs.ensureDir(path.dirname(dest));
+        await fs.writeFile(src, 'incoming');
+        await fs.writeFile(dest, 'pre-existing'); // MUST survive untouched
+
+        vi.spyOn(fs, 'rename')
+            .mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }) as never);
+
+        await expect(moveFileSafe(src, dest)).rejects.toMatchObject({ code: 'EEXIST' });
+        expect(await fs.readFile(dest, 'utf8')).toBe('pre-existing'); // not clobbered
+        expect(await fs.pathExists(src)).toBe(true); // source left in place
+    });
+
+    it('cleans up the staged temp file when the cross-device copy fails (issue #170)', async () => {
+        const src = path.join(root, 'e.cbz');
+        const dest = path.join(root, 'lib5', 'e.cbz');
+        await fs.ensureDir(path.dirname(dest));
+        await fs.writeFile(src, 'will not arrive');
+
+        vi.spyOn(fs, 'rename')
+            .mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }) as never);
+        // Drive drops out mid-copy.
+        vi.spyOn(fs, 'copy')
+            .mockRejectedValueOnce(Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }) as never);
+
+        await expect(moveFileSafe(src, dest)).rejects.toThrow('EIO');
+        // Source intact, and the destination folder holds neither the file nor a stranded temp.
+        expect(await fs.pathExists(src)).toBe(true);
+        expect(await fs.readdir(path.dirname(dest))).toEqual([]);
     });
 
     it('rethrows non-EXDEV errors without attempting a copy', async () => {

@@ -861,19 +861,28 @@ async fn handle_repack(
             match result {
                 Ok(Ok(new_path)) => {
                     let new_path_str = new_path.to_string_lossy().to_string();
+                    // Flattening can drop junk entries, so refresh the pageCount the OPDS feed
+                    // advertises (parity with Node repackArchive); the CASE keeps an unreadable
+                    // result from zeroing a previously-known count.
+                    let count_path = new_path.clone();
+                    let pages = tokio::task::spawn_blocking(move || converter::count_zip_pages(&count_path))
+                        .await.ok().flatten().unwrap_or(0);
                     let mut db_ok = true;
-                    if new_path_str != file_path {
-                        // process_archive already deleted the original and renamed the .cbz, so a failed
-                        // UPDATE would orphan the Issue row pointing at a now-deleted path — surface it.
-                        if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE id = $2"#)
-                            .bind(new_path_str)
-                            .bind(&issue_id)
-                            .execute(&db)
-                            .await
-                        {
-                            log::error!("[Repack] Repacked {} on disk but failed to update its database path: {:?}", file_path, e);
-                            db_ok = false;
-                        }
+                    // process_archive already deleted the original and renamed the .cbz, so a failed
+                    // UPDATE would orphan the Issue row pointing at a now-deleted path — surface it.
+                    if let Err(e) = sqlx::query(
+                        r#"UPDATE "Issue" SET "filePath" = $1,
+                               "pageCount" = CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END
+                           WHERE id = $3"#
+                    )
+                        .bind(&new_path_str)
+                        .bind(pages)
+                        .bind(&issue_id)
+                        .execute(&db)
+                        .await
+                    {
+                        log::error!("[Repack] Repacked {} on disk but failed to update its database record: {:?}", file_path, e);
+                        db_ok = false;
                     }
                     if db_ok { success_count += 1; } else { fail_count += 1; }
                 }

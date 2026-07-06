@@ -12,6 +12,7 @@ import { getErrorMessage } from './utils/error';
 import { CACHE_DIR } from '@/lib/utils/paths';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import { countArchivePages } from '@/lib/utils/archive-pages';
 
 const execFileAsync = promisify(execFile);
 
@@ -203,7 +204,8 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         if (existingIssue) {
             await prisma.issue.update({
                 where: { id: existingIssue.id },
-                data: { filePath: cbzPath }
+                // The CBR was uncountable (pageCount 0) — the new CBZ isn't, so refresh it for OPDS.
+                data: { filePath: cbzPath, pageCount: await countArchivePages(cbzPath) }
             });
         }
         

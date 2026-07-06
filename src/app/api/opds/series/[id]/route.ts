@@ -5,6 +5,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { escapeXml } from '@/lib/utils/xml';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
+import { countArchivePages, isPageCountable } from '@/lib/utils/archive-pages';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,13 +49,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         return numA - numB;
     });
 
-    const entries = sortedIssues.map(issue => {
+    const entries = [];
+    for (const issue of sortedIssues) {
         const rawCover = issue.coverUrl || (series.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '');
         const finalCoverUrl = rawCover.startsWith('http') ? rawCover : (rawCover ? `${baseUrl}${rawCover}` : '');
-        
+
         // --- MEMORY LEAK FIXED: Pulling directly from DB instead of loading files into RAM ---
-        const pageCount = (issue as any).pageCount || 0;
-        
+        let pageCount = (issue as any).pageCount || 0;
+        // Self-heal issues indexed before page counts were persisted: without a real pse:count,
+        // OPDS clients (Panels) show "0 pages" and refuse to stream. countArchivePages reads only
+        // the zip central directory, so healing a whole series inline stays fast; the result is
+        // written back so this runs once per issue.
+        if (!pageCount && isPageCountable(issue.filePath)) {
+            pageCount = await countArchivePages(issue.filePath);
+            if (pageCount > 0) {
+                await prisma.issue.update({ where: { id: issue.id }, data: { pageCount } }).catch(() => {});
+            }
+        }
+
         // The Official OPDS-PSE Streaming Link with the URI Template
         const pseLink = `<link rel="http://vaemendis.net/opds-pse/stream" type="image/jpeg" href="${baseUrl}/api/opds/page/${issue.id}/{pageNumber}" pse:count="${pageCount}"/>`;
         
@@ -63,7 +75,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
             ? `<link rel="http://opds-spec.org/acquisition" href="${baseUrl}/api/opds/download?issueId=${issue.id}" type="application/vnd.comicbook+zip"/>`
             : '';
 
-        return `
+        entries.push(`
   <entry>
     <title>${escapeXml(issue.name || `${series.name} #${issue.number}`)}</title>
     <id>urn:omnibus:issue:${issue.id}</id>
@@ -74,8 +86,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     ${finalCoverUrl ? `<link rel="http://opds-spec.org/image/thumbnail" href="${escapeXml(finalCoverUrl)}" type="image/jpeg"/>` : ''}
     ${pseLink}
     ${downloadLink}
-  </entry>`;
-    }).join('');
+  </entry>`);
+    }
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:pse="http://vaemendis.net/opds-pse/ns">
@@ -85,7 +97,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   <link rel="self" href="${baseUrl}/api/opds/series/${series.id}" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
   <link rel="start" href="${baseUrl}/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
   <link rel="up" href="${baseUrl}/api/opds/series" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
-  ${entries}
+  ${entries.join('')}
 </feed>`;
 
     return new Response(xml, { headers: { 'Content-Type': 'application/atom+xml;profile=opds-catalog; charset=utf-8' } });

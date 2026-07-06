@@ -19,6 +19,7 @@ import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 import { safeRelocateFolder, moveFileSafe } from '@/lib/utils/safe-fs';
+import { countArchivePages } from '@/lib/utils/archive-pages';
 
 export async function POST(request: Request) {
   try {
@@ -342,10 +343,12 @@ export async function POST(request: Request) {
 
                     // 2. Inline Database Update (No more silent transaction rollbacks!)
                     if (existingRecord) {
-                        const updatePayload: any = { 
+                        const updatePayload: any = {
                             filePath: newFilePath,
                             number: issueNumStr,
-                            seriesId: existingRecord.id 
+                            seriesId: existingRecord.id,
+                            // Persist the page total so OPDS (pse:count) can stream this issue.
+                            pageCount: await countArchivePages(newFilePath)
                         };
                         
                         if (isTargetFile && targetIssueMetaId) {

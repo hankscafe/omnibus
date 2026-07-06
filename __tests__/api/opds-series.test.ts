@@ -1,0 +1,95 @@
+// __tests__/api/opds-series.test.ts
+//
+// The OPDS series feed is what Panels/Chunky read to decide whether an issue is streamable: the
+// pse:count attribute comes from Issue.pageCount in the DB. These tests pin the regression where
+// scanned issues (persisted with pageCount 0) rendered as "0 pages" and unreadable — the feed must
+// self-heal a zero count from the archive and write it back.
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { GET } from '@/app/api/opds/series/[id]/route';
+
+const mocks = vi.hoisted(() => ({
+    validateApiKey: vi.fn(),
+    findUniqueSeries: vi.fn(),
+    updateIssue: vi.fn(),
+    countArchivePages: vi.fn(),
+}));
+
+vi.mock('@/lib/api-auth', () => ({ validateApiKey: mocks.validateApiKey }));
+vi.mock('@/lib/db', () => ({
+    prisma: {
+        series: { findUnique: mocks.findUniqueSeries },
+        issue: { update: mocks.updateIssue },
+    }
+}));
+vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
+vi.mock('@/lib/library-access', () => ({
+    getAccessibleLibraryIds: vi.fn().mockResolvedValue(null), // null = admin/full access
+    canAccessLibraryId: vi.fn().mockReturnValue(true),
+}));
+vi.mock('@/lib/utils/archive-pages', () => ({
+    countArchivePages: mocks.countArchivePages,
+    isPageCountable: (p: string | null | undefined) => !!p && /\.(cbz|zip|epub)$/i.test(p),
+}));
+
+const createReq = () => new Request('http://localhost/api/opds/series/ser_1');
+const createParams = () => Promise.resolve({ id: 'ser_1' });
+
+const baseSeries = (issues: any[]) => ({
+    id: 'ser_1',
+    name: 'Batman',
+    publisher: 'DC Comics',
+    folderPath: '/comics/DC Comics/Batman (2016)',
+    libraryId: 'lib_1',
+    issues,
+});
+
+describe('API Route: OPDS Series Feed (/api/opds/series/[id])', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.validateApiKey.mockResolvedValue({ valid: true, user: { id: 'u1', role: 'ADMIN' } } as any);
+        mocks.updateIssue.mockResolvedValue({});
+    });
+
+    it('advertises the persisted pageCount as pse:count without touching the archive', async () => {
+        mocks.findUniqueSeries.mockResolvedValue(baseSeries([
+            { id: 'iss_1', number: '1', name: 'Issue 1', filePath: '/comics/batman 01.cbz', pageCount: 22, coverUrl: null, description: null },
+        ]));
+
+        const res = await GET(createReq(), { params: createParams() }) as Response;
+        const xml = await res.text();
+
+        expect(res.status).toBe(200);
+        expect(xml).toContain('pse:count="22"');
+        expect(mocks.countArchivePages).not.toHaveBeenCalled();
+        expect(mocks.updateIssue).not.toHaveBeenCalled();
+    });
+
+    it('self-heals a zero pageCount from the archive and persists it (Panels "0 pages" regression)', async () => {
+        mocks.findUniqueSeries.mockResolvedValue(baseSeries([
+            { id: 'iss_1', number: '1', name: 'Issue 1', filePath: '/comics/batman 01.cbz', pageCount: 0, coverUrl: null, description: null },
+        ]));
+        mocks.countArchivePages.mockResolvedValue(30);
+
+        const res = await GET(createReq(), { params: createParams() }) as Response;
+        const xml = await res.text();
+
+        expect(xml).toContain('pse:count="30"');
+        expect(xml).not.toContain('pse:count="0"');
+        expect(mocks.countArchivePages).toHaveBeenCalledWith('/comics/batman 01.cbz');
+        // Healed count is written back so the archive is only ever read once.
+        expect(mocks.updateIssue).toHaveBeenCalledWith({ where: { id: 'iss_1' }, data: { pageCount: 30 } });
+    });
+
+    it('leaves an un-countable archive at 0 without a DB write (converter will fix it later)', async () => {
+        mocks.findUniqueSeries.mockResolvedValue(baseSeries([
+            { id: 'iss_2', number: '2', name: 'Issue 2', filePath: '/comics/batman 02.cbr', pageCount: 0, coverUrl: null, description: null },
+        ]));
+
+        const res = await GET(createReq(), { params: createParams() }) as Response;
+        const xml = await res.text();
+
+        expect(xml).toContain('pse:count="0"');
+        expect(mocks.countArchivePages).not.toHaveBeenCalled(); // .cbr is not countable
+        expect(mocks.updateIssue).not.toHaveBeenCalled();
+    });
+});

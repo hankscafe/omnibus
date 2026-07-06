@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { isComicFile } from '@/lib/utils/formats';
+import { countArchivePages, isPageCountable } from '@/lib/utils/archive-pages';
 
 export const LibraryScanner = {
     async scan(specificPath?: string): Promise<boolean | null> {
@@ -132,6 +133,7 @@ export const LibraryScanner = {
                 Logger.log(`[Scanner Debug] Searching for ghost issues with missing files...`, 'debug');
                 const allFiles = await prisma.issue.findMany({ where: { filePath: { not: null } } });
                 let ghostIssueCount = 0;
+                let backfilledPageCounts = 0;
                 for (const issue of allFiles) {
                     if (issue.filePath && !fs.existsSync(issue.filePath)) {
                         Logger.log(`[Scanner Debug] Removing ghost file path: ${issue.filePath}`, 'debug');
@@ -149,10 +151,26 @@ export const LibraryScanner = {
                         } catch (e: any) {
                             Logger.log(`[Scanner Debug] Error removing ghost issue ${issue.id}: ${e.message}`, 'error');
                         }
+                    } else if (!issue.pageCount && isPageCountable(issue.filePath)) {
+                        // Backfill pageCount for issues indexed before counts were persisted — OPDS
+                        // (Panels etc.) reads pse:count from the DB, so a 0 renders the issue unreadable
+                        // there. Cheap: only the zip central directory is read, never the whole archive.
+                        try {
+                            const pages = await countArchivePages(issue.filePath);
+                            if (pages > 0) {
+                                await prisma.issue.update({ where: { id: issue.id }, data: { pageCount: pages } });
+                                backfilledPageCounts++;
+                            }
+                        } catch (e: any) {
+                            Logger.log(`[Scanner Debug] Page-count backfill failed for ${issue.filePath}: ${e.message}`, 'debug');
+                        }
                     }
                 }
                 if (ghostIssueCount > 0) {
                     Logger.log(`[Scan] Cleared ${ghostIssueCount} ghost issue files.`, 'info');
+                }
+                if (backfilledPageCounts > 0) {
+                    Logger.log(`[Scan] Backfilled page counts for ${backfilledPageCounts} issue(s) (OPDS readability).`, 'info');
                 }
             }
 
@@ -197,21 +215,27 @@ export const LibraryScanner = {
                                 }
                             });
                             
-                            const issuesToCreate = bookFiles.map(file => {
+                            const issuesToCreate = [];
+                            for (const file of bookFiles) {
                                 const stdNum = extractIssueNumber(file);
                                 const resolvedIssueMetaId = embeddedMeta?.metadataIssueId?.toString() || embeddedMeta?.cvIssueId?.toString() || `unmatched_${Math.random()}`;
                                 const resolvedIssueMetaSource = embeddedMeta?.metadataSource || (embeddedMeta?.cvIssueId ? 'COMICVINE' : 'LOCAL');
                                 const resolvedIssueMatchState = (embeddedMeta?.metadataIssueId || embeddedMeta?.cvIssueId) ? 'MATCHED' : 'UNMATCHED';
-                                return {
+                                const archivePath = path.join(dir, file);
+                                issuesToCreate.push({
                                     seriesId: createdSeries.id,
                                     metadataId: resolvedIssueMetaId,
                                     metadataSource: resolvedIssueMetaSource,
                                     matchState: resolvedIssueMatchState,
                                     number: stdNum,
                                     status: 'DOWNLOADED',
-                                    filePath: path.join(dir, file).replace(/\\/g, '/')
-                                };
-                            });
+                                    filePath: archivePath.replace(/\\/g, '/'),
+                                    // OPDS clients gate readability on pse:count, so the count must be
+                                    // persisted at index time (the web reader re-lists archives live and
+                                    // never notices a 0 here; Panels does).
+                                    pageCount: await countArchivePages(archivePath)
+                                });
+                            }
                             if (issuesToCreate.length > 0) {
                                 await prisma.issue.createMany({ data: issuesToCreate });
                             }

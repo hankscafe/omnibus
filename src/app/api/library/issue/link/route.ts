@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { moveFileSafe } from '@/lib/utils/safe-fs';
+import { countArchivePages } from '@/lib/utils/archive-pages';
 
 export async function POST(request: NextRequest) {
     try {
@@ -131,7 +132,9 @@ export async function POST(request: NextRequest) {
                 where: { id: targetId },
                 data: {
                     filePath: finalFilePath,
-                    status: 'DOWNLOADED'
+                    status: 'DOWNLOADED',
+                    // Persist the page total so OPDS (pse:count) can stream this issue.
+                    pageCount: await countArchivePages(finalFilePath)
                 }
             }),
             prisma.issue.delete({

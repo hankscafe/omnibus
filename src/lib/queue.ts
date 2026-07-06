@@ -19,6 +19,7 @@ import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { BACKUPS_DIR, WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
 import { containsWord } from '@/lib/filter-defaults';
+import { countArchivePages } from '@/lib/utils/archive-pages';
 
 const execFileAsync = promisify(execFile);
 
@@ -778,10 +779,12 @@ export function initWorker() {
                                         metadataId: meta.metadataIssueId ? meta.metadataIssueId.toString() : `unmatched_${Math.random()}`,
                                         metadataSource: meta.metadataIssueId ? meta.metadataSource : 'LOCAL',
                                         matchState: meta.metadataIssueId ? 'MATCHED' : 'UNMATCHED',
-                                        number: extractedNum, 
-                                        status: 'DOWNLOADED', 
+                                        number: extractedNum,
+                                        status: 'DOWNLOADED',
                                         filePath: finalDestPath,
-                                        name: meta.title, 
+                                        // Persisted so OPDS (pse:count) sees a real page total immediately.
+                                        pageCount: await countArchivePages(finalDestPath),
+                                        name: meta.title,
                                         description: meta.summary,
                                         writers: meta.writers?.length ? JSON.stringify(meta.writers) : null,
                                         artists: meta.artists?.length ? JSON.stringify(meta.artists) : null,

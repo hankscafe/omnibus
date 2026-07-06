@@ -11,6 +11,7 @@ import { promisify } from 'util';
 import { getErrorMessage } from './utils/error';
 import { CACHE_DIR } from '@/lib/utils/paths';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
+import { countArchivePages } from '@/lib/utils/archive-pages';
 
 const execFileAsync = promisify(execFile);
 
@@ -180,7 +181,8 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
         if (existingIssue) {
             await prisma.issue.update({
                 where: { id: existingIssue.id },
-                data: { filePath: cbzPath }
+                // The CBR was uncountable (pageCount 0) — the new CBZ isn't, so refresh it for OPDS.
+                data: { filePath: cbzPath, pageCount: await countArchivePages(cbzPath) }
             });
         }
         
@@ -282,7 +284,18 @@ export async function repackArchive(filePath: string): Promise<boolean> {
         const tmpOut = `${filePath}.tmp`;
         newZip.writeZip(tmpOut);
         await fs.move(tmpOut, filePath, { overwrite: true });
-        
+
+        // Flattening can drop junk entries, so re-persist the count the OPDS feed advertises.
+        try {
+            const repackedIssue = await prisma.issue.findFirst({ where: { filePath } });
+            if (repackedIssue) {
+                await prisma.issue.update({
+                    where: { id: repackedIssue.id },
+                    data: { pageCount: await countArchivePages(filePath) }
+                });
+            }
+        } catch (e) {}
+
         Logger.log(`[Repacker] Success: Flattened and repacked ${imageCount - 1} pages in ${path.basename(filePath)}`, 'success');
         return true;
     } catch (error: unknown) {

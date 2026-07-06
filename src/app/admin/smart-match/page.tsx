@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -89,6 +89,48 @@ export default function SmartMatchPage() {
     // Bulk Custom-ID: a shared Series Group / Universe applied to every selected item.
     const [bulkSeriesGroup, setBulkSeriesGroup] = useState("");
     const [bulkUniverse, setBulkUniverse] = useState("");
+
+    // --- Page preview: flip through an unmatched file's pages to identify it before matching ---
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const [previewTarget, setPreviewTarget] = useState<any>(null);
+    const [previewFile, setPreviewFile] = useState<string | null>(null);
+    const [previewCount, setPreviewCount] = useState(0);
+    const [previewIndex, setPreviewIndex] = useState(0);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [previewError, setPreviewError] = useState<string | null>(null);
+    // RAR-family archives can't be page-listed (zip-only) — fall back to the single-page archive cover.
+    const previewIsRar = !!previewFile && /\.(cbr|rar|cb7)$/i.test(previewFile) && previewCount === 0;
+
+    const openPreview = async (series: any) => {
+        setPreviewTarget(series);
+        setPreviewOpen(true);
+        setPreviewLoading(true);
+        setPreviewError(null);
+        setPreviewFile(null);
+        setPreviewCount(0);
+        setPreviewIndex(0);
+        try {
+            const res = await fetch(`/api/library/archive-preview?path=${encodeURIComponent(series.folderPath)}&info=1`);
+            if (!res.ok) {
+                const data = await res.json().catch(() => null);
+                throw new Error(data?.error || 'Preview unavailable');
+            }
+            const data = await res.json();
+            if (!data.file) {
+                setPreviewError('No comic archive found in this folder.');
+                return;
+            }
+            setPreviewFile(data.file);
+            setPreviewCount(data.pageCount || 0);
+            if (!data.pageCount && !/\.(cbr|rar|cb7)$/i.test(data.file)) {
+                setPreviewError('No readable pages found in this archive.');
+            }
+        } catch (e: any) {
+            setPreviewError(e.message || 'Preview unavailable');
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
 
     const { toast } = useToast();
 
@@ -612,6 +654,16 @@ export default function SmartMatchPage() {
                                         <div className="min-w-0 flex-1">
                                             <h3 className="font-bold text-foreground break-words whitespace-normal leading-tight">{series.name}</h3>
                                             <p className="text-sm text-muted-foreground break-all whitespace-normal mt-1">{series.folderPath}</p>
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                className="mt-1.5 h-7 px-2 -ml-2 text-primary hover:bg-primary/10 font-bold"
+                                                disabled={isSelectionMode}
+                                                onClick={(e) => { e.stopPropagation(); openPreview(series); }}
+                                                title="Flip through the file's pages to identify it before matching"
+                                            >
+                                                <BookOpen className="w-4 h-4 mr-1.5" /> Preview Pages
+                                            </Button>
                                         </div>
                                     </div>
                                 </div>
@@ -1031,6 +1083,67 @@ export default function SmartMatchPage() {
                 initialIssueCover={metaEditorTarget ? issueOverrides[metaEditorTarget.id]?.coverImageBase64 : undefined}
                 onSave={handleMetaSave}
             />
+
+            {/* --- PAGE PREVIEW DIALOG: flip through an unmatched file before matching it --- */}
+            <Dialog open={previewOpen} onOpenChange={(open) => { if (!open) { setPreviewOpen(false); setPreviewTarget(null); setPreviewFile(null); } }}>
+                <DialogContent className="max-w-3xl">
+                    <DialogHeader>
+                        <DialogTitle className="pr-8 break-words">{previewTarget?.name || 'Preview'}</DialogTitle>
+                        <DialogDescription className="break-all text-xs">{previewFile || previewTarget?.folderPath}</DialogDescription>
+                    </DialogHeader>
+
+                    {previewLoading && (
+                        <div className="flex items-center justify-center py-20 text-muted-foreground">
+                            <Loader2 className="w-8 h-8 animate-spin" />
+                        </div>
+                    )}
+
+                    {!previewLoading && previewError && (
+                        <div className="text-center py-16 text-muted-foreground text-sm">{previewError}</div>
+                    )}
+
+                    {!previewLoading && !previewError && previewIsRar && previewFile && (
+                        <div className="space-y-3">
+                            <div className="bg-black/40 rounded-lg overflow-hidden flex items-center justify-center min-h-[300px]">
+                                {/* RAR-family archives can't be page-listed — the archive-cover route extracts
+                                    the first page natively (unrar), so at least the cover is identifiable. */}
+                                <img
+                                    src={`/api/library/archive-cover?path=${encodeURIComponent(previewFile)}`}
+                                    className="max-h-[65vh] w-auto object-contain"
+                                    alt="First page"
+                                />
+                            </div>
+                            <p className="text-center text-xs text-muted-foreground">
+                                RAR archive — only the first page can be previewed. Convert to CBZ for full paging.
+                            </p>
+                        </div>
+                    )}
+
+                    {!previewLoading && !previewError && !previewIsRar && previewFile && previewCount > 0 && (
+                        <div className="space-y-3">
+                            <div className="bg-black/40 rounded-lg overflow-hidden flex items-center justify-center min-h-[300px]">
+                                <img
+                                    key={previewIndex}
+                                    src={`/api/library/archive-preview?path=${encodeURIComponent(previewFile)}&page=${previewIndex}`}
+                                    className="max-h-[65vh] w-auto object-contain"
+                                    alt={`Page ${previewIndex + 1}`}
+                                />
+                            </div>
+                            <div className="flex items-center justify-center gap-4">
+                                <Button variant="outline" size="sm" className="font-bold" disabled={previewIndex <= 0} onClick={() => setPreviewIndex(i => Math.max(0, i - 1))}>
+                                    <ChevronLeft className="w-4 h-4" />
+                                </Button>
+                                <span className="text-sm font-bold text-muted-foreground tabular-nums">
+                                    Page {previewIndex + 1} / {previewCount}
+                                </span>
+                                <Button variant="outline" size="sm" className="font-bold" disabled={previewIndex >= previewCount - 1} onClick={() => setPreviewIndex(i => Math.min(previewCount - 1, i + 1))}>
+                                    <ChevronRight className="w-4 h-4" />
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
 
         </div>
     )

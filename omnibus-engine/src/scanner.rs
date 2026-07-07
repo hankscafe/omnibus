@@ -1374,27 +1374,42 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // SQLite spike: run the real scan_library against a Prisma-created SQLite database file.
-    // Gated on env vars so normal `cargo test` runs skip it:
-    //   OMNIBUS_SPIKE_DB  — path to a SQLite db created by `prisma db push` (main-branch schema)
-    //   OMNIBUS_SPIKE_LIB — scratch directory to use as the library root (fixture cbz is created here)
-    // Proves: Any-driver connect + $N placeholders + bool/i64/String decode on SQLite rows,
-    // ON CONFLICT, the now_expr() epoch-ms write (Prisma-readable), and scan idempotency.
+    // Dual-backend spike: the same end-to-end scan → re-scan → metadata-sync/embed flow runs
+    // against a real Prisma-created database on EITHER backend through the Any pool.
+    // Env-gated so normal `cargo test` runs skip them:
+    //   OMNIBUS_SPIKE_DB     — SQLite file path (`prisma db push` of the sqlite-provider schema)
+    //   OMNIBUS_SPIKE_LIB    — scratch library root for the SQLite run
+    //   OMNIBUS_SPIKE_PG     — postgres:// URL (`prisma db push` of this repo's schema), e.g. a
+    //                          throwaway container:
+    //                          docker run --name omnibus-spike-pg -e POSTGRES_USER=spike \
+    //                            -e POSTGRES_PASSWORD=spike -e POSTGRES_DB=spike \
+    //                            -p 127.0.0.1:55432:5432 -d postgres:15-alpine
+    //   OMNIBUS_SPIKE_PG_LIB — scratch library root for the Postgres run
+    // Proves: Any-driver connect, $N binds, bool/i64/String/NULL decode, ON CONFLICT, the
+    // per-dialect now/now-UTC/ISO expressions, scan idempotency, and the embed pipeline.
     // ------------------------------------------------------------------
     #[tokio::test]
     async fn sqlite_spike_end_to_end_scan() {
-        let Ok(db_path) = std::env::var("OMNIBUS_SPIKE_DB") else {
-            eprintln!("OMNIBUS_SPIKE_DB unset — skipping SQLite spike test");
+        let (Ok(db_path), Ok(lib_dir)) = (std::env::var("OMNIBUS_SPIKE_DB"), std::env::var("OMNIBUS_SPIKE_LIB")) else {
+            eprintln!("OMNIBUS_SPIKE_DB / OMNIBUS_SPIKE_LIB unset — skipping SQLite spike test");
             return;
         };
-        let Ok(lib_dir) = std::env::var("OMNIBUS_SPIKE_LIB") else {
-            eprintln!("OMNIBUS_SPIKE_LIB unset — skipping SQLite spike test");
-            return;
-        };
+        spike_end_to_end(&format!("file:{}", db_path), &lib_dir, crate::db::Dialect::Sqlite).await;
+    }
 
+    #[tokio::test]
+    async fn postgres_spike_end_to_end_scan() {
+        let (Ok(url), Ok(lib_dir)) = (std::env::var("OMNIBUS_SPIKE_PG"), std::env::var("OMNIBUS_SPIKE_PG_LIB")) else {
+            eprintln!("OMNIBUS_SPIKE_PG / OMNIBUS_SPIKE_PG_LIB unset — skipping Postgres spike test");
+            return;
+        };
+        spike_end_to_end(&url, &lib_dir, crate::db::Dialect::Postgres).await;
+    }
+
+    async fn spike_end_to_end(db_url: &str, lib_dir: &str, expected_dialect: crate::db::Dialect) {
         // Fixture: <lib>/Spike Series (2020)/Spike Series 001 (2020).cbz — a zip whose 3 image-named
         // entries make count_zip_pages report 3 (it counts entries, it never decodes).
-        let series_dir = Path::new(&lib_dir).join("Spike Series (2020)");
+        let series_dir = Path::new(lib_dir).join("Spike Series (2020)");
         std::fs::create_dir_all(&series_dir).expect("create fixture series dir");
         let cbz = series_dir.join("Spike Series 001 (2020).cbz");
         {
@@ -1408,8 +1423,9 @@ mod tests {
             zw.finish().unwrap();
         }
 
-        let db = crate::db::Db::connect(&format!("file:{}", db_path), 2).await.expect("Any-driver SQLite connect");
-        assert_eq!(db.dialect, crate::db::Dialect::Sqlite);
+        let db = crate::db::Db::connect(db_url, 2).await.expect("Any-driver connect");
+        assert_eq!(db.dialect, expected_dialect);
+        let lib_dir = lib_dir.to_string();
 
         // Seed the Library row the scan reads its isManga baseline from. isManga=true exercises the
         // bool decode AND short-circuits manga detection before its AniList network tier.
@@ -1432,14 +1448,18 @@ mod tests {
 
         // isManga/createdAt are CAST for the Any driver: SQLite's BOOLEAN- and DATETIME-declared
         // columns have no Any mapping (same reason as the isManga read in scan_library). createdAt
-        // goes through TEXT, not INTEGER: expression results carry SQLite's runtime type code,
-        // which sqlx maps to the 32-bit Any path — an epoch-ms value silently truncates mod 2^32.
-        let row = sqlx::query(r#"SELECT id, name, CAST("isManga" AS INTEGER) AS "isManga", "matchState", CAST("createdAt" AS TEXT) AS "createdAt" FROM "Series" WHERE "libraryId" = 'spike_lib'"#)
+        // is read as epoch-ms TEXT via a per-dialect expression: SQLite stores Prisma DateTime as
+        // epoch-ms already; Postgres converts its timestamp with EXTRACT(EPOCH ...).
+        let created_expr = match db.dialect {
+            crate::db::Dialect::Sqlite => r#"CAST("createdAt" AS TEXT)"#,
+            crate::db::Dialect::Postgres => r#"CAST(CAST(EXTRACT(EPOCH FROM "createdAt") * 1000 AS BIGINT) AS TEXT)"#,
+        };
+        let row = sqlx::query(&format!(r#"SELECT id, name, CAST("isManga" AS INTEGER) AS "isManga", "matchState", {created_expr} AS "createdAt" FROM "Series" WHERE "libraryId" = 'spike_lib'"#))
             .fetch_one(&db.pool).await.unwrap();
         assert_eq!(row.get::<String, _>("name"), "Spike Series");
-        assert_eq!(row.get::<i64, _>("isManga"), 1, "bool stored as INTEGER 1 (Prisma-native)");
+        assert_eq!(row.get::<i64, _>("isManga"), 1, "isManga reads back as 1 through CAST");
         assert_eq!(row.get::<String, _>("matchState"), "UNMATCHED");
-        // now_expr() must have written Prisma-native epoch milliseconds (sanity: within a day of now).
+        // now_expr() must have written a sane "now" (sanity: within a day of the host clock).
         let created_ms: i64 = row.get::<String, _>("createdAt").parse().expect("createdAt is an integer");
         let sys_now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
@@ -1460,7 +1480,7 @@ mod tests {
         assert_eq!(group, None);
 
         // Second scan: idempotent (dedupe via existing filePath map) and exercises the ghost-sweep
-        // read paths (Series bool/Option<bool> reads, Issue joins) against live SQLite rows.
+        // read paths (Series bool/Option<bool> reads, Issue joins) against live rows.
         scan_library(db.clone(), lib_dir.clone(), "spike_lib".to_string(), None).await.expect("second scan");
         let series_count2: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Series" WHERE "libraryId" = 'spike_lib'"#)
             .fetch_one(&db.pool).await.unwrap();
@@ -1471,14 +1491,14 @@ mod tests {
         assert_eq!(series_count2, 1, "re-scan must not duplicate the series");
         assert_eq!(issue_count2, 1, "re-scan must not duplicate the issue");
 
-        // Ported metadata pipeline on SQLite, no network needed: a LOCAL-source series skips the
+        // Ported metadata pipeline, no network needed: a LOCAL-source series skips the
         // provider fetch but still runs the CAST/ISO series select, the embed job (a REAL
         // ComicInfo.xml injection into the fixture cbz via metadata_writer), and the
         // updatedAt/lastMetadataSync bump through the per-dialect now/now-UTC expressions.
         let series_id_owned: String = row.get("id");
         crate::metadata::sync_metadata(db.clone(), Some(vec![series_id_owned.clone()]))
             .await
-            .expect("sync_metadata against SQLite");
+            .expect("sync_metadata through the Any pool");
 
         let last_sync: Option<String> = sqlx::query_scalar(&format!(
             r#"SELECT {} FROM "Series" WHERE id = $1"#,

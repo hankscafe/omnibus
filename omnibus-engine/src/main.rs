@@ -1383,7 +1383,7 @@ async fn handle_discover_sync(State(state): State<Arc<AppState>>) -> StatusCode 
         let db = state.db.clone();
         let start_time = std::time::Instant::now();
 
-        match discover::run_discover_sync(db.clone()).await {
+        match discover::run_discover_sync(state.any_db.clone()).await {
             Ok((_count, details)) => {
                 let duration = start_time.elapsed().as_millis() as i32;
                 log::info!("{}", details);
@@ -1411,7 +1411,7 @@ async fn handle_discover_sync(State(state): State<Arc<AppState>>) -> StatusCode 
 /// searches, so this awaits the full multi-minute fetch and returns skeleton count + candidates.
 async fn handle_monitor_sync(State(state): State<Arc<AppState>>) -> Result<Json<monitor::MonitorOutput>, StatusCode> {
     log::info!("Received request to run Series Monitor (fetch/match/skeleton phase).");
-    match monitor::run_series_monitor(state.db.clone()).await {
+    match monitor::run_series_monitor(state.any_db.clone()).await {
         Ok(out) => {
             log::info!("Series Monitor engine phase complete: {} skeletons, {} candidates.", out.skeletons_created, out.candidates.len());
             Ok(Json(out))

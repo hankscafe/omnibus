@@ -4,7 +4,8 @@
 // publisher/keyword/manga filters, and formats each item. Metron path paginates recent issues,
 // resolving missing series ids via a cached name search. Pure fetch→filter→cache; no downloads.
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use crate::db::Db;
+use sqlx::Row;
 use reqwest::Client;
 use std::collections::{HashMap, HashSet};
 use serde_json::{json, Value};
@@ -289,18 +290,18 @@ impl DiscoverConfig {
     }
 }
 
-async fn upsert_setting(db: &PgPool, key: &str, value: &str) -> Result<()> {
+async fn upsert_setting(db: &Db, key: &str, value: &str) -> Result<()> {
     sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#)
         .bind(key)
         .bind(value)
-        .execute(db)
+        .execute(&db.pool)
         .await?;
     Ok(())
 }
 
-pub async fn run_discover_sync(db: PgPool) -> Result<(i32, String)> {
+pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
     // Load all settings into a map (parity with the config object).
-    let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting""#).fetch_all(&db).await?;
+    let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting""#).fetch_all(&db.pool).await?;
     let config: HashMap<String, String> = rows.iter()
         .map(|r| (r.get::<String, _>("key"), r.get::<String, _>("value")))
         .collect();
@@ -312,7 +313,7 @@ pub async fn run_discover_sync(db: PgPool) -> Result<(i32, String)> {
     let primary_source = if get("primary_metadata_source").is_empty() { "COMICVINE" } else { get("primary_metadata_source") };
 
     // Node requires a CV key up front regardless of source (queue.ts throws before the source branch).
-    let cv_api_key = crate::secret_crypto::decrypt_setting(&db, config.get("cv_api_key").cloned()).await
+    let cv_api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, config.get("cv_api_key").cloned()).await
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("CV_API_KEY").ok().filter(|s| !s.is_empty()))
         .unwrap_or_default();
@@ -332,7 +333,7 @@ pub async fn run_discover_sync(db: PgPool) -> Result<(i32, String)> {
 
     let (new_releases, popular): (Vec<Value>, Vec<Value>) = if primary_source == "METRON" {
         let metron_user = config.get("metron_user").cloned().unwrap_or_default();
-        let metron_pass = crate::secret_crypto::decrypt_str(&db, config.get("metron_pass").map(|s| s.as_str()).unwrap_or("")).await;
+        let metron_pass = crate::secret_crypto::decrypt_str(&db.pool, config.get("metron_pass").map(|s| s.as_str()).unwrap_or("")).await;
         if metron_user.is_empty() || metron_pass.is_empty() {
             anyhow::bail!("Metron credentials missing for Discover Sync");
         }

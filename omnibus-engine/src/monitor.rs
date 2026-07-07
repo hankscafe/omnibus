@@ -4,7 +4,8 @@
 // issues), and returns the monitored, matched, not-yet-in-library issues as *candidates*. The Node
 // worker keeps request creation + searchAndDownload (BullMQ) + the Phase 3 UNRELEASED upgrade sweep.
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use crate::db::Db;
+use sqlx::Row;
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
@@ -75,33 +76,36 @@ fn jstr(v: Option<&Value>) -> Option<String> {
 /// Inserts a WANTED skeleton Issue. Returns true on success (failures swallowed, parity with `.catch`).
 #[allow(clippy::too_many_arguments)]
 async fn insert_skeleton(
-    db: &PgPool, series_id: &str, metadata_id: &str, source: &str, number: &str,
+    db: &Db, series_id: &str, metadata_id: &str, source: &str, number: &str,
     name: Option<&str>, description: Option<&str>, release_date: Option<&str>, cover_url: Option<&str>,
 ) -> Option<String> {
     let id = uuid::Uuid::new_v4().to_string();
-    let res = sqlx::query(
+    let res = sqlx::query(&format!(
         r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", "matchState", number, name, description, "releaseDate", "coverUrl", status, "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, 'MATCHED', $5, $6, $7, $8, $9, 'WANTED', NOW(), NOW())"#,
-    )
+           VALUES ($1, $2, $3, $4, 'MATCHED', $5, $6, $7, $8, $9, 'WANTED', {now}, {now})"#,
+        now = db.now_expr()
+    ))
     .bind(&id).bind(series_id).bind(metadata_id).bind(source).bind(number)
     .bind(name).bind(description).bind(release_date).bind(cover_url)
-    .execute(db).await;
+    .execute(&db.pool).await;
     match res {
         Ok(_) => Some(id),
         Err(e) => { log::warn!("[Series Monitor] Skeleton insert failed (issue #{}): {:?}", number, e); None }
     }
 }
 
-async fn update_skeleton_release_date(db: &PgPool, issue_id: &str, release_date: &str) {
+async fn update_skeleton_release_date(db: &Db, issue_id: &str, release_date: &str) {
     let _ = sqlx::query(r#"UPDATE "Issue" SET "releaseDate" = $1 WHERE id = $2"#)
-        .bind(release_date).bind(issue_id).execute(db).await;
+        .bind(release_date).bind(issue_id).execute(&db.pool).await;
 }
 
 /// Loads every Series + its issues into memory (parity with `findMany({ include: { issues } })`).
-async fn load_state(db: &PgPool) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<IssueRec>>)> {
+async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<IssueRec>>)> {
     let series_rows = sqlx::query(
-        r#"SELECT id, name, publisher, year, "metadataId", "metadataSource", monitored, "isManga", "coverUrl" FROM "Series""#,
-    ).fetch_all(db).await?;
+        // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping); nullable monitored
+        // is COALESCEd in SQL — the code always treated NULL as false.
+        r#"SELECT id, name, publisher, year, "metadataId", "metadataSource", COALESCE(CAST(monitored AS INTEGER), 0) AS monitored, CAST("isManga" AS INTEGER) AS "isManga", "coverUrl" FROM "Series""#,
+    ).fetch_all(&db.pool).await?;
     let series: Vec<SeriesRec> = series_rows.iter().map(|r| SeriesRec {
         id: r.get("id"),
         name: r.get("name"),
@@ -109,12 +113,12 @@ async fn load_state(db: &PgPool) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<
         year: r.get("year"),
         metadata_id: r.get("metadataId"),
         metadata_source: r.get("metadataSource"),
-        monitored: r.get::<Option<bool>, _>("monitored").unwrap_or(false),
-        is_manga: r.get("isManga"),
+        monitored: r.get::<i64, _>("monitored") != 0,
+        is_manga: r.get::<i64, _>("isManga") != 0,
         cover_url: r.get("coverUrl"),
     }).collect();
 
-    let issue_rows = sqlx::query(r#"SELECT id, "seriesId", number, "filePath", "releaseDate" FROM "Issue""#).fetch_all(db).await?;
+    let issue_rows = sqlx::query(r#"SELECT id, "seriesId", number, "filePath", "releaseDate" FROM "Issue""#).fetch_all(&db.pool).await?;
     let mut issues: HashMap<String, Vec<IssueRec>> = HashMap::new();
     for r in &issue_rows {
         let sid: String = r.get("seriesId");
@@ -136,7 +140,7 @@ fn is_already_in_library(issues: &[IssueRec], num: &str) -> bool {
 /// and emit candidates for monitored series. Errors are captured into `notes` (Phase 2 still runs).
 #[allow(clippy::too_many_arguments)]
 async fn phase1_metron(
-    db: &PgPool, client: &Client, user: &str, pass: &str,
+    db: &Db, client: &Client, user: &str, pass: &str,
     series: &[SeriesRec], issues: &mut HashMap<String, Vec<IssueRec>>,
     skeletons_created: &mut i32, candidates: &mut Vec<MonitorCandidate>, notes: &mut Vec<String>,
 ) {
@@ -284,14 +288,16 @@ async fn phase1_metron(
 /// Phase 2 — ComicVine: for the 25 oldest monitored CV series, fetch their latest 30 issues, upsert
 /// skeletons for not-in-library issues, emit candidates, and bump the series' updatedAt (rotates the window).
 async fn phase2_comicvine(
-    db: &PgPool, client: &Client, cv_api_key: &str,
+    db: &Db, client: &Client, cv_api_key: &str,
     issues: &mut HashMap<String, Vec<IssueRec>>,
     skeletons_created: &mut i32, candidates: &mut Vec<MonitorCandidate>,
 ) -> Result<()> {
     let rows = sqlx::query(
-        r#"SELECT id, name, publisher, year, "metadataId", "isManga", "coverUrl" FROM "Series"
+        // isManga is CAST for the Any driver (no SQLite BOOLEAN mapping); `monitored = true`
+        // stays — SQLite 3.23+ reads the TRUE literal as 1, matching the stored 0/1.
+        r#"SELECT id, name, publisher, year, "metadataId", CAST("isManga" AS INTEGER) AS "isManga", "coverUrl" FROM "Series"
            WHERE monitored = true AND "metadataSource" = 'COMICVINE' ORDER BY "updatedAt" ASC LIMIT 25"#,
-    ).fetch_all(db).await?;
+    ).fetch_all(&db.pool).await?;
 
     for row in &rows {
         let series_id: String = row.get("id");
@@ -299,7 +305,7 @@ async fn phase2_comicvine(
         let publisher: Option<String> = row.get("publisher");
         let year: i32 = row.get("year");
         let cv_id: Option<String> = row.get("metadataId");
-        let is_manga: bool = row.get("isManga");
+        let is_manga: bool = row.get::<i64, _>("isManga") != 0;
         let cover_url: Option<String> = row.get("coverUrl");
 
         let Some(cv_id) = cv_id else { continue };
@@ -383,13 +389,13 @@ async fn phase2_comicvine(
             });
         }
 
-        let _ = sqlx::query(r#"UPDATE "Series" SET "updatedAt" = NOW() WHERE id = $1"#).bind(&series_id).execute(db).await;
+        let _ = sqlx::query(&format!(r#"UPDATE "Series" SET "updatedAt" = {} WHERE id = $1"#, db.now_expr())).bind(&series_id).execute(&db.pool).await;
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
     }
     Ok(())
 }
 
-pub async fn run_series_monitor(db: PgPool) -> Result<MonitorOutput> {
+pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
     let (series, mut issues) = load_state(&db).await?;
     let client = Client::builder().build()?;
 
@@ -398,7 +404,7 @@ pub async fn run_series_monitor(db: PgPool) -> Result<MonitorOutput> {
     let mut notes: Vec<String> = Vec::new();
 
     // Phase 1 — Metron (only when credentials are present).
-    let creds = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('metron_user','metron_pass')"#).fetch_all(&db).await?;
+    let creds = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('metron_user','metron_pass')"#).fetch_all(&db.pool).await?;
     let mut metron_user = String::new();
     let mut metron_pass = String::new();
     for r in &creds {
@@ -406,15 +412,15 @@ pub async fn run_series_monitor(db: PgPool) -> Result<MonitorOutput> {
         let v: String = r.get("value");
         if k == "metron_user" { metron_user = v; } else if k == "metron_pass" { metron_pass = v; }
     }
-    let metron_pass = crate::secret_crypto::decrypt_setting(&db, Some(metron_pass)).await.unwrap_or_default();
+    let metron_pass = crate::secret_crypto::decrypt_setting_any(&db.pool, Some(metron_pass)).await.unwrap_or_default();
     if !metron_user.is_empty() && !metron_pass.is_empty() {
         phase1_metron(&db, &client, &metron_user, &metron_pass, &series, &mut issues, &mut skeletons_created, &mut candidates, &mut notes).await;
     }
 
     // Phase 2 — ComicVine (only when a key is present).
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
-        .fetch_optional(&db).await?;
-    let cv_api_key = crate::secret_crypto::decrypt_setting(&db, cv_api_key).await.filter(|s| !s.is_empty());
+        .fetch_optional(&db.pool).await?;
+    let cv_api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, cv_api_key).await.filter(|s| !s.is_empty());
     if let Some(key) = cv_api_key {
         if let Err(e) = phase2_comicvine(&db, &client, &key, &mut issues, &mut skeletons_created, &mut candidates).await {
             notes.push(format!("[Phase 2] ComicVine sync error: {}", e));

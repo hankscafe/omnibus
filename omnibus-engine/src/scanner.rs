@@ -1452,6 +1452,13 @@ mod tests {
         assert_eq!(issue.get::<String, _>("status"), "DOWNLOADED");
         assert_eq!(issue.get::<i64, _>("pageCount"), 3);
 
+        // NULL round-trip through Any (sqlx >= 0.8 required): the ghost sweep reads Option columns
+        // that are NULL on real libraries (Series.seriesGroup here, NULL for a ComicInfo-less
+        // fixture). On sqlx 0.7 this errored with "Option<T> is not compatible with SQL type NULL".
+        let group: Option<String> = sqlx::query_scalar(r#"SELECT "seriesGroup" FROM "Series" WHERE "libraryId" = 'spike_lib'"#)
+            .fetch_one(&db.pool).await.expect("Option<String> read of a NULL column");
+        assert_eq!(group, None);
+
         // Second scan: idempotent (dedupe via existing filePath map) and exercises the ghost-sweep
         // read paths (Series bool/Option<bool> reads, Issue joins) against live SQLite rows.
         scan_library(db.clone(), lib_dir.clone(), "spike_lib".to_string(), None).await.expect("second scan");

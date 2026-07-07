@@ -7,7 +7,7 @@ edition = "2021"
 # Async runtime (replaces the Node.js event loop)
 tokio = { version = "1.35", features = ["full"] }
 # SQLx: PostgreSQL + SQLite backends, selected at runtime via the Any driver (src/db.rs)
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "sqlite", "any", "chrono"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "sqlite", "any", "chrono"] }
 jwalk = "0.8"
 regex = "1.10"
 uuid = { version = "1.8", features = ["v4"] }

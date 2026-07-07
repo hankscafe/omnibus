@@ -1,4 +1,5 @@
-use sqlx::{PgPool, Row};
+use crate::db::Db;
+use sqlx::Row;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -46,28 +47,35 @@ fn clean_json_array(raw: Option<&str>) -> String {
     parse_json_array(raw).join(", ")
 }
 
-pub async fn process_embed_job(db: PgPool, payload: EmbedRequest) -> anyhow::Result<(i32, i32, i32)> {
+pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<(i32, i32, i32)> {
+    // isManga is CAST for the Any driver — SQLite's BOOLEAN decltype has no Any mapping.
     let base = r#"SELECT i.id, i."filePath", i.number, i.name as issue_name, i.description as issue_desc,
                i.writers, i.artists, i.characters, i."coverArtists", i.colorists, i.letterers, i.teams, i.locations,
                i."releaseDate", i.universe as issue_universe,
                i.genres, i."storyArcs", i."metadataId" as issue_meta_id, i."metadataSource" as issue_meta_source,
                s.id as series_id, s.name as series_name, s.publisher, s.year, s."folderPath",
-               s.universe as series_universe, s."seriesGroup" as series_group, s."isManga", s."metadataId" as series_meta_id, s."metadataSource" as series_meta_source
+               s.universe as series_universe, s."seriesGroup" as series_group, CAST(s."isManga" AS INTEGER) AS "isManga", s."metadataId" as series_meta_id, s."metadataSource" as series_meta_source
         FROM "Issue" i
         JOIN "Series" s ON i."seriesId" = s.id
         WHERE i."filePath" LIKE '%.cbz'"#;
 
     // User-controlled ids are bound (NOT interpolated); only the fixed WHERE clause is appended.
     let rows = if let Some(s_id) = payload.series_id {
-        sqlx::query(&format!("{} AND s.id = $1", base)).bind(s_id).fetch_all(&db).await?
+        sqlx::query(&format!("{} AND s.id = $1", base)).bind(s_id).fetch_all(&db.pool).await?
     } else if let Some(i_ids) = payload.issue_ids {
         if i_ids.is_empty() {
             Vec::new()
         } else {
-            sqlx::query(&format!("{} AND i.id = ANY($1)", base)).bind(i_ids).fetch_all(&db).await?
+            // Portable IN (...) list — `= ANY($1)` array binds are Postgres-only (see src/db.rs).
+            let sql = format!("{} AND i.id IN ({})", base, Db::in_placeholders(1, i_ids.len()));
+            let mut q = sqlx::query(&sql);
+            for id in &i_ids {
+                q = q.bind(id);
+            }
+            q.fetch_all(&db.pool).await?
         }
     } else {
-        sqlx::query(&format!("{} AND s.\"metadataSource\" IN ('COMICVINE', 'METRON')", base)).fetch_all(&db).await?
+        sqlx::query(&format!("{} AND s.\"metadataSource\" IN ('COMICVINE', 'METRON')", base)).fetch_all(&db.pool).await?
     };
 
     // 1. Build the full ComicInfo XML for each issue (in the async context, where we have the data).
@@ -86,7 +94,7 @@ pub async fn process_embed_job(db: PgPool, payload: EmbedRequest) -> anyhow::Res
 
     // 2. Inject concurrently, BOUNDED so a full-library embed can't fan out hundreds of concurrent
     //    full-archive ZIP rewrites and thrash the disk / exhaust the blocking pool.
-    let cfg = crate::engine_config::EngineConfig::load(&db).await;
+    let cfg = crate::engine_config::EngineConfig::load_any(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.convert_workers));
     let mut join_set = JoinSet::new();
     for task in tasks {
@@ -123,7 +131,7 @@ pub async fn process_embed_job(db: PgPool, payload: EmbedRequest) -> anyhow::Res
 }
 
 /// Builds the full ComicInfo.xml (parity with metadata-writer.ts writeComicInfo — all ~21 tags).
-fn build_comic_info_xml(row: &sqlx::postgres::PgRow) -> String {
+fn build_comic_info_xml(row: &sqlx::any::AnyRow) -> String {
     let g = |c: &str| -> Option<String> { row.try_get::<Option<String>, _>(c).unwrap_or(None) };
 
     let series_name = g("series_name").unwrap_or_default();
@@ -131,7 +139,8 @@ fn build_comic_info_xml(row: &sqlx::postgres::PgRow) -> String {
     let number = g("number").unwrap_or_default();
     let year: i32 = row.try_get("year").unwrap_or(0);
     let publisher = g("publisher").unwrap_or_default();
-    let is_manga: bool = row.try_get("isManga").unwrap_or(false);
+    // CAST to INTEGER in the SELECT (Any driver); != 0 recovers the bool.
+    let is_manga: bool = row.try_get::<i64, _>("isManga").map(|v| v != 0).unwrap_or(false);
 
     let universe = g("issue_universe").filter(|s| !s.is_empty())
         .or_else(|| g("series_universe").filter(|s| !s.is_empty()))
@@ -291,20 +300,21 @@ fn format_month_year(date_str: &str) -> String {
 /// Writes a Mylar-spec (v1.0.2) series.json — the format Komga, Kavita, and Mylar consume.
 /// Gated on `export_series_json` + DB-tracked file ownership. Parity with writeSeriesJson
 /// (metadata-writer.ts, beta.032-034).
-pub(crate) async fn write_series_json(db: &PgPool, series_id: &str) -> bool {
+pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
     let enabled = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'export_series_json'"#)
-        .fetch_optional(db).await.ok().flatten();
+        .fetch_optional(&db.pool).await.ok().flatten();
     if enabled.as_deref() != Some("true") {
         return false;
     }
 
     let series = match sqlx::query(
+        // seriesJsonWritten is CAST for the Any driver — SQLite's BOOLEAN decltype has no mapping.
         r#"SELECT name, publisher, status, description, year, "cvId", "metadataSource", "metadataId",
-                  "folderPath", "bookType", "remoteCoverUrl", "coverUrl", "seriesJsonWritten"
+                  "folderPath", "bookType", "remoteCoverUrl", "coverUrl", CAST("seriesJsonWritten" AS INTEGER) AS "seriesJsonWritten"
            FROM "Series" WHERE id = $1"#,
     )
     .bind(series_id)
-    .fetch_optional(db)
+    .fetch_optional(&db.pool)
     .await
     {
         Ok(Some(r)) => r,
@@ -318,7 +328,7 @@ pub(crate) async fn write_series_json(db: &PgPool, series_id: &str) -> bool {
     let json_path = Path::new(&folder).join("series.json");
 
     let name: String = series.try_get("name").unwrap_or_default();
-    let json_written: bool = series.try_get("seriesJsonWritten").unwrap_or(false);
+    let json_written: bool = series.try_get::<i64, _>("seriesJsonWritten").map(|v| v != 0).unwrap_or(false);
 
     // Never clobber a series.json Omnibus didn't create (e.g. a curated Mylar library).
     // Ownership is tracked in the DB; the one exception is our own legacy Komga-style format
@@ -350,7 +360,7 @@ pub(crate) async fn write_series_json(db: &PgPool, series_id: &str) -> bool {
 
     let mut release_dates: Vec<String> = sqlx::query(r#"SELECT "releaseDate" FROM "Issue" WHERE "seriesId" = $1"#)
         .bind(series_id)
-        .fetch_all(db)
+        .fetch_all(&db.pool)
         .await
         .unwrap_or_default()
         .iter()
@@ -360,7 +370,7 @@ pub(crate) async fn write_series_json(db: &PgPool, series_id: &str) -> bool {
     release_dates.sort();
     let total_issues = sqlx::query_scalar::<_, i64>(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
         .bind(series_id)
-        .fetch_one(db)
+        .fetch_one(&db.pool)
         .await
         .unwrap_or(0);
 
@@ -438,7 +448,7 @@ pub(crate) async fn write_series_json(db: &PgPool, series_id: &str) -> bool {
             if !json_written {
                 let _ = sqlx::query(r#"UPDATE "Series" SET "seriesJsonWritten" = true WHERE id = $1"#)
                     .bind(series_id)
-                    .execute(db)
+                    .execute(&db.pool)
                     .await;
             }
             true
@@ -452,18 +462,26 @@ pub(crate) async fn write_series_json(db: &PgPool, series_id: &str) -> bool {
 
 /// Standalone series.json export over all (or selected) provider-matched series — the Node
 /// EXPORT_SERIES_JSON job forwards here. Returns (exported, total considered).
-pub async fn run_series_json_export(db: &PgPool, series_ids: Option<Vec<String>>) -> (i64, i64) {
+pub async fn run_series_json_export(db: &Db, series_ids: Option<Vec<String>>) -> (i64, i64) {
     let rows = match &series_ids {
         // An explicit (even empty) id list filters, matching the Node `id: { in: [...] }` behavior.
+        // Empty list → zero rows without touching the DB (`IN ()` is invalid SQL; Postgres's old
+        // `= ANY('{}')` behavior returned nothing).
+        Some(ids) if ids.is_empty() => Ok(Vec::new()),
         Some(ids) => {
-            sqlx::query(r#"SELECT id FROM "Series" WHERE "metadataSource" IN ('COMICVINE','METRON') AND id = ANY($1)"#)
-                .bind(ids)
-                .fetch_all(db)
-                .await
+            let sql = format!(
+                r#"SELECT id FROM "Series" WHERE "metadataSource" IN ('COMICVINE','METRON') AND id IN ({})"#,
+                Db::in_placeholders(1, ids.len())
+            );
+            let mut q = sqlx::query(&sql);
+            for id in ids {
+                q = q.bind(id);
+            }
+            q.fetch_all(&db.pool).await
         }
         None => {
             sqlx::query(r#"SELECT id FROM "Series" WHERE "metadataSource" IN ('COMICVINE','METRON')"#)
-                .fetch_all(db)
+                .fetch_all(&db.pool)
                 .await
         }
     }

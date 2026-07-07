@@ -1,34 +1,48 @@
-use sqlx::{PgPool, Row};
+use crate::db::Db;
+use sqlx::Row;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 use regex::Regex;
 use reqwest::Client;
 
-pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyhow::Result<()> {
+pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::Result<()> {
     // ComicVine API key (Metron series don't need it, so this is optional).
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
-        .fetch_optional(&db)
+        .fetch_optional(&db.pool)
         .await?;
-    let cv_api_key = crate::secret_crypto::decrypt_setting(&db, cv_api_key).await;
+    let cv_api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, cv_api_key).await;
 
     // Global cover-source preference: 'metadata' (provider wins, default) | 'archive' (keep an
     // extracted/local cover, don't overwrite with the provider) | 'metadata_only'. A custom-uploaded
     // cover (hasCustomCover) always wins regardless of this.
     let cover_source: String = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'cover_source'"#)
-        .fetch_optional(&db).await.ok().flatten().unwrap_or_else(|| "metadata".to_string());
+        .fetch_optional(&db.pool).await.ok().flatten().unwrap_or_else(|| "metadata".to_string());
 
-    // Resolve target series records.
+    // Resolve target series records. hasCustomCover is CAST and lastMetadataSync read via the
+    // per-dialect ISO expression — SQLite's BOOLEAN/DATETIME decltypes have no Any-driver mapping.
+    let series_select = format!(
+        r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", {last_sync} as "lastMetadataSync" FROM "Series""#,
+        last_sync = db.iso_utc_expr(r#""lastMetadataSync""#)
+    );
     let series_list = match &series_ids {
+        // Empty id list → no series (matches the old `= ANY('{}')`); `IN ()` is invalid SQL.
+        Some(ids) if ids.is_empty() => Vec::new(),
         Some(ids) => {
-            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", "hasCustomCover", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE id = ANY($1) AND "metadataId" IS NOT NULL"#)
-                .bind(ids)
-                .fetch_all(&db)
-                .await?
+            let sql = format!(
+                r#"{series_select} WHERE id IN ({}) AND "metadataId" IS NOT NULL"#,
+                Db::in_placeholders(1, ids.len())
+            );
+            let mut q = sqlx::query(&sql);
+            for id in ids {
+                q = q.bind(id);
+            }
+            q.fetch_all(&db.pool).await?
         }
         None => {
-            sqlx::query(r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", "hasCustomCover", to_char("lastMetadataSync", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "lastMetadataSync" FROM "Series" WHERE "metadataId" IS NOT NULL ORDER BY "updatedAt" ASC LIMIT 15"#)
-                .fetch_all(&db)
+            let sql = format!(r#"{series_select} WHERE "metadataId" IS NOT NULL ORDER BY "updatedAt" ASC LIMIT 15"#);
+            sqlx::query(&sql)
+                .fetch_all(&db.pool)
                 .await?
         }
     };
@@ -51,7 +65,7 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
         let folder_path: String = series.try_get("folderPath").unwrap_or_default();
         let current_year: i32 = series.try_get("year").unwrap_or(0);
         let current_cover: Option<String> = series.try_get("coverUrl").unwrap_or(None);
-        let has_custom_cover: bool = series.try_get("hasCustomCover").unwrap_or(false);
+        let has_custom_cover: bool = series.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false);
         // ISO timestamp of the last successful sync (UTC) — keys incremental fetches. None = never synced.
         let last_sync: Option<String> = series.try_get("lastMetadataSync").unwrap_or(None);
 
@@ -106,9 +120,13 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
             log::error!("[Metadata] Embed failed for {}: {:?}", series_name, e);
         }
 
-        if let Err(e) = sqlx::query(r#"UPDATE "Series" SET "updatedAt" = NOW(), "lastMetadataSync" = (NOW() AT TIME ZONE 'UTC') WHERE id = $1"#)
+        if let Err(e) = sqlx::query(&format!(
+            r#"UPDATE "Series" SET "updatedAt" = {now}, "lastMetadataSync" = {now_utc} WHERE id = $1"#,
+            now = db.now_expr(),
+            now_utc = db.now_utc_ts_expr()
+        ))
             .bind(&series_id)
-            .execute(&db)
+            .execute(&db.pool)
             .await
         {
             log::error!("[Metadata] Failed to bump updatedAt for {}: {:?}", series_name, e);
@@ -121,13 +139,15 @@ pub async fn sync_metadata(db: PgPool, series_ids: Option<Vec<String>>) -> anyho
 /// True when a series was manually curated in the metadata editor — auto-sync must then leave its
 /// narrative fields (name/publisher/year/description/status/universe) alone and only refresh the
 /// cover + fill blank bookType/remoteCoverUrl.
-async fn series_is_locked(db: &PgPool, series_id: &str) -> bool {
-    sqlx::query_scalar::<_, bool>(r#"SELECT "hasCustomMetadata" FROM "Series" WHERE id=$1"#)
+async fn series_is_locked(db: &Db, series_id: &str) -> bool {
+    // CAST for the Any driver — SQLite's BOOLEAN decltype has no mapping.
+    sqlx::query_scalar::<_, i64>(r#"SELECT CAST("hasCustomMetadata" AS INTEGER) FROM "Series" WHERE id=$1"#)
         .bind(series_id)
-        .fetch_optional(db)
+        .fetch_optional(&db.pool)
         .await
         .ok()
         .flatten()
+        .map(|v| v != 0)
         .unwrap_or(false)
 }
 
@@ -135,7 +155,7 @@ async fn series_is_locked(db: &PgPool, series_id: &str) -> bool {
 /// Parity with metadata-fetcher.ts (ComicVine branch).
 #[allow(clippy::too_many_arguments)]
 async fn fetch_comicvine(
-    db: &PgPool,
+    db: &Db,
     client: &Client,
     api_key: &str,
     series_id: &str,
@@ -231,7 +251,7 @@ async fn fetch_comicvine(
         .bind(&image_url)
         .bind(guessed_book_type)
         .bind(series_id)
-        .execute(db)
+        .execute(&db.pool)
         .await
     } else {
         sqlx::query(
@@ -249,7 +269,7 @@ async fn fetch_comicvine(
         .bind(&image_url)
         .bind(guessed_book_type)
         .bind(series_id)
-        .execute(db)
+        .execute(&db.pool)
         .await
     };
     if let Err(e) = update_res {
@@ -264,7 +284,7 @@ async fn fetch_comicvine(
     let cv_total = vol_data["count_of_issues"].as_i64().unwrap_or(0);
     if !full_fetch && status == "Ended" && cv_total > 0 {
         let local_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
-            .bind(series_id).fetch_one(db).await.unwrap_or(0);
+            .bind(series_id).fetch_one(&db.pool).await.unwrap_or(0);
         if local_count >= cv_total {
             log::info!("[Metadata] {} is Ended and complete ({}/{}) — skipping ComicVine issue fetch.", series_name, local_count, cv_total);
             return Ok(0);
@@ -310,12 +330,13 @@ async fn fetch_comicvine(
         }
         let cv_issues = issue_json["results"].as_array().cloned().unwrap_or_default();
 
-        // Re-fetch the series' issues each page so issues created on earlier pages are visible to isSameIssue.
+        // Re-fetch the series' issues each page so issues created on earlier pages are visible to
+        // isSameIssue. Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
         let existing_issues = sqlx::query(
-            r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate", genres, description, "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
+            r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(series_id)
-        .fetch_all(db)
+        .fetch_all(&db.pool)
         .await?;
 
         // Batch the GLOBAL existing-by-cvId lookups for the whole page into ONE query (was 1 query per
@@ -324,13 +345,18 @@ async fn fetch_comicvine(
         let page_cv_ids: Vec<String> = cv_issues.iter()
             .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
             .collect();
-        let mut by_cv: std::collections::HashMap<String, sqlx::postgres::PgRow> = std::collections::HashMap::new();
+        let mut by_cv: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
         if !page_cv_ids.is_empty() {
-            let rows = sqlx::query(
-                r#"SELECT id, name, "releaseDate", "hasCustomMetadata", genres, description, "metadataId" FROM "Issue" WHERE "metadataId" = ANY($1) AND "metadataSource" = 'COMICVINE'"#,
-            )
-            .bind(&page_cv_ids)
-            .fetch_all(db)
+            let sql = format!(
+                r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId" FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE'"#,
+                Db::in_placeholders(1, page_cv_ids.len())
+            );
+            let mut q = sqlx::query(&sql);
+            for id in &page_cv_ids {
+                q = q.bind(id);
+            }
+            let rows = q
+            .fetch_all(&db.pool)
             .await?;
             for row in rows {
                 if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
@@ -372,22 +398,22 @@ async fn fetch_comicvine(
             // Determine the lock + existing fields from whichever record we'll target.
             let (is_locked, existing_name, existing_release, existing_genres, existing_desc, has_custom_cover, existing_cover) = if let Some(r) = existing_by_cv {
                 (
-                    r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
+                    r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
                     r.try_get::<Option<String>, _>("name").unwrap_or(None),
                     r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
                     r.try_get::<Option<String>, _>("genres").unwrap_or(None),
                     r.try_get::<Option<String>, _>("description").unwrap_or(None),
-                    r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                    r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
                     r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
                 )
             } else if let Some(r) = existing_by_num {
                 (
-                    r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
+                    r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
                     r.try_get::<Option<String>, _>("name").unwrap_or(None),
                     r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
                     r.try_get::<Option<String>, _>("genres").unwrap_or(None),
                     r.try_get::<Option<String>, _>("description").unwrap_or(None),
-                    r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                    r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
                     r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
                 )
             } else {
@@ -416,7 +442,7 @@ async fn fetch_comicvine(
                 )
                 .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val)
                 .bind(&desc_val).bind(&cover_val).bind(&genres_val).bind(&id)
-                .execute(db).await
+                .execute(&db.pool).await
             } else if let Some(r) = existing_by_num {
                 let id: String = r.get("id");
                 sqlx::query(
@@ -424,17 +450,18 @@ async fn fetch_comicvine(
                 )
                 .bind(&cv_id_str).bind(&name_val).bind(&release_val)
                 .bind(&desc_val).bind(&cover_val).bind(&genres_val).bind(&id)
-                .execute(db).await
+                .execute(&db.pool).await
             } else {
                 let new_id = uuid::Uuid::new_v4().to_string();
-                sqlx::query(
+                sqlx::query(&format!(
                     r#"INSERT INTO "Issue"
                        (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", "matchState", genres, "createdAt", "updatedAt")
-                       VALUES ($1,$2,$3,'COMICVINE',$4,'WANTED',$5,$6,$7,$8,'MATCHED',$9, NOW(), NOW())"#,
-                )
+                       VALUES ($1,$2,$3,'COMICVINE',$4,'WANTED',$5,$6,$7,$8,'MATCHED',$9, {now}, {now})"#,
+                    now = db.now_expr()
+                ))
                 .bind(&new_id).bind(series_id).bind(&cv_id_str).bind(&issue_num)
                 .bind(&name_val).bind(&release_val).bind(&cv_desc).bind(&cv_cover).bind(&genres_val)
-                .execute(db).await
+                .execute(&db.pool).await
             };
 
             if let Err(e) = res {
@@ -453,7 +480,7 @@ async fn fetch_comicvine(
     if status != "Ended" && latest_date_ms > 0 {
         if let Some((cutoff_ms, months)) = get_series_ended_cutoff(db).await {
             if latest_date_ms < cutoff_ms {
-                let _ = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(db).await;
+                let _ = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(&db.pool).await;
                 log::info!("[Metadata] Series \"{}\" marked as Ended after {}+ months without a new issue.", series_name, months);
             }
         }
@@ -466,9 +493,9 @@ async fn fetch_comicvine(
 /// Providers rarely report when a series ends, so Omnibus guesses: no new issue within the
 /// admin-configured window (months) = Ended. Returns None when the guess is disabled (window
 /// of 0 / "Never"). Parity with metadata-fetcher.ts getSeriesEndedCutoff (beta.034).
-async fn get_series_ended_cutoff(db: &PgPool) -> Option<(i64, i32)> {
+async fn get_series_ended_cutoff(db: &Db) -> Option<(i64, i32)> {
     let raw = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'series_ended_months'"#)
-        .fetch_optional(db)
+        .fetch_optional(&db.pool)
         .await
         .ok()
         .flatten();
@@ -480,7 +507,7 @@ async fn get_series_ended_cutoff(db: &PgPool) -> Option<(i64, i32)> {
     Some((chrono::Utc::now().timestamp_millis() - window_ms, months))
 }
 
-pub(crate) async fn metron_auth(db: &PgPool) -> Option<(String, String)> {
+pub(crate) async fn metron_auth(db: &sqlx::AnyPool) -> Option<(String, String)> {
     let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('metron_user','metron_pass')"#)
         .fetch_all(db).await.unwrap_or_default();
     let mut user = String::new();
@@ -491,22 +518,6 @@ pub(crate) async fn metron_auth(db: &PgPool) -> Option<(String, String)> {
         if k == "metron_user" { user = v; } else if k == "metron_pass" { pass = v; }
     }
     // metron_pass is stored encrypted at rest (parity with Node); metron_user is not a secret.
-    let pass = crate::secret_crypto::decrypt_setting(db, Some(pass)).await.unwrap_or_default();
-    if user.is_empty() || pass.is_empty() || pass == "********" { None } else { Some((user, pass)) }
-}
-
-/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`metron_auth`] for modules already ported to
-/// the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
-pub(crate) async fn metron_auth_any(db: &sqlx::AnyPool) -> Option<(String, String)> {
-    let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('metron_user','metron_pass')"#)
-        .fetch_all(db).await.unwrap_or_default();
-    let mut user = String::new();
-    let mut pass = String::new();
-    for row in rows {
-        let k: String = row.get("key");
-        let v: String = row.get("value");
-        if k == "metron_user" { user = v; } else if k == "metron_pass" { pass = v; }
-    }
     let pass = crate::secret_crypto::decrypt_setting_any(db, Some(pass)).await.unwrap_or_default();
     if user.is_empty() || pass.is_empty() || pass == "********" { None } else { Some((user, pass)) }
 }
@@ -520,7 +531,7 @@ fn metron_header_i64(resp: &reqwest::Response, name: &str, default: i64) -> i64 
 }
 
 /// Metron HTTP GET with burst-rate-limit handling + retry/backoff (parity with metron.ts fetchWithBackoff).
-async fn metron_fetch(db: &PgPool, client: &Client, auth: &(String, String), url: &str, timeout_secs: u64, max_retries: u32) -> anyhow::Result<(u16, serde_json::Value)> {
+async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &str, timeout_secs: u64, max_retries: u32) -> anyhow::Result<(u16, serde_json::Value)> {
     log::debug!("[Metron Debug] Executing Fetch: {}", url);
     for attempt in 0..max_retries {
         match client
@@ -618,7 +629,7 @@ fn metron_issue_name(issue: &serde_json::Value, number: &str) -> String {
 /// (matching the Node behavior — richer credits would require per-issue getIssueDetails calls).
 #[allow(clippy::too_many_arguments)]
 async fn fetch_metron(
-    db: &PgPool,
+    db: &Db,
     client: &Client,
     series_id: &str,
     series_name: &str,
@@ -631,7 +642,7 @@ async fn fetch_metron(
     has_custom_cover: bool,
     cover_source: &str,
 ) -> anyhow::Result<i32> {
-    let auth = match metron_auth(db).await {
+    let auth = match metron_auth(&db.pool).await {
         Some(a) => a,
         None => {
             log::warn!("[Metadata] Metron credentials missing; skipping {}", series_name);
@@ -693,7 +704,7 @@ async fn fetch_metron(
                WHERE id=$5"#,
         )
         .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(series_id)
-        .execute(db).await
+        .execute(&db.pool).await
     } else {
         sqlx::query(
             r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6, universe=COALESCE($7, universe),
@@ -703,14 +714,14 @@ async fn fetch_metron(
         )
         .bind(&name).bind(&publisher).bind(year).bind(&description).bind(&final_cover).bind(status_str).bind(&universe)
         .bind(&cover_remote).bind(book_type).bind(series_id)
-        .execute(db).await
+        .execute(&db.pool).await
     };
     if let Err(e) = update_res {
         log::error!("[Metadata] Failed to update Metron series {}: {:?}", series_name, e);
     }
 
     let local_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
-        .bind(series_id).fetch_one(db).await.unwrap_or(0);
+        .bind(series_id).fetch_one(&db.pool).await.unwrap_or(0);
 
     // API-call reduction: an Ended series we already hold in full has no new issues to page — skip the
     // issue_list pagination (issue_count from the series detail above; status from status_str). The
@@ -744,11 +755,12 @@ async fn fetch_metron(
         next_url = data["next"].as_str().map(|s| s.to_string());
     }
 
+    // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
     let existing_issues = sqlx::query(
-        r#"SELECT id, number, "hasCustomMetadata", name, "releaseDate", "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
+        r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
     )
     .bind(series_id)
-    .fetch_all(db)
+    .fetch_all(&db.pool)
     .await?;
 
     // Batch the GLOBAL existing-by-metadataId lookups for every issue into ONE query (was 1 query per
@@ -756,13 +768,18 @@ async fn fetch_metron(
     let all_meta_ids: Vec<String> = all_issues.iter()
         .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
         .collect();
-    let mut by_meta: std::collections::HashMap<String, sqlx::postgres::PgRow> = std::collections::HashMap::new();
+    let mut by_meta: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
     if !all_meta_ids.is_empty() {
-        let rows = sqlx::query(
-            r#"SELECT id, name, "releaseDate", "hasCustomMetadata", "metadataId" FROM "Issue" WHERE "metadataId" = ANY($1) AND "metadataSource" = 'METRON'"#,
-        )
-        .bind(&all_meta_ids)
-        .fetch_all(db)
+        let sql = format!(
+            r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId" FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON'"#,
+            Db::in_placeholders(1, all_meta_ids.len())
+        );
+        let mut q = sqlx::query(&sql);
+        for id in &all_meta_ids {
+            q = q.bind(id);
+        }
+        let rows = q
+        .fetch_all(&db.pool)
         .await?;
         for row in rows {
             if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
@@ -802,18 +819,18 @@ async fn fetch_metron(
 
         let (is_locked, existing_name, existing_release, has_custom_cover, existing_cover) = if let Some(r) = existing_by_meta {
             (
-                r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
+                r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
                 r.try_get::<Option<String>, _>("name").unwrap_or(None),
                 r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
-                r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
                 r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
             )
         } else if let Some(r) = existing_by_num {
             (
-                r.try_get::<bool, _>("hasCustomMetadata").unwrap_or(false),
+                r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
                 r.try_get::<Option<String>, _>("name").unwrap_or(None),
                 r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
-                r.try_get::<bool, _>("hasCustomCover").unwrap_or(false),
+                r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
                 r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
             )
         } else {
@@ -836,13 +853,13 @@ async fn fetch_metron(
                     r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, "coverUrl"=$3, "matchState"='MATCHED' WHERE id=$4"#,
                 )
                 .bind(series_id).bind(&issue_num).bind(&cover_val).bind(&id)
-                .execute(db).await
+                .execute(&db.pool).await
             } else {
                 sqlx::query(
                     r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$7"#,
                 )
                 .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(&id)
-                .execute(db).await
+                .execute(&db.pool).await
             }
         } else if let Some(r) = existing_by_num {
             let id: String = r.get("id");
@@ -852,23 +869,24 @@ async fn fetch_metron(
                     r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', "coverUrl"=$2, "matchState"='MATCHED' WHERE id=$3"#,
                 )
                 .bind(&source_id).bind(&cover_val).bind(&id)
-                .execute(db).await
+                .execute(&db.pool).await
             } else {
                 sqlx::query(
                     r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$6"#,
                 )
                 .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(&id)
-                .execute(db).await
+                .execute(&db.pool).await
             }
         } else {
             let new_id = uuid::Uuid::new_v4().to_string();
-            sqlx::query(
+            sqlx::query(&format!(
                 r#"INSERT INTO "Issue"
                    (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", writers, artists, characters, "matchState", "createdAt", "updatedAt")
-                   VALUES ($1,$2,$3,'METRON',$4,'WANTED',$5,$6,$7,$8,'[]','[]','[]','MATCHED', NOW(), NOW())"#,
-            )
+                   VALUES ($1,$2,$3,'METRON',$4,'WANTED',$5,$6,$7,$8,'[]','[]','[]','MATCHED', {now}, {now})"#,
+                now = db.now_expr()
+            ))
             .bind(&new_id).bind(series_id).bind(&source_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover)
-            .execute(db).await
+            .execute(&db.pool).await
         };
 
         if let Err(e) = res {
@@ -885,14 +903,14 @@ async fn fetch_metron(
     if effective_latest == 0 {
         if let Ok(Some(d)) = sqlx::query_scalar::<_, Option<String>>(
             r#"SELECT MAX("releaseDate") FROM "Issue" WHERE "seriesId" = $1 AND "releaseDate" IS NOT NULL AND "releaseDate" <> ''"#,
-        ).bind(series_id).fetch_one(db).await {
+        ).bind(series_id).fetch_one(&db.pool).await {
             if let Some(ms) = parse_date_ms(&d) { effective_latest = ms; }
         }
     }
     if status_str != "Ended" && effective_latest > 0 {
         if let Some((cutoff_ms, months)) = get_series_ended_cutoff(db).await {
             if effective_latest < cutoff_ms {
-                let _ = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(db).await;
+                let _ = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(&db.pool).await;
                 log::info!("[Metadata] Series \"{}\" marked as Ended after {}+ months without a new issue.", series_name, months);
             }
         }
@@ -977,14 +995,14 @@ async fn resolve_cover(client: &Client, image_url: Option<&str>, folder_path: &s
     fallback
 }
 
-async fn mark_flag(db: &PgPool, key: &str) {
+async fn mark_flag(db: &Db, key: &str) {
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis().to_string()).unwrap_or_default();
     let _ = sqlx::query(
         r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
     )
     .bind(key)
     .bind(now_ms)
-    .execute(db)
+    .execute(&db.pool)
     .await;
 }
 

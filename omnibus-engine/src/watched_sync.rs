@@ -1,6 +1,7 @@
 use anyhow::Result;
+use crate::db::Db;
 use serde::Deserialize;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -74,7 +75,7 @@ fn re_metron_issue() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"/issue/(\d+)").unwrap())
 }
 
-pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
+pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     let watched_dir = std::env::var("OMNIBUS_WATCHED_DIR").unwrap_or_else(|_| "/watched".to_string());
     let unmatched_dir = std::env::var("OMNIBUS_AWAITING_MATCH_DIR").unwrap_or_else(|_| "/unmatched".to_string());
     
@@ -100,7 +101,7 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
     // ==========================================
     // PHASE 1: PARALLEL FILE I/O & CONVERSION
     // ==========================================
-    let cfg = crate::engine_config::EngineConfig::load(&db).await;
+    let cfg = crate::engine_config::EngineConfig::load_any(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.convert_workers));
     let mut join_set = JoinSet::new();
 
@@ -138,7 +139,7 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
     // ==========================================
     // PHASE 2: SEQUENTIAL DATABASE ROUTING
     // ==========================================
-    let settings = sqlx::query(r#"SELECT key, value FROM "SystemSetting""#).fetch_all(&db).await?;
+    let settings = sqlx::query(r#"SELECT key, value FROM "SystemSetting""#).fetch_all(&db.pool).await?;
     let mut folder_pattern = "{Publisher}/{Series} ({Year})".to_string();
     let mut file_pattern = "{Series} #{Issue}".to_string();
     let mut manga_file_pattern = "{Series} Vol. {Issue}".to_string();
@@ -151,7 +152,8 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
         if key == "manga_file_naming_pattern" { manga_file_pattern = val.clone(); }
     }
 
-    let libraries = sqlx::query(r#"SELECT id, path, "isDefault", "isManga" FROM "Library""#).fetch_all(&db).await?;
+    // Bool columns are CAST for the Any driver — SQLite's BOOLEAN decltype has no mapping.
+    let libraries = sqlx::query(r#"SELECT id, path, CAST("isDefault" AS INTEGER) AS "isDefault", CAST("isManga" AS INTEGER) AS "isManga" FROM "Library""#).fetch_all(&db.pool).await?;
     if libraries.is_empty() {
         anyhow::bail!("No libraries configured in the database!");
     }
@@ -159,7 +161,7 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
     // Manga-detection waterfall inputs, loaded once per job (parity with the scanner): publisher
     // lists + a shared HTTP client for the AniList fallback. Used only for NEW series whose ComicInfo
     // <Manga> tag didn't already settle it.
-    let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings(&db).await;
+    let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings(&db.pool).await;
     let manga_http = reqwest::Client::new();
 
     let mut success_count = 0;
@@ -234,11 +236,12 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
             // Node's findUnique. The earlier name+publisher OR clause could merge two distinct series
             // or shadow a real ID match on a stale name collision.
             let existing_series = sqlx::query(
-                r#"SELECT id, "isManga", "libraryId", "folderPath" FROM "Series"
+                // isManga is CAST for the Any driver (no SQLite BOOLEAN mapping).
+                r#"SELECT id, CAST("isManga" AS INTEGER) AS "isManga", "libraryId", "folderPath" FROM "Series"
                    WHERE "metadataSource" = $1 AND "metadataId" = $2"#
             )
             .bind(&meta_source).bind(&meta_id)
-            .fetch_optional(&db).await?;
+            .fetch_optional(&db.pool).await?;
 
             let series_id: String;
             let target_lib_id: String;
@@ -246,7 +249,7 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
 
             if let Some(series_row) = existing_series {
                 series_id = series_row.get("id");
-                is_manga = series_row.get("isManga");
+                is_manga = series_row.get::<i64, _>("isManga") != 0;
                 target_lib_id = series_row.get("libraryId");
                 dest_folder = PathBuf::from(series_row.get::<String, _>("folderPath"));
             } else {
@@ -268,8 +271,8 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                 let mut fallback_lib_path = String::new();
                 let mut fallback_lib_id = String::new();
                 for lib in &libraries {
-                    let lib_manga: bool = lib.get("isManga");
-                    let lib_default: bool = lib.get("isDefault");
+                    let lib_manga: bool = lib.get::<i64, _>("isManga") != 0;
+                    let lib_default: bool = lib.get::<i64, _>("isDefault") != 0;
                     if lib_manga == is_manga && lib_default {
                         fallback_lib_path = lib.get("path");
                         fallback_lib_id = lib.get("id");
@@ -278,7 +281,7 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                 }
                 if fallback_lib_path.is_empty() {
                     for lib in &libraries {
-                        let lib_manga: bool = lib.get("isManga");
+                        let lib_manga: bool = lib.get::<i64, _>("isManga") != 0;
                         if lib_manga == is_manga {
                             fallback_lib_path = lib.get("path");
                             fallback_lib_id = lib.get("id");
@@ -357,15 +360,16 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
 
-                let _ = sqlx::query(
+                let _ = sqlx::query(&format!(
                     r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "metadataId", "metadataSource", "matchState", "isManga", "seriesGroup", "libraryId", "updatedAt")
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, 'MATCHED', $8, $9, $10, NOW())
-                       ON CONFLICT (id) DO UPDATE SET "folderPath" = EXCLUDED."folderPath", "updatedAt" = NOW()"#
-                )
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, 'MATCHED', $8, $9, $10, {now})
+                       ON CONFLICT (id) DO UPDATE SET "folderPath" = EXCLUDED."folderPath", "updatedAt" = {now}"#,
+                    now = db.now_expr()
+                ))
                 .bind(&series_id).bind(&series_name).bind(&publisher).bind(year)
                 .bind(dest_folder.to_string_lossy().to_string())
                 .bind(&meta_id).bind(&meta_source).bind(is_manga).bind(&series_group_db).bind(&target_lib_id)
-                .execute(&db).await;
+                .execute(&db.pool).await;
 
                 let issue_id = uuid::Uuid::new_v4().to_string();
 
@@ -413,7 +417,7 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                     r#"SELECT id, number FROM "Issue" WHERE "seriesId" = $1"#,
                 )
                 .bind(&series_id)
-                .fetch_all(&db)
+                .fetch_all(&db.pool)
                 .await
                 .unwrap_or_default()
                 .iter()
@@ -446,17 +450,18 @@ pub async fn process_watched_folder(db: PgPool) -> Result<(i32, i32, String)> {
                     .bind(&issue_num).bind(&file_path_str).bind(&issue_title).bind(&issue_summary)
                     .bind(&writers_json).bind(&artists_json).bind(&characters_json)
                     .bind(&issue_meta_id).bind(&issue_meta_source).bind(issue_match_state).bind(page_count).bind(&eid)
-                    .execute(&db).await
+                    .execute(&db.pool).await
                 } else {
-                    sqlx::query(
+                    sqlx::query(&format!(
                         r#"INSERT INTO "Issue" (id, "seriesId", number, status, "filePath", name, description, writers, artists, characters, "matchState", "metadataId", "metadataSource", "pageCount", "createdAt")
-                           VALUES ($1, $2, $3, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())"#,
-                    )
+                           VALUES ($1, $2, $3, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, {now})"#,
+                        now = db.now_expr()
+                    ))
                     .bind(&issue_id).bind(&series_id).bind(&issue_num).bind(&file_path_str)
                     .bind(&issue_title).bind(&issue_summary)
                     .bind(&writers_json).bind(&artists_json).bind(&characters_json)
                     .bind(issue_match_state).bind(&issue_meta_id).bind(&issue_meta_source).bind(page_count)
-                    .execute(&db).await
+                    .execute(&db.pool).await
                 };
 
                 if let Err(e) = res {

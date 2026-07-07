@@ -1,5 +1,5 @@
 use reqwest::Client;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::time::Duration;
 
 // Built-in fallbacks (parity with manga-detector.ts).
@@ -17,17 +17,7 @@ const DEFAULT_WESTERN_PUBLISHERS: &[&str] = &[
 
 /// Fetches the manga / western publisher lists from settings (or the built-in defaults).
 /// Fetch once per scan and pass the lists into `detect_manga` to avoid N+1 queries.
-pub async fn get_detector_settings(db: &PgPool) -> (Vec<String>, Vec<String>) {
-    let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('manga_publishers', 'western_publishers')"#)
-        .fetch_all(db)
-        .await
-        .unwrap_or_default();
-    resolve_detector_lists(rows.iter().map(|r| (r.get("key"), r.get("value"))).collect())
-}
-
-/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`get_detector_settings`] for modules already
-/// ported to the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
-pub async fn get_detector_settings_any(db: &sqlx::AnyPool) -> (Vec<String>, Vec<String>) {
+pub async fn get_detector_settings(db: &sqlx::AnyPool) -> (Vec<String>, Vec<String>) {
     let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('manga_publishers', 'western_publishers')"#)
         .fetch_all(db)
         .await

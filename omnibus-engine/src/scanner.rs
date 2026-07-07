@@ -326,7 +326,7 @@ async fn resolve_dynamic_ids(db: &Db, client: &reqwest::Client, d: &mut DerivedM
             d.recompute_resolved();
             return;
         }
-        if let Some(auth) = crate::metadata::metron_auth_any(&db.pool).await {
+        if let Some(auth) = crate::metadata::metron_auth(&db.pool).await {
             let url = format!("{}/api/series/?name={}", metron_base_url(), urlencoding::encode(series_name));
             let resp = client
                 .get(&url)
@@ -789,7 +789,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
     // Manga-detection (3rd tier) resources: one HTTP client + the publisher lists, fetched once for the whole scan.
     let http_client = reqwest::Client::new();
-    let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings_any(&db.pool).await;
+    let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings(&db.pool).await;
 
     // ---------------------------------------------------------
     // 5A. NEW FOLDERS → new Series + Issues, matched from the first archive's ComicInfo.xml
@@ -1470,5 +1470,36 @@ mod tests {
         .fetch_one(&db.pool).await.unwrap();
         assert_eq!(series_count2, 1, "re-scan must not duplicate the series");
         assert_eq!(issue_count2, 1, "re-scan must not duplicate the issue");
+
+        // Ported metadata pipeline on SQLite, no network needed: a LOCAL-source series skips the
+        // provider fetch but still runs the CAST/ISO series select, the embed job (a REAL
+        // ComicInfo.xml injection into the fixture cbz via metadata_writer), and the
+        // updatedAt/lastMetadataSync bump through the per-dialect now/now-UTC expressions.
+        let series_id_owned: String = row.get("id");
+        crate::metadata::sync_metadata(db.clone(), Some(vec![series_id_owned.clone()]))
+            .await
+            .expect("sync_metadata against SQLite");
+
+        let last_sync: Option<String> = sqlx::query_scalar(&format!(
+            r#"SELECT {} FROM "Series" WHERE id = $1"#,
+            db.iso_utc_expr(r#""lastMetadataSync""#)
+        ))
+        .bind(&series_id_owned)
+        .fetch_one(&db.pool)
+        .await
+        .expect("read lastMetadataSync via iso_utc_expr");
+        let iso = last_sync.expect("lastMetadataSync set by sync_metadata");
+        assert!(
+            iso.len() == 20 && iso.ends_with('Z') && iso.contains('T'),
+            "ISO-8601Z shape from iso_utc_expr, got {}",
+            iso
+        );
+
+        let f = File::open(&cbz).unwrap();
+        let mut za = ZipArchive::new(f).unwrap();
+        let has_comicinfo = (0..za.len()).any(|i| {
+            za.by_index(i).map(|e| e.name().eq_ignore_ascii_case("comicinfo.xml")).unwrap_or(false)
+        });
+        assert!(has_comicinfo, "embed job wrote ComicInfo.xml into the fixture cbz");
     }
 }

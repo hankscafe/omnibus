@@ -76,8 +76,30 @@ impl Db {
 
     /// `$start, $start+1, ..` placeholder list for a portable `IN (...)` — replaces Postgres's
     /// `= ANY($1)` array bind, which neither SQLite nor the Any driver supports.
+    /// NOTE: `IN ()` is invalid SQL on both backends — callers must guard the empty-list case
+    /// (Postgres's `= ANY('{}')` used to return zero rows; keep that behavior explicitly).
     pub fn in_placeholders(start: usize, n: usize) -> String {
         (0..n).map(|i| format!("${}", start + i)).collect::<Vec<_>>().join(", ")
+    }
+
+    /// "now" for Prisma DateTime columns that Node reads as naive UTC (e.g. lastMetadataSync).
+    /// Postgres needs the explicit AT TIME ZONE conversion (NOW() is timestamptz; the column is
+    /// timestamp); on SQLite it's the same epoch-ms integer as `now_expr`.
+    pub fn now_utc_ts_expr(&self) -> &'static str {
+        match self.dialect {
+            Dialect::Postgres => "(NOW() AT TIME ZONE 'UTC')",
+            Dialect::Sqlite => "CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER)",
+        }
+    }
+
+    /// Expression reading a Prisma DateTime column as an ISO-8601 `YYYY-MM-DDTHH:MM:SSZ` string
+    /// (UTC), NULL-preserving. `col` is a ready-to-embed (quoted) column reference. Needed because
+    /// DATETIME-declared SQLite columns have no Any-driver mapping and store epoch-ms.
+    pub fn iso_utc_expr(&self, col: &str) -> String {
+        match self.dialect {
+            Dialect::Postgres => format!(r#"to_char({col}, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')"#),
+            Dialect::Sqlite => format!("strftime('%Y-%m-%dT%H:%M:%SZ', {col} / 1000.0, 'unixepoch')"),
+        }
     }
 }
 

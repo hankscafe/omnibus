@@ -1,5 +1,6 @@
+use crate::db::Db;
 use jwalk::WalkDir;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::collections::{HashSet, HashMap};
 use std::fs::File;
 use std::io::Read;
@@ -272,7 +273,7 @@ fn pick_metron_series(results: &[serde_json::Value], series_name: &str, parsed_y
 /// Fill in a missing volume/series id when the file only carries an issue id, then recompute the
 /// resolved source + metadata id. Best-effort: any API/credential failure leaves the meta as-is
 /// (the series stays UNMATCHED, exactly like Node's catch branches).
-async fn resolve_dynamic_ids(db: &PgPool, client: &reqwest::Client, d: &mut DerivedMeta, series_name: Option<&str>) {
+async fn resolve_dynamic_ids(db: &Db, client: &reqwest::Client, d: &mut DerivedMeta, series_name: Option<&str>) {
     let cache_tail = format!(
         "{}_{}",
         series_name.unwrap_or(""),
@@ -289,8 +290,8 @@ async fn resolve_dynamic_ids(db: &PgPool, client: &reqwest::Client, d: &mut Deri
             }
         }
         let api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
-            .fetch_optional(db).await.ok().flatten();
-        let api_key = crate::secret_crypto::decrypt_setting(db, api_key).await;
+            .fetch_optional(&db.pool).await.ok().flatten();
+        let api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, api_key).await;
         if let Some(api_key) = api_key.filter(|k| !k.is_empty()) {
             let issue_id = d.cv_issue_id.unwrap();
             let url = format!("{}/api/issue/4000-{}/", cv_base_url(), issue_id);
@@ -325,7 +326,7 @@ async fn resolve_dynamic_ids(db: &PgPool, client: &reqwest::Client, d: &mut Deri
             d.recompute_resolved();
             return;
         }
-        if let Some(auth) = crate::metadata::metron_auth(db).await {
+        if let Some(auth) = crate::metadata::metron_auth_any(&db.pool).await {
             let url = format!("{}/api/series/?name={}", metron_base_url(), urlencoding::encode(series_name));
             let resp = client
                 .get(&url)
@@ -509,7 +510,7 @@ fn any_year_re() -> &'static Regex {
 // Main scan
 // ============================================================================
 
-pub async fn scan_library(db: PgPool, library_path: String, library_id: String, specific_path: Option<String>) -> anyhow::Result<()> {
+pub async fn scan_library(db: Db, library_path: String, library_id: String, specific_path: Option<String>) -> anyhow::Result<()> {
     log::info!("Starting fast parallel scan of: {}", library_path);
     let start_time = std::time::Instant::now();
 
@@ -543,12 +544,15 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
     };
 
     // Read the library's manga flag once — used as a baseline for series isManga.
-    let lib_is_manga: bool = match sqlx::query(r#"SELECT "isManga" FROM "Library" WHERE id = $1"#)
+    // Boolean columns are read as CAST(... AS INTEGER): sqlx's Any driver rejects SQLite's
+    // BOOLEAN-declared columns outright (SqliteTypeInfo(Bool) has no Any mapping), and the cast is
+    // equally valid on Postgres (bool → int4). Any's integer decode converts across widths.
+    let lib_is_manga: bool = match sqlx::query(r#"SELECT CAST("isManga" AS INTEGER) AS "isManga" FROM "Library" WHERE id = $1"#)
         .bind(&library_id)
-        .fetch_optional(&db)
+        .fetch_optional(&db.pool)
         .await?
     {
-        Some(row) => row.get("isManga"),
+        Some(row) => row.get::<i64, _>("isManga") != 0,
         None => false,
     };
 
@@ -563,16 +567,19 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         let active_reqs = sqlx::query(
             r#"SELECT "volumeId" FROM "Request" WHERE status NOT IN ('COMPLETED','IMPORTED','CANCELLED')"#,
         )
-        .fetch_all(&db)
+        .fetch_all(&db.pool)
         .await?;
         let active_vol_ids: HashSet<String> =
             active_reqs.iter().map(|r| r.get::<String, _>("volumeId")).collect();
 
         let series_for_ghost = sqlx::query(
-            r#"SELECT id, "folderPath", monitored, "metadataId" FROM "Series" WHERE "libraryId" = $1"#,
+            // monitored is CAST for the Any driver (see the isManga note above) and COALESCEd
+            // because a NULL expression result decodes as type NULL under Any — the code always
+            // treated NULL as false, so folding it in SQL is behavior-preserving.
+            r#"SELECT id, "folderPath", COALESCE(CAST(monitored AS INTEGER), 0) AS monitored, "metadataId" FROM "Series" WHERE "libraryId" = $1"#,
         )
         .bind(&library_id)
-        .fetch_all(&db)
+        .fetch_all(&db.pool)
         .await?;
 
         // Ghost-series purge with a GRACE WINDOW. A series whose folder is missing is NOT deleted
@@ -587,7 +594,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         let miss_raw: Option<String> = sqlx::query_scalar(
             r#"SELECT value FROM "SystemSetting" WHERE key = 'scan_missing_series'"#,
         )
-        .fetch_optional(&db)
+        .fetch_optional(&db.pool)
         .await
         .ok()
         .flatten();
@@ -599,13 +606,13 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         for row in series_for_ghost {
             let id: String = row.get("id");
             let folder: String = row.get("folderPath");
-            let monitored: Option<bool> = row.get("monitored");
+            let monitored = row.get::<i64, _>("monitored") != 0;
             let metadata_id: Option<String> = row.get("metadataId");
 
             if !folder.is_empty() && Path::new(&folder).exists() {
                 continue; // folder is present
             }
-            if monitored.unwrap_or(false) {
+            if monitored {
                 continue; // user is monitoring it for new issues
             }
             if let Some(mid) = &metadata_id {
@@ -632,25 +639,30 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
         )
         .bind(&next_miss_json)
-        .execute(&db)
+        .execute(&db.pool)
         .await
         {
             log::warn!("[Scan] Could not persist ghost-series grace counters: {:?}", e);
         }
 
         if !bad_series_ids.is_empty() {
-            if let Err(e) = sqlx::query(r#"DELETE FROM "Issue" WHERE "seriesId" = ANY($1)"#)
-                .bind(&bad_series_ids)
-                .execute(&db)
-                .await
-            {
+            // Portable IN (...) list instead of Postgres's `= ANY($1)` array bind — SQLite has no
+            // arrays and the Any driver can't bind Vec<T>. Ghost lists are small (per-library).
+            let ph = Db::in_placeholders(1, bad_series_ids.len());
+            let issues_sql = format!(r#"DELETE FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
+            let mut q = sqlx::query(&issues_sql);
+            for id in &bad_series_ids {
+                q = q.bind(id);
+            }
+            if let Err(e) = q.execute(&db.pool).await {
                 log::error!("[Scan] Failed to delete ghost-series issues: {:?}", e);
             }
-            if let Err(e) = sqlx::query(r#"DELETE FROM "Series" WHERE id = ANY($1)"#)
-                .bind(&bad_series_ids)
-                .execute(&db)
-                .await
-            {
+            let series_sql = format!(r#"DELETE FROM "Series" WHERE id IN ({})"#, ph);
+            let mut q = sqlx::query(&series_sql);
+            for id in &bad_series_ids {
+                q = q.bind(id);
+            }
+            if let Err(e) = q.execute(&db.pool).await {
                 log::error!("[Scan] Failed to delete ghost series: {:?}", e);
             }
             log::info!("[Scan] Purged {} ghost series records (folder missing > 24h).", bad_series_ids.len());
@@ -670,7 +682,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
                WHERE i."filePath" IS NOT NULL AND s."libraryId" = $1"#,
         )
         .bind(&library_id)
-        .fetch_all(&db)
+        .fetch_all(&db.pool)
         .await?;
 
         let mut ghost_count = 0;
@@ -688,7 +700,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
                             r#"UPDATE "Issue" SET "filePath" = NULL, status = 'WANTED' WHERE id = $1"#,
                         )
                         .bind(&issue_id)
-                        .execute(&db)
+                        .execute(&db.pool)
                         .await
                         {
                             log::error!("[Scanner Debug] Error blanking ghost issue '{}': {:?}", file_path, e);
@@ -713,7 +725,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
     log::info!("Mapping existing library data into memory...");
 
     let series_rows = sqlx::query(r#"SELECT id, "folderPath" FROM "Series" WHERE "folderPath" IS NOT NULL"#)
-        .fetch_all(&db)
+        .fetch_all(&db.pool)
         .await?;
     let mut existing_series: HashMap<String, String> = HashMap::new();
     for row in series_rows {
@@ -723,7 +735,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
     }
 
     let issue_rows = sqlx::query(r#"SELECT "filePath" FROM "Issue" WHERE "filePath" IS NOT NULL"#)
-        .fetch_all(&db)
+        .fetch_all(&db.pool)
         .await?;
     let mut existing_files: HashSet<String> = HashSet::new();
     for row in issue_rows {
@@ -777,13 +789,13 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
 
     // Manga-detection (3rd tier) resources: one HTTP client + the publisher lists, fetched once for the whole scan.
     let http_client = reqwest::Client::new();
-    let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings(&db).await;
+    let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings_any(&db.pool).await;
 
     // ---------------------------------------------------------
     // 5A. NEW FOLDERS → new Series + Issues, matched from the first archive's ComicInfo.xml
     // ---------------------------------------------------------
     // Parse each new folder's first-archive ComicInfo in parallel (bounded to CPU count), then insert sequentially.
-    let cfg = crate::engine_config::EngineConfig::load(&db).await;
+    let cfg = crate::engine_config::EngineConfig::load_any(&db.pool).await;
     let parse_sem = Arc::new(Semaphore::new(cfg.scan_workers));
 
     // Series name / year / publisher derivation, shared by the parallel phase (for manga detection) and
@@ -899,12 +911,13 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
 
         // ON CONFLICT DO NOTHING guards the @@unique([metadataSource, metadataId]) constraint —
         // a duplicate matched series is skipped (parity with Node's create-throws-then-skip).
-        let insert_res = sqlx::query(
+        let insert_res = sqlx::query(&format!(
             r#"INSERT INTO "Series"
                (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "seriesGroup", "libraryId", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, {now}, {now})
                ON CONFLICT DO NOTHING"#,
-        )
+            now = db.now_expr()
+        ))
         .bind(&series_id)
         .bind(&folder_path)
         .bind(&clean_name)
@@ -918,7 +931,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         .bind(is_manga)
         .bind(&series_group)
         .bind(&library_id)
-        .execute(&db)
+        .execute(&db.pool)
         .await;
 
         match insert_res {
@@ -954,11 +967,12 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
             let page_count = count_pages_blocking(file).await;
 
-            if let Err(e) = sqlx::query(
+            if let Err(e) = sqlx::query(&format!(
                 r#"INSERT INTO "Issue"
                    (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount", "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, NOW(), NOW())"#,
-            )
+                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, {now}, {now})"#,
+                now = db.now_expr()
+            ))
             .bind(&issue_id)
             .bind(&series_id)
             .bind(&issue_meta_id)
@@ -967,7 +981,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             .bind(&issue_num)
             .bind(file)
             .bind(page_count)
-            .execute(&db)
+            .execute(&db.pool)
             .await
             {
                 log::error!("[Scanner Debug] Failed to insert issue for {}: {:?}", file, e);
@@ -1008,9 +1022,14 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         .collect::<std::collections::HashSet<_>>().into_iter().collect();
     let mut series_issue_nums: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
     if !involved_series.is_empty() {
-        let rows = sqlx::query(r#"SELECT "seriesId", id, number FROM "Issue" WHERE "seriesId" = ANY($1)"#)
-            .bind(&involved_series)
-            .fetch_all(&db).await.unwrap_or_default();
+        // Portable IN (...) list — see the ghost-purge note above on `= ANY($1)`.
+        let ph = Db::in_placeholders(1, involved_series.len());
+        let sql = format!(r#"SELECT "seriesId", id, number FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
+        let mut q = sqlx::query(&sql);
+        for sid in &involved_series {
+            q = q.bind(sid);
+        }
+        let rows = q.fetch_all(&db.pool).await.unwrap_or_default();
         for r in rows {
             series_issue_nums.entry(r.get::<String, _>("seriesId")).or_default()
                 .push((r.get::<String, _>("id"), r.get::<String, _>("number")));
@@ -1028,12 +1047,13 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         if let Some(eid) = dup_id {
             // Repointed file: refresh the page count too (a 0-count row may finally have a readable zip).
             let page_count = count_pages_blocking(&file).await;
-            if let Err(e) = sqlx::query(
+            if let Err(e) = sqlx::query(&format!(
                 r#"UPDATE "Issue" SET "filePath"=$1, status='DOWNLOADED',
                        "pageCount"=CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END,
-                       "updatedAt"=NOW() WHERE id=$3"#,
-            )
-            .bind(&file).bind(page_count).bind(&eid).execute(&db).await
+                       "updatedAt"={now} WHERE id=$3"#,
+                now = db.now_expr()
+            ))
+            .bind(&file).bind(page_count).bind(&eid).execute(&db.pool).await
             {
                 log::error!("[Scanner Debug] Failed to repoint existing issue {}: {:?}", file, e);
             }
@@ -1051,11 +1071,12 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
 
         let issue_id = Uuid::new_v4().to_string();
         let page_count = count_pages_blocking(&file).await;
-        if let Err(e) = sqlx::query(
+        if let Err(e) = sqlx::query(&format!(
             r#"INSERT INTO "Issue"
                (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, NOW(), NOW())"#,
-        )
+               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, {now}, {now})"#,
+            now = db.now_expr()
+        ))
         .bind(&issue_id)
         .bind(&series_id)
         .bind(&issue_meta_id)
@@ -1064,7 +1085,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
         .bind(&issue_num)
         .bind(&file)
         .bind(page_count)
-        .execute(&db)
+        .execute(&db.pool)
         .await
         {
             log::error!("[Scanner Debug] Failed to append issue {}: {:?}", file, e);
@@ -1083,7 +1104,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
     // show the placeholder. Pull the first page of their lowest archive into <folder>/cover.<ext>.
     // Idempotent + cheap on re-scans: skips series that already have a coverUrl or a custom cover.
     let cover_source = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'cover_source'"#)
-        .fetch_optional(&db).await.ok().flatten().unwrap_or_else(|| "metadata".to_string());
+        .fetch_optional(&db.pool).await.ok().flatten().unwrap_or_else(|| "metadata".to_string());
 
     if cover_source != "metadata_only" {
         let cover_targets = sqlx::query(
@@ -1092,7 +1113,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
                  AND ("coverUrl" IS NULL OR "coverUrl" = '')"#,
         )
         .bind(&library_id)
-        .fetch_all(&db)
+        .fetch_all(&db.pool)
         .await
         .unwrap_or_default();
 
@@ -1121,7 +1142,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             while let Some(res) = cover_set.join_next().await {
                 if let Ok(Some((id, url))) = res {
                     if sqlx::query(r#"UPDATE "Series" SET "coverUrl" = $1 WHERE id = $2"#)
-                        .bind(&url).bind(&id).execute(&db).await.is_ok()
+                        .bind(&url).bind(&id).execute(&db.pool).await.is_ok()
                     {
                         covered += 1;
                     }
@@ -1144,7 +1165,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
            WHERE s."libraryId" = $1 AND i."pageCount" = 0 AND i."filePath" IS NOT NULL"#,
     )
     .bind(&library_id)
-    .fetch_all(&db)
+    .fetch_all(&db.pool)
     .await
     .unwrap_or_default();
 
@@ -1172,7 +1193,7 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
             if let Ok((id, Some(count))) = res {
                 if count > 0
                     && sqlx::query(r#"UPDATE "Issue" SET "pageCount" = $1 WHERE id = $2"#)
-                        .bind(count).bind(&id).execute(&db).await.is_ok()
+                        .bind(count).bind(&id).execute(&db.pool).await.is_ok()
                 {
                     backfilled += 1;
                 }
@@ -1190,17 +1211,17 @@ pub async fn scan_library(db: PgPool, library_path: String, library_id: String, 
     Ok(())
 }
 
-async fn delete_issue(db: &PgPool, issue_id: &str) {
+async fn delete_issue(db: &Db, issue_id: &str) {
     if let Err(e) = sqlx::query(r#"DELETE FROM "ReadProgress" WHERE "issueId" = $1"#)
         .bind(issue_id)
-        .execute(db)
+        .execute(&db.pool)
         .await
     {
         log::error!("[Scanner Debug] Error deleting ReadProgress for {}: {:?}", issue_id, e);
     }
     if let Err(e) = sqlx::query(r#"DELETE FROM "Issue" WHERE id = $1"#)
         .bind(issue_id)
-        .execute(db)
+        .execute(&db.pool)
         .await
     {
         log::error!("[Scanner Debug] Error deleting ghost issue {}: {:?}", issue_id, e);
@@ -1350,5 +1371,97 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(derive_meta(&info2).parsed_year, Some(2021));
+    }
+
+    // ------------------------------------------------------------------
+    // SQLite spike: run the real scan_library against a Prisma-created SQLite database file.
+    // Gated on env vars so normal `cargo test` runs skip it:
+    //   OMNIBUS_SPIKE_DB  — path to a SQLite db created by `prisma db push` (main-branch schema)
+    //   OMNIBUS_SPIKE_LIB — scratch directory to use as the library root (fixture cbz is created here)
+    // Proves: Any-driver connect + $N placeholders + bool/i64/String decode on SQLite rows,
+    // ON CONFLICT, the now_expr() epoch-ms write (Prisma-readable), and scan idempotency.
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn sqlite_spike_end_to_end_scan() {
+        let Ok(db_path) = std::env::var("OMNIBUS_SPIKE_DB") else {
+            eprintln!("OMNIBUS_SPIKE_DB unset — skipping SQLite spike test");
+            return;
+        };
+        let Ok(lib_dir) = std::env::var("OMNIBUS_SPIKE_LIB") else {
+            eprintln!("OMNIBUS_SPIKE_LIB unset — skipping SQLite spike test");
+            return;
+        };
+
+        // Fixture: <lib>/Spike Series (2020)/Spike Series 001 (2020).cbz — a zip whose 3 image-named
+        // entries make count_zip_pages report 3 (it counts entries, it never decodes).
+        let series_dir = Path::new(&lib_dir).join("Spike Series (2020)");
+        std::fs::create_dir_all(&series_dir).expect("create fixture series dir");
+        let cbz = series_dir.join("Spike Series 001 (2020).cbz");
+        {
+            use std::io::Write as _;
+            let f = File::create(&cbz).expect("create fixture cbz");
+            let mut zw = zip::ZipWriter::new(f);
+            for name in ["01.jpg", "02.jpg", "03.jpg"] {
+                zw.start_file(name, zip::write::FileOptions::default()).unwrap();
+                zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+
+        let db = crate::db::Db::connect(&format!("file:{}", db_path), 2).await.expect("Any-driver SQLite connect");
+        assert_eq!(db.dialect, crate::db::Dialect::Sqlite);
+
+        // Seed the Library row the scan reads its isManga baseline from. isManga=true exercises the
+        // bool decode AND short-circuits manga detection before its AniList network tier.
+        sqlx::query(
+            r#"INSERT INTO "Library" (id, name, path, "isManga", "isDefault", "defaultAccess")
+               VALUES ($1, $2, $3, true, false, false) ON CONFLICT DO NOTHING"#,
+        )
+        .bind("spike_lib")
+        .bind("Spike Library")
+        .bind(&lib_dir)
+        .execute(&db.pool)
+        .await
+        .expect("seed Library row");
+
+        scan_library(db.clone(), lib_dir.clone(), "spike_lib".to_string(), None).await.expect("first scan");
+
+        let series_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Series" WHERE "libraryId" = 'spike_lib'"#)
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(series_count, 1, "exactly one series indexed");
+
+        // isManga/createdAt are CAST for the Any driver: SQLite's BOOLEAN- and DATETIME-declared
+        // columns have no Any mapping (same reason as the isManga read in scan_library). createdAt
+        // goes through TEXT, not INTEGER: expression results carry SQLite's runtime type code,
+        // which sqlx maps to the 32-bit Any path — an epoch-ms value silently truncates mod 2^32.
+        let row = sqlx::query(r#"SELECT id, name, CAST("isManga" AS INTEGER) AS "isManga", "matchState", CAST("createdAt" AS TEXT) AS "createdAt" FROM "Series" WHERE "libraryId" = 'spike_lib'"#)
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(row.get::<String, _>("name"), "Spike Series");
+        assert_eq!(row.get::<i64, _>("isManga"), 1, "bool stored as INTEGER 1 (Prisma-native)");
+        assert_eq!(row.get::<String, _>("matchState"), "UNMATCHED");
+        // now_expr() must have written Prisma-native epoch milliseconds (sanity: within a day of now).
+        let created_ms: i64 = row.get::<String, _>("createdAt").parse().expect("createdAt is an integer");
+        let sys_now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        assert!((sys_now_ms - created_ms).abs() < 24 * 3600 * 1000, "createdAt is epoch-ms, got {}", created_ms);
+
+        let issue = sqlx::query(r#"SELECT number, status, "pageCount" FROM "Issue" WHERE "seriesId" = $1"#)
+            .bind(row.get::<String, _>("id"))
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(issue.get::<String, _>("number"), "1");
+        assert_eq!(issue.get::<String, _>("status"), "DOWNLOADED");
+        assert_eq!(issue.get::<i64, _>("pageCount"), 3);
+
+        // Second scan: idempotent (dedupe via existing filePath map) and exercises the ghost-sweep
+        // read paths (Series bool/Option<bool> reads, Issue joins) against live SQLite rows.
+        scan_library(db.clone(), lib_dir.clone(), "spike_lib".to_string(), None).await.expect("second scan");
+        let series_count2: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Series" WHERE "libraryId" = 'spike_lib'"#)
+            .fetch_one(&db.pool).await.unwrap();
+        let issue_count2: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*) FROM "Issue" i JOIN "Series" s ON i."seriesId" = s.id WHERE s."libraryId" = 'spike_lib'"#,
+        )
+        .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(series_count2, 1, "re-scan must not duplicate the series");
+        assert_eq!(issue_count2, 1, "re-scan must not duplicate the issue");
     }
 }

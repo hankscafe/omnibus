@@ -1,4 +1,5 @@
 mod converter;
+mod db;
 mod scanner;
 mod metadata;
 mod prowlarr;
@@ -143,6 +144,9 @@ struct InteractiveResponse {
 
 struct AppState {
     db: PgPool,
+    // Runtime-selected (Postgres/SQLite) pool for modules already ported to the dual-DB seam
+    // (src/db.rs) — currently the scanner. Replaces `db` entirely once every module is ported.
+    scan_db: db::Db,
     limiter: Arc<rate_limiter::RateLimiter>,
     // Shared secret (Node's NEXTAUTH_SECRET) required in the X-Internal-Secret header on every
     // request. `None` when unset → endpoints are open (dev/localhost); a startup warning is logged.
@@ -385,7 +389,11 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
              address ({bind_addr}) is loopback-only, so they are not reachable off-host (dev/single-host)."
         );
     }
-    let shared_state = Arc::new(AppState { db: pool, limiter, internal_secret });
+    // Dual-DB seam (src/db.rs): the runtime-selected Any pool for ported modules (scanner). Points
+    // at the same DATABASE_URL as `pool` today; sized small because the scanner's DB work is mostly
+    // sequential. Both pools coexist only while the module-by-module migration is in progress.
+    let scan_db = db::Db::connect(&db_url, db_connections.min(8)).await?;
+    let shared_state = Arc::new(AppState { db: pool, scan_db, limiter, internal_secret });
 
     let api = Router::new()
         .route("/api/repack", post(handle_repack))
@@ -921,6 +929,7 @@ async fn handle_scan(
 
     tokio::spawn(async move {
         let db = state.db.clone();
+        let scan_db = state.scan_db.clone();
         let lock_id = format!("LIBRARY_SCAN_{}", payload.library_id);
 
         // Concurrency lock (parity with the pristine Node JobLock): refuse to start a second scan of the
@@ -945,7 +954,7 @@ async fn handle_scan(
         }
 
         let start_time = std::time::Instant::now();
-        if let Err(e) = scanner::scan_library(db.clone(), payload.library_path, payload.library_id.clone(), payload.specific_path).await {
+        if let Err(e) = scanner::scan_library(scan_db, payload.library_path, payload.library_id.clone(), payload.specific_path).await {
             log::error!("❌ Library scan failed: {:?}", e);
             write_failed_joblog(&db, "LIBRARY_SCAN", start_time.elapsed().as_millis() as i32, format!("Library scan failed: {:?}", e)).await;
         }

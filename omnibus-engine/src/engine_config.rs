@@ -41,17 +41,14 @@ impl EngineConfig {
         Self::resolve(None, None, None, None, None, None, cores())
     }
 
+    const SETTINGS_SQL: &'static str = r#"SELECT key, value FROM "SystemSetting" WHERE key IN
+               ('engine_max_scan_workers','engine_max_convert_workers','engine_cpu_cap',
+                'engine_max_blocking_threads','engine_memory_ceiling_mb','engine_max_db_connections')"#;
+
     /// Reads the `engine_*` SystemSetting keys and resolves them into clamped, derated limits.
     pub async fn load(db: &PgPool) -> Self {
         let mut map: HashMap<String, String> = HashMap::new();
-        match sqlx::query(
-            r#"SELECT key, value FROM "SystemSetting" WHERE key IN
-               ('engine_max_scan_workers','engine_max_convert_workers','engine_cpu_cap',
-                'engine_max_blocking_threads','engine_memory_ceiling_mb','engine_max_db_connections')"#,
-        )
-        .fetch_all(db)
-        .await
-        {
+        match sqlx::query(Self::SETTINGS_SQL).fetch_all(db).await {
             Ok(rows) => {
                 for row in rows {
                     let k: String = row.get("key");
@@ -61,7 +58,27 @@ impl EngineConfig {
             }
             Err(e) => log::warn!("[Config] Could not read engine concurrency settings ({}); using defaults.", e),
         }
+        Self::from_map(map)
+    }
 
+    /// TRANSITIONAL (dual-DB migration): AnyPool twin of [`Self::load`] for modules already ported
+    /// to the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
+    pub async fn load_any(db: &sqlx::AnyPool) -> Self {
+        let mut map: HashMap<String, String> = HashMap::new();
+        match sqlx::query(Self::SETTINGS_SQL).fetch_all(db).await {
+            Ok(rows) => {
+                for row in rows {
+                    let k: String = row.get("key");
+                    let v: String = row.get("value");
+                    map.insert(k, v);
+                }
+            }
+            Err(e) => log::warn!("[Config] Could not read engine concurrency settings ({}); using defaults.", e),
+        }
+        Self::from_map(map)
+    }
+
+    fn from_map(map: HashMap<String, String>) -> Self {
         let num = |key: &str| -> Option<u64> { map.get(key).and_then(|v| v.trim().parse::<u64>().ok()) };
 
         let cfg = Self::resolve(

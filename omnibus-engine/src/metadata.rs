@@ -495,6 +495,22 @@ pub(crate) async fn metron_auth(db: &PgPool) -> Option<(String, String)> {
     if user.is_empty() || pass.is_empty() || pass == "********" { None } else { Some((user, pass)) }
 }
 
+/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`metron_auth`] for modules already ported to
+/// the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
+pub(crate) async fn metron_auth_any(db: &sqlx::AnyPool) -> Option<(String, String)> {
+    let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('metron_user','metron_pass')"#)
+        .fetch_all(db).await.unwrap_or_default();
+    let mut user = String::new();
+    let mut pass = String::new();
+    for row in rows {
+        let k: String = row.get("key");
+        let v: String = row.get("value");
+        if k == "metron_user" { user = v; } else if k == "metron_pass" { pass = v; }
+    }
+    let pass = crate::secret_crypto::decrypt_setting_any(db, Some(pass)).await.unwrap_or_default();
+    if user.is_empty() || pass.is_empty() || pass == "********" { None } else { Some((user, pass)) }
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }

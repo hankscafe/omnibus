@@ -24,14 +24,8 @@ fn derive_key(secret: &str) -> [u8; 32] {
 }
 
 /// Resolve the encryption key the same way Node does: the persistent DATABASE_ENCRYPTION_KEY row
-/// takes precedence; the NEXTAUTH_SECRET env var is the fallback.
-async fn encryption_key(db: &PgPool) -> Option<[u8; 32]> {
-    let db_key: Option<String> =
-        sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'DATABASE_ENCRYPTION_KEY'"#)
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten();
+/// (fetched by the caller) takes precedence; the NEXTAUTH_SECRET env var is the fallback.
+fn resolve_key(db_key: Option<String>) -> Option<[u8; 32]> {
     let secret = db_key
         .filter(|s| !s.is_empty())
         // Refuse to derive a key from the shipped placeholder NEXTAUTH_SECRET (parity with Node's
@@ -39,6 +33,20 @@ async fn encryption_key(db: &PgPool) -> Option<[u8; 32]> {
         .or_else(|| std::env::var("NEXTAUTH_SECRET").ok().filter(|s| !s.is_empty() && !crate::is_placeholder_secret(s)))
         .filter(|s| !s.is_empty())?;
     Some(derive_key(&secret))
+}
+
+const KEY_ROW_SQL: &str = r#"SELECT value FROM "SystemSetting" WHERE key = 'DATABASE_ENCRYPTION_KEY'"#;
+
+async fn encryption_key(db: &PgPool) -> Option<[u8; 32]> {
+    let db_key: Option<String> = sqlx::query_scalar(KEY_ROW_SQL).fetch_optional(db).await.ok().flatten();
+    resolve_key(db_key)
+}
+
+/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`encryption_key`] for modules already ported
+/// to the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
+async fn encryption_key_any(db: &sqlx::AnyPool) -> Option<[u8; 32]> {
+    let db_key: Option<String> = sqlx::query_scalar(KEY_ROW_SQL).fetch_optional(db).await.ok().flatten();
+    resolve_key(db_key)
 }
 
 /// Decrypt the v1 `<iv_hex>:<ct_hex>` portion (everything after the `enc:v1:` prefix). AES-256-CBC.
@@ -86,16 +94,30 @@ pub async fn decrypt_setting(db: &PgPool, value: Option<String>) -> Option<Strin
     } else {
         return Some(v);
     };
-    match decoded {
-        Some(plain) => Some(plain),
-        None => {
-            log::warn!(
-                "[Secret] Failed to decrypt a SystemSetting credential; treating it as missing. \
-                 Check DATABASE_ENCRYPTION_KEY / NEXTAUTH_SECRET parity with the Node app."
-            );
-            None
-        }
+    warn_if_undecryptable(decoded)
+}
+
+/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`decrypt_setting`] for ported modules.
+pub async fn decrypt_setting_any(db: &sqlx::AnyPool, value: Option<String>) -> Option<String> {
+    let v = value?;
+    let decoded = if let Some(rest) = v.strip_prefix(PREFIX_V2) {
+        encryption_key_any(db).await.and_then(|key| decrypt_payload_v2(rest, &key))
+    } else if let Some(rest) = v.strip_prefix(PREFIX_V1) {
+        encryption_key_any(db).await.and_then(|key| decrypt_payload_v1(rest, &key))
+    } else {
+        return Some(v);
+    };
+    warn_if_undecryptable(decoded)
+}
+
+fn warn_if_undecryptable(decoded: Option<String>) -> Option<String> {
+    if decoded.is_none() {
+        log::warn!(
+            "[Secret] Failed to decrypt a SystemSetting credential; treating it as missing. \
+             Check DATABASE_ENCRYPTION_KEY / NEXTAUTH_SECRET parity with the Node app."
+        );
     }
+    decoded
 }
 
 /// Convenience wrapper for values pulled from a settings map (returns "" when absent/undecryptable).

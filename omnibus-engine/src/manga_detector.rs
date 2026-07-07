@@ -22,12 +22,23 @@ pub async fn get_detector_settings(db: &PgPool) -> (Vec<String>, Vec<String>) {
         .fetch_all(db)
         .await
         .unwrap_or_default();
+    resolve_detector_lists(rows.iter().map(|r| (r.get("key"), r.get("value"))).collect())
+}
 
+/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`get_detector_settings`] for modules already
+/// ported to the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
+pub async fn get_detector_settings_any(db: &sqlx::AnyPool) -> (Vec<String>, Vec<String>) {
+    let rows = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('manga_publishers', 'western_publishers')"#)
+        .fetch_all(db)
+        .await
+        .unwrap_or_default();
+    resolve_detector_lists(rows.iter().map(|r| (r.get("key"), r.get("value"))).collect())
+}
+
+fn resolve_detector_lists(kv: Vec<(String, String)>) -> (Vec<String>, Vec<String>) {
     let mut manga: Option<Vec<String>> = None;
     let mut western: Option<Vec<String>> = None;
-    for row in rows {
-        let k: String = row.get("key");
-        let v: String = row.get("value");
+    for (k, v) in kv {
         let list: Vec<String> = v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
         if !list.is_empty() {
             if k == "manga_publishers" { manga = Some(list); }

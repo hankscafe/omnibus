@@ -4,7 +4,7 @@
 // rename. Hoster *resolution* (HosterEngine.resolveLink) and the Mega SDK stream stay in Node, which
 // calls this only for plain HTTP(S) URLs and handles the failure alert.
 use anyhow::{anyhow, bail, Result};
-use sqlx::PgPool;
+ 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -201,7 +201,7 @@ async fn establish_stream(
     bail!("Failed to connect after 3 attempts: {}", last_err)
 }
 
-pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> {
+pub async fn stream_download(db: &sqlx::AnyPool, req: StreamRequest) -> Result<String> {
     // For a getcomics.org /dls/ link, ANY failure to deliver the file automatically — an unsolved
     // Cloudflare challenge, OR a stalled/empty stream because the solver consumed getcomics' one-shot
     // signed download in its own browser (cookie-replay can't re-fetch it) — is best handed to the user
@@ -219,7 +219,7 @@ pub async fn stream_download(db: &PgPool, req: StreamRequest) -> Result<String> 
     }
 }
 
-async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String> {
+async fn run_stream_download(db: &sqlx::AnyPool, req: &StreamRequest) -> Result<String> {
     let part_path = format!("{}.part", req.dest_path);
     let _ = tokio::fs::remove_file(&part_path).await; // clear any stale partial
     if let Some(parent) = Path::new(&req.dest_path).parent() {
@@ -305,7 +305,7 @@ async fn run_stream_download(db: &PgPool, req: &StreamRequest) -> Result<String>
 /// reject an HTML page, stream to `part_path` under the 45s stall-watchdog, and reject a too-small file.
 /// Leaves the completed bytes at `part_path` on success; any failure returns Err so the caller can retry.
 async fn attempt_stream_to_part(
-    db: &PgPool,
+    db: &sqlx::AnyPool,
     client: &reqwest::Client,
     req: &StreamRequest,
     part_path: &str,

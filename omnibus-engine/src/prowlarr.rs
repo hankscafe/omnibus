@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +83,7 @@ fn map_raw_result(item: RawProwlarrResult) -> ProwlarrResult {
 /// query that returns only irrelevant hits would shadow a later, more-specific query and yield no
 /// match at all (the queries are ordered specific-first, so the good query often comes later). When
 /// false (interactive search), the first non-empty query wins to keep the UI response fast.
-pub async fn search(db: &PgPool, limiter: &crate::rate_limiter::RateLimiter, queries: &[String], is_manga: bool, exhaustive: bool) -> anyhow::Result<Vec<ProwlarrResult>> {    let prowlarr_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_url'"#).fetch_optional(db).await?;
+pub async fn search(db: &sqlx::AnyPool, limiter: &crate::rate_limiter::RateLimiter, queries: &[String], is_manga: bool, exhaustive: bool) -> anyhow::Result<Vec<ProwlarrResult>> {    let prowlarr_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_url'"#).fetch_optional(db).await?;
     let prowlarr_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_key'"#).fetch_optional(db).await?;
     let prowlarr_key = crate::secret_crypto::decrypt_setting(db, prowlarr_key).await;
     let prowlarr_cats: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_categories'"#).fetch_optional(db).await?;

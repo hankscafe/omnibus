@@ -11,7 +11,7 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
         .fetch_optional(&db.pool)
         .await?;
-    let cv_api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, cv_api_key).await;
+    let cv_api_key = crate::secret_crypto::decrypt_setting(&db.pool, cv_api_key).await;
 
     // Global cover-source preference: 'metadata' (provider wins, default) | 'archive' (keep an
     // extracted/local cover, don't overwrite with the provider) | 'metadata_only'. A custom-uploaded
@@ -518,7 +518,7 @@ pub(crate) async fn metron_auth(db: &sqlx::AnyPool) -> Option<(String, String)> 
         if k == "metron_user" { user = v; } else if k == "metron_pass" { pass = v; }
     }
     // metron_pass is stored encrypted at rest (parity with Node); metron_user is not a secret.
-    let pass = crate::secret_crypto::decrypt_setting_any(db, Some(pass)).await.unwrap_or_default();
+    let pass = crate::secret_crypto::decrypt_setting(db, Some(pass)).await.unwrap_or_default();
     if user.is_empty() || pass.is_empty() || pass == "********" { None } else { Some((user, pass)) }
 }
 

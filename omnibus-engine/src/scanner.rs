@@ -291,7 +291,7 @@ async fn resolve_dynamic_ids(db: &Db, client: &reqwest::Client, d: &mut DerivedM
         }
         let api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
             .fetch_optional(&db.pool).await.ok().flatten();
-        let api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, api_key).await;
+        let api_key = crate::secret_crypto::decrypt_setting(&db.pool, api_key).await;
         if let Some(api_key) = api_key.filter(|k| !k.is_empty()) {
             let issue_id = d.cv_issue_id.unwrap();
             let url = format!("{}/api/issue/4000-{}/", cv_base_url(), issue_id);

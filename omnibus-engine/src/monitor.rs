@@ -412,7 +412,7 @@ pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
         let v: String = r.get("value");
         if k == "metron_user" { metron_user = v; } else if k == "metron_pass" { metron_pass = v; }
     }
-    let metron_pass = crate::secret_crypto::decrypt_setting_any(&db.pool, Some(metron_pass)).await.unwrap_or_default();
+    let metron_pass = crate::secret_crypto::decrypt_setting(&db.pool, Some(metron_pass)).await.unwrap_or_default();
     if !metron_user.is_empty() && !metron_pass.is_empty() {
         phase1_metron(&db, &client, &metron_user, &metron_pass, &series, &mut issues, &mut skeletons_created, &mut candidates, &mut notes).await;
     }
@@ -420,7 +420,7 @@ pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
     // Phase 2 — ComicVine (only when a key is present).
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
         .fetch_optional(&db.pool).await?;
-    let cv_api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, cv_api_key).await.filter(|s| !s.is_empty());
+    let cv_api_key = crate::secret_crypto::decrypt_setting(&db.pool, cv_api_key).await.filter(|s| !s.is_empty());
     if let Some(key) = cv_api_key {
         if let Err(e) = phase2_comicvine(&db, &client, &key, &mut issues, &mut skeletons_created, &mut candidates).await {
             notes.push(format!("[Phase 2] ComicVine sync error: {}", e));

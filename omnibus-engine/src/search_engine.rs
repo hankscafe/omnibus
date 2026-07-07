@@ -1,5 +1,5 @@
 use regex::Regex;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use serde::Deserialize;
@@ -90,7 +90,7 @@ pub fn parse_search_source_order(value: Option<&str>) -> Vec<String> {
     if out.is_empty() { default() } else { out }
 }
 
-pub async fn get_custom_acronyms(db: &PgPool) -> anyhow::Result<HashMap<String, String>> {
+pub async fn get_custom_acronyms(db: &sqlx::AnyPool) -> anyhow::Result<HashMap<String, String>> {
     let mut ac_map = HashMap::new();
     ac_map.insert("tmnt".to_string(), "teenage mutant ninja turtles".to_string());
     ac_map.insert("asm".to_string(), "amazing spider-man".to_string());
@@ -361,7 +361,7 @@ fn core_series_words(title: &str, noise: &HashSet<String>) -> Vec<String> {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn filter_and_score(
-    db: &PgPool,
+    db: &sqlx::AnyPool,
     mut results: Vec<ProwlarrResult>,
     target_query: &str,
     is_manga: bool,

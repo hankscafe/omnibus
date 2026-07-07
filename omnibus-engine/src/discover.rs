@@ -313,7 +313,7 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
     let primary_source = if get("primary_metadata_source").is_empty() { "COMICVINE" } else { get("primary_metadata_source") };
 
     // Node requires a CV key up front regardless of source (queue.ts throws before the source branch).
-    let cv_api_key = crate::secret_crypto::decrypt_setting_any(&db.pool, config.get("cv_api_key").cloned()).await
+    let cv_api_key = crate::secret_crypto::decrypt_setting(&db.pool, config.get("cv_api_key").cloned()).await
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("CV_API_KEY").ok().filter(|s| !s.is_empty()))
         .unwrap_or_default();

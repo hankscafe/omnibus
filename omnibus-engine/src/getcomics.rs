@@ -1,6 +1,6 @@
 use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
-use sqlx::PgPool; 
+ 
 use std::collections::HashSet;
 use crate::prowlarr::ProwlarrResult;
 use serde::Serialize;
@@ -50,7 +50,7 @@ fn migrate_legacy_getcomics(prefs: &mut Vec<HosterPref>) {
 /// Parses the `hoster_priority` setting into an ordered, migrated preference list (mirrors the Node
 /// `enabledHostersFromSetting`/`migrateHosterPrefs` helpers): unset → defaults; empty array → none;
 /// string array → all enabled in that order; object array → each entry's `enabled` flag (default true).
-pub async fn hoster_prefs(db: &PgPool) -> Vec<HosterPref> {
+pub async fn hoster_prefs(db: &sqlx::AnyPool) -> Vec<HosterPref> {
     let hp: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'hoster_priority'"#)
         .fetch_optional(db).await.ok().flatten();
     let Some(val) = hp else { return default_hoster_prefs(); };
@@ -71,19 +71,19 @@ pub async fn hoster_prefs(db: &PgPool) -> Vec<HosterPref> {
 }
 
 /// The set of currently-enabled hosters, priority order preserved (Node's `enabledHosters`).
-pub async fn enabled_hosters(db: &PgPool) -> Vec<String> {
+pub async fn enabled_hosters(db: &sqlx::AnyPool) -> Vec<String> {
     hoster_prefs(db).await.into_iter().filter(|p| p.enabled).map(|p| p.hoster).collect()
 }
 
 /// Whether GetComics is usable as a source at all — either the fast direct CDN (`getcomics_direct`)
 /// or the gated main server (`getcomics_main`) is enabled. The split replaced the single legacy
 /// `getcomics` key, which is still accepted for un-migrated callers.
-pub async fn is_getcomics_enabled(db: &PgPool) -> bool {
+pub async fn is_getcomics_enabled(db: &sqlx::AnyPool) -> bool {
     enabled_hosters(db).await.iter().any(|h| h == "getcomics_direct" || h == "getcomics_main" || h == "getcomics")
 }
 
 /// Records a Cloudflare-block timestamp so the rest of the app can back off / surface it in the UI.
-async fn mark_cloudflare_flag(db: &PgPool) {
+async fn mark_cloudflare_flag(db: &sqlx::AnyPool) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis().to_string())
@@ -116,7 +116,7 @@ pub struct SolverConfig {
 /// FlareSolverr it's MILLISECONDS — sending the wrong unit to Byparr would read 300000 as ~83 hours.
 /// The engine's own HTTP timeout always uses real milliseconds + a 15s margin so it never cuts the
 /// solver off before its own budget elapses.
-pub async fn solver_config(db: &PgPool) -> SolverConfig {
+pub async fn solver_config(db: &sqlx::AnyPool) -> SolverConfig {
     let secs = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_timeout'"#)
         .fetch_optional(db).await.ok().flatten()
         .and_then(|v| v.trim().parse::<u64>().ok())
@@ -131,7 +131,7 @@ pub async fn solver_config(db: &PgPool) -> SolverConfig {
     SolverConfig { kind, payload_timeout, http_timeout_ms: secs * 1000 + 15_000 }
 }
 
-async fn fetch_html(client: &Client, db: &PgPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
+async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
     let res = client.get(url).send().await?;
     if res.status() == 403 {
         if let Some(flare_url) = flaresolverr.filter(|f| !f.is_empty()) {
@@ -269,7 +269,7 @@ pub fn parse_issue_range(title: &str) -> Option<(u32, u32)> {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn search(
-    db: &PgPool,
+    db: &sqlx::AnyPool,
     limiter: &crate::rate_limiter::RateLimiter,
     queries: &[String],
     is_interactive: bool,
@@ -754,7 +754,7 @@ fn select_pack_section(
 /// issue-range + year contain the requested issue; when no single archive cleanly matches, `Ambiguous`
 /// is returned so the caller stalls for human review instead of grabbing an arbitrary archive.
 pub async fn scrape_deep_link(
-    db: &PgPool,
+    db: &sqlx::AnyPool,
     limiter: &crate::rate_limiter::RateLimiter,
     article_url: &str,
     target: Option<&DeepLinkTarget>,

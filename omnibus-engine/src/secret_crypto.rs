@@ -11,7 +11,7 @@ use base64::Engine as _;
 use cbc::Decryptor;
 use cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+
 
 type Aes256CbcDec = Decryptor<Aes256>;
 const PREFIX_V1: &str = "enc:v1:";
@@ -37,14 +37,7 @@ fn resolve_key(db_key: Option<String>) -> Option<[u8; 32]> {
 
 const KEY_ROW_SQL: &str = r#"SELECT value FROM "SystemSetting" WHERE key = 'DATABASE_ENCRYPTION_KEY'"#;
 
-async fn encryption_key(db: &PgPool) -> Option<[u8; 32]> {
-    let db_key: Option<String> = sqlx::query_scalar(KEY_ROW_SQL).fetch_optional(db).await.ok().flatten();
-    resolve_key(db_key)
-}
-
-/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`encryption_key`] for modules already ported
-/// to the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
-async fn encryption_key_any(db: &sqlx::AnyPool) -> Option<[u8; 32]> {
+async fn encryption_key(db: &sqlx::AnyPool) -> Option<[u8; 32]> {
     let db_key: Option<String> = sqlx::query_scalar(KEY_ROW_SQL).fetch_optional(db).await.ok().flatten();
     resolve_key(db_key)
 }
@@ -84,26 +77,13 @@ fn decrypt_payload_v2(rest: &str, key: &[u8; 32]) -> Option<String> {
 /// Decrypts a SystemSetting value carrying the `enc:v1:` prefix; returns plaintext values unchanged
 /// (legacy / not-yet-encrypted). Returns None for a None input or on decryption failure — callers
 /// then treat the credential as missing rather than sending ciphertext to an upstream API.
-pub async fn decrypt_setting(db: &PgPool, value: Option<String>) -> Option<String> {
+pub async fn decrypt_setting(db: &sqlx::AnyPool, value: Option<String>) -> Option<String> {
     let v = value?;
     // Dispatch on the version prefix; a plaintext (unprefixed) value passes through unchanged.
     let decoded = if let Some(rest) = v.strip_prefix(PREFIX_V2) {
         encryption_key(db).await.and_then(|key| decrypt_payload_v2(rest, &key))
     } else if let Some(rest) = v.strip_prefix(PREFIX_V1) {
         encryption_key(db).await.and_then(|key| decrypt_payload_v1(rest, &key))
-    } else {
-        return Some(v);
-    };
-    warn_if_undecryptable(decoded)
-}
-
-/// TRANSITIONAL (dual-DB migration): AnyPool twin of [`decrypt_setting`] for ported modules.
-pub async fn decrypt_setting_any(db: &sqlx::AnyPool, value: Option<String>) -> Option<String> {
-    let v = value?;
-    let decoded = if let Some(rest) = v.strip_prefix(PREFIX_V2) {
-        encryption_key_any(db).await.and_then(|key| decrypt_payload_v2(rest, &key))
-    } else if let Some(rest) = v.strip_prefix(PREFIX_V1) {
-        encryption_key_any(db).await.and_then(|key| decrypt_payload_v1(rest, &key))
     } else {
         return Some(v);
     };
@@ -122,7 +102,7 @@ fn warn_if_undecryptable(decoded: Option<String>) -> Option<String> {
 
 /// Convenience wrapper for values pulled from a settings map (returns "" when absent/undecryptable).
 pub async fn decrypt_str(db: &sqlx::AnyPool, value: &str) -> String {
-    decrypt_setting_any(db, Some(value.to_string()))
+    decrypt_setting(db, Some(value.to_string()))
         .await
         .unwrap_or_default()
 }

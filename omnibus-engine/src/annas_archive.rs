@@ -16,7 +16,7 @@
 
 use reqwest::Client;
 use scraper::{Html, Selector};
-use sqlx::PgPool;
+ 
 use std::collections::HashSet;
 use crate::prowlarr::ProwlarrResult;
 
@@ -48,7 +48,7 @@ fn mirror_candidates(configured: &str) -> Vec<String> {
 
 /// The configured Anna's Archive base URL (default annas-archive.org), trailing slash trimmed. AA
 /// rotates mirror domains (.org/.se/.li) under takedown pressure, so it's admin-overridable.
-async fn base_url(db: &PgPool) -> String {
+async fn base_url(db: &sqlx::AnyPool) -> String {
     sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'annas_archive_base_url'"#)
         .fetch_optional(db).await.ok().flatten()
         .map(|s| s.trim().trim_end_matches('/').to_string())
@@ -57,7 +57,7 @@ async fn base_url(db: &PgPool) -> String {
 }
 
 /// The comic file formats to search for (default cbz,cbr,pdf,epub), lowercased + de-dotted.
-async fn formats(db: &PgPool) -> Vec<String> {
+async fn formats(db: &sqlx::AnyPool) -> Vec<String> {
     let raw = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'annas_archive_formats'"#)
         .fetch_optional(db).await.ok().flatten()
         .filter(|s| !s.trim().is_empty())
@@ -67,7 +67,7 @@ async fn formats(db: &PgPool) -> Vec<String> {
 
 /// Whether Anna's Archive is enabled for INTERACTIVE search. Ungated (no API key needed) and OFF by
 /// default — the admin opts in via Settings. Automation enablement is separate + key-gated (Phase 2).
-pub async fn is_interactive_enabled(db: &PgPool) -> bool {
+pub async fn is_interactive_enabled(db: &sqlx::AnyPool) -> bool {
     sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'annas_archive_interactive_enabled'"#)
         .fetch_optional(db).await.ok().flatten().as_deref() == Some("true")
 }
@@ -76,7 +76,7 @@ pub async fn is_interactive_enabled(db: &PgPool) -> bool {
 /// titles when the global content filter (filter_enabled) is on — parity with the Discover filter, which
 /// AA previously lacked entirely. AA exposes no separate rating/publisher field, so both lists are matched
 /// against the title (the best signal available). Returns empty (no filtering) when the filter is off.
-async fn content_blocklist(db: &PgPool) -> Vec<String> {
+async fn content_blocklist(db: &sqlx::AnyPool) -> Vec<String> {
     let enabled = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'filter_enabled'"#)
         .fetch_optional(db).await.ok().flatten().as_deref() == Some("true");
     if !enabled { return Vec::new(); }
@@ -132,7 +132,7 @@ fn parse_size(text: &str) -> Option<i64> {
 /// and reusing the shared `getcomics::solver_config`. On a 403/503 it routes through the configured
 /// solver; if that fails (or none is set) it returns the raw (likely-challenge) body so the caller
 /// degrades to an empty result list rather than erroring.
-async fn fetch_html(client: &Client, db: &PgPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
+async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
     let res = client.get(url).send().await?;
     let status = res.status();
     if status == 403 || status == 503 {
@@ -165,7 +165,7 @@ async fn fetch_html(client: &Client, db: &PgPool, url: &str, flaresolverr: Optio
 /// bytes uses the Node hoster resolver at download time (premium key) or falls to the manual queue.
 /// `is_interactive` selects the page depth + rate interval.
 pub async fn search(
-    db: &PgPool,
+    db: &sqlx::AnyPool,
     limiter: &crate::rate_limiter::RateLimiter,
     queries: &[String],
     is_interactive: bool,

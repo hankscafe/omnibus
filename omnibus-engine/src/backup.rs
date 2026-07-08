@@ -1,5 +1,6 @@
 use anyhow::Result;
-use sqlx::PgPool;
+use crate::db::Db;
+use sqlx::Row;
 use std::fs;
 use std::path::PathBuf;
 use sha2::Sha256;
@@ -31,6 +32,42 @@ fn mark_naive_timestamps_utc(v: &mut serde_json::Value, re: &regex::Regex) {
 /// MUST stay in lock-step with the Node backup route (`admin/backup/route.ts`) and the Node
 /// restore route (`admin/restore/route.ts`) — a table exported here but not restored there (or
 /// vice versa) is a silent data-loss bug. The `backup_table_set_matches_restore` test guards this.
+/// SQLite twin of the Postgres `json_agg(row_to_json(...))` export: builds a
+/// `json_group_array(json_object(...))` from `pragma_table_info`, mapping Prisma's SQLite storage
+/// back to the JSON types Node's restore round-trips through Prisma — BOOLEAN 0/1 → true/false,
+/// DATETIME epoch-ms → ISO-8601 `…Z` strings; everything else passes through natively typed.
+async fn export_table_json_sqlite(pool: &sqlx::AnyPool, table_name: &str) -> Result<String> {
+    // Table names come from the static backup_tables() list (never user input); pragma_table_info
+    // takes the name as a literal.
+    let cols = sqlx::query(&format!("SELECT name, type FROM pragma_table_info('{}')", table_name))
+        .fetch_all(pool)
+        .await?;
+    if cols.is_empty() {
+        anyhow::bail!("Backup failed: table {} not found in the SQLite schema.", table_name);
+    }
+    let pairs: Vec<String> = cols
+        .iter()
+        .map(|c| {
+            let name: String = c.get("name");
+            let decl = c.get::<String, _>("type").to_uppercase();
+            let expr = if decl.starts_with("BOOL") {
+                format!(r#"json(CASE WHEN "{n}" IS NULL THEN 'null' WHEN "{n}" THEN 'true' ELSE 'false' END)"#, n = name)
+            } else if decl.starts_with("DATETIME") || decl.starts_with("TIMESTAMP") {
+                format!(r#"strftime('%Y-%m-%dT%H:%M:%fZ', "{n}" / 1000.0, 'unixepoch')"#, n = name)
+            } else {
+                format!(r#""{}""#, name)
+            };
+            format!("'{}', {}", name, expr)
+        })
+        .collect();
+    let query = format!(
+        r#"SELECT COALESCE(json_group_array(json_object({})), '[]') FROM "{}""#,
+        pairs.join(", "),
+        table_name
+    );
+    Ok(sqlx::query_scalar(&query).fetch_one(pool).await?)
+}
+
 fn backup_tables() -> Vec<(&'static str, &'static str)> {
     vec![
         ("users", "User"),
@@ -73,7 +110,7 @@ fn backup_tables() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-pub async fn process_backup(db: PgPool) -> Result<(i32, String)> {
+pub async fn process_backup(db: Db) -> Result<(i32, String)> {
     // 1. Prepare Encryption Keys (Matching the Node admin/backup route exactly).
     // SECURITY: mandatory secret check, no literal fallback (parity with backup/route.ts:19-23).
     let secret = std::env::var("NEXTAUTH_SECRET").unwrap_or_default();
@@ -101,16 +138,21 @@ pub async fn process_backup(db: PgPool) -> Result<(i32, String)> {
     // mark_naive_timestamps_utc.
     let naive_ts_re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?$").unwrap();
 
-    // 3. Ultra-Fast PostgreSQL JSON Extraction
+    // 3. Native JSON extraction — the DB engine serializes each whole table into one JSON array.
     for (json_key, table_name) in tables {
         log::debug!("[Backup Debug] Exporting table: {}", table_name);
 
-        // This query forces Postgres (C-engine) to serialize the entire table into a single JSON array natively!
-        let query = format!(r#"SELECT COALESCE(json_agg(row_to_json(t)), '[]')::text FROM "{}" t"#, table_name);
-
-        let (json_str,): (String,) = sqlx::query_as(&query).fetch_one(&db).await?;
+        let json_str: String = match db.dialect {
+            crate::db::Dialect::Postgres => {
+                // Postgres (C-engine) serializes the entire table natively.
+                let query = format!(r#"SELECT COALESCE(json_agg(row_to_json(t)), '[]')::text FROM "{}" t"#, table_name);
+                sqlx::query_scalar(&query).fetch_one(&db.pool).await?
+            }
+            crate::db::Dialect::Sqlite => export_table_json_sqlite(&db.pool, table_name).await?,
+        };
         let mut parsed_arr: serde_json::Value = serde_json::from_str(&json_str)?;
         // Normalize naive timestamps to UTC `…Z` so Node's restore parses them as UTC, not local time.
+        // (The SQLite arm already emits `…Z`; the regex requires a zone-less string, so it's a no-op there.)
         mark_naive_timestamps_utc(&mut parsed_arr, &naive_ts_re);
 
         inner_data.insert(json_key.to_string(), parsed_arr);

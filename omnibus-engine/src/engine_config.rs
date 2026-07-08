@@ -10,7 +10,7 @@
 // Worker counts are re-read per job (so settings changes take effect on the next job); cpu_cap and
 // blocking_threads are read once at startup because the runtime can only be sized at construction.
 
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy)]
@@ -46,24 +46,7 @@ impl EngineConfig {
                 'engine_max_blocking_threads','engine_memory_ceiling_mb','engine_max_db_connections')"#;
 
     /// Reads the `engine_*` SystemSetting keys and resolves them into clamped, derated limits.
-    pub async fn load(db: &PgPool) -> Self {
-        let mut map: HashMap<String, String> = HashMap::new();
-        match sqlx::query(Self::SETTINGS_SQL).fetch_all(db).await {
-            Ok(rows) => {
-                for row in rows {
-                    let k: String = row.get("key");
-                    let v: String = row.get("value");
-                    map.insert(k, v);
-                }
-            }
-            Err(e) => log::warn!("[Config] Could not read engine concurrency settings ({}); using defaults.", e),
-        }
-        Self::from_map(map)
-    }
-
-    /// TRANSITIONAL (dual-DB migration): AnyPool twin of [`Self::load`] for modules already ported
-    /// to the runtime-selected pool (src/db.rs). Deleted when the last module leaves PgPool.
-    pub async fn load_any(db: &sqlx::AnyPool) -> Self {
+    pub async fn load(db: &sqlx::AnyPool) -> Self {
         let mut map: HashMap<String, String> = HashMap::new();
         match sqlx::query(Self::SETTINGS_SQL).fetch_all(db).await {
             Ok(rows) => {

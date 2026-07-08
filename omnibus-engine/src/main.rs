@@ -23,7 +23,7 @@ mod secret_crypto;
 use axum::{routing::{get, post}, Router, Json, extract::{State, Request}, http::{StatusCode, header}, middleware::{self, Next}, response::Response};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use sqlx::Row;
 use std::sync::{Arc, OnceLock};
 
 /// Process-wide reqwest clients, built once and reused. Rebuilding a `Client` per request re-creates
@@ -143,10 +143,8 @@ struct InteractiveResponse {
 }
 
 struct AppState {
-    db: PgPool,
-    // Runtime-selected (Postgres/SQLite) pool for modules already ported to the dual-DB seam
-    // (src/db.rs) — currently the scanner. Replaces `db` entirely once every module is ported.
-    any_db: db::Db,
+    // The runtime-selected (Postgres/SQLite) database — see src/db.rs.
+    db: db::Db,
     limiter: Arc<rate_limiter::RateLimiter>,
     // Shared secret (Node's NEXTAUTH_SECRET) required in the X-Internal-Secret header on every
     // request. `None` when unset → endpoints are open (dev/localhost); a startup warning is logged.
@@ -286,10 +284,10 @@ fn main() -> anyhow::Result<()> {
     let cfg = {
         let boot = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
         boot.block_on(async {
-            match PgPoolOptions::new().max_connections(1).connect(&db_url).await {
-                Ok(pool) => {
-                    let c = engine_config::EngineConfig::load(&pool).await;
-                    pool.close().await;
+            match db::Db::connect(&db_url, 1).await {
+                Ok(d) => {
+                    let c = engine_config::EngineConfig::load(&d.pool).await;
+                    d.pool.close().await;
                     c
                 }
                 Err(e) => {
@@ -320,18 +318,19 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(run(db_url, cfg.db_connections))
 }
 
-/// Connects to Postgres, retrying with backoff for up to ~90s before giving up. The engine and DB
-/// often share a Docker bridge whose ports take time to start forwarding (e.g. STP forward-delay on
-/// a QNAP virtual switch adds a ~15-30s dead window when a container's interface first joins), and
-/// the DB container may still be starting. Without this, the process would exit on the first failure
-/// and `restart: always` would reset the bridge port — a loop that can never outlast the window.
-async fn connect_with_retry(db_url: &str, max_connections: u32) -> anyhow::Result<PgPool> {
+/// Connects to the database (Postgres or SQLite, selected by DATABASE_URL — src/db.rs), retrying
+/// with backoff for up to ~90s before giving up. The engine and DB often share a Docker bridge
+/// whose ports take time to start forwarding (e.g. STP forward-delay on a QNAP virtual switch adds
+/// a ~15-30s dead window when a container's interface first joins), and the DB container may still
+/// be starting. Without this, the process would exit on the first failure and `restart: always`
+/// would reset the bridge port — a loop that can never outlast the window.
+async fn connect_with_retry(db_url: &str, max_connections: u32) -> anyhow::Result<db::Db> {
     const MAX_ATTEMPTS: u32 = 30;
     const DELAY_SECS: u64 = 3;
     let mut attempt = 1;
     loop {
-        log::info!("Connecting to PostgreSQL database (attempt {}/{})...", attempt, MAX_ATTEMPTS);
-        match PgPoolOptions::new().max_connections(max_connections).connect(db_url).await {
+        log::info!("Connecting to the database (attempt {}/{})...", attempt, MAX_ATTEMPTS);
+        match db::Db::connect(db_url, max_connections).await {
             Ok(pool) => return Ok(pool),
             Err(e) if attempt < MAX_ATTEMPTS => {
                 log::warn!(
@@ -355,9 +354,9 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
     // emitted during startup (preflight, the DB-connect retries below) were buffered and flush here.
     log_forward::spawn_forwarder();
 
-    let pool = connect_with_retry(&db_url, db_connections).await?;
+    let db = connect_with_retry(&db_url, db_connections).await?;
 
-    log::info!("✅ Connected to PostgreSQL!");
+    log::info!("✅ Connected to the database ({:?})!", db.dialect);
 
     let limiter = Arc::new(rate_limiter::RateLimiter::new());
 
@@ -389,11 +388,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
              address ({bind_addr}) is loopback-only, so they are not reachable off-host (dev/single-host)."
         );
     }
-    // Dual-DB seam (src/db.rs): the runtime-selected Any pool for ported modules (scanner). Points
-    // at the same DATABASE_URL as `pool` today; sized small because the scanner's DB work is mostly
-    // sequential. Both pools coexist only while the module-by-module migration is in progress.
-    let any_db = db::Db::connect(&db_url, db_connections.min(8)).await?;
-    let shared_state = Arc::new(AppState { db: pool, any_db, limiter, internal_secret });
+    let shared_state = Arc::new(AppState { db, limiter, internal_secret });
 
     let api = Router::new()
         .route("/api/repack", post(handle_repack))
@@ -469,19 +464,27 @@ async fn handle_health() -> Json<serde_json::Value> {
 
 /// Records a FAILED JobLog so a background-task failure is DB-visible (BullMQ already got its 202,
 /// so without this the failure would only appear in the Rust logs and silently vanish from the UI).
-async fn write_failed_joblog(db: &PgPool, job_type: &str, duration_ms: i32, message: String) {
-    if let Err(e) = sqlx::query(
+async fn write_failed_joblog(db: &db::Db, job_type: &str, duration_ms: i32, message: String) {
+    write_joblog(db, job_type, "FAILED", duration_ms, message).await;
+}
+
+/// Records a JobLog row via the per-dialect "now" expression (src/db.rs). All handler success/
+/// failure logging funnels through here so the dialect handling lives in one place.
+async fn write_joblog(db: &db::Db, job_type: &str, status: &str, duration_ms: i32, message: String) {
+    if let Err(e) = sqlx::query(&format!(
         r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-           VALUES ($1, $2, 'FAILED', $3, $4, NOW(), 1)"#,
-    )
+           VALUES ($1, $2, $3, $4, $5, {now}, 1)"#,
+        now = db.now_expr()
+    ))
     .bind(uuid::Uuid::new_v4().to_string())
     .bind(job_type)
+    .bind(status)
     .bind(duration_ms)
     .bind(message)
-    .execute(db)
+    .execute(&db.pool)
     .await
     {
-        log::error!("Failed to write FAILED JobLog for {}: {:?}", job_type, e);
+        log::error!("Failed to write {} JobLog for {}: {:?}", status, job_type, e);
     }
 }
 
@@ -541,15 +544,7 @@ async fn handle_cbr_sweep(
                 
                 log::info!("{}", msg);
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'CBR_CONVERTER', $2, $3, $4, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(status)
-                .bind(duration)
-                .bind(msg)
-                .execute(&db).await;
+                write_joblog(&db, "CBR_CONVERTER", status, duration, msg).await;
             },
             Err(e) => {
                 log::error!("❌ Background CBR Sweep failed: {:?}", e);
@@ -766,7 +761,7 @@ async fn handle_convert_file(
         log::warn!("[Convert File] Rejected non-absolute or traversing path: {}", req.path);
         return Err(StatusCode::FORBIDDEN);
     }
-    let (convert_to_webp, webp_quality) = converter::get_webp_settings(&state.db).await;
+    let (convert_to_webp, webp_quality) = converter::get_webp_settings(&state.db.pool).await;
     let path = req.path.clone();
 
     let new_path = tokio::task::spawn_blocking(move || {
@@ -788,7 +783,7 @@ async fn handle_convert_file(
         .bind(&new_path_str)
         .bind(pages)
         .bind(&req.path)
-        .execute(&state.db)
+        .execute(&state.db.pool)
         .await
     {
         log::error!("[Convert File] Converted {} but failed to update its database path: {:?}", new_path_str, e);
@@ -830,7 +825,7 @@ async fn handle_repack(
         let mut fail_count = 0;
 
         // Honor the user's WebP settings instead of hardcoding (parity with converter.ts).
-        let (convert_to_webp, webp_quality) = converter::get_webp_settings(&db).await;
+        let (convert_to_webp, webp_quality) = converter::get_webp_settings(&db.pool).await;
         log::info!("[Repack] WebP conversion: {} (quality {})", convert_to_webp, webp_quality);
 
         // Collect every issue across all requested series, then process them through one bounded pool.
@@ -839,7 +834,7 @@ async fn handle_repack(
         for series_id in &payload.series_ids {
             let issues = sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE "seriesId" = $1 AND "filePath" IS NOT NULL"#)
                 .bind(series_id)
-                .fetch_all(&db)
+                .fetch_all(&db.pool)
                 .await
                 .unwrap_or_default();
             for issue in issues {
@@ -848,7 +843,7 @@ async fn handle_repack(
         }
         log::info!("[Repack] Processing {} archives across {} series.", targets.len(), payload.series_ids.len());
 
-        let cfg = engine_config::EngineConfig::load(&db).await;
+        let cfg = engine_config::EngineConfig::load(&db.pool).await;
         let sem = Arc::new(tokio::sync::Semaphore::new(cfg.convert_workers));
         let mut join_set = tokio::task::JoinSet::new();
         for (issue_id, file_path) in targets {
@@ -886,7 +881,7 @@ async fn handle_repack(
                         .bind(&new_path_str)
                         .bind(pages)
                         .bind(&issue_id)
-                        .execute(&db)
+                        .execute(&db.pool)
                         .await
                     {
                         log::error!("[Repack] Repacked {} on disk but failed to update its database record: {:?}", file_path, e);
@@ -902,18 +897,8 @@ async fn handle_repack(
         let duration_ms = start_time.elapsed().as_millis() as i32;
         let status = if fail_count > 0 { "COMPLETED_WITH_ERRORS" } else { "COMPLETED" };
         let message = format!("Internal repack complete. Processed {} archives successfully. Failed: {}.", success_count, fail_count);
-        let log_id = uuid::Uuid::new_v4().to_string();
 
-        let _ = sqlx::query(
-            r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-               VALUES ($1, 'REPACK_ARCHIVES', $2, $3, $4, NOW(), 1)"#
-        )
-        .bind(log_id)
-        .bind(status)
-        .bind(duration_ms)
-        .bind(message.clone())
-        .execute(&db)
-        .await;
+        write_joblog(&db, "REPACK_ARCHIVES", status, duration_ms, message.clone()).await;
 
         log::info!("Job complete: {}", message);
     });
@@ -929,20 +914,21 @@ async fn handle_scan(
 
     tokio::spawn(async move {
         let db = state.db.clone();
-        let any_db = state.any_db.clone();
         let lock_id = format!("LIBRARY_SCAN_{}", payload.library_id);
 
         // Concurrency lock (parity with the pristine Node JobLock): refuse to start a second scan of the
         // SAME library while one is active, so overlapping scheduled+manual triggers can't race two
         // inserts of the same issue. Per-library so different libraries still scan concurrently. A stale
         // lock (>10 min, e.g. from a crashed scan) is atomically taken over.
-        match sqlx::query(
-            r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, NOW())
-               ON CONFLICT (id) DO UPDATE SET "lockedAt" = NOW()
-               WHERE "JobLock"."lockedAt" < NOW() - INTERVAL '10 minutes'"#,
-        )
+        match sqlx::query(&format!(
+            r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, {now})
+               ON CONFLICT (id) DO UPDATE SET "lockedAt" = {now}
+               WHERE {stale}"#,
+            now = db.now_expr(),
+            stale = db.older_than(r#""JobLock"."lockedAt""#, 600)
+        ))
         .bind(&lock_id)
-        .execute(&db)
+        .execute(&db.pool)
         .await
         {
             Ok(r) if r.rows_affected() == 0 => {
@@ -954,13 +940,13 @@ async fn handle_scan(
         }
 
         let start_time = std::time::Instant::now();
-        if let Err(e) = scanner::scan_library(any_db, payload.library_path, payload.library_id.clone(), payload.specific_path).await {
+        if let Err(e) = scanner::scan_library(db.clone(), payload.library_path, payload.library_id.clone(), payload.specific_path).await {
             log::error!("❌ Library scan failed: {:?}", e);
             write_failed_joblog(&db, "LIBRARY_SCAN", start_time.elapsed().as_millis() as i32, format!("Library scan failed: {:?}", e)).await;
         }
 
         // Release the lock (best-effort; the 10-min stale takeover covers a missed release on panic).
-        let _ = sqlx::query(r#"DELETE FROM "JobLock" WHERE id = $1"#).bind(&lock_id).execute(&db).await;
+        let _ = sqlx::query(r#"DELETE FROM "JobLock" WHERE id = $1"#).bind(&lock_id).execute(&db.pool).await;
     });
 
     StatusCode::ACCEPTED
@@ -975,7 +961,7 @@ async fn handle_metadata_sync(
     tokio::spawn(async move {
         let db = state.db.clone();
         let start_time = std::time::Instant::now();
-        match metadata::sync_metadata(state.any_db.clone(), payload.series_ids).await {
+        match metadata::sync_metadata(state.db.clone(), payload.series_ids).await {
             Ok(_) => notify_node("job_metadata_sync", "Metadata synchronization completed.").await,
             Err(e) => {
                 log::error!("❌ Background Metadata Synchronization failed: {:?}", e);
@@ -998,7 +984,7 @@ async fn handle_metadata_embed(
         let db = state.db.clone();
         let start_time = std::time::Instant::now();
 
-        match metadata_writer::process_embed_job(state.any_db.clone(), payload).await {
+        match metadata_writer::process_embed_job(state.db.clone(), payload).await {
             Ok((success, fail, json_count)) => {
                 let duration = start_time.elapsed().as_millis() as i32;
                 let status = if fail > 0 { "COMPLETED_WITH_ERRORS" } else { "COMPLETED" };
@@ -1006,15 +992,7 @@ async fn handle_metadata_embed(
                 
                 log::info!("{}", msg);
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'EMBED_METADATA', $2, $3, $4, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(status)
-                .bind(duration)
-                .bind(msg)
-                .execute(&db).await;
+                write_joblog(&db, "EMBED_METADATA", status, duration, msg).await;
             },
             Err(e) => {
                 log::error!("❌ Background Metadata Embedding failed: {:?}", e);
@@ -1038,7 +1016,7 @@ async fn handle_export_series_json(
     Json(payload): Json<ExportSeriesJsonRequest>,
 ) -> Json<serde_json::Value> {
     log::info!("Received request to export Mylar series.json files.");
-    let (exported, total) = metadata_writer::run_series_json_export(&state.any_db, payload.series_ids).await;
+    let (exported, total) = metadata_writer::run_series_json_export(&state.db, payload.series_ids).await;
     log::info!("series.json export complete. Wrote {} of {} series folders.", exported, total);
     Json(serde_json::json!({ "exported": exported, "total": total }))
 }
@@ -1058,13 +1036,13 @@ async fn handle_search(
     // Pack isolation (beta.035): packs are only used when the global setting allows them AND the
     // request's series owns zero downloaded files; prioritization additionally needs its own flag.
     let global_allow_bulk = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'allow_bulk_packs'"#)
-        .fetch_optional(&state.db).await.ok().flatten().as_deref() == Some("true");
+        .fetch_optional(&state.db.pool).await.ok().flatten().as_deref() == Some("true");
     let global_prioritize = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'prioritize_packs'"#)
-        .fetch_optional(&state.db).await.ok().flatten().as_deref() == Some("true");
+        .fetch_optional(&state.db.pool).await.ok().flatten().as_deref() == Some("true");
     let use_packs = global_allow_bulk && payload.allow_packs.unwrap_or(false);
     let prioritize_packs = global_prioritize && use_packs;
 
-    let acronyms = search_engine::get_custom_acronyms(&state.any_db.pool).await.unwrap_or_default();
+    let acronyms = search_engine::get_custom_acronyms(&state.db.pool).await.unwrap_or_default();
     let year_str = req_year.clone().unwrap_or_default();
     let mut queries = search_engine::generate_search_queries(&payload.name, &year_str, &acronyms, prioritize_packs, use_packs);
 
@@ -1075,7 +1053,7 @@ async fn handle_search(
     // Resolve the admin-configured source order (default: GetComics → Prowlarr; Anna's Archive opt-in).
     // skip_indexers (DDL-only requests) drops Prowlarr from the order.
     let ssp: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'search_source_priority'"#)
-        .fetch_optional(&state.db).await.ok().flatten();
+        .fetch_optional(&state.db.pool).await.ok().flatten();
     let mut source_order = search_engine::parse_search_source_order(ssp.as_deref());
     if skip_indexers {
         log::info!("skip_indexers set — excluding Prowlarr from the source order.");
@@ -1091,13 +1069,13 @@ async fn handle_search(
     // downloadable match.
     let (get_res_raw, annas_res_raw, prow_res_raw) = tokio::join!(
         async { if run_get {
-            getcomics::search(&state.any_db.pool, &state.limiter, &queries, false, &payload.name, req_year.as_deref(), series_year.as_deref(), is_manga, Some(use_packs)).await
+            getcomics::search(&state.db.pool, &state.limiter, &queries, false, &payload.name, req_year.as_deref(), series_year.as_deref(), is_manga, Some(use_packs)).await
         } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } },
         async { if run_annas {
-            annas_archive::search(&state.any_db.pool, &state.limiter, &queries, false, is_manga).await
+            annas_archive::search(&state.db.pool, &state.limiter, &queries, false, is_manga).await
         } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } },
         async { if run_prow {
-            prowlarr::search(&state.any_db.pool, &state.limiter, &queries, is_manga, true).await
+            prowlarr::search(&state.db.pool, &state.limiter, &queries, is_manga, true).await
         } else { Ok::<Vec<prowlarr::ProwlarrResult>, anyhow::Error>(Vec::new()) } }
     );
 
@@ -1150,11 +1128,11 @@ async fn handle_search(
                 // GetComics results are already relevance-filtered in getcomics::search → operator
                 // junk/exclude lists + scoring only (skip_relevance = true).
                 if let Ok(Some(mut best_ddl)) = search_engine::filter_and_score(
-                    &state.any_db.pool, get_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), true, Some(use_packs)
+                    &state.db.pool, get_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), true, Some(use_packs)
                 ).await {
                     // Resolve the article to concrete hoster links; scrape_deep_link drops disabled
                     // hosters, so an empty list means no enabled hoster can serve this match.
-                    let outcome = getcomics::scrape_deep_link(&state.any_db.pool, &state.limiter, &best_ddl.download_url, dl_target.as_ref())
+                    let outcome = getcomics::scrape_deep_link(&state.db.pool, &state.limiter, &best_ddl.download_url, dl_target.as_ref())
                         .await.unwrap_or(getcomics::DeepLinkOutcome::Links(Vec::new()));
                     let candidates = match outcome {
                         getcomics::DeepLinkOutcome::Ambiguous => {
@@ -1195,7 +1173,7 @@ async fn handle_search(
                 if annas_res.is_empty() { continue; }
                 // Anna's Archive results aren't pre-filtered (unlike GetComics) → full relevance scoring.
                 if let Ok(Some(mut best_aa)) = search_engine::filter_and_score(
-                    &state.any_db.pool, annas_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), false, Some(use_packs)
+                    &state.db.pool, annas_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), false, Some(use_packs)
                 ).await {
                     // The result's download_url is already the resolvable /md5/ link — emit one candidate
                     // tagged for the existing Node resolver (premium key → stream; keyless → MANUAL_DDL).
@@ -1209,7 +1187,7 @@ async fn handle_search(
             "prowlarr" => {
                 if prow_res.is_empty() { continue; }
                 if let Ok(Some(best_prow)) = search_engine::filter_and_score(
-                    &state.any_db.pool, prow_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), false, Some(use_packs)
+                    &state.db.pool, prow_res.clone(), &payload.name, is_manga, req_year.clone(), series_year.clone(), false, Some(use_packs)
                 ).await {
                     log::info!("[Prowlarr] Matched an indexer release for {}.", payload.name);
                     best_match = Some(best_prow);
@@ -1228,7 +1206,7 @@ async fn handle_search(
     // Nothing auto-downloadable. If we held a GetComics link and GetComics is an enabled hoster, surface
     // it for manual download (parity with the automation.ts MANUAL_DDL fallback).
     if let Some((url, name)) = manual_fallback {
-        if getcomics::is_getcomics_enabled(&state.any_db.pool).await {
+        if getcomics::is_getcomics_enabled(&state.db.pool).await {
             log::warn!("No downloadable release for {}. Reverting to the GetComics manual DDL fallback.", payload.name);
             return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, stall_reason: None, manual_ddl: Some(ManualDdl { url, name }), ddl_candidates: Vec::new() });
         }
@@ -1252,14 +1230,14 @@ async fn handle_interactive_search(
 
     // Anna's Archive is key-free for interactive search but OFF by default — only query it when the
     // admin has opted in. The empty-on-disabled future keeps all three sources in one concurrent join.
-    let annas_enabled = annas_archive::is_interactive_enabled(&state.any_db.pool).await;
+    let annas_enabled = annas_archive::is_interactive_enabled(&state.db.pool).await;
 
     let (prow_res, get_res, annas_res) = tokio::join!(
-        prowlarr::search(&state.any_db.pool, &state.limiter, &queries, is_manga, false),
-        getcomics::search(&state.any_db.pool, &state.limiter, &queries, true, &payload.query, payload.year.as_deref(), payload.year.as_deref(), is_manga, None),
+        prowlarr::search(&state.db.pool, &state.limiter, &queries, is_manga, false),
+        getcomics::search(&state.db.pool, &state.limiter, &queries, true, &payload.query, payload.year.as_deref(), payload.year.as_deref(), is_manga, None),
         async {
             if annas_enabled {
-                annas_archive::search(&state.any_db.pool, &state.limiter, &queries, true, is_manga).await
+                annas_archive::search(&state.db.pool, &state.limiter, &queries, true, is_manga).await
             } else {
                 Ok(Vec::new())
             }
@@ -1302,7 +1280,7 @@ async fn handle_getcomics_scrape(
     Json(payload): Json<ScrapeRequest>,
 ) -> Json<ScrapeResponse> {
     let target = payload.issue_num.map(|n| getcomics::DeepLinkTarget { issue_num: n, year: payload.year.clone() });
-    match getcomics::scrape_deep_link(&state.any_db.pool, &state.limiter, &payload.url, target.as_ref()).await {
+    match getcomics::scrape_deep_link(&state.db.pool, &state.limiter, &payload.url, target.as_ref()).await {
         Ok(getcomics::DeepLinkOutcome::Links(links)) => Json(ScrapeResponse { success: true, ambiguous: false, links }),
         Ok(getcomics::DeepLinkOutcome::Ambiguous) => Json(ScrapeResponse { success: false, ambiguous: true, links: Vec::new() }),
         Err(e) => {
@@ -1319,19 +1297,12 @@ async fn handle_watched_sync(State(state): State<Arc<AppState>>) -> StatusCode {
         let db = state.db.clone();
         let start_time = std::time::Instant::now();
 
-        match watched_sync::process_watched_folder(state.any_db.clone()).await {
+        match watched_sync::process_watched_folder(state.db.clone()).await {
             Ok((_success, _unmatched, details)) => {
                 let duration = start_time.elapsed().as_millis() as i32;
                 log::info!("{}", details);
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'WATCHED_FOLDER_SYNC', 'COMPLETED', $2, $3, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(duration)
-                .bind(details)
-                .execute(&db).await;
+                write_joblog(&db, "WATCHED_FOLDER_SYNC", "COMPLETED", duration, details).await;
             },
             Err(e) => {
                 log::error!("❌ Background Watched Sync failed: {:?}", e);
@@ -1356,14 +1327,7 @@ async fn handle_backup(State(state): State<Arc<AppState>>) -> StatusCode {
                 log::info!("{}", details);
                 notify_node("job_db_backup", &details).await;
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'DATABASE_BACKUP', 'COMPLETED', $2, $3, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(duration)
-                .bind(details)
-                .execute(&db).await;
+                write_joblog(&db, "DATABASE_BACKUP", "COMPLETED", duration, details).await;
             },
             Err(e) => {
                 log::error!("❌ Background Database Backup failed: {:?}", e);
@@ -1383,19 +1347,12 @@ async fn handle_discover_sync(State(state): State<Arc<AppState>>) -> StatusCode 
         let db = state.db.clone();
         let start_time = std::time::Instant::now();
 
-        match discover::run_discover_sync(state.any_db.clone()).await {
+        match discover::run_discover_sync(state.db.clone()).await {
             Ok((_count, details)) => {
                 let duration = start_time.elapsed().as_millis() as i32;
                 log::info!("{}", details);
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'DISCOVER_SYNC', 'COMPLETED', $2, $3, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(duration)
-                .bind(details)
-                .execute(&db).await;
+                write_joblog(&db, "DISCOVER_SYNC", "COMPLETED", duration, details).await;
             },
             Err(e) => {
                 log::error!("❌ Background Discover Sync failed: {:?}", e);
@@ -1411,7 +1368,7 @@ async fn handle_discover_sync(State(state): State<Arc<AppState>>) -> StatusCode 
 /// searches, so this awaits the full multi-minute fetch and returns skeleton count + candidates.
 async fn handle_monitor_sync(State(state): State<Arc<AppState>>) -> Result<Json<monitor::MonitorOutput>, StatusCode> {
     log::info!("Received request to run Series Monitor (fetch/match/skeleton phase).");
-    match monitor::run_series_monitor(state.any_db.clone()).await {
+    match monitor::run_series_monitor(state.db.clone()).await {
         Ok(out) => {
             log::info!("Series Monitor engine phase complete: {} skeletons, {} candidates.", out.skeletons_created, out.candidates.len());
             Ok(Json(out))
@@ -1431,7 +1388,7 @@ async fn handle_download_stream(
     Json(req): Json<download::StreamRequest>,
 ) -> Json<download::StreamResponse> {
     log::info!("[Internal DL] Streaming download for request {} -> {}", req.request_id, req.dest_path);
-    match download::stream_download(&state.any_db.pool, req).await {
+    match download::stream_download(&state.db.pool, req).await {
         Ok(final_path) => {
             log::info!("[Internal DL] Engine stream complete: {}", final_path);
             Json(download::StreamResponse { success: true, final_path: Some(final_path), error: None })
@@ -1456,14 +1413,7 @@ async fn handle_ghost_check(State(state): State<Arc<AppState>>) -> StatusCode {
                 log::info!("{}", details);
                 notify_node("job_diagnostics", &details).await;
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'DIAGNOSTICS', 'COMPLETED', $2, $3, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(duration)
-                .bind(details)
-                .execute(&db).await;
+                write_joblog(&db, "DIAGNOSTICS", "COMPLETED", duration, details).await;
             }
             Err(e) => {
                 log::error!("❌ Ghost File Diagnostics failed: {:?}", e);
@@ -1489,14 +1439,7 @@ async fn handle_storage_scan(State(state): State<Arc<AppState>>) -> StatusCode {
                 log::info!("{}", details);
                 notify_node("job_diagnostics", &details).await;
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'STORAGE_SCAN', 'COMPLETED', $2, $3, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(duration)
-                .bind(details)
-                .execute(&db).await;
+                write_joblog(&db, "STORAGE_SCAN", "COMPLETED", duration, details).await;
             }
             Err(e) => {
                 log::error!("❌ Deep Storage Scan failed: {:?}", e);
@@ -1542,14 +1485,7 @@ async fn handle_integrity_scan(State(state): State<Arc<AppState>>) -> StatusCode
                 let duration = start_time.elapsed().as_millis() as i32;
                 log::info!("{}", details);
 
-                let _ = sqlx::query(
-                    r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "createdAt", attempts)
-                       VALUES ($1, 'DIAGNOSTICS', 'COMPLETED', $2, $3, NOW(), 1)"#
-                )
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(duration)
-                .bind(details)
-                .execute(&db).await;
+                write_joblog(&db, "DIAGNOSTICS", "COMPLETED", duration, details).await;
             }
             Err(e) => {
                 log::error!("❌ Archive Integrity Scan failed: {:?}", e);

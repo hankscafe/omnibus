@@ -1,13 +1,12 @@
 // Runtime-selected database backend (PostgreSQL or SQLite) via sqlx's Any driver.
 //
-// This is the migration seam for dual-database support: modules move off the hard-typed PgPool
-// onto `Db` one at a time (scanner is first). `Db` carries the resolved dialect so the handful of
-// SQL constructs that differ between backends (NOW(), array binds) can be emitted per-dialect.
-// When the last module flips, the PgPool in main.rs and the transitional `*_any` helper variants
-// in secret_crypto/metadata/manga_detector/engine_config are deleted.
+// The ENTIRE engine runs on this pool: `Db` carries the resolved dialect so the handful of SQL
+// constructs that differ between backends (NOW(), IN-lists, bool/datetime handling) are emitted
+// per-dialect through the helpers below. DATABASE_URL picks the backend at startup —
+// postgres://... or a Prisma-style file:/sqlite: path.
 //
 // Dialect ground rules for queries running on this pool (enforced by convention, verified by the
-// spike test in scanner.rs):
+// dual-backend spike tests in scanner.rs):
 //   - Placeholders are `$1..$N`, in order, none reused — valid in BOTH Postgres and SQLite, and
 //     the Any driver binds positionally.
 //   - No `= ANY($1)` array binds (Postgres-only; the Any driver cannot bind Vec<T>). Use
@@ -99,6 +98,18 @@ impl Db {
         match self.dialect {
             Dialect::Postgres => format!(r#"to_char({col}, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')"#),
             Dialect::Sqlite => format!("strftime('%Y-%m-%dT%H:%M:%SZ', {col} / 1000.0, 'unixepoch')"),
+        }
+    }
+
+    /// SQL predicate: DateTime `col` is older than `seconds` ago — replaces Postgres's
+    /// `col < NOW() - INTERVAL '...'` (stale-lock takeovers).
+    pub fn older_than(&self, col: &str, seconds: u64) -> String {
+        match self.dialect {
+            Dialect::Postgres => format!("{col} < NOW() - INTERVAL '{seconds} seconds'"),
+            Dialect::Sqlite => format!(
+                "{col} < CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER) - {}",
+                seconds * 1000
+            ),
         }
     }
 }

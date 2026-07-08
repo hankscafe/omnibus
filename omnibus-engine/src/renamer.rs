@@ -9,7 +9,8 @@
 //   - only confirmed-empty source directories are removed, walking up to (never past) the
 //     library root.
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use crate::db::Db;
+use sqlx::Row;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -189,28 +190,37 @@ struct LibraryRow {
 }
 
 pub async fn run_bulk_rename(
-    db: &PgPool,
+    db: &Db,
     series_ids: &[String],
     folder_pattern: &str,
     file_pattern: &str,
 ) -> Result<RenameSummary> {
-    let series_rows = sqlx::query(
-        r#"SELECT id, name, publisher, year, universe, "seriesGroup", "folderPath", "libraryId", "isManga"
-           FROM "Series" WHERE id = ANY($1)"#,
-    )
-    .bind(series_ids)
-    .fetch_all(db)
-    .await?;
+    // Empty id list → nothing to rename (`IN ()` is invalid SQL; matches the old ANY('{}')).
+    let series_rows = if series_ids.is_empty() {
+        Vec::new()
+    } else {
+        // Portable IN (...) list + CAST bool columns for the Any driver (see src/db.rs).
+        let sql = format!(
+            r#"SELECT id, name, publisher, year, universe, "seriesGroup", "folderPath", "libraryId", CAST("isManga" AS INTEGER) AS "isManga"
+               FROM "Series" WHERE id IN ({})"#,
+            Db::in_placeholders(1, series_ids.len())
+        );
+        let mut q = sqlx::query(&sql);
+        for id in series_ids {
+            q = q.bind(id);
+        }
+        q.fetch_all(&db.pool).await?
+    };
 
-    let libraries: Vec<LibraryRow> = sqlx::query(r#"SELECT id, path, "isDefault", "isManga" FROM "Library""#)
-        .fetch_all(db)
+    let libraries: Vec<LibraryRow> = sqlx::query(r#"SELECT id, path, CAST("isDefault" AS INTEGER) AS "isDefault", CAST("isManga" AS INTEGER) AS "isManga" FROM "Library""#)
+        .fetch_all(&db.pool)
         .await?
         .into_iter()
         .map(|r| LibraryRow {
             id: r.get("id"),
             path: r.get("path"),
-            is_default: r.get("isDefault"),
-            is_manga: r.get("isManga"),
+            is_default: r.get::<i64, _>("isDefault") != 0,
+            is_manga: r.get::<i64, _>("isManga") != 0,
         })
         .collect();
 
@@ -231,7 +241,7 @@ pub async fn run_bulk_rename(
             series_group: row.get("seriesGroup"),
             folder_path: row.get("folderPath"),
             library_id: row.get("libraryId"),
-            is_manga: row.get("isManga"),
+            is_manga: row.get::<i64, _>("isManga") != 0,
         };
 
         // Library resolution: the series' own library → the matching-type default → the first one.
@@ -289,7 +299,7 @@ pub async fn run_bulk_rename(
             r#"SELECT id, name, number, "filePath", "releaseDate" FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(&s.id)
-        .fetch_all(db)
+        .fetch_all(&db.pool)
         .await?;
 
         // Only act if at least one real file exists (the recorded folder, or any issue file wherever
@@ -402,7 +412,7 @@ pub async fn run_bulk_rename(
                     sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE id = $2"#)
                         .bind(&new_file_path_str)
                         .bind(&issue_id)
-                        .execute(db)
+                        .execute(&db.pool)
                         .await?;
                 }
                 continue;
@@ -427,7 +437,7 @@ pub async fn run_bulk_rename(
                     sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE id = $2"#)
                         .bind(&new_file_path_str)
                         .bind(&issue_id)
-                        .execute(db)
+                        .execute(&db.pool)
                         .await?;
                     files_renamed += 1;
                 }
@@ -441,7 +451,7 @@ pub async fn run_bulk_rename(
             sqlx::query(r#"UPDATE "Series" SET "folderPath" = $1 WHERE id = $2"#)
                 .bind(&target_folder_str)
                 .bind(&s.id)
-                .execute(db)
+                .execute(&db.pool)
                 .await?;
             if folder_changed {
                 folders_renamed += 1;

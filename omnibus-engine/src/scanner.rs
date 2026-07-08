@@ -795,7 +795,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     // 5A. NEW FOLDERS → new Series + Issues, matched from the first archive's ComicInfo.xml
     // ---------------------------------------------------------
     // Parse each new folder's first-archive ComicInfo in parallel (bounded to CPU count), then insert sequentially.
-    let cfg = crate::engine_config::EngineConfig::load_any(&db.pool).await;
+    let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let parse_sem = Arc::new(Semaphore::new(cfg.scan_workers));
 
     // Series name / year / publisher derivation, shared by the parallel phase (for manga detection) and

@@ -1,5 +1,6 @@
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use crate::db::Db;
+use sqlx::Row;
 use std::path::Path;
 use tokio::task::JoinSet;
 
@@ -19,13 +20,13 @@ struct StorageEntry {
     size_bytes: u64,
 }
 
-pub async fn run_ghost_check(db: PgPool) -> Result<(i32, i32, String)> {
+pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
     // Drive-online guard (parity with the Node DIAGNOSTICS job's drivesOnline check): if ANY configured
     // library drive is offline, skip the whole pass. Otherwise an unmounted/disconnected volume makes
     // every Issue's file look missing and would flip the entire library to status='MISSING'. Self-heals
     // once the drive is back.
     let library_paths: Vec<String> = sqlx::query_scalar(r#"SELECT path FROM "Library""#)
-        .fetch_all(&db).await.unwrap_or_default();
+        .fetch_all(&db.pool).await.unwrap_or_default();
     for lib_path in &library_paths {
         if !Path::new(lib_path).exists() {
             log::warn!("[Ghost Check] Drive offline ({}); skipping ghost check to avoid mass-marking issues MISSING.", lib_path);
@@ -34,9 +35,9 @@ pub async fn run_ghost_check(db: PgPool) -> Result<(i32, i32, String)> {
     }
 
     let issues = sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE "filePath" IS NOT NULL"#)
-        .fetch_all(&db).await?;
+        .fetch_all(&db.pool).await?;
 
-    let cfg = crate::engine_config::EngineConfig::load(&db).await;
+    let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.scan_workers));
     let mut join_set = JoinSet::new();
 
@@ -68,13 +69,16 @@ pub async fn run_ghost_check(db: PgPool) -> Result<(i32, i32, String)> {
         }
     }
 
-    // One bulk UPDATE instead of one-per-missing-issue.
+    // One bulk UPDATE instead of one-per-missing-issue. Portable IN (...) list — `= ANY($1)`
+    // array binds are Postgres-only (see src/db.rs).
     let missing_count = missing_ids.len() as i32;
     if !missing_ids.is_empty() {
-        if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET status = 'MISSING' WHERE id = ANY($1)"#)
-            .bind(&missing_ids)
-            .execute(&db).await
-        {
+        let sql = format!(r#"UPDATE "Issue" SET status = 'MISSING' WHERE id IN ({})"#, Db::in_placeholders(1, missing_ids.len()));
+        let mut q = sqlx::query(&sql);
+        for id in &missing_ids {
+            q = q.bind(id);
+        }
+        if let Err(e) = q.execute(&db.pool).await {
             log::error!("[Ghost Check] Failed to mark {} issues MISSING: {:?}", missing_count, e);
         }
     }
@@ -82,19 +86,20 @@ pub async fn run_ghost_check(db: PgPool) -> Result<(i32, i32, String)> {
     Ok((total_checked, missing_count, format!("Ghost check complete. Scanned {} files. Found {} missing.", total_checked, missing_count)))
 }
 
-pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
+pub async fn run_storage_scan(db: Db) -> Result<(i32, u64, String)> {
     // Pull the fields the dashboard needs (name/publisher/isManga/issueCount) in one grouped query.
     let series = sqlx::query(
-        r#"SELECT s.id, s.name, s.publisher, s."isManga", s."folderPath",
+        // isManga is CAST for the Any driver (no SQLite BOOLEAN mapping).
+        r#"SELECT s.id, s.name, s.publisher, CAST(s."isManga" AS INTEGER) AS "isManga", s."folderPath",
                   COUNT(i.id) AS issue_count
            FROM "Series" s
            LEFT JOIN "Issue" i ON i."seriesId" = s.id
            WHERE s."folderPath" IS NOT NULL
            GROUP BY s.id"#
     )
-    .fetch_all(&db).await?;
+    .fetch_all(&db.pool).await?;
 
-    let cfg = crate::engine_config::EngineConfig::load(&db).await;
+    let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.scan_workers));
     let mut join_set = JoinSet::new();
 
@@ -106,7 +111,7 @@ pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
             .ok()
             .flatten()
             .unwrap_or_else(|| "Unknown".to_string());
-        let is_manga: bool = row.try_get("isManga").unwrap_or(false);
+        let is_manga: bool = row.try_get::<i64, _>("isManga").map(|v| v != 0).unwrap_or(false);
         let issue_count: i64 = row.try_get("issue_count").unwrap_or(0);
         let folder_path: String = row.get("folderPath");
         let sem = sem.clone();
@@ -151,19 +156,17 @@ pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
         }
     }
 
-    // Persist per-series sizes in ONE bulk UPDATE (was one query per series) via parallel arrays —
-    // Node writes prisma.series.update({ data: { size } }) per series.
-    if !size_ids.is_empty() {
-        if let Err(e) = sqlx::query(
-            r#"UPDATE "Series" AS s SET "size" = v.size
-               FROM (SELECT unnest($1::text[]) AS id, unnest($2::float8[]) AS size) AS v
-               WHERE s.id = v.id"#,
-        )
-        .bind(&size_ids)
-        .bind(&size_vals)
-        .execute(&db).await
+    // Persist per-series sizes as one UPDATE per series. The old Postgres-only bulk form
+    // (unnest'd parallel arrays) cannot pass through the Any driver — it has no array binds on
+    // either backend — and this is a scheduled job whose cost is the filesystem walk above, not
+    // these writes (SQLite: local file; Postgres: ~1ms round-trips inside a minutes-long job).
+    for (id, size) in size_ids.iter().zip(size_vals.iter()) {
+        if let Err(e) = sqlx::query(r#"UPDATE "Series" SET "size" = $1 WHERE id = $2"#)
+            .bind(size)
+            .bind(id)
+            .execute(&db.pool).await
         {
-            log::error!("[Storage Scan] Failed to bulk-update {} series sizes: {:?}", size_ids.len(), e);
+            log::error!("[Storage Scan] Failed to update size for series {}: {:?}", id, e);
         }
     }
 
@@ -177,7 +180,7 @@ pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
     if let Err(e) = sqlx::query(
         r#"INSERT INTO "SystemSetting" (key, value) VALUES ('storage_deep_dive_cache', $1)
            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#
-    ).bind(cache_json).execute(&db).await {
+    ).bind(cache_json).execute(&db.pool).await {
         log::error!("[Storage Scan] Failed to write storage_deep_dive_cache: {:?}", e);
     }
 
@@ -191,7 +194,7 @@ pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
         if let Err(e) = sqlx::query(
             r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2)
                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#
-        ).bind(key).bind(&now_ms).execute(&db).await {
+        ).bind(key).bind(&now_ms).execute(&db.pool).await {
             log::error!("[Storage Scan] Failed to write {}: {:?}", key, e);
         }
     }
@@ -201,7 +204,7 @@ pub async fn run_storage_scan(db: PgPool) -> Result<(i32, u64, String)> {
     if let Err(e) = sqlx::query(
         r#"INSERT INTO "SystemSetting" (key, value) VALUES ('total_library_size_mb', $1)
            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#
-    ).bind(total_mb.to_string()).execute(&db).await {
+    ).bind(total_mb.to_string()).execute(&db.pool).await {
         log::error!("[Storage Scan] Failed to write total_library_size_mb: {:?}", e);
     }
 
@@ -220,8 +223,8 @@ fn compute_orphans(
     physical.into_iter().filter(|p| !db_lower.contains(&p.to_lowercase())).collect()
 }
 
-pub async fn run_orphan_scan(db: PgPool) -> Result<Vec<String>> {
-    let libs = sqlx::query(r#"SELECT path FROM "Library""#).fetch_all(&db).await?;
+pub async fn run_orphan_scan(db: Db) -> Result<Vec<String>> {
+    let libs = sqlx::query(r#"SELECT path FROM "Library""#).fetch_all(&db.pool).await?;
     let mut all_physical_files = std::collections::HashSet::new();
 
     // 1. Walk the physical hard drives and collect all comic files
@@ -243,7 +246,7 @@ pub async fn run_orphan_scan(db: PgPool) -> Result<Vec<String>> {
 
     // 2. Get all DB file paths, normalized + lowercased for case-insensitive comparison (parity with
     //    Node's path.normalize(p).toLowerCase()).
-    let issues = sqlx::query(r#"SELECT "filePath" FROM "Issue" WHERE "filePath" IS NOT NULL"#).fetch_all(&db).await?;
+    let issues = sqlx::query(r#"SELECT "filePath" FROM "Issue" WHERE "filePath" IS NOT NULL"#).fetch_all(&db.pool).await?;
     let mut db_files = std::collections::HashSet::new();
     for row in issues {
         let fp: String = row.get("filePath");
@@ -255,10 +258,11 @@ pub async fn run_orphan_scan(db: PgPool) -> Result<Vec<String>> {
     Ok(compute_orphans(all_physical_files, &db_files))
 }
 
-pub async fn run_integrity_scan(db: PgPool) -> Result<(i32, i32, String)> {
+pub async fn run_integrity_scan(db: Db) -> Result<(i32, i32, String)> {
     // Only test existing .cbz archives (case-insensitive), matching Node's existsSync + endsWith('.cbz').
-    let issues = sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE "filePath" ILIKE '%.cbz'"#).fetch_all(&db).await?;
-    let cfg = crate::engine_config::EngineConfig::load(&db).await;
+    // LOWER(...) LIKE replaces Postgres-only ILIKE (identical semantics for this ASCII pattern).
+    let issues = sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE LOWER("filePath") LIKE '%.cbz'"#).fetch_all(&db.pool).await?;
+    let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.scan_workers));
     let mut join_set = JoinSet::new();
 
@@ -303,9 +307,13 @@ pub async fn run_integrity_scan(db: PgPool) -> Result<(i32, i32, String)> {
     // One bulk UPDATE instead of one-per-corrupted-issue.
     let corrupted_count = corrupted_ids.len() as i32;
     if !corrupted_ids.is_empty() {
-        if let Err(e) = sqlx::query(r#"UPDATE "Issue" SET status = 'CORRUPTED' WHERE id = ANY($1)"#)
-            .bind(&corrupted_ids).execute(&db).await
-        {
+        // Portable IN (...) list — see the ghost-check note on `= ANY($1)`.
+        let sql = format!(r#"UPDATE "Issue" SET status = 'CORRUPTED' WHERE id IN ({})"#, Db::in_placeholders(1, corrupted_ids.len()));
+        let mut q = sqlx::query(&sql);
+        for id in &corrupted_ids {
+            q = q.bind(id);
+        }
+        if let Err(e) = q.execute(&db.pool).await {
             log::error!("[Integrity Scan] Failed to mark {} issues CORRUPTED: {:?}", corrupted_count, e);
         }
     }

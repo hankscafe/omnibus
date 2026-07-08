@@ -94,7 +94,7 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
 
     // 2. Inject concurrently, BOUNDED so a full-library embed can't fan out hundreds of concurrent
     //    full-archive ZIP rewrites and thrash the disk / exhaust the blocking pool.
-    let cfg = crate::engine_config::EngineConfig::load_any(&db.pool).await;
+    let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.convert_workers));
     let mut join_set = JoinSet::new();
     for task in tasks {

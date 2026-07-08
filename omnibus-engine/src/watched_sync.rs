@@ -101,7 +101,7 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     // ==========================================
     // PHASE 1: PARALLEL FILE I/O & CONVERSION
     // ==========================================
-    let cfg = crate::engine_config::EngineConfig::load_any(&db.pool).await;
+    let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.convert_workers));
     let mut join_set = JoinSet::new();
 

@@ -6,7 +6,8 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use sqlx::{PgPool, Row};
+use crate::db::Db;
+use sqlx::Row;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use webp::Encoder;
@@ -261,7 +262,7 @@ pub fn convert_cbr_to_cbz(cbr_path: &Path) -> Result<PathBuf> {
 
 /// Reads the user's WebP conversion settings from the database.
 /// Parity with converter.ts:25-30 — defaults: conversion OFF, quality 80.
-pub async fn get_webp_settings(db: &PgPool) -> (bool, f32) {
+pub async fn get_webp_settings(db: &sqlx::AnyPool) -> (bool, f32) {
     let rows = sqlx::query(
         r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('convert_to_webp', 'webp_quality')"#
     )
@@ -285,17 +286,17 @@ pub async fn get_webp_settings(db: &PgPool) -> (bool, f32) {
 
 /// The Parallel Background Sweep Job for converting all CBRs in the library.
 /// An `issue_id` converts just that issue (beta.034 targeted conversion).
-pub async fn process_cbr_sweep(db: PgPool, issue_id: Option<String>) -> anyhow::Result<(i32, i32, String)> {
+pub async fn process_cbr_sweep(db: Db, issue_id: Option<String>) -> anyhow::Result<(i32, i32, String)> {
     let issues = if let Some(id) = &issue_id {
         sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE id = $1 AND "filePath" IS NOT NULL"#)
             .bind(id)
-            .fetch_all(&db)
+            .fetch_all(&db.pool)
             .await?
     } else {
         sqlx::query(
             r#"SELECT id, "filePath" FROM "Issue"
-               WHERE "filePath" ILIKE '%.cbr' OR "filePath" ILIKE '%.rar' OR "filePath" ILIKE '%.cb7'"#
-        ).fetch_all(&db).await?
+               WHERE LOWER("filePath") LIKE '%.cbr' OR LOWER("filePath") LIKE '%.rar' OR LOWER("filePath") LIKE '%.cb7'"#
+        ).fetch_all(&db.pool).await?
     };
 
     if issues.is_empty() {
@@ -307,11 +308,11 @@ pub async fn process_cbr_sweep(db: PgPool, issue_id: Option<String>) -> anyhow::
     }
 
     // Honor the user's WebP settings (the sweep previously did a raw RAR→ZIP repack, ignoring them).
-    let (convert_to_webp, webp_quality) = get_webp_settings(&db).await;
+    let (convert_to_webp, webp_quality) = get_webp_settings(&db.pool).await;
     log::info!("[Converter] CBR sweep starting for {} files. WebP: {} (quality {}).", issues.len(), convert_to_webp, webp_quality);
 
     // Bound concurrency to the core count so a large library can't exhaust the blocking pool / thrash disk.
-    let cfg = crate::engine_config::EngineConfig::load(&db).await;
+    let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let sem = Arc::new(Semaphore::new(cfg.convert_workers));
     let mut join_set = JoinSet::new();
 
@@ -354,7 +355,7 @@ pub async fn process_cbr_sweep(db: PgPool, issue_id: Option<String>) -> anyhow::
                     .bind(&new_path)
                     .bind(pages)
                     .bind(&issue_id)
-                    .execute(&db).await
+                    .execute(&db.pool).await
                 {
                     log::error!("[Converter] Converted {} but failed to update its database path: {:?}", new_path, e);
                     fail += 1;

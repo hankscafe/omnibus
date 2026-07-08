@@ -81,8 +81,10 @@ export async function setUserLibraryAccess(userId: string, libraryIds: string[])
   const unique = Array.from(new Set(libraryIds));
   await prisma.$transaction([
     prisma.userLibraryAccess.deleteMany({ where: { userId } }),
+    // No skipDuplicates (unsupported by Prisma's SQLite connector, and unnecessary): the preceding
+    // deleteMany clears this user's rows and `unique` is de-duplicated, so no collision is possible.
     ...(unique.length
-      ? [prisma.userLibraryAccess.createMany({ data: unique.map((libraryId) => ({ userId, libraryId })), skipDuplicates: true })]
+      ? [prisma.userLibraryAccess.createMany({ data: unique.map((libraryId) => ({ userId, libraryId })) })]
       : []),
   ]);
 }

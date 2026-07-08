@@ -1,20 +1,36 @@
 # ============================================================================
-# Omnibus — STANDARD profile (zero-config SQLite).
+# Omnibus — SCALE profile (PostgreSQL).
 #
-# Three services: the Next.js web app, the Rust engine, and Redis (BullMQ queue).
-# The database is a single SQLite file on the shared /config volume — no database
-# server to run or configure. This is the recommended profile for most self-hosters.
+# Four services: web + Rust engine + Redis + PostgreSQL. Use this only if your
+# library is large enough to benefit from Postgres; most self-hosters should use
+# the zero-config SQLite default:
+#     docker compose up -d          # (docker-compose.yml)
 #
-# Want PostgreSQL for a very large library? Use the scale profile instead:
+# Start this profile explicitly:
 #     docker compose -f docker-compose.postgres.yml up -d
 #
-# The web app and the engine BOTH open the same SQLite file, so they MUST share the
-# /config volume (below). The engine opens it in WAL mode with a busy-timeout so the
-# two processes coexist; keep /config on a real local/bind mount, NOT a network share
-# (SMB/NFS file locking is unreliable for SQLite).
+# Migrating an existing SQLite instance here? Use Admin → Backup on the old instance,
+# then Restore on this one with the SAME NEXTAUTH_SECRET. See UPGRADING.md.
 # ============================================================================
 services:
-  # --- Redis: the background job queue (BullMQ) ---
+  db:
+    image: postgres:15-alpine
+    container_name: omnibus_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: omnibus
+      POSTGRES_PASSWORD: omnibus_password
+      POSTGRES_DB: omnibus
+    # Not published to the host: only the web + engine containers reach Postgres over the compose
+    # network. To use a DB GUI from the host, add `ports: ["127.0.0.1:5432:5432"]` (loopback only).
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnibus -d omnibus"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     container_name: omnibus_redis
@@ -28,14 +44,15 @@ services:
 
   # --- Rust engine: heavy/parallel backend tasks (scan, convert, metadata, search, backup) ---
   omnibus-engine:
-    # Pull the published unified test image by default; `docker compose build` rebuilds from source.
     image: ${OMNIBUS_ENGINE_IMAGE:-ghcr.io/hankscafe/omnibus-engine:unified}
     build: ./omnibus-engine
     container_name: omnibus_engine
     restart: always
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
-      # SQLite file on the shared /config volume — same path the web app uses.
-      DATABASE_URL: file:/config/omnibus.db
+      DATABASE_URL: postgresql://omnibus:omnibus_password@db:5432/omnibus?schema=public
       OMNIBUS_ENGINE_BIND: 0.0.0.0:8000
       # The engine calls back to the Node web app to fire detached-job completion notifications.
       OMNIBUS_NODE_URL: http://web:3000
@@ -49,29 +66,28 @@ services:
       OMNIBUS_AWAITING_MATCH_DIR: /data/unmatched
     # No host port: the web container reaches the engine at http://omnibus-engine:8000 over the
     # compose network. Publishing 8000 would expose the DB-/filesystem-mutating engine API to the LAN.
-    # The engine scans/converts/embeds files on disk AND shares the SQLite DB, so it MUST share the
-    # SAME config + data volumes as the web app. For a real deploy, replace these named volumes with
-    # host bind mounts to your storage (e.g. /mnt/nas/config:/config and /mnt/nas/data:/data).
+    # The engine scans/converts/embeds files on disk, so it MUST share the SAME config + data
+    # volumes as the web app. For a real deploy, replace these named volumes with host bind mounts
+    # to your storage (e.g. /mnt/nas/config:/config and /mnt/nas/data:/data).
     volumes:
       - config:/config
       - data:/data
 
   # --- Node / Next.js web app: the UI + API; forwards heavy jobs to omnibus-engine ---
   web:
-    # Pull the published unified test image by default; `docker compose build` rebuilds from source.
     image: ${OMNIBUS_IMAGE:-ghcr.io/hankscafe/omnibus:unified}
     build: .
     container_name: omnibus_web
     restart: always
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
       omnibus-engine:
         condition: service_started
     environment:
-      # Same SQLite file as the engine (shared /config volume). A file: URL selects the SQLite
-      # provider automatically (the entrypoint bakes the SQLite client; no regeneration needed).
-      DATABASE_URL: file:/config/omnibus.db
+      DATABASE_URL: postgresql://omnibus:omnibus_password@db:5432/omnibus?schema=public
       OMNIBUS_REDIS_URL: redis://redis:6379
       # Reach the Rust engine over the compose network (NOT 127.0.0.1).
       OMNIBUS_ENGINE_URL: http://omnibus-engine:8000
@@ -86,12 +102,12 @@ services:
       OMNIBUS_AWAITING_MATCH_DIR: /data/unmatched
     ports:
       - "3000:3000"
-    # Shares the SAME config + data volumes as omnibus-engine so both containers see the files
-    # (including the SQLite database at /config/omnibus.db).
+    # Shares the SAME config + data volumes as omnibus-engine so both containers see the files.
     volumes:
       - config:/config
       - data:/data
 
 volumes:
+  pgdata:
   config:
   data:

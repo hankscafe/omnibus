@@ -274,8 +274,17 @@ export async function POST(request: Request) {
             const newlyDefault = nowDefault.filter((l: any) => wasDefault.get(l.id) !== true).map((l: any) => l.id);
             if (newlyDefault.length > 0) {
                 const allUsers = await tx.user.findMany({ select: { id: true } });
-                const rows = allUsers.flatMap((u: any) => newlyDefault.map((libId: string) => ({ userId: u.id, libraryId: libId })));
-                if (rows.length > 0) await tx.userLibraryAccess.createMany({ data: rows, skipDuplicates: true });
+                // No skipDuplicates on SQLite — skip pairs that already exist so re-flagging a
+                // library as default (some users may already hold it) can't hit the unique.
+                const existing = await tx.userLibraryAccess.findMany({
+                    where: { libraryId: { in: newlyDefault } },
+                    select: { userId: true, libraryId: true },
+                });
+                const have = new Set(existing.map((r: any) => `${r.userId}:${r.libraryId}`));
+                const rows = allUsers.flatMap((u: any) => newlyDefault
+                    .filter((libId: string) => !have.has(`${u.id}:${libId}`))
+                    .map((libId: string) => ({ userId: u.id, libraryId: libId })));
+                if (rows.length > 0) await tx.userLibraryAccess.createMany({ data: rows });
             }
         }
         if (downloadClients) await syncTable(tx.downloadClient, encDownloadClients);

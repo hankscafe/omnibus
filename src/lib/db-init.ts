@@ -341,7 +341,13 @@ export async function initDatabase() {
                 const allUsers = await prisma.user.findMany({ select: { id: true } });
                 const rows = allUsers.flatMap(u => allLibs.map(l => ({ userId: u.id, libraryId: l.id })));
                 if (rows.length > 0) {
-                    await prisma.userLibraryAccess.createMany({ data: rows, skipDuplicates: true });
+                    // No skipDuplicates (unsupported on SQLite): this sentinel-guarded backfill runs
+                    // once, and access rows for these users don't exist yet — filter defensively so a
+                    // stray pre-existing grant can't throw and wedge startup.
+                    const existing = await prisma.userLibraryAccess.findMany({ select: { userId: true, libraryId: true } });
+                    const have = new Set(existing.map(r => `${r.userId}:${r.libraryId}`));
+                    const fresh = rows.filter(r => !have.has(`${r.userId}:${r.libraryId}`));
+                    if (fresh.length > 0) await prisma.userLibraryAccess.createMany({ data: fresh });
                 }
                 await prisma.systemSetting.create({ data: { key: LIBRARY_SENTINEL, value: new Date().toISOString() } });
                 Logger.log(`[DB Init] Backfilled library access for ${allUsers.length} user(s) across ${allLibs.length} library(ies).`, "success");

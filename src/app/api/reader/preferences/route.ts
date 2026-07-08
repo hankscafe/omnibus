@@ -35,7 +35,12 @@ export async function GET(request: Request) {
     const pref = await prisma.readerPreference.findUnique({
       where: { userId_seriesId: { userId, seriesId } },
     });
-    return NextResponse.json({ settings: pref?.settings ?? null });
+    // settings is stored as a JSON string (SQLite has no Json type) — parse back to an object for the client.
+    let settings: unknown = null;
+    if (pref?.settings) {
+      try { settings = JSON.parse(pref.settings); } catch { settings = null; }
+    }
+    return NextResponse.json({ settings });
   } catch (error: unknown) {
     Logger.log(`[Reader Prefs] GET Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ settings: null });
@@ -52,11 +57,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing seriesId or settings' }, { status: 400 });
     }
 
-    // Upsert; the FK to Series naturally rejects an unknown seriesId.
+    // Store as a JSON string (SQLite has no Json type); GET parses it back. FK to Series rejects an unknown seriesId.
+    const serialized = JSON.stringify(settings);
     await prisma.readerPreference.upsert({
       where: { userId_seriesId: { userId, seriesId } },
-      update: { settings },
-      create: { userId, seriesId, settings },
+      update: { settings: serialized },
+      create: { userId, seriesId, settings: serialized },
     });
     return NextResponse.json({ success: true });
   } catch (error: unknown) {

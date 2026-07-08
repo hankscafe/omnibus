@@ -333,20 +333,28 @@ export async function POST(request: Request) {
         if (action === 'bulk-progress') {
             const isCompleted = status === 'READ';
             const currentPage = isCompleted ? 100 : 0;
-            // Select only ids, then do the whole batch as two bulk statements instead of a per-issue
-            // upsert loop inside one long lock-holding transaction: update the rows that already exist,
-            // then create the ones that don't (skipDuplicates on the (userId, issueId) unique).
+            // Two bulk statements instead of a per-issue upsert loop in one long lock-holding
+            // transaction: update the rows that already exist, then create only the missing ones.
+            // No skipDuplicates (unsupported on SQLite) — we explicitly diff against existing rows,
+            // so createMany can't collide on the (userId, issueId) unique.
             const issues = await prisma.issue.findMany({ where: { seriesId: { in: seriesIds } }, select: { id: true } });
             const issueIds = issues.map(i => i.id);
+            const existing = await prisma.readProgress.findMany({
+                where: { userId, issueId: { in: issueIds } },
+                select: { issueId: true },
+            });
+            const have = new Set(existing.map(r => r.issueId));
+            const missing = issueIds.filter(id => !have.has(id));
             await prisma.$transaction([
                 prisma.readProgress.updateMany({
                     where: { userId, issueId: { in: issueIds } },
                     data: { isCompleted, currentPage, totalPages: 100 },
                 }),
-                prisma.readProgress.createMany({
-                    data: issueIds.map(issueId => ({ userId, issueId, isCompleted, currentPage, totalPages: 100 })),
-                    skipDuplicates: true,
-                }),
+                ...(missing.length
+                    ? [prisma.readProgress.createMany({
+                        data: missing.map(issueId => ({ userId, issueId, isCompleted, currentPage, totalPages: 100 })),
+                    })]
+                    : []),
             ]);
             return NextResponse.json({ success: true });
         }

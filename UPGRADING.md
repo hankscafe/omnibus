@@ -1,14 +1,45 @@
 # Upgrading Omnibus
 
-## Migrating from the SQLite release (v1.0.x) to the Rust + PostgreSQL release
+## Choosing your database (SQLite or PostgreSQL)
 
-Older Omnibus releases bundled the database as a single **SQLite** file (`<config>/omnibus.db`)
-via Prisma. The current release runs a **PostgreSQL** database alongside the Rust engine and Redis,
-so there is **no in-place file conversion** — the two databases use different on-disk formats, and a
-raw SQLite→PostgreSQL dump would mis-type the booleans and dates that the Rust engine reads natively.
+Omnibus runs on **either** database from the **same images** — you choose with `DATABASE_URL`, and
+you are not locked in (you can move between them later via Backup → Restore, below).
 
-Instead, migrate with Omnibus's own **encrypted Backup → Restore**, which round-trips every row
-through Prisma (so SQLite `0/1` booleans become real PostgreSQL booleans, dates normalize, etc.).
+- **SQLite — the default, recommended for most.** Zero configuration: the database is a single file
+  at `<config>/omnibus.db`. No database server to run. Start with the standard compose file:
+
+  ```bash
+  docker compose up -d
+  ```
+
+- **PostgreSQL — optional, for very large libraries.** Adds a Postgres service. Start with the scale
+  compose file:
+
+  ```bash
+  docker compose -f docker-compose.postgres.yml up -d
+  ```
+
+Both the web app and the Rust engine read the **same `DATABASE_URL`**. On the SQLite profile they
+open the **same database file**, so they must share the `/config` volume — the compose files already
+do this. **Keep `/config` on a local disk or bind mount, never an SMB/NFS network share:** SQLite's
+file locking is unreliable over network filesystems and can corrupt the database under concurrent
+access. (Your comic library on `/data` can live on a network share as usual — this applies only to
+`/config`, where the SQLite file lives.)
+
+> **How the provider is selected:** the image ships ready for SQLite (the default). When
+> `DATABASE_URL` is a `postgres://` URL, the container's startup script rewrites the Prisma
+> datasource and regenerates the client automatically before first boot — no manual step.
+
+---
+
+## Switching an existing instance between SQLite and PostgreSQL
+
+The two databases use different on-disk formats, so there is **no in-place file conversion** — a raw
+SQLite→PostgreSQL dump would mis-type the booleans and dates that the Rust engine reads natively.
+Instead, move your data with Omnibus's own **encrypted Backup → Restore**, which round-trips every
+row through Prisma (so SQLite `0/1` booleans become real PostgreSQL booleans, dates normalize, etc.).
+The same procedure works in **either** direction (SQLite → Postgres for scale, or Postgres → SQLite
+to simplify).
 
 ### Before you start
 
@@ -19,11 +50,12 @@ through Prisma (so SQLite `0/1` booleans become real PostgreSQL booleans, dates 
 
 ### Steps
 
-1. **On the OLD (SQLite) instance:** log in as an admin → **Admin → Settings → Backup** → download the
+1. **On the OLD instance:** log in as an admin → **Admin → Settings → Backup** → download the
    database backup (`omnibus_backup_<date>.json`).
-2. **Stand up the NEW stack** (`docker-compose.yml`) with the **same `NEXTAUTH_SECRET`** set in your
-   `.env`. PostgreSQL, Redis, and the engine start, and the web container creates the schema
-   automatically on first boot (`prisma db push`).
+2. **Stand up the NEW stack** with the **same `NEXTAUTH_SECRET`** set in your `.env` — use
+   `docker compose up -d` for the SQLite target, or `docker compose -f docker-compose.postgres.yml up -d`
+   for the PostgreSQL target. The web container creates the schema automatically on first boot
+   (`prisma db push`); on the Postgres target the datasource is switched to PostgreSQL automatically.
 3. **Restore before finishing setup:** on the new instance's first-run setup screen (or later via
    **Admin → Settings → Restore**), upload the backup JSON. Restore is intentionally permitted before
    setup completes so you can seed a brand-new instance. Legacy-shaped fields are upgraded

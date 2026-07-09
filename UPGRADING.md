@@ -27,8 +27,42 @@ access. (Your comic library on `/data` can live on a network share as usual — 
 `/config`, where the SQLite file lives.)
 
 > **How the provider is selected:** the image ships ready for SQLite (the default). When
-> `DATABASE_URL` is a `postgres://` URL, the container's startup script rewrites the Prisma
-> datasource and regenerates the client automatically before first boot — no manual step.
+> `DATABASE_URL` is a `postgres://` URL, the container's entrypoint rewrites the Prisma datasource
+> and regenerates the client automatically before first boot — no manual step.
+
+---
+
+## In-place image upgrades on NAS / command-freezing platforms (QNAP, etc.)
+
+Most setups upgrade cleanly by pulling the new image and recreating the container. But some
+platforms — notably **QNAP Container Station**, and other UIs that capture a container's run
+configuration at *creation* — keep the **original container's command** when you only update the
+image, instead of adopting the new image's startup. Because this build runs its datasource setup at
+startup, a container carried over from an older image can keep a stale command and fail to boot with:
+
+```
+Error validating datasource `db`: the URL must start with the protocol `file:`.  (P1012)
+```
+
+That means the container is running the old startup (a bare `prisma db push`) against the new
+image's SQLite-default schema while `DATABASE_URL` points at PostgreSQL. (This is harmless — the
+error is a schema-validation failure *before* Prisma connects, so **your database is untouched**.
+The Rust engine is unaffected either way; it reads `DATABASE_URL` directly and never uses Prisma.)
+
+**Fix — do either one:**
+
+1. **Recreate the container** (recommended) so it adopts the new image's entrypoint. Keep the same
+   environment (`DATABASE_URL`, `NEXTAUTH_SECRET`, the `OMNIBUS_*` paths) and the same `/config` +
+   `/data` volumes, and leave the command/entrypoint fields **blank** so the image's defaults apply.
+2. **Or set the command override** to run the provider-select step before starting:
+
+   ```
+   sh -c 'node ./scripts/prepare-datasource.mjs && node ./node_modules/prisma/build/index.js db push --schema=/app/prisma/schema.prisma --skip-generate --accept-data-loss && node server.js'
+   ```
+
+Either way, a healthy boot logs `provider "sqlite" -> "postgresql"; regenerating Prisma client...`
+followed by `Your database is now in sync with your Prisma schema.` before the server starts. Once
+set, the platform keeps the correct startup across future updates.
 
 ---
 

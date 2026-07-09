@@ -84,8 +84,9 @@ USER node
 EXPOSE 3000
 ENV PORT=3000
 
-# Dual-DB startup: pick the datasource provider from DATABASE_URL (SQLite default is fully baked at
-# build time; a postgres:// URL rewrites the schema + regenerates the client), then apply the schema
-# and start. prisma db push is provider-agnostic (no migration files); --skip-generate because
-# prepare-datasource already (re)generated the correct client when needed.
-CMD ["sh", "-c", "node ./scripts/prepare-datasource.mjs && node ./node_modules/prisma/build/index.js db push --schema=/app/prisma/schema.prisma --skip-generate --accept-data-loss && node server.js"]
+# Dual-DB startup lives in the ENTRYPOINT (scripts/docker-entrypoint.sh) so it runs on EVERY start
+# with NO command override needed — a fresh container self-applies the correct datasource. The
+# entrypoint selects the provider from DATABASE_URL, runs `prisma db push`, then execs the CMD.
+# NOTE for in-place image upgrades on command-freezing platforms (e.g. QNAP): see UPGRADING.md.
+ENTRYPOINT ["sh", "/app/scripts/docker-entrypoint.sh"]
+CMD ["node", "server.js"]

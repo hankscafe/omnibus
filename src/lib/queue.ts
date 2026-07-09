@@ -280,11 +280,12 @@ export function initWorker() {
                                 break;
                             }
 
-                            // Notify the requester so a stalled search isn't silent (parity with the legacy Node path).
                             const currentReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
-                            await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
 
                             if (resultData.stall_for_review) {
+                                // Editions WERE found — this is a genuine failure needing admin disambiguation.
+                                // Keep it STALLED (counts against System Health) and notify.
+                                await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
                                 Logger.log(`[BullMQ] Search for ${name} needs admin review (${resultData.stall_reason ? 'multi-pack ambiguity' : 'multiple distinct editions'}). Stalling.`, 'warn');
                                 await SystemNotifier.sendAlert('download_failed', {
                                     title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
@@ -295,12 +296,13 @@ export function initWorker() {
                                     publisher, year
                                 }).catch(() => {});
                             } else {
-                                Logger.log(`[BullMQ] Rust engine found no valid matches for: ${name}. Stalling request.`, 'warn');
-                                await SystemNotifier.sendAlert('download_failed', {
-                                    title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
-                                    description: `Omnibus searched all connected indexers and direct download sites but could not find a match for **${name}**.`,
-                                    publisher, year
-                                }).catch(() => {});
+                                // Searched everywhere and found nothing — normal for a brand-new or small-press
+                                // title that simply isn't released/indexed anywhere yet. Park as AWAITING_RELEASE
+                                // (NOT STALLED) so the Series Monitor re-searches it on a slow cadence and it never
+                                // drives System Health to Degraded (issue #175). No failure notification — an item
+                                // that isn't out yet is not a failure.
+                                await prisma.request.update({ where: { id: requestId }, data: { status: 'AWAITING_RELEASE' } });
+                                Logger.log(`[BullMQ] No source found for ${name} yet. Parking as AWAITING_RELEASE for the monitor to retry.`, 'info');
                             }
                             break;
                         }
@@ -821,12 +823,53 @@ export function initWorker() {
                         }
                     }
 
+                    // Phase 3b -- AWAITING_RELEASE retry sweep. Requests that searched clean (no source had
+                    // them yet) are re-searched on a slow, release-friendly cadence (awaiting_retry_days,
+                    // default 7) — instead of the tight per-minute retry a real download failure gets — so a
+                    // title that later lands on an indexer/GetComics gets picked up. Snoozed items (an admin
+                    // dismissed the health warning) are skipped until their snooze expires (issue #175).
+                    let awaitingRetried = 0;
+                    const awaitingRetryDays = Math.max(1, parseInt(
+                        (await prisma.systemSetting.findUnique({ where: { key: 'awaiting_retry_days' } }))?.value || '7'
+                    ) || 7);
+                    const awaitingCutoff = new Date(Date.now() - awaitingRetryDays * 24 * 60 * 60 * 1000);
+                    const nowTs = new Date();
+                    const awaitingRequests = await prisma.request.findMany({
+                        where: {
+                            status: 'AWAITING_RELEASE',
+                            updatedAt: { lt: awaitingCutoff },
+                            OR: [{ snoozedUntil: null }, { snoozedUntil: { lt: nowTs } }]
+                        },
+                        select: { id: true, volumeId: true, activeDownloadName: true }
+                    });
+                    const awaitingVolIds = [...new Set(awaitingRequests.map(r => r.volumeId).filter(Boolean))] as string[];
+                    const awaitingSeries = awaitingVolIds.length
+                        ? await prisma.series.findMany({
+                            where: { OR: [{ metadataId: { in: awaitingVolIds } }, { id: { in: awaitingVolIds } }] },
+                            select: { id: true, metadataId: true, publisher: true, isManga: true, year: true, issues: { select: { number: true, releaseDate: true } } }
+                        })
+                        : [];
+                    for (const req of awaitingRequests) {
+                        const s = awaitingSeries.find(x => x.metadataId === req.volumeId || x.id === req.volumeId);
+                        const reqNum = parseFloat(extractIssueNumber(req.activeDownloadName || ""));
+                        // Prefer the matched issue's release year for a tighter search; fall back to the series year.
+                        let searchYear = s?.year ? String(s.year) : "";
+                        if (s && !isNaN(reqNum)) {
+                            const skel = s.issues.find((i: any) => parseFloat(i.number) === reqNum);
+                            if (skel?.releaseDate) searchYear = skel.releaseDate.split('-')[0];
+                        }
+                        await prisma.request.update({ where: { id: req.id }, data: { status: 'PENDING' } });
+                        searchAndDownload(req.id, req.activeDownloadName || "", searchYear, s?.publisher || "Unknown", s?.isManga || false).catch(() => {});
+                        awaitingRetried++;
+                    }
+                    if (awaitingRetried > 0) details += `[AWAITING] Re-searched ${awaitingRetried} awaiting-release request(s) after ${awaitingRetryDays}d.\n`;
+
                     await prisma.jobLog.create({
                         data: {
                             jobType: 'SERIES_MONITOR',
                             status: 'COMPLETED',
                             durationMs: Date.now() - startTime,
-                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades.`
+                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades, ${awaitingRetried} awaiting re-searched.`
                         }
                     });
                     break;

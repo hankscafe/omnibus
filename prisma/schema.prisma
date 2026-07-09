@@ -80,13 +80,16 @@ model Request {
   userId             String   
   volumeId           String
   metadataSource     String   @default("COMICVINE")
-  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED
+  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED, UNRELEASED, AWAITING_RELEASE, STALLED
   progress           Int      @default(0)
   retryCount         Int      @default(0)
   indexer            String?
   downloadLink       String?
   activeDownloadName String?
   failedLinks        String? @default("[]")
+  // Set when an admin dismisses/snoozes the System Health warning for this request. Snoozed items are
+  // excluded from health flagging and from the AWAITING_RELEASE retry sweep until this timestamp passes.
+  snoozedUntil       DateTime?
   imageUrl           String?
   notified           Boolean  @default(false)  
   createdAt          DateTime @default(now())

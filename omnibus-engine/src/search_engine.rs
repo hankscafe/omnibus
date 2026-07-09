@@ -254,17 +254,69 @@ pub fn generate_search_queries(
     // colon/dash isn't immediately matched against its entire line by an over-broad title-only query —
     // which also drops the issue number, disabling the indexer's issue filter and letting any issue win.
     // The broad title query is retained as a fallback for when the specific variants find nothing.
-    if prioritize_packs && use_packs {
-        let mut final_queries = packs;
-        final_queries.extend(secondary);
-        final_queries.extend(primary);
-        return final_queries;
-    }
+    let final_queries: Vec<String> = if prioritize_packs && use_packs {
+        let mut fq = packs;
+        fq.extend(secondary);
+        fq.extend(primary);
+        fq
+    } else {
+        let mut fq = secondary;
+        fq.extend(primary);
+        fq.extend(packs);
+        fq
+    };
 
-    let mut final_queries: Vec<String> = secondary;
-    final_queries.extend(primary);
-    final_queries.extend(packs);
-    final_queries
+    // Issue #176 change A: scene/Usenet releases zero-pad the issue number to 3 digits, so a query
+    // ending in a bare "3" can miss "…003…" hits on tokenizing newznab indexers. Emit a padded companion
+    // for each query that ends in the requested issue number, ordered just before its bare form so the
+    // interactive first-hit path tries the more specific shape first. Automated (exhaustive) search sends
+    // every variant anyway, so this is purely additive recall — the result filter still enforces the
+    // exact issue number, so a padded query can't loosen precision.
+    apply_issue_padding(final_queries, &search_name)
+}
+
+/// The requested issue as (bare, zero-padded-to-3) — e.g. ("3", "003") — but ONLY when the name carries
+/// an explicit issue marker (#/issue/chapter) and the number is 1–2 digits (so padding actually differs).
+/// Keying on the marker avoids ever mistaking a title number (Batman '89, Spider-Man 2099) for the issue.
+fn issue_pad_forms(name: &str) -> Option<(String, String)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?i)(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d{1,2})\b").unwrap());
+    let n: u32 = re.captures(name)?.get(1)?.as_str().parse().ok()?;
+    if n == 0 { return None; }
+    let bare = n.to_string();
+    let padded = format!("{:03}", n);
+    if bare == padded { None } else { Some((bare, padded)) }
+}
+
+/// If `query` ends in the bare issue number as its own token (optionally followed by a 4-digit year),
+/// return the query with that number zero-padded; otherwise None. Anchored to the end so an in-title
+/// number (e.g. the "23" of "X 23 001") is never touched.
+fn pad_trailing_issue(query: &str, bare: &str, padded: &str) -> Option<String> {
+    let re = Regex::new(&format!(r"(^|\s){}(\s\d{{4}})?$", regex::escape(bare))).ok()?;
+    let caps = re.captures(query)?;
+    let m = caps.get(0)?;
+    let lead = caps.get(1).map_or("", |x| x.as_str());
+    let year = caps.get(2).map_or("", |x| x.as_str());
+    Some(format!("{}{}{}{}", &query[..m.start()], lead, padded, year))
+}
+
+/// Insert a zero-padded issue variant immediately before each query that ends in the bare issue number,
+/// de-duping. A no-op when the name has no explicit issue marker (so existing pack/title-only tests and
+/// number-less requests are unaffected).
+fn apply_issue_padding(queries: Vec<String>, name: &str) -> Vec<String> {
+    let (bare, padded) = match issue_pad_forms(name) {
+        Some(p) => p,
+        None => return queries,
+    };
+    let mut out: Vec<String> = Vec::with_capacity(queries.len() + 4);
+    let mut seen: HashSet<String> = HashSet::new();
+    for q in queries {
+        if let Some(pq) = pad_trailing_issue(&q, &bare, &padded) {
+            if seen.insert(pq.clone()) { out.push(pq); }
+        }
+        if seen.insert(q.clone()) { out.push(q); }
+    }
+    out
 }
 
 // Extract number faithfully porting Node.js regex fallbacks without using lookarounds.
@@ -362,7 +414,7 @@ fn core_series_words(title: &str, noise: &HashSet<String>) -> Vec<String> {
 #[allow(clippy::too_many_arguments)]
 pub async fn filter_and_score(
     db: &sqlx::AnyPool,
-    mut results: Vec<ProwlarrResult>,
+    results: Vec<ProwlarrResult>,
     target_query: &str,
     is_manga: bool,
     req_year: Option<String>,
@@ -387,6 +439,10 @@ pub async fn filter_and_score(
     let match_ratio_str = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'filter_match_ratio'"#)
         .fetch_optional(db).await?.unwrap_or_default();
     let ratio_config = match_ratio_str.parse::<f64>().unwrap_or(60.0) / 100.0;
+    // Issue #176 change B (opt-in, default OFF): accept undated Prowlarr/Usenet releases instead of
+    // hard-rejecting them, but demote them below any dated candidate (year = validator/tiebreaker).
+    let accept_yearless = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'prowlarr_accept_yearless'"#)
+        .fetch_optional(db).await?.unwrap_or_default() == "true";
 
     // Default scoring rules — full 8-rule set matching automation.ts:269-273 (was truncated to 2).
     let mut scoring_rules: Vec<ScoringRule> = vec![
@@ -453,31 +509,35 @@ pub async fn filter_and_score(
         s
     };
 
-    results.retain(|res| {
+    // Evaluate each result: None = rejected; Some(year_unconfirmed) = kept, where `true` marks an
+    // undated release admitted only via the opt-in `prowlarr_accept_yearless` (issue #176 change B).
+    // Unconfirmed survivors sort BELOW every dated candidate regardless of score, so an undated release
+    // only ever auto-downloads when nothing dated exists.
+    let evaluate = |res: &ProwlarrResult| -> Option<bool> {
         let title_lower = res.title.to_lowercase();
         let is_ddl = res.protocol == "ddl";
 
-        for junk in &junk_words { if title_lower.contains(junk) { return false; } }
-        for group in &exclude_groups { if title_lower.contains(group) { return false; } }
-        if res.seeders == 0 && res.protocol != "usenet" && !is_ddl { return false; }
+        for junk in &junk_words { if title_lower.contains(junk) { return None; } }
+        for group in &exclude_groups { if title_lower.contains(group) { return None; } }
+        if res.seeders == 0 && res.protocol != "usenet" && !is_ddl { return None; }
 
         // Pre-filtered sources (GetComics, already validated per-query in getcomics::search) only get
-        // the operator's junk/exclude lists + scoring — not this relevance retain, which is keyed on the
+        // the operator's junk/exclude lists + scoring — not this relevance filter, which is keyed on the
         // merged target_query rather than the specific query that produced the result.
-        if skip_relevance { return true; }
+        if skip_relevance { return Some(false); }
 
         let is_pack = allow_bulk_packs && pack_terms.iter().any(|term| title_lower.contains(term));
 
         if req_num.is_some() && !is_looking_for_omnibus && !is_pack {
             let unexpected_tpb_terms: Vec<&&str> = tpb_terms.iter().filter(|t| !clean_original.contains(**t)).collect();
-            if unexpected_tpb_terms.iter().any(|term| title_lower.contains(**term)) { return false; }
+            if unexpected_tpb_terms.iter().any(|term| title_lower.contains(**term)) { return None; }
         }
 
         // Variant rejection is a GetComics/DDL-only filter in Node (getcomics.ts); prowlarr.ts never
         // rejects variants, so gate on is_ddl to avoid dropping legitimate Prowlarr torrents.
         if is_ddl && !user_wants_variant {
-            if open_variant_keywords.iter().any(|k| title_lower.contains(k)) { return false; }
-            if re_bounded_variant().is_match(&title_lower) { return false; }
+            if open_variant_keywords.iter().any(|k| title_lower.contains(k)) { return None; }
+            if re_bounded_variant().is_match(&title_lower) { return None; }
         }
 
         let clean_tor = re_ext_strip().replace(&title_lower, "").to_string();
@@ -487,8 +547,8 @@ pub async fn filter_and_score(
         if let Some(rn) = &req_num {
             if !is_looking_for_omnibus && !is_pack {
                 match &tor_num {
-                    Some(tn) if tn != rn => return false,
-                    None => return false,
+                    Some(tn) if tn != rn => return None,
+                    None => return None,
                     _ => {}
                 }
             }
@@ -507,19 +567,24 @@ pub async fn filter_and_score(
             req_year.as_ref()
         };
 
+        let mut year_unconfirmed = false;
         if let Some(req_y) = effective_year {
             if let Some(ty_str) = &tor_year {
                 if let (Ok(ry), Ok(ty)) = (req_y.parse::<i32>(), ty_str.parse::<i32>()) {
-                    if (ry - ty).abs() > 1 { return false; }
+                    // A present-but-wrong year is ALWAYS a hard reject — this is the volume discriminator
+                    // for rebooted series and is never relaxed by the opt-in below.
+                    if (ry - ty).abs() > 1 { return None; }
                 }
-            } else if !is_ddl {
-                // Prowlarr: a yearless title is rejected unless it literally contains the requested year (PG-7).
-                if !title_lower.contains(req_y.as_str()) { return false; }
+            } else if !is_ddl && !title_lower.contains(req_y.as_str()) {
+                // Prowlarr, undated title (PG-7 default: reject). Scene/Usenet releases often omit the
+                // year, so with prowlarr_accept_yearless=true the release is KEPT but flagged, and the
+                // tiered sort below prefers any dated candidate over it (issue #176 change B).
+                if accept_yearless { year_unconfirmed = true; } else { return None; }
             }
         }
 
         // Annual rejection is GetComics/DDL-only in Node (getcomics.ts:258-262); prowlarr.ts has none.
-        if is_ddl && !is_looking_for_annual && title_lower.contains("annual") { return false; }
+        if is_ddl && !is_looking_for_annual && title_lower.contains("annual") { return None; }
 
         // REVERSE GUARD (Prowlarr single-issue only): the required-word/ratio checks can't tell the
         // requested series from a differently-titled one that merely CONTAINS its words — e.g. "Wolverine
@@ -534,7 +599,7 @@ pub async fn filter_and_score(
                 .collect();
             if !extra.is_empty() {
                 log::debug!("[Automation Debug] Discarding off-series Prowlarr release \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
-                return false;
+                return None;
             }
         }
 
@@ -549,7 +614,7 @@ pub async fn filter_and_score(
                 .map(|s| s.to_string())
                 .collect();
             if fails_match_ratio(&significant_query_words, &result_words, is_pack, ratio_config) {
-                return false;
+                return None;
             }
         }
 
@@ -560,21 +625,33 @@ pub async fn filter_and_score(
             }
         }
         for w in &words_to_enforce {
-            if !w.chars().all(char::is_numeric) && !title_lower.contains(w) { return false; }
+            if !w.chars().all(char::is_numeric) && !title_lower.contains(w) { return None; }
         }
 
-        true
+        Some(year_unconfirmed)
+    };
+
+    let mut kept: Vec<(ProwlarrResult, bool)> = Vec::new();
+    for res in results {
+        if let Some(unconfirmed) = evaluate(&res) {
+            kept.push((res, unconfirmed));
+        }
+    }
+
+    if kept.is_empty() { return Ok(None); }
+
+    // Tiered sort: year-confirmed (false) before unconfirmed (true), then score within each tier.
+    // With prowlarr_accept_yearless off no survivor is ever flagged, so this reduces to the original
+    // pure score ordering — the default path is bit-for-bit the old behavior.
+    kept.sort_by(|a, b| {
+        a.1.cmp(&b.1).then_with(|| {
+            let score_a = calculate_score(&a.0, &scoring_rules);
+            let score_b = calculate_score(&b.0, &scoring_rules);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        })
     });
 
-    if results.is_empty() { return Ok(None); }
-
-    results.sort_by(|a, b| {
-        let score_a = calculate_score(a, &scoring_rules);
-        let score_b = calculate_score(b, &scoring_rules);
-        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    Ok(Some(results[0].clone()))
+    Ok(Some(kept.remove(0).0))
 }
 
 /// Parity with automation.ts scoreRelease: `seeders + peers*0.5 + rule scores`.
@@ -771,5 +848,173 @@ mod tests {
         let no_number = generate_search_queries("Saga", "2014", &ac, false, true);
         assert!(no_number.iter().any(|q| q == "Saga collection"));
         assert!(no_number.iter().any(|q| q == "Saga pack"));
+    }
+
+    // ---- Issue #176 characterization: query normalization ALREADY strips punctuation and the year is
+    // never a hard query constraint (year-less variants are always emitted). These assert current
+    // behavior on this branch (they pass without any change) — proving the "auto sends only the
+    // fully-punctuated query" symptom from the reporter's beta.076 no longer applies here.
+    #[test]
+    fn normalization_folds_punctuation_current_behavior() {
+        let ac = HashMap::new();
+
+        // Batman '89: Echoes #3 (2024) — apostrophe/colon/# folded to a clean broad query, plus a
+        // title-only fallback from the colon split. The '89 digits are preserved (never stripped).
+        let batman = generate_search_queries("Batman '89: Echoes #3", "2024", &ac, false, false);
+        assert!(batman.iter().any(|q| q == "Batman 89 Echoes 3"), "clean broad query missing: {:?}", batman);
+        assert!(batman.iter().any(|q| q == "Batman 89"), "title-only fallback missing: {:?}", batman);
+        assert!(batman.iter().any(|q| q == "Batman 89 Echoes 3"), "yearless variant must exist: {:?}", batman);
+
+        // Title digits are kept, only punctuation is folded (never strip 2099 / the X-23 hyphen number).
+        let spidey = generate_search_queries("Spider-Man 2099 #1", "1992", &ac, false, false);
+        assert!(spidey.iter().any(|q| q == "Spider Man 2099 1"), "2099 title digits must survive: {:?}", spidey);
+        let x23 = generate_search_queries("X-23 #1", "2010", &ac, false, false);
+        assert!(x23.iter().any(|q| q == "X 23 1"), "X-23 hyphen split kept: {:?}", x23);
+
+        // Ampersand / period fold to spaces.
+        let br = generate_search_queries("Batman & Robin #5", "2011", &ac, false, false);
+        assert!(br.iter().any(|q| q == "Batman Robin 5"), "ampersand fold missing: {:?}", br);
+        let ms = generate_search_queries("Ms. Marvel #12", "2014", &ac, false, false);
+        assert!(ms.iter().any(|q| q == "Ms Marvel 12"), "period fold missing: {:?}", ms);
+
+        // KNOWN DELTA vs the issue's table: the engine drops a possessive "'s" entirely ("Marvel's" ->
+        // "Marvel"), whereas the issue expects "Marvels". That is deliberate (a stray "s" token would be
+        // enforced as a required title word) and is OUT OF SCOPE for change A — documented here so the
+        // difference is visible, not silently assumed.
+        let mv = generate_search_queries("Marvel's Voices #1", "2020", &ac, false, false);
+        assert!(mv.iter().any(|q| q == "Marvel Voices 1"), "current possessive handling: {:?}", mv);
+    }
+
+    // ---- Issue #176 change A: zero-padded issue-number variants (scene releases pad to 3 digits).
+    // FAILS before the change is implemented, PASSES after.
+    #[test]
+    fn zero_pads_issue_number_variants_change_a() {
+        let ac = HashMap::new();
+
+        let batman = generate_search_queries("Batman '89: Echoes #3", "2024", &ac, false, false);
+        // #3 gains a padded "003" companion on the clean query...
+        assert!(batman.iter().any(|q| q == "Batman 89 Echoes 003"), "padded issue variant missing: {:?}", batman);
+        // ...and it's tried BEFORE its bare counterpart (interactive first-hit ordering).
+        let padded = batman.iter().position(|q| q == "Batman 89 Echoes 003");
+        let bare = batman.iter().position(|q| q == "Batman 89 Echoes 3");
+        assert!(padded.is_some() && bare.is_some() && padded < bare, "padded must precede bare: {:?}", batman);
+        // The title-only "Batman 89" must NOT be padded — '89 is part of the title, not the issue.
+        assert!(batman.iter().all(|q| !q.contains("089")), "title '89 must not be padded: {:?}", batman);
+
+        // Issue #1 -> 001, while the 2099 title digits are left alone.
+        let spidey = generate_search_queries("Spider-Man 2099 #1", "1992", &ac, false, false);
+        assert!(spidey.iter().any(|q| q == "Spider Man 2099 001"), "issue #1 should pad to 001: {:?}", spidey);
+        assert!(spidey.iter().all(|q| !q.contains("02099")), "2099 must not be padded: {:?}", spidey);
+
+        // Two-digit issue -> zero-padded to three; hyphen-number title kept.
+        let ms = generate_search_queries("Ms. Marvel #12", "2014", &ac, false, false);
+        assert!(ms.iter().any(|q| q == "Ms Marvel 012"), "issue #12 should pad to 012: {:?}", ms);
+        let x23 = generate_search_queries("X-23 #1", "2010", &ac, false, false);
+        assert!(x23.iter().any(|q| q == "X 23 001"), "issue #1 padded; 23 title kept: {:?}", x23);
+        assert!(x23.iter().all(|q| !q.contains("X 023")), "the title 23 must not be padded: {:?}", x23);
+    }
+
+    // ==== Issue #176 change B: the year gate in filter_and_score, exercised END-TO-END against an
+    // in-memory SQLite AnyPool (the real settings-read path), because this filter decides what
+    // auto-downloads and must not be tested by proxy.
+
+    fn res_p(title: &str, seeders: i32, peers: i32, protocol: &str) -> ProwlarrResult {
+        ProwlarrResult {
+            guid: format!("g-{}", title), title: title.into(), size: 0, indexer: "idx".into(),
+            seeders, peers, info_url: String::new(), download_url: format!("u-{}", title),
+            protocol: protocol.into(), publish_date: String::new(), info_hash: None,
+        }
+    }
+
+    async fn mem_pool(settings: &[(&str, &str)]) -> sqlx::AnyPool {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1) // each :memory: connection is its own DB — keep exactly one
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#)
+            .execute(&pool).await.unwrap();
+        for (k, v) in settings {
+            sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2)"#)
+                .bind(*k).bind(*v).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    const REQ: &str = "Batman '89: Echoes #3";
+    const UNDATED: &str = "Batman 89 Echoes 003 (Digital) (Zone-Empire)";
+    const DATED: &str = "Batman 89 Echoes 003 (2024) (Digital)";
+    const WRONG_YEAR: &str = "Batman 89 Echoes 003 (1989) (Digital)";
+
+    async fn run_filter(pool: &sqlx::AnyPool, results: Vec<ProwlarrResult>) -> Option<ProwlarrResult> {
+        filter_and_score(pool, results, REQ, false, Some("2024".into()), None, false, Some(false))
+            .await.unwrap()
+    }
+
+    // Characterization (current behavior, no setting): PG-7 hard-rejects an undated Prowlarr/Usenet
+    // release; a dated release within ±1 year is kept; a wrong-year release is rejected; DDL undated
+    // releases were always exempt. This test must KEEP passing after change B (default off).
+    #[tokio::test]
+    async fn year_gate_default_rejects_undated_prowlarr_keeps_dated_and_ddl() {
+        let pool = mem_pool(&[]).await;
+
+        // Undated usenet release -> rejected (the reporter's residual symptom).
+        assert!(run_filter(&pool, vec![res_p(UNDATED, 0, 0, "usenet")]).await.is_none());
+
+        // Dated within ±1 -> kept.
+        let kept = run_filter(&pool, vec![res_p(DATED, 5, 0, "usenet")]).await;
+        assert_eq!(kept.map(|r| r.title), Some(DATED.to_string()));
+
+        // Wrong year -> rejected.
+        assert!(run_filter(&pool, vec![res_p(WRONG_YEAR, 5, 0, "usenet")]).await.is_none());
+
+        // DDL undated -> kept (existing exemption, unchanged).
+        let ddl = run_filter(&pool, vec![res_p(UNDATED, 0, 0, "ddl")]).await;
+        assert_eq!(ddl.map(|r| r.title), Some(UNDATED.to_string()));
+    }
+
+    // Change B, part 1: with prowlarr_accept_yearless=true, an undated release is ACCEPTED when it is
+    // the only candidate (the reporter's NZBGeek case: scene titles usually omit the year).
+    #[tokio::test]
+    async fn year_gate_opt_in_accepts_undated_when_only_candidate() {
+        let pool = mem_pool(&[("prowlarr_accept_yearless", "true")]).await;
+        let got = run_filter(&pool, vec![res_p(UNDATED, 0, 0, "usenet")]).await;
+        assert_eq!(got.map(|r| r.title), Some(UNDATED.to_string()));
+    }
+
+    // Change B, part 2: the year acts as a VALIDATOR/TIEBREAKER — a dated candidate always outranks an
+    // undated one, even when the undated release would win on raw score (seeders). An undated release
+    // can be the wrong volume of a rebooted series; a dated one is confirmed. This is what makes the
+    // opt-in safe: undated only downloads when nothing dated exists.
+    #[tokio::test]
+    async fn year_gate_opt_in_dated_release_outranks_undated() {
+        let pool = mem_pool(&[("prowlarr_accept_yearless", "true")]).await;
+        let got = run_filter(&pool, vec![
+            res_p(UNDATED, 500, 100, "torrent"), // huge score
+            res_p(DATED, 5, 0, "torrent"),       // tiny score, but year-confirmed
+        ]).await;
+        assert_eq!(got.map(|r| r.title), Some(DATED.to_string()), "dated must win regardless of score");
+    }
+
+    // Change B guard: opting in must NOT weaken the wrong-year rejection — a release dated outside ±1
+    // is still discarded. (Passes today too; pinned so B can't accidentally loosen it.)
+    #[tokio::test]
+    async fn year_gate_opt_in_still_rejects_wrong_year() {
+        let pool = mem_pool(&[("prowlarr_accept_yearless", "true")]).await;
+        assert!(run_filter(&pool, vec![res_p(WRONG_YEAR, 500, 0, "usenet")]).await.is_none());
+    }
+
+    // Change B guard: with the setting ABSENT the tie-break sort must be inert — among dated survivors
+    // ordering stays purely score-based (pin against the sort-key refactor changing default behavior).
+    #[tokio::test]
+    async fn year_gate_default_sort_stays_score_based() {
+        let pool = mem_pool(&[]).await;
+        let low = "Batman 89 Echoes 003 (2024)";
+        let high = "Batman 89 Echoes 003 (2024) (Digital)";
+        let got = run_filter(&pool, vec![
+            res_p(low, 5, 0, "torrent"),
+            res_p(high, 50, 0, "torrent"),
+        ]).await;
+        assert_eq!(got.map(|r| r.title), Some(high.to_string()));
     }
 }

@@ -16,6 +16,9 @@ export interface HealthCheckResult {
     message: string;
     actionLink?: string;
     details?: string[];
+    // Actionable request rows (id + label) for checks that support per-item snooze/dismiss in the UI
+    // (stalled imports, awaiting-availability). Absent on purely informational checks.
+    items?: { id: string; name: string }[];
 }
 
 export async function runSystemHealthCheck() {
@@ -224,24 +227,57 @@ export async function runSystemHealthCheck() {
         results.push({ id: 'dl_clients_config', name: 'Download Clients', status: 'ok', message: `${downloadClientCount} client(s) configured` });
     }
 
-    // 8. External Client Missing Files
-    const stalledReqs = await prisma.request.findMany({
-        where: { status: 'STALLED', retryCount: { gte: 3 } },
+    // 8. External Client Import Errors (GENUINE failures only)
+    // A STALLED request is a real problem needing intervention: a download that failed to import, or a
+    // search flagged for admin disambiguation. "Searched everywhere, found nothing yet" is NOT here — it
+    // lives in AWAITING_RELEASE and is reported as informational below, because that's expected for brand-
+    // new / small-press titles and must not drive System Health to Degraded (issue #175). Snoozed items
+    // (an admin dismissed the warning) are excluded until their snooze expires.
+    const now = new Date();
+    const notSnoozed = { OR: [{ snoozedUntil: null }, { snoozedUntil: { lt: now } }] };
+
+    // Global toggle: admins who track niche/indie titles can disable stalled-request flagging entirely.
+    const flagStalled = config.flag_stalled_requests !== 'false'; // default ON
+    if (flagStalled) {
+        const stalledReqs = await prisma.request.findMany({
+            where: { status: 'STALLED', retryCount: { gte: 3 }, ...notSnoozed },
+            select: { id: true, activeDownloadName: true }
+        });
+        if (stalledReqs.length > 0) {
+            const stalledNames = stalledReqs.map(r => r.activeDownloadName || `Request ID: ${r.id}`);
+            results.push({
+                id: 'stalled_dls',
+                name: 'External Client Import Errors',
+                status: 'error',
+                message: `${stalledReqs.length} download(s) failed to import or need review. They are stuck in the active queue and require manual intervention (check path mappings, permissions, or run an Interactive Search).`,
+                actionLink: '/admin',
+                details: stalledNames,
+                items: stalledReqs.map(r => ({ id: r.id, name: r.activeDownloadName || `Request ID: ${r.id}` }))
+            });
+        } else {
+            results.push({ id: 'stalled_dls', name: 'External Client Imports', status: 'ok', message: 'All imports successful' });
+        }
+    } else {
+        results.push({ id: 'stalled_dls', name: 'External Client Imports', status: 'ok', message: 'Stalled-request flagging is disabled in settings' });
+    }
+
+    // 8b. Awaiting Availability (informational — never an error)
+    // Requests that couldn't be found on any source yet. Omnibus keeps retrying on a slow cadence
+    // (awaiting_retry_days). This surfaces them without penalising overall health.
+    const awaitingReqs = await prisma.request.findMany({
+        where: { status: 'AWAITING_RELEASE', ...notSnoozed },
         select: { id: true, activeDownloadName: true }
     });
-    
-    if (stalledReqs.length > 0) {
-        const stalledNames = stalledReqs.map(r => r.activeDownloadName || `Request ID: ${r.id}`);
-        results.push({ 
-            id: 'stalled_dls', 
-            name: 'External Client Import Errors', 
-            status: 'error', 
-            message: `${stalledReqs.length} download(s) failed to import. They are stuck in the active queue and require manual intervention (Check path mappings or permissions).`, 
+    if (awaitingReqs.length > 0) {
+        results.push({
+            id: 'awaiting_release',
+            name: 'Awaiting Availability',
+            status: 'ok',
+            message: `${awaitingReqs.length} request(s) aren't available on any source yet — Omnibus will keep retrying automatically. This is normal for brand-new or small-press titles.`,
             actionLink: '/admin',
-            details: stalledNames 
+            details: awaitingReqs.map(r => r.activeDownloadName || `Request ID: ${r.id}`),
+            items: awaitingReqs.map(r => ({ id: r.id, name: r.activeDownloadName || `Request ID: ${r.id}` }))
         });
-    } else {
-        results.push({ id: 'stalled_dls', name: 'External Client Imports', status: 'ok', message: 'All imports successful' });
     }
 
     // 9. Cache Integrity Check

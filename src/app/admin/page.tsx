@@ -93,6 +93,34 @@ export default function AdminPage() {
   const [healthData, setHealthData] = useState<any>(null);
   const [healthModalOpen, setHealthModalOpen] = useState(false);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [snoozingHealth, setSnoozingHealth] = useState(false);
+
+  // Snooze (or un-snooze) one/many requests' System Health warnings, then recompute health so the
+  // dismissed items drop off the panel immediately (issue #175).
+  const handleSnoozeHealth = async (ids: string[], opts?: { days?: number; clear?: boolean }) => {
+    if (ids.length === 0) return;
+    setSnoozingHealth(true);
+    try {
+      const res = await fetch('/api/request/snooze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, days: opts?.days ?? 30, clear: opts?.clear ?? false }),
+      });
+      if (!res.ok) throw new Error(`Snooze failed (${res.status})`);
+      const health = await fetch('/api/admin/health?force=true');
+      if (health.ok) setHealthData(await health.json());
+      toast({
+        title: opts?.clear ? 'Reminder restored' : 'Dismissed',
+        description: opts?.clear
+          ? `${ids.length} item(s) will be flagged again.`
+          : `${ids.length} item(s) snoozed for ${opts?.days ?? 30} days.`,
+      });
+    } catch (e) {
+      toast({ title: 'Error', description: getErrorMessage(e), variant: 'destructive' });
+    } finally {
+      setSnoozingHealth(false);
+    }
+  };
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [requestToDelete, setRequestToDelete] = useState<{id: string, name: string} | null>(null)
@@ -1176,14 +1204,41 @@ const mappedRequests = requests.map(req => {
                                 {check.message}
                             </p>
                             
-                            {/* NEW: Render the details list for the stalled items */}
-                            {check.details && check.details.length > 0 && (
+                            {/* Actionable rows (stalled imports / awaiting availability) get a per-item
+                                Snooze that dismisses the health warning; other checks show a plain list. */}
+                            {check.items && check.items.length > 0 ? (
+                                <>
+                                    <ul className="mt-2 space-y-1 bg-background/50 p-2 rounded border border-border/50 max-h-40 overflow-y-auto">
+                                        {check.items.map((it: { id: string; name: string }) => (
+                                            <li key={it.id} className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                                                <span className="truncate" title={it.name}>{it.name}</span>
+                                                <Button
+                                                    variant="ghost" size="sm" disabled={snoozingHealth}
+                                                    className="shrink-0 h-6 px-2 text-[10px] uppercase font-bold tracking-wider"
+                                                    onClick={() => handleSnoozeHealth([it.id], { days: 30 })}
+                                                >
+                                                    <Clock className="w-3 h-3 mr-1" /> Snooze
+                                                </Button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    {check.items.length > 1 && (
+                                        <Button
+                                            variant="link" size="sm" disabled={snoozingHealth}
+                                            className="h-6 px-0 mt-1 text-[10px] uppercase font-bold tracking-wider text-muted-foreground hover:text-foreground"
+                                            onClick={() => handleSnoozeHealth(check.items.map((i: { id: string }) => i.id), { days: 30 })}
+                                        >
+                                            Snooze all {check.items.length} for 30 days
+                                        </Button>
+                                    )}
+                                </>
+                            ) : check.details && check.details.length > 0 ? (
                                 <ul className="mt-2 text-[11px] text-muted-foreground list-disc pl-4 space-y-0.5 bg-background/50 p-2 rounded border border-border/50 max-h-24 overflow-y-auto">
                                     {check.details.map((detail: string, i: number) => (
                                         <li key={i} className="truncate" title={detail}>{detail}</li>
                                     ))}
                                 </ul>
-                            )}
+                            ) : null}
                         </div>
                         {(check.actionLink || check.id === 'system_update') && (
                             <Button variant={isUpdateAvailable ? "default" : "outline"} size="sm" asChild className={`shrink-0 h-8 text-[10px] uppercase font-bold tracking-wider ${isUpdateAvailable ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-md' : ''}`}>

@@ -139,4 +139,60 @@ describe('System Health & Diagnostics', () => {
             update: { value: 'false' }
         }));
     });
+
+    describe('Stalled vs. Awaiting-availability (issue #175)', () => {
+        beforeEach(() => {
+            // Healthy disk + access so the only variable is the request state.
+            vi.mocked(fs.promises.statfs).mockResolvedValue({ bsize: 1024, bavail: 15 * 1024 * 1024 * 1024 / 1024 } as any);
+            vi.mocked(fs.promises.access).mockResolvedValue(undefined);
+        });
+
+        // Route the shared request.findMany mock by the status it's querying.
+        const routeRequestsByStatus = (byStatus: Record<string, any[]>) => {
+            mocks.findManyRequests.mockImplementation((args: any) => {
+                const status = args?.where?.status;
+                return Promise.resolve(byStatus[status] || []);
+            });
+        };
+
+        it('flags genuinely STALLED imports as an error (DEGRADED)', async () => {
+            routeRequestsByStatus({ STALLED: [{ id: 'r1', activeDownloadName: 'Broken Import #1' }] });
+            const result = await runSystemHealthCheck();
+            const stalled = result.checks.find(c => c.id === 'stalled_dls');
+            expect(stalled?.status).toBe('error');
+            expect(result.status).toBe('DEGRADED');
+        });
+
+        it('does NOT flag AWAITING_RELEASE items — reports them as informational ok', async () => {
+            routeRequestsByStatus({ AWAITING_RELEASE: [{ id: 'r2', activeDownloadName: 'The Dogsitter #1' }] });
+            const result = await runSystemHealthCheck();
+
+            const awaiting = result.checks.find(c => c.id === 'awaiting_release');
+            expect(awaiting?.status).toBe('ok');
+            expect(awaiting?.details).toContain('The Dogsitter #1');
+
+            // Stalled check stays green, and one "not out yet" item must not degrade the instance.
+            expect(result.checks.find(c => c.id === 'stalled_dls')?.status).toBe('ok');
+            expect(result.status).toBe('HEALTHY');
+        });
+
+        it('honors the flag_stalled_requests=false toggle (stalled no longer errors)', async () => {
+            mocks.findManySettings.mockResolvedValueOnce([
+                { key: 'cv_api_key', value: 'valid_key' },
+                { key: 'download_path', value: '/downloads' },
+                { key: 'last_backup_sync', value: Date.now().toString() },
+                { key: 'cloudflare_block_time', value: '0' },
+                { key: 'cv_rate_limit_time', value: '0' },
+                { key: 'metron_rate_limit_time', value: '0' },
+                { key: 'flag_stalled_requests', value: 'false' }
+            ]);
+            routeRequestsByStatus({ STALLED: [{ id: 'r1', activeDownloadName: 'Broken Import #1' }] });
+
+            const result = await runSystemHealthCheck();
+            const stalled = result.checks.find(c => c.id === 'stalled_dls');
+            expect(stalled?.status).toBe('ok');
+            expect(stalled?.message).toContain('disabled');
+            expect(result.status).toBe('HEALTHY');
+        });
+    });
 });

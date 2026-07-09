@@ -205,7 +205,9 @@ export default function SettingsPage() {
     manga_publishers: "", western_publishers: "",
     discover_manga_filter_mode: "SHOW_ALL", discover_manga_allowed_publishers: "",
     download_retry_delay: "5",
-    convert_to_webp: "false", webp_quality: "80", 
+    awaiting_retry_days: "7", flag_stalled_requests: "true",
+    prowlarr_accept_yearless: "false",
+    convert_to_webp: "false", webp_quality: "80",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
     oidc_force_sso: "false", oidc_auto_approve: "false", oidc_admin_group: "", oidc_user_group: "",
     folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "",
@@ -1572,6 +1574,20 @@ export default function SettingsPage() {
                             </div>
                         </div>
 
+                        {/* Issue #176 change B: opt-in acceptance of undated indexer releases */}
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-2">
+                            <Switch
+                                id="accept-yearless-toggle"
+                                checked={config.prowlarr_accept_yearless === "true"}
+                                onCheckedChange={(c) => setConfig({...config, prowlarr_accept_yearless: c ? "true" : "false"})}
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="accept-yearless-toggle" className="cursor-pointer font-bold text-base text-foreground">Accept Undated Indexer Releases</Label>
+                                <p className="text-[11px] text-muted-foreground">Many Usenet/scene releases omit the year (e.g. <code>Batman 89 Echoes 003 (Digital)</code>), and by default Omnibus rejects them because the year is the only way to tell rebooted series apart (a "Wolverine 003" exists for the 1988, 2010, 2014 and 2020 volumes). Enable to accept undated releases — a release <strong>with</strong> a matching year is always preferred, so undated ones only download when nothing dated exists. Slight risk of grabbing the wrong volume of a rebooted series.</p>
+                            </div>
+                        </div>
+
                         {/* GetComics Interactive Search Depth */}
                         <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
                             <Label htmlFor="getcomics_interactive_pages" className="font-bold text-foreground">Interactive Search Depth (Pages)</Label>
@@ -2185,6 +2201,39 @@ export default function SettingsPage() {
                             <span className="text-sm text-muted-foreground">
                                 Wait time before automatically retrying a stalled/failed download (Max 3 retries).
                             </span>
+                        </div>
+                    </div>
+
+                    <div className="grid gap-2 bg-muted/30 p-4 rounded-lg border border-border">
+                        <Label className="text-base font-bold text-foreground">Awaiting-Release Retry (Days)</Label>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                            <Input
+                                type="number"
+                                min="1"
+                                value={config.awaiting_retry_days || "7"}
+                                onChange={e => setConfig({...config, awaiting_retry_days: e.target.value})}
+                                className="h-12 sm:h-10 w-full sm:w-32 bg-background border-border text-foreground"
+                            />
+                            <span className="text-sm text-muted-foreground">
+                                How often to re-search requests that aren't available on any source yet (brand-new / small-press titles). These retry on this slow cadence instead of counting as failures. (Default: 7)
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                        <Switch
+                            id="flag-stalled-requests"
+                            checked={config.flag_stalled_requests !== "false"}
+                            onCheckedChange={(c) => setConfig({...config, flag_stalled_requests: c ? "true" : "false"})}
+                            className="scale-110 sm:scale-100"
+                        />
+                        <div className="grid gap-1 ml-2">
+                            <Label htmlFor="flag-stalled-requests" className="cursor-pointer font-bold text-base text-foreground">
+                                Flag stalled requests in System Health
+                            </Label>
+                            <p className="text-[11px] text-muted-foreground">
+                                When on, downloads stuck after repeated retries count against System Health. Turn off if you track many niche/indie titles and don't want stalled requests to show the instance as Degraded. (Items still awaiting availability never count either way.)
+                            </p>
                         </div>
                     </div>
 

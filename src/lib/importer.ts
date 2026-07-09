@@ -65,6 +65,40 @@ function fixMagicNumberSync(filePath: string): string {
     return filePath;
 }
 
+// Give a freshly imported series a real on-disk cover the instant the import lands, so the library
+// and Discover ("Recently Added") grids don't show the OMNIBUS placeholder during the ~10-minute wait
+// for the (delayed) METADATA_SYNC job whose resolve_cover is otherwise the only thing that writes a
+// local cover. Mirrors the engine scanner's cover-backfill (scanner.rs §5C). Idempotent: an existing
+// cover.* / folder.* file is reused, never overwritten. Returns the on-disk cover path, or null.
+function ensureLocalCover(folder: string, archivePath: string): string | null {
+    try {
+        const existing = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
+        for (const pc of existing) {
+            const p = path.join(folder, pc);
+            if (fs.existsSync(p)) return p;
+        }
+
+        // Only zip-based archives (CBR/RAR are converted to CBZ upstream before we reach here).
+        if (!/\.(cbz|zip)$/i.test(archivePath)) return null;
+
+        const zip = new AdmZip(archivePath);
+        const first = zip.getEntries()
+            .filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && IMAGE_EXT_REGEX.test(e.entryName))
+            // Natural sort so "10" sorts after "2" — the lowest-numbered page is the cover.
+            .sort((a: any, b: any) => a.entryName.localeCompare(b.entryName, undefined, { numeric: true, sensitivity: 'base' }))[0];
+        if (!first) return null;
+
+        const srcExt = path.extname(first.entryName).toLowerCase();
+        const outExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(srcExt) ? srcExt : '.jpg';
+        const coverPath = path.join(folder, `cover${outExt}`);
+        fs.writeFileSync(coverPath, first.getData());
+        return coverPath;
+    } catch (e: any) {
+        Logger.log(`[Importer] Cover extraction failed for ${archivePath}: ${e.message}`, 'warn');
+        return null;
+    }
+}
+
 export const Importer = {
   async importRequest(requestId: string) {
     const req = await prisma.request.findUnique({ 
@@ -782,6 +816,21 @@ export const Importer = {
                  }
              });
          } catch (e) { }
+
+         // Immediate local cover — don't wait for the delayed metadata sync (or depend on the server
+         // being able to proxy a remote provider URL) to have a real cover in the grids. A custom
+         // cover is respected; the later provider sync upgrades this to the official cover art.
+         if (!(series as any).hasCustomCover) {
+             const coverFile = ensureLocalCover(destFolder, finalPath);
+             if (coverFile) {
+                 try {
+                     await prisma.series.update({
+                         where: { id: series.id },
+                         data: { coverUrl: `/api/library/cover?path=${encodeURIComponent(coverFile)}` }
+                     });
+                 } catch (e) { }
+             }
+         }
       }
 
       try {

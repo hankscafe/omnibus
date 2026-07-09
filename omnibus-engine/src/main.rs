@@ -342,7 +342,7 @@ async fn connect_with_retry(db_url: &str, max_connections: u32) -> anyhow::Resul
             }
             Err(e) => {
                 log::error!("Database unreachable after {} attempts (~{}s). Giving up.", MAX_ATTEMPTS, MAX_ATTEMPTS as u64 * DELAY_SECS);
-                return Err(e.into());
+                return Err(e);
             }
         }
     }

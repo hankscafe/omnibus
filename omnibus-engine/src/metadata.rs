@@ -57,6 +57,8 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
     // refresh always re-checks every issue, even on a finished series.
     let full_fetch = series_ids.is_some();
 
+    let mut ok_count = 0usize;
+    let mut fail_count = 0usize;
     for series in series_list {
         let series_id: String = series.get("id");
         let series_name: String = series.get("name");
@@ -110,8 +112,10 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
             }
             log::error!("[Metadata] {} fetch failed for {}: {:?}", metadata_source, series_name, e);
             // Non-fatal: don't re-embed stale data for this series; move on to the next one.
+            fail_count += 1;
             continue;
         }
+        ok_count += 1;
 
         // Embed the (now-refreshed) DB values into the archives via the full-tag writer
         // (unified on metadata_writer::process_embed_job — no more duplicate 4-tag writer).
@@ -133,6 +137,7 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
         }
     }
 
+    log::info!("[Metadata] Sync batch complete: {} series synced, {} failed.", ok_count, fail_count);
     Ok(())
 }
 
@@ -184,6 +189,7 @@ async fn fetch_comicvine(
         .send()
         .await?;
 
+    crate::api_usage::log(&db.pool, "comicvine", &vol_url).await;
     if vol_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
         mark_flag(db, "cv_rate_limit_time").await;
         anyhow::bail!("ComicVine rate limited (429) on volume fetch");
@@ -312,13 +318,16 @@ async fn fetch_comicvine(
                 ("sort", "issue_number:asc"),
                 ("limit", "100"),
                 ("offset", offset_str.as_str()),
-                ("field_list", "id,name,issue_number,store_date,cover_date,image,deck,description"),
+                // person/character/team/location credits ride along in the SAME list call (no extra
+                // API budget) so per-issue credits populate without per-issue detail fetches (issue #179).
+                ("field_list", "id,name,issue_number,store_date,cover_date,image,deck,description,person_credits,character_credits,team_credits,location_credits"),
             ])
             .header("User-Agent", "Omnibus/1.0")
             .timeout(Duration::from_secs(15))
             .send()
             .await?;
 
+        crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
         if issue_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             mark_flag(db, "cv_rate_limit_time").await;
             anyhow::bail!("ComicVine rate limited (429) on issues fetch");
@@ -328,12 +337,25 @@ async fn fetch_comicvine(
         if offset == 0 {
             total_results = issue_json["number_of_total_results"].as_i64().unwrap_or(0) as i32;
         }
+        if issue_json.get("results").and_then(|v| v.as_array()).is_none() {
+            log::warn!("[Metadata] ComicVine issues response for {} (offset {}) carried no results array -- page treated as empty.", series_name, offset);
+        }
         let cv_issues = issue_json["results"].as_array().cloned().unwrap_or_default();
+
+        // Diagnostic (issue #179): ComicVine's docs list the credit fields as detail-only, but in
+        // practice the list endpoint has returned person_credits (Discover depends on it). Log which
+        // reality this instance sees, once per sync, so operators can tell where credits come from.
+        if offset == 0 && !cv_issues.is_empty() {
+            let has_credit_fields = cv_issues.iter().any(|i| i.get("person_credits").map(|v| !v.is_null()).unwrap_or(false));
+            if !has_credit_fields {
+                log::info!("[Metadata] ComicVine issues list carried no credit fields for {} — per-issue credits will populate via view-time enrichment instead.", series_name);
+            }
+        }
 
         // Re-fetch the series' issues each page so issues created on earlier pages are visible to
         // isSameIssue. Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
         let existing_issues = sqlx::query(
-            r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
+            r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(series_id)
         .fetch_all(&db.pool)
@@ -348,7 +370,7 @@ async fn fetch_comicvine(
         let mut by_cv: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
         if !page_cv_ids.is_empty() {
             let sql = format!(
-                r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId" FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE'"#,
+                r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE'"#,
                 Db::in_placeholders(1, page_cv_ids.len())
             );
             let mut q = sqlx::query(&sql);
@@ -435,32 +457,61 @@ async fn fetch_comicvine(
                 existing_genres
             };
 
+            // Per-issue credits/appearances from the list item (issue #179). merge_credit_json keeps
+            // the existing column whenever the provider supplied nothing — a re-sync can never wipe
+            // ComicInfo.xml-derived or manually added credits with '[]'.
+            let credits = cv_issue_credits(cv_issue);
+            let existing_row = existing_by_cv.or(existing_by_num);
+            let existing_col = |col: &str| -> Option<String> {
+                existing_row.and_then(|r| r.try_get::<Option<String>, _>(col).unwrap_or(None))
+            };
+            let match_state_val = next_match_state(existing_col("matchState"));
+            let writers_val = merge_credit_json(existing_col("writers"), &credits.writers, is_locked);
+            let artists_val = merge_credit_json(existing_col("artists"), &credits.artists, is_locked);
+            let cover_artists_val = merge_credit_json(existing_col("coverArtists"), &credits.cover_artists, is_locked);
+            let colorists_val = merge_credit_json(existing_col("colorists"), &credits.colorists, is_locked);
+            let letterers_val = merge_credit_json(existing_col("letterers"), &credits.letterers, is_locked);
+            let characters_val = merge_credit_json(existing_col("characters"), &credits.characters, is_locked);
+            let teams_val = merge_credit_json(existing_col("teams"), &credits.teams, is_locked);
+            let locations_val = merge_credit_json(existing_col("locations"), &credits.locations, is_locked);
+
             let res = if let Some(r) = existing_by_cv {
                 let id: String = r.get("id");
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"='MATCHED', genres=$7 WHERE id=$8"#,
+                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$16, genres=$7,
+                       writers=$8, artists=$9, "coverArtists"=$10, colorists=$11, letterers=$12, characters=$13, teams=$14, locations=$15 WHERE id=$17"#,
                 )
                 .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val)
-                .bind(&desc_val).bind(&cover_val).bind(&genres_val).bind(&id)
+                .bind(&desc_val).bind(&cover_val).bind(&genres_val)
+                .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
+                .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
+                .bind(match_state_val).bind(&id)
                 .execute(&db.pool).await
             } else if let Some(r) = existing_by_num {
                 let id: String = r.get("id");
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='COMICVINE', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"='MATCHED', genres=$6 WHERE id=$7"#,
+                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='COMICVINE', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"=$15, genres=$6,
+                       writers=$7, artists=$8, "coverArtists"=$9, colorists=$10, letterers=$11, characters=$12, teams=$13, locations=$14 WHERE id=$16"#,
                 )
                 .bind(&cv_id_str).bind(&name_val).bind(&release_val)
-                .bind(&desc_val).bind(&cover_val).bind(&genres_val).bind(&id)
+                .bind(&desc_val).bind(&cover_val).bind(&genres_val)
+                .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
+                .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
+                .bind(match_state_val).bind(&id)
                 .execute(&db.pool).await
             } else {
                 let new_id = uuid::Uuid::new_v4().to_string();
                 sqlx::query(&format!(
                     r#"INSERT INTO "Issue"
-                       (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", "matchState", genres, "createdAt", "updatedAt")
-                       VALUES ($1,$2,$3,'COMICVINE',$4,'WANTED',$5,$6,$7,$8,'MATCHED',$9, {now}, {now})"#,
+                       (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", "matchState", genres,
+                        writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "createdAt", "updatedAt")
+                       VALUES ($1,$2,$3,'COMICVINE',$4,'WANTED',$5,$6,$7,$8,'MATCHED',$9,$10,$11,$12,$13,$14,$15,$16,$17, {now}, {now})"#,
                     now = db.now_expr()
                 ))
                 .bind(&new_id).bind(series_id).bind(&cv_id_str).bind(&issue_num)
                 .bind(&name_val).bind(&release_val).bind(&cv_desc).bind(&cv_cover).bind(&genres_val)
+                .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
+                .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
                 .execute(&db.pool).await
             };
 
@@ -480,7 +531,9 @@ async fn fetch_comicvine(
     if status != "Ended" && latest_date_ms > 0 {
         if let Some((cutoff_ms, months)) = get_series_ended_cutoff(db).await {
             if latest_date_ms < cutoff_ms {
-                let _ = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(&db.pool).await;
+                if let Err(e) = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(&db.pool).await {
+                    log::error!("[Metadata] Failed to mark {} as Ended: {:?}", series_name, e);
+                }
                 log::info!("[Metadata] Series \"{}\" marked as Ended after {}+ months without a new issue.", series_name, months);
             }
         }
@@ -522,6 +575,16 @@ pub(crate) async fn metron_auth(db: &sqlx::AnyPool) -> Option<(String, String)> 
     if user.is_empty() || pass.is_empty() || pass == "********" { None } else { Some((user, pass)) }
 }
 
+/// ISO timestamp ("2026-07-10T12:34:56", space-separated, or fractional/Z variants) -> RFC 7231
+/// IMF-fixdate for the If-Modified-Since header. None when unparseable (send no header over a bogus one).
+fn iso_to_http_date(iso: &str) -> Option<String> {
+    let cleaned = iso.trim().replace(' ', "T");
+    let cleaned = cleaned.trim_end_matches('Z');
+    let base = cleaned.split('.').next().unwrap_or("");
+    let dt = chrono::NaiveDateTime::parse_from_str(base, "%Y-%m-%dT%H:%M:%S").ok()?;
+    Some(dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -531,19 +594,29 @@ fn metron_header_i64(resp: &reqwest::Response, name: &str, default: i64) -> i64 
 }
 
 /// Metron HTTP GET with burst-rate-limit handling + retry/backoff (parity with metron.ts fetchWithBackoff).
-async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &str, timeout_secs: u64, max_retries: u32) -> anyhow::Result<(u16, serde_json::Value)> {
-    log::debug!("[Metron Debug] Executing Fetch: {}", url);
+/// `if_modified_since`: RFC 7231 date for conditional detail requests (metron.cloud best-practices) --
+/// the server answers 304 with no body when the resource is unchanged; callers must branch on status.
+async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &str, timeout_secs: u64, max_retries: u32, if_modified_since: Option<&str>) -> anyhow::Result<(u16, serde_json::Value)> {
+    log::debug!("[Metron Debug] Executing Fetch: {}{}", url, if if_modified_since.is_some() { " (conditional)" } else { "" });
     for attempt in 0..max_retries {
-        match client
+        let mut req = client
             .get(url)
             .basic_auth(&auth.0, Some(&auth.1))
             .header("User-Agent", "Omnibus/1.0")
-            .timeout(Duration::from_secs(timeout_secs))
+            .timeout(Duration::from_secs(timeout_secs));
+        if let Some(ims) = if_modified_since {
+            req = req.header("If-Modified-Since", ims);
+        }
+        match req
             .send()
             .await
         {
             Ok(resp) => {
                 let status = resp.status().as_u16();
+                // Every attempt is a real request against the 5,000/day sustained quota — record it
+                // so the health panel's Metron counter reflects engine traffic too (unified builds
+                // route all sync calls through here).
+                crate::api_usage::log(&db.pool, "metron", url).await;
                 let remaining = metron_header_i64(&resp, "x-ratelimit-burst-remaining", 20);
                 log::debug!("[Metron Debug] Rate Limit Status -> Burst Remaining: {}", remaining);
 
@@ -572,17 +645,31 @@ async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &s
 
                 let valid = (200..300).contains(&status) || status == 304 || status == 404;
                 if !valid {
+                    // Hard 4xx (bad credentials/params) won't improve on retry — metron.cloud's API
+                    // best-practices: only 429 and 5xx are retryable. Bail instead of burning quota.
+                    if (400..500).contains(&status) {
+                        anyhow::bail!("Metron HTTP Error: {} (not retried)", status);
+                    }
                     if attempt + 1 == max_retries { anyhow::bail!("Metron HTTP Error: {}", status); }
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     continue;
                 }
 
-                let data = if status != 204 && status != 304 {
-                    resp.json::<serde_json::Value>().await.unwrap_or(serde_json::Value::Null)
-                } else {
-                    serde_json::Value::Null
-                };
-                return Ok((status, data));
+                if status == 204 || status == 304 {
+                    return Ok((status, serde_json::Value::Null));
+                }
+                // A 2xx/404 body that doesn't parse is a real failure -- silently returning Null here
+                // let a truncated response overwrite good series data with "Unknown" fields. Retry it
+                // like a network error; bail after max retries.
+                match resp.json::<serde_json::Value>().await {
+                    Ok(data) => return Ok((status, data)),
+                    Err(e) => {
+                        log::warn!("[Metron] Response body for {} did not parse as JSON (attempt {}/{}): {}", url, attempt + 1, max_retries, e);
+                        if attempt + 1 == max_retries { anyhow::bail!("Metron returned an unparseable body for {}", url); }
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        continue;
+                    }
+                }
             }
             Err(e) => {
                 log::debug!("[Metron Debug] Fetch Attempt {} Failed: {}", attempt + 1, e);
@@ -658,9 +745,19 @@ async fn fetch_metron(
         format!("https://metron.cloud/api/series/?name={}", urlencoding::encode(metadata_id))
     };
 
-    let (status, mut series_data) = metron_fetch(db, client, &auth, &detail_url, 10, 3).await?;
+    // Conditional fetch on scheduled sweeps (never on a manual refresh): Metron honors
+    // If-Modified-Since on detail endpoints with a bodyless 304 (their API best-practices).
+    let ims_header = if !full_fetch { last_sync.and_then(iso_to_http_date) } else { None };
+    let (status, mut series_data) = metron_fetch(db, client, &auth, &detail_url, 10, 3, ims_header.as_deref()).await?;
     if status == 404 {
         anyhow::bail!("Series {} not found on Metron", metadata_id);
+    }
+    // 304 = series-level fields unchanged since our last sync. Skip the series update AND the cover
+    // re-resolution (the bodyless response has nothing to apply -- writing it would fabricate
+    // "Unknown" fields), but still run the incremental issue top-up below for new/changed issues.
+    let series_unchanged = status == 304 && is_numeric;
+    if series_unchanged {
+        log::debug!("[Metron Debug] Series {} unchanged since last sync (304) -- skipping series-level update.", series_name);
     }
     if !is_numeric {
         let results = series_data["results"].as_array().cloned().unwrap_or_default();
@@ -672,11 +769,18 @@ async fn fetch_metron(
 
     let real_series_id = series_data["id"].as_i64().map(|i| i.to_string()).unwrap_or_else(|| metadata_id.to_string());
 
-    // Cover: first image from the issue_list.
     let issue_list_url = format!("https://metron.cloud/api/series/{}/issue_list/", real_series_id);
+
+    // One first-page fetch serves BOTH the cover (first issue's image) and, on a full walk, the
+    // first page of the issue pagination below. The old shape made a throwaway cover-only call
+    // (errors silently swallowed, retries=1) and then re-fetched the same page in the walk --
+    // a duplicated API call on every full sync. Skipped entirely on a 304 (nothing changed).
     let mut cover_remote: Option<String> = None;
-    if let Ok((_, il)) = metron_fetch(db, client, &auth, &issue_list_url, 5, 1).await {
+    let mut first_page: Option<serde_json::Value> = None;
+    if !series_unchanged {
+        let (_, il) = metron_fetch(db, client, &auth, &issue_list_url, 15, 3, None).await?;
         cover_remote = il["results"][0]["image"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        first_page = Some(il);
     }
 
     let name = series_data["series"].as_str().or_else(|| series_data["name"].as_str()).filter(|s| !s.is_empty()).unwrap_or("Unknown").to_string();
@@ -693,6 +797,7 @@ async fn fetch_metron(
     // Metron's series_type is authoritative for the Mylar booktype, but never clobber a manual one.
     let book_type = map_series_type(&series_data["series_type"]);
 
+    if !series_unchanged {
     let final_cover = resolve_cover(client, cover_remote.as_deref(), folder_path, current_cover, has_custom_cover, cover_source).await;
 
     // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
@@ -719,6 +824,7 @@ async fn fetch_metron(
     if let Err(e) = update_res {
         log::error!("[Metadata] Failed to update Metron series {}: {:?}", series_name, e);
     }
+    }
 
     let local_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
         .bind(series_id).fetch_one(&db.pool).await.unwrap_or(0);
@@ -738,26 +844,37 @@ async fn fetch_metron(
     // synced or locally empty; if Metron ignores the param it just returns everything (still correct —
     // the recency-ended check below re-bases on local data, not just this run's results).
     let mut start_url = issue_list_url.clone();
+    let mut incremental = false;
     if !full_fetch && local_count > 0 {
         if let Some(since) = last_sync {
             let sep = if start_url.contains('?') { '&' } else { '?' };
             start_url = format!("{}{}modified_gt={}", start_url, sep, urlencoding::encode(since));
+            incremental = true;
             log::debug!("[Metron Debug] Incremental issue fetch since {} for {}", since, series_name);
         }
     }
     let mut all_issues: Vec<serde_json::Value> = Vec::new();
-    let mut next_url = Some(start_url);
+    // A full walk starts from the first page already fetched for the cover; incremental walks use
+    // their own modified_gt URL (the plain first page would hand back unchanged issues).
+    let mut next_url = match (incremental, first_page.take()) {
+        (false, Some(fp)) => {
+            if let Some(arr) = fp["results"].as_array() { all_issues.extend(arr.clone()); }
+            fp["next"].as_str().map(|s| s.to_string())
+        }
+        _ => Some(start_url),
+    };
     while let Some(url) = next_url {
-        let (_, data) = metron_fetch(db, client, &auth, &url, 15, 3).await?;
+        let (_, data) = metron_fetch(db, client, &auth, &url, 15, 3, None).await?;
         if let Some(arr) = data["results"].as_array() {
             all_issues.extend(arr.clone());
         }
         next_url = data["next"].as_str().map(|s| s.to_string());
     }
+    log::debug!("[Metron Debug] Issue walk for {} returned {} issue(s){}.", series_name, all_issues.len(), if incremental { " (incremental)" } else { "" });
 
     // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
     let existing_issues = sqlx::query(
-        r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl" FROM "Issue" WHERE "seriesId" = $1"#,
+        r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState" FROM "Issue" WHERE "seriesId" = $1"#,
     )
     .bind(series_id)
     .fetch_all(&db.pool)
@@ -771,7 +888,7 @@ async fn fetch_metron(
     let mut by_meta: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
     if !all_meta_ids.is_empty() {
         let sql = format!(
-            r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId" FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON'"#,
+            r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState" FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON'"#,
             Db::in_placeholders(1, all_meta_ids.len())
         );
         let mut q = sqlx::query(&sql);
@@ -837,6 +954,10 @@ async fn fetch_metron(
             (false, None, None, false, None)
         };
 
+        let metron_existing_state: Option<String> = existing_by_meta.or(existing_by_num)
+            .and_then(|r| r.try_get::<Option<String>, _>("matchState").unwrap_or(None));
+        let match_state_val = next_match_state(metron_existing_state);
+
         let name_val: Option<String> = if is_locked { existing_name } else { Some(issue_name) };
         let release_val: Option<String> = if is_locked { existing_release } else { issue_date.clone() };
         // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
@@ -846,19 +967,20 @@ async fn fetch_metron(
             let id: String = r.get("id");
             if is_locked {
                 // Manually edited (hasCustomMetadata): keep name/releaseDate/description and the
-                // creator credits — only re-affirm the cover + match state. NOTE: the unlocked path
-                // resets writers/artists/characters to '[]' because Metron's issue_list carries no
-                // per-issue credits (they're lazy-loaded), which would otherwise wipe a manual edit.
+                // creator credits — only re-affirm the cover + match state.
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, "coverUrl"=$3, "matchState"='MATCHED' WHERE id=$4"#,
+                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, "coverUrl"=$3, "matchState"=$4 WHERE id=$5"#,
                 )
-                .bind(series_id).bind(&issue_num).bind(&cover_val).bind(&id)
+                .bind(series_id).bind(&issue_num).bind(&cover_val).bind(match_state_val).bind(&id)
                 .execute(&db.pool).await
             } else {
+                // Metron's issue_list carries no per-issue credits (they're lazy-loaded on the issue
+                // detail endpoint), so the credit columns are LEFT UNTOUCHED — the old literal-'[]'
+                // writes wiped ComicInfo.xml-derived credits on every re-sync (issue #179).
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$7"#,
+                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$7 WHERE id=$8"#,
                 )
-                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(&id)
+                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&id)
                 .execute(&db.pool).await
             }
         } else if let Some(r) = existing_by_num {
@@ -866,15 +988,17 @@ async fn fetch_metron(
             if is_locked {
                 // Link the Metron id but preserve the manually entered name/description/credits.
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', "coverUrl"=$2, "matchState"='MATCHED' WHERE id=$3"#,
+                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', "coverUrl"=$2, "matchState"=$3 WHERE id=$4"#,
                 )
-                .bind(&source_id).bind(&cover_val).bind(&id)
+                .bind(&source_id).bind(&cover_val).bind(match_state_val).bind(&id)
                 .execute(&db.pool).await
             } else {
+                // Credit columns left untouched — Metron's issue_list has no per-issue credits and a
+                // literal-'[]' write would wipe ComicInfo-derived data (issue #179, same as above).
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, writers='[]', artists='[]', characters='[]', "matchState"='MATCHED' WHERE id=$6"#,
+                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"=$6 WHERE id=$7"#,
                 )
-                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(&id)
+                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&id)
                 .execute(&db.pool).await
             }
         } else {
@@ -910,7 +1034,9 @@ async fn fetch_metron(
     if status_str != "Ended" && effective_latest > 0 {
         if let Some((cutoff_ms, months)) = get_series_ended_cutoff(db).await {
             if effective_latest < cutoff_ms {
-                let _ = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(&db.pool).await;
+                if let Err(e) = sqlx::query(r#"UPDATE "Series" SET status='Ended' WHERE id=$1"#).bind(series_id).execute(&db.pool).await {
+                    log::error!("[Metadata] Failed to mark {} as Ended: {:?}", series_name, e);
+                }
                 log::info!("[Metadata] Series \"{}\" marked as Ended after {}+ months without a new issue.", series_name, months);
             }
         }
@@ -1006,6 +1132,79 @@ async fn mark_flag(db: &Db, key: &str) {
     .await;
 }
 
+/// Per-issue credits and key appearances parsed from a ComicVine ISSUE LIST item (issue #179).
+/// The /issues/ list endpoint returns these association fields when asked (Discover already relies
+/// on person_credits there), so the sync gets full credits with ZERO extra API calls.
+#[derive(Default)]
+pub(crate) struct CvIssueCredits {
+    pub writers: Vec<String>,
+    pub artists: Vec<String>,
+    pub cover_artists: Vec<String>,
+    pub colorists: Vec<String>,
+    pub letterers: Vec<String>,
+    pub characters: Vec<String>,
+    pub teams: Vec<String>,
+    pub locations: Vec<String>,
+}
+
+fn push_unique(vec: &mut Vec<String>, name: &str) {
+    if !name.is_empty() && !vec.iter().any(|x| x == name) {
+        vec.push(name.to_string());
+    }
+}
+
+fn credit_names(item: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(arr) = item.get(key).and_then(|v| v.as_array()) {
+        for e in arr {
+            if let Some(n) = e.get("name").and_then(|v| v.as_str()) {
+                push_unique(&mut out, n);
+            }
+        }
+    }
+    out
+}
+
+/// Role taxonomy is exact parity with Node's parseComicVineCredits (src/lib/utils.ts): one person
+/// can land in several buckets ("penciler, inker" → artists; "writer" + "cover" → both), and names
+/// dedup per bucket preserving first-seen order.
+pub(crate) fn cv_issue_credits(item: &serde_json::Value) -> CvIssueCredits {
+    let mut c = CvIssueCredits::default();
+    if let Some(pc) = item.get("person_credits").and_then(|v| v.as_array()) {
+        for p in pc {
+            let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if role.contains("writer") || role.contains("script") || role.contains("plot") || role.contains("story") { push_unique(&mut c.writers, name); }
+            if role.contains("pencil") || role.contains("ink") || role.contains("artist") || role.contains("illustrator") { push_unique(&mut c.artists, name); }
+            if role.contains("cover") { push_unique(&mut c.cover_artists, name); }
+            if role.contains("color") { push_unique(&mut c.colorists, name); }
+            if role.contains("letter") { push_unique(&mut c.letterers, name); }
+        }
+    }
+    c.characters = credit_names(item, "character_credits");
+    c.teams = credit_names(item, "team_credits");
+    c.locations = credit_names(item, "location_credits");
+    c
+}
+
+/// Match-state a sync upsert should write: an issue the view-time lazy enrichment already deep-
+/// fetched keeps DEEP_SYNCED (so it is never redundantly re-fetched); everything else lands on
+/// MATCHED as before (issue #179).
+pub(crate) fn next_match_state(existing: Option<String>) -> &'static str {
+    if existing.as_deref() == Some("DEEP_SYNCED") { "DEEP_SYNCED" } else { "MATCHED" }
+}
+
+/// Column-write policy for provider credit syncs (issue #179): a locked (hasCustomMetadata) issue
+/// keeps its value; an unlocked issue takes the provider's list only when the provider actually
+/// supplied one. An empty fetch NEVER overwrites existing data — the literal-'[]' writes this
+/// replaces destroyed ComicInfo.xml-derived credits on every re-sync.
+pub(crate) fn merge_credit_json(existing: Option<String>, fetched: &[String], locked: bool) -> Option<String> {
+    if locked || fetched.is_empty() {
+        return existing;
+    }
+    serde_json::to_string(fetched).ok().or(existing)
+}
+
 fn cv_is_ended(v: &serde_json::Value) -> bool {
     match v {
         serde_json::Value::Null => false,
@@ -1091,6 +1290,87 @@ mod tests {
         assert!(is_same_issue("-2.5", "-2.50"));
         assert!(!is_same_issue("-1", "1"));
         assert!(is_same_issue("-1A", "-001a"));
+    }
+
+    // ==== Issue #179: per-issue credits/appearances from the ComicVine ISSUE LIST response. ====
+
+    #[test]
+    fn cv_issue_credits_parses_roles_and_appearances() {
+        let issue = serde_json::json!({
+            "person_credits": [
+                {"name": "Chip Zdarsky", "role": "writer"},
+                {"name": "Marco Checchetto", "role": "penciler, inker"},
+                {"name": "Frank Martin", "role": "colorist"},
+                {"name": "Clayton Cowles", "role": "letterer"},
+                {"name": "John Romita Jr.", "role": "cover"},
+                {"name": "Devin Lewis", "role": "editor"},
+                {"name": "Chip Zdarsky", "role": "script"}
+            ],
+            "character_credits": [ {"name": "Daredevil"}, {"name": "Kingpin"} ],
+            "team_credits": [ {"name": "The Hand"} ],
+            "location_credits": [ {"name": "Hell's Kitchen"} ]
+        });
+
+        let c = cv_issue_credits(&issue);
+        // Role taxonomy is exact parity with Node parseComicVineCredits (utils.ts); a duplicated
+        // name across matching roles ("writer" + "script") dedups within the bucket.
+        assert_eq!(c.writers, vec!["Chip Zdarsky"]);
+        // Multi-role strings ("penciler, inker") land the person once in the artists bucket.
+        assert_eq!(c.artists, vec!["Marco Checchetto"]);
+        assert_eq!(c.cover_artists, vec!["John Romita Jr."]);
+        assert_eq!(c.colorists, vec!["Frank Martin"]);
+        assert_eq!(c.letterers, vec!["Clayton Cowles"]);
+        assert_eq!(c.characters, vec!["Daredevil", "Kingpin"]);
+        assert_eq!(c.teams, vec!["The Hand"]);
+        assert_eq!(c.locations, vec!["Hell's Kitchen"]);
+
+        // A list item without credit fields (endpoint didn't return them) parses to all-empty —
+        // which the merge policy below treats as "don't touch the existing columns".
+        let empty = cv_issue_credits(&serde_json::json!({"id": 1, "issue_number": "3"}));
+        assert!(empty.writers.is_empty() && empty.artists.is_empty() && empty.characters.is_empty());
+        assert!(empty.teams.is_empty() && empty.locations.is_empty());
+    }
+
+    #[test]
+    fn iso_to_http_date_formats_for_if_modified_since() {
+        // lastMetadataSync arrives as ISO (with either 'T' or space, optionally fractional/Z);
+        // the If-Modified-Since header requires an RFC 7231 IMF-fixdate in GMT.
+        assert_eq!(iso_to_http_date("2026-07-10T12:34:56"), Some("Fri, 10 Jul 2026 12:34:56 GMT".to_string()));
+        assert_eq!(iso_to_http_date("2026-07-10 12:34:56"), Some("Fri, 10 Jul 2026 12:34:56 GMT".to_string()));
+        assert_eq!(iso_to_http_date("2026-07-10T12:34:56.789Z"), Some("Fri, 10 Jul 2026 12:34:56 GMT".to_string()));
+        // Unparseable input → no header rather than a bogus one.
+        assert_eq!(iso_to_http_date("not a date"), None);
+        assert_eq!(iso_to_http_date(""), None);
+    }
+
+    #[test]
+    fn next_match_state_preserves_deep_synced() {
+        // The view-time lazy enrichment (library/issue route) marks an issue DEEP_SYNCED after its
+        // per-issue detail fetch. A scheduled sync must NOT downgrade that back to MATCHED — doing so
+        // re-triggers the deep fetch on every subsequent view, burning ComicVine's 200/hr budget on
+        // issues that were already fully enriched (issue #179).
+        assert_eq!(next_match_state(Some("DEEP_SYNCED".to_string())), "DEEP_SYNCED");
+        assert_eq!(next_match_state(Some("MATCHED".to_string())), "MATCHED");
+        assert_eq!(next_match_state(Some("UNMATCHED".to_string())), "MATCHED");
+        assert_eq!(next_match_state(None), "MATCHED");
+    }
+
+    #[test]
+    fn merge_credit_json_never_clobbers_existing_with_empty() {
+        let existing = Some(r#"["From ComicInfo.xml"]"#.to_string());
+
+        // Unlocked + provider supplied data → provider wins (normal sync semantics).
+        assert_eq!(
+            merge_credit_json(existing.clone(), &["A".to_string(), "B".to_string()], false),
+            Some(r#"["A","B"]"#.to_string())
+        );
+        // Unlocked + provider has NOTHING → keep what we have. This is the '[]' wipe from
+        // issue #179: a re-sync must never destroy ComicInfo-derived or manually added credits.
+        assert_eq!(merge_credit_json(existing.clone(), &[], false), existing);
+        // Locked (hasCustomMetadata) → existing always wins, even against provider data.
+        assert_eq!(merge_credit_json(existing.clone(), &["A".to_string()], true), existing);
+        // Nothing anywhere → stays NULL (never write a literal '[]').
+        assert_eq!(merge_credit_json(None, &[], false), None);
     }
 
     #[test]

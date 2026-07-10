@@ -197,7 +197,7 @@ impl DiscoverConfig {
 
     /// Paginates ComicVine /api/issues/ for one sort order, enriching each item's volume with
     /// publisher+concepts (batched /api/volumes/), until 112 valid items or 15 API calls.
-    async fn fetch_category(&self, client: &Client, sort: &str) -> Result<Vec<Value>> {
+    async fn fetch_category(&self, pool: &sqlx::AnyPool, client: &Client, sort: &str) -> Result<Vec<Value>> {
         let mut valid_items: Vec<Value> = Vec::new();
         let mut offset = 0i64;
         let mut api_calls = 0;
@@ -216,6 +216,7 @@ impl DiscoverConfig {
                 .header("User-Agent", "Omnibus/1.0")
                 .send().await?;
             api_calls += 1;
+            crate::api_usage::log(pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
             let data: Value = resp.error_for_status()?.json().await?;
 
             let mut items = data.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -248,6 +249,7 @@ impl DiscoverConfig {
                     {
                         Ok(vr) => {
                             api_calls += 1;
+                            crate::api_usage::log(pool, "comicvine", "https://comicvine.gamespot.com/api/volumes/").await;
                             if let Ok(vd) = vr.json::<Value>().await {
                                 if let Some(results) = vd.get("results") {
                                     let arr = if results.is_array() {
@@ -351,6 +353,7 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
                 .send().await?
                 .error_for_status()?
                 .json().await?;
+            crate::api_usage::log(&db.pool, "metron", &url).await;
 
             for item in res.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
                 // Series id: prefer the nested object / series_id field.
@@ -382,6 +385,7 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
                                 .header("User-Agent", "Omnibus/1.0")
                                 .send().await
                             {
+                                crate::api_usage::log(&db.pool, "metron", &search_url).await;
                                 let status = sr.status();
                                 if status.as_u16() == 429 {
                                     tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
@@ -461,8 +465,8 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
 
         // Run both categories concurrently (parity with Promise.all). Either error fails the job.
         let (new_res, pop_res) = tokio::join!(
-            cfg.fetch_category(&client, "store_date:desc"),
-            cfg.fetch_category(&client, "cover_date:desc")
+            cfg.fetch_category(&db.pool, &client, "store_date:desc"),
+            cfg.fetch_category(&db.pool, &client, "cover_date:desc")
         );
         (new_res?, pop_res?)
     };

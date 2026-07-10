@@ -167,6 +167,7 @@ async fn phase1_metron(
             Ok(r) => r,
             Err(e) => { notes.push(format!("[Phase 1] Metron Oracle failed: {}", e)); break 'fetch; }
         };
+        crate::api_usage::log(&db.pool, "metron", &url).await;
 
         let status = resp.status();
         if status.as_u16() == 429 {
@@ -323,6 +324,7 @@ async fn phase2_comicvine(
             .timeout(std::time::Duration::from_secs(10))
             .send().await;
 
+        crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
         let data: Value = match resp.and_then(|r| r.error_for_status()) {
             Ok(r) => match r.json().await { Ok(d) => d, Err(_) => continue },
             Err(_) => continue, // Node swallows per-series CV errors.

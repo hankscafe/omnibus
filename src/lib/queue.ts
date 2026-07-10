@@ -384,15 +384,34 @@ export function initWorker() {
                                 throw new Error(`No download client configured in settings for protocol: ${bestMatch.protocol}`);
                             }
 
+                            const trackingHash = bestMatch.infoHash || bestMatch.guid || bestMatch.downloadUrl;
+
+                            // Release dedup, parity with the DDL duplicateDownload check above (issue #174):
+                            // six issue requests matching the same whole-run pack NZB must produce ONE client
+                            // download, not one per request. Park this request against the sibling's link —
+                            // the importer's shared-link completion sweep (updateMany on downloadLink) closes
+                            // it out when the single download imports, and the cron dead-lead release frees it
+                            // if the lead permanently fails.
+                            const duplicateExternal = await prisma.request.findFirst({
+                                where: { downloadLink: trackingHash, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: requestId } }
+                            });
+                            if (duplicateExternal) {
+                                Logger.log(`[BullMQ] Release already sent to the download client by another request (${bestMatch.title}). Parking ${name} against it instead of re-downloading.`, 'info');
+                                await prisma.request.update({
+                                    where: { id: requestId },
+                                    data: { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }
+                                });
+                                break;
+                            }
+
                             Logger.log(`[BullMQ] Routing ${bestMatch.protocol.toUpperCase()} release to external client: ${clientConfig.name}`, 'info');
-                            
+
                             // File manga under its own category/label in the client (manga → second configured category).
                             await DownloadService.addDownload(clientConfig, bestMatch.downloadUrl, bestMatch.title, 0, 0, isManga || false);
-                            
-                            const trackingHash = bestMatch.infoHash || bestMatch.guid || bestMatch.downloadUrl;
-                            await prisma.request.update({ 
-                                where: { id: requestId }, 
-                                data: { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer } 
+
+                            await prisma.request.update({
+                                where: { id: requestId },
+                                data: { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }
                             });
                         }
 

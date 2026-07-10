@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
     systemSettingFindUnique: vi.fn(),
     queueAdd: vi.fn(),
     axiosGet: vi.fn(),
+    requestFindUnique: vi.fn(),
+    requestFindFirst: vi.fn(),
+    requestUpdate: vi.fn(),
+    downloadClientFindMany: vi.fn(),
+    addDownload: vi.fn(),
     sendWeeklyDigest: vi.fn().mockResolvedValue(true),
     digestHistoryCreate: vi.fn(),
     transaction: vi.fn().mockResolvedValue([]),
@@ -36,6 +41,8 @@ vi.mock('@/lib/db', () => ({
         series: { findMany: mocks.seriesFindMany, update: mocks.seriesUpdate },
         issue: { findMany: mocks.issueFindMany },
         user: { findMany: mocks.userFindMany },
+        request: { findUnique: mocks.requestFindUnique, findFirst: mocks.requestFindFirst, update: mocks.requestUpdate },
+        downloadClient: { findMany: mocks.downloadClientFindMany },
         digestHistory: {
             deleteMany: vi.fn(),
             findMany: vi.fn().mockResolvedValue([]),
@@ -51,6 +58,7 @@ vi.mock('@/lib/api-client', () => ({
 }));
 
 vi.mock('@/lib/health-checker', () => ({ runSystemHealthCheck: mocks.runSystemHealthCheck }));
+vi.mock('@/lib/download-clients', () => ({ DownloadService: { addDownload: mocks.addDownload } }));
 vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 
@@ -353,6 +361,66 @@ describe('Cron: BullMQ Worker Router', () => {
         );
         // The engine writes the DISCOVER_SYNC JobLog itself
         expect(mocks.jobLogCreate).not.toHaveBeenCalled();
+    });
+
+    // ==== Issue #174: the same pack NZB must not be added to the download client once per issue
+    // request. The DDL path already dedups against the primary link (queue.ts duplicateDownload);
+    // the external-client (Prowlarr → SAB/qBit) path must do the same on the tracking hash.
+
+    const runExternalClientSearch = async (sibling: { id: string } | null) => {
+        initWorker();
+
+        // freshReq: volumeId "0" skips the series/issue-year block — this test targets routing only.
+        mocks.requestFindUnique.mockResolvedValue({ id: 'req_2', volumeId: '0', failedLinks: '[]' });
+        mocks.systemSettingFindMany.mockResolvedValue([]);
+        mocks.downloadClientFindMany.mockResolvedValue([{ id: 'dc1', name: 'SAB', protocol: 'usenet' }]);
+        mocks.requestFindFirst.mockResolvedValue(sibling);
+
+        // Engine matched the same whole-run pack this request's sibling already grabbed.
+        mocks.engineFetch.mockResolvedValueOnce({
+            ok: true, status: 200,
+            json: async () => ({
+                success: true,
+                best_match: {
+                    title: "Batman '89 - Echoes 1-6 Pack",
+                    protocol: 'usenet',
+                    downloadUrl: 'http://nzbgeek/get/abc',
+                    guid: 'nzbgeek-abc',
+                    infoHash: null,
+                    indexer: 'NZBGeek'
+                },
+                ddl_candidates: []
+            })
+        });
+
+        await mocks.workerCb.current({
+            id: 'job_search',
+            data: { type: 'SEARCH_AND_DOWNLOAD', requestId: 'req_2', name: "Batman '89: Echoes #2", year: '2024', isManga: false, publisher: 'DC', skipIndexers: false },
+            updateProgress: vi.fn()
+        });
+    };
+
+    it('parks a duplicate external-client pack instead of re-adding it to the client (issue #174)', async () => {
+        await runExternalClientSearch({ id: 'req_1' }); // sibling already holds this tracking hash
+
+        // The pack must NOT be sent to SABnzbd a second time…
+        expect(mocks.addDownload).not.toHaveBeenCalled();
+        // …the request is parked against the sibling's link so the shared-link completion sweep
+        // (importer updateMany on downloadLink) closes it out when the one download imports.
+        expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'req_2' },
+            data: expect.objectContaining({ status: 'DOWNLOADING', downloadLink: 'nzbgeek-abc' })
+        }));
+    });
+
+    it('adds the download normally when no sibling holds the same tracking hash', async () => {
+        await runExternalClientSearch(null);
+
+        expect(mocks.addDownload).toHaveBeenCalledTimes(1);
+        expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'req_2' },
+            data: expect.objectContaining({ status: 'DOWNLOADING', downloadLink: 'nzbgeek-abc' })
+        }));
     });
 
     it('should fail DISCOVER_SYNC when the engine is unreachable', async () => {

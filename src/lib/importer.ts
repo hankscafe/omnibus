@@ -234,8 +234,9 @@ export const Importer = {
     let actualSourceFile = sourcePath;
     let isBatchFolder = false;
     let isBatchArchive = false;
+    let isRarContainer = false;
     let batchFiles: string[] = [];
-    let nestedArchiveCount = 0; 
+    let nestedArchiveCount = 0;
 
     if (fs.statSync(sourcePath).isDirectory()) {
         async function getComicFilesInDir(dir: string) {
@@ -251,7 +252,7 @@ export const Importer = {
             }
             return results;
         }
-        
+
         batchFiles = await getComicFilesInDir(sourcePath);
 
         if (batchFiles.length > 1) {
@@ -264,31 +265,56 @@ export const Importer = {
             Logger.log(`[Importer] No valid comic archive found inside folder: ${sourcePath}`, "error");
             return false;
         }
-    } else {
-        if (inMemoryTrueExt === '.zip' || inMemoryTrueExt === '.cbz') {
-            // Engine-first: streams the central directory instead of loading a multi-GB pack into
-            // the Node heap just to count its nested archives.
-            const engineList = await engineNestedArchives(sourcePath);
+    }
+
+    // Nested-pack inspection runs on the RESOLVED archive — the bare file, or the single archive
+    // found inside a download client's job folder. SAB/qBit always deliver a folder, and this check
+    // previously only ran on bare files, so a whole-run pack delivered by Usenet was NEVER split and
+    // imported as one bogus "issue" (issue #174). RAR packs (the dominant scene container) are
+    // engine-only: the engine lists/extracts via unrar; AdmZip cannot read them.
+    if (!isBatchFolder) {
+        let containerExt = inMemoryTrueExt;
+        if (actualSourceFile !== sourcePath) {
+            containerExt = path.extname(actualSourceFile).toLowerCase();
+            try {
+                const buffer = Buffer.alloc(4);
+                const fd = fs.openSync(actualSourceFile, 'r');
+                fs.readSync(fd, buffer, 0, 4, 0);
+                fs.closeSync(fd);
+                const hex = buffer.toString('hex').toLowerCase();
+                if (hex === '52617221') containerExt = '.cbr';
+                else if (hex === '504b0304') containerExt = '.cbz';
+            } catch (e) { /* keep the extension-derived guess */ }
+        }
+        const isZipContainer = containerExt === '.zip' || containerExt === '.cbz';
+        isRarContainer = containerExt === '.cbr' || containerExt === '.rar';
+
+        if (isZipContainer || isRarContainer) {
+            // Engine-first: streams the central directory / unrar listing instead of loading a
+            // multi-GB pack into the Node heap just to count its nested archives.
+            const engineList = await engineNestedArchives(actualSourceFile);
             if (engineList) {
                 if (engineList.count > 0) {
                     isBatchArchive = true;
                     nestedArchiveCount = engineList.count;
-                    Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(sourcePath)} (engine)`, 'debug');
+                    Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(actualSourceFile)} (engine)`, 'debug');
                 }
-            } else {
+            } else if (isZipContainer) {
                 try {
-                    const zip = new AdmZip(sourcePath);
+                    const zip = new AdmZip(actualSourceFile);
                     const entries = zip.getEntries();
                     const comicFiles = entries.filter((e: any) => !e.isDirectory && COMIC_EXT_REGEX.test(e.entryName));
 
                     if (comicFiles.length > 0) {
                         isBatchArchive = true;
                         nestedArchiveCount = comicFiles.length;
-                        Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(sourcePath)}`, 'debug');
+                        Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(actualSourceFile)}`, 'debug');
                     }
                 } catch(e: any) {
                     Logger.log(`[Importer Debug] Error inspecting zip for nested archives: ${e.message}`, 'error');
                 }
+            } else {
+                Logger.log(`[Importer] Engine unavailable — cannot inspect ${path.basename(actualSourceFile)} (RAR) for nested archives; importing as a single file.`, 'debug');
             }
         }
     }
@@ -330,15 +356,21 @@ export const Importer = {
         } else if (isBatchArchive) {
             // Engine-first: streams each nested archive straight to disk (collision naming +
             // magic-fix included) instead of buffering the whole pack through AdmZip.
-            const engineExtract = await engineNestedArchives(sourcePath, watchedDir);
+            const engineExtract = await engineNestedArchives(actualSourceFile, watchedDir);
             if (engineExtract?.files) {
                 moveSuccessCount = engineExtract.files.length;
                 if (!isFromClient && !trackingHash) {
                     try { await fs.remove(sourcePath); } catch(e) {}
                 }
+            } else if (isRarContainer) {
+                // No local fallback exists for RAR (AdmZip can't read it). Say what actually went
+                // wrong — NOT a path-mapping/permissions red herring (issue #174) — and leave the
+                // download in place so the next import cycle retries once the engine is back.
+                Logger.log(`[Importer] Pack "${path.basename(actualSourceFile)}" downloaded but could not be split into issues (RAR extraction failed or engine unavailable). Leaving the download for the next import cycle.`, 'error');
+                return false;
             } else {
                 try {
-                    const zip = new AdmZip(sourcePath);
+                    const zip = new AdmZip(actualSourceFile);
                     const entries = zip.getEntries();
                     for (const entry of entries) {
                         if (!entry.isDirectory && COMIC_EXT_REGEX.test(entry.entryName)) {

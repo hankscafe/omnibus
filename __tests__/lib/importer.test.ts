@@ -202,4 +202,98 @@ describe('File System: Importer Engine', () => {
             title: expect.stringContaining('1 Files')
         }));
     });
+
+    // ==== Issue #174: RAR packs (the dominant Usenet/scene container) must be batch-split too. ====
+
+    it('routes a nested RAR batch pack to WATCHED via the engine (issue #174)', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 89 Echoes Pack.cbr'
+        });
+
+        // Engine answers detection (list) then extraction — the same pipeline zips already use.
+        mocks.fetch
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 6, entries: ['Batman 89 Echoes 001.cbz'] }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 6, files: ['/watched/Batman 89 Echoes 001.cbz'] }) });
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        expect(mocks.fetch).toHaveBeenCalledTimes(2);
+        // AdmZip can't read RAR — it must never be consulted for a .cbr pack.
+        expect(mocks.zipGetEntries).not.toHaveBeenCalled();
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'COMPLETED' })
+        }));
+        expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), expect.any(Object));
+    });
+
+    it('treats a RAR file as a single issue when the engine is down (no AdmZip fallback for RAR)', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Wolverine 003.cbr', createdAt: new Date()
+        });
+
+        // Engine unreachable (default fetch rejection) → RAR can't be inspected locally; the file
+        // must fall through to the normal single-issue import, NOT crash into AdmZip.
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        // The engine list WAS attempted for the .cbr…
+        expect(mocks.fetch).toHaveBeenCalledTimes(1);
+        // …but AdmZip never touched the RAR.
+        expect(mocks.zipGetEntries).not.toHaveBeenCalled();
+    });
+
+    it('fails with an accurate "could not be split" log when RAR pack extraction fails (issue #174)', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 89 Echoes Pack.cbr'
+        });
+
+        // Detection sees a batch, but the extraction call fails (engine died mid-flight).
+        mocks.fetch
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 6, entries: ['a.cbz'] }) })
+            .mockRejectedValueOnce(new Error('engine crashed'));
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(false);
+        // The reason must be the REAL one — not a path-mapping/permissions red herring.
+        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('could not be split'), 'error');
+        expect(mocks.updateRequest).not.toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'COMPLETED' })
+        }));
+    });
+
+    it('splits a pack that arrives inside a download-client job folder (SAB case, issue #174)', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 89 Echoes Job'
+        });
+
+        // SABnzbd delivers a job FOLDER containing the pack archive — the folder resolves to a
+        // single archive, and that archive must still get nested-pack inspection.
+        vi.mocked(fs.statSync).mockImplementation((p: any) => ({
+            isDirectory: () => typeof p === 'string' && !/\.cb[zr7t]$|\.zip$|\.rar$/i.test(p),
+            size: 1000000
+        }) as any);
+        vi.mocked(fs.promises.readdir).mockResolvedValue([
+            { name: 'Batman 89 Echoes Pack.cbz', isDirectory: () => false }
+        ] as any);
+
+        mocks.fetch
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 6, entries: ['a.cbz'] }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 6, files: ['/watched/a.cbz'] }) });
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        expect(mocks.fetch).toHaveBeenCalledTimes(2);
+        // The nested inspection ran against the archive INSIDE the folder.
+        const listBody = JSON.parse(mocks.fetch.mock.calls[0][1].body);
+        expect(listBody.path).toContain('Batman 89 Echoes Pack.cbz');
+        expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), expect.any(Object));
+
+        // Restore the shared statSync/readdir defaults for any tests added after this one
+        // (vi.clearAllMocks does not reset implementations).
+        vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => false, size: 1000000 } as any);
+        vi.mocked(fs.promises.readdir).mockResolvedValue([] as any);
+    });
 });

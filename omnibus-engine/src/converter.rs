@@ -894,9 +894,30 @@ pub fn first_comic_file(folder: &Path) -> Option<PathBuf> {
 // stream from the file instead and keep the work off the Node event loop.
 // ============================================================================
 
-/// Comic archives nested inside a zip/cbz (non-directory entries with a comic extension) —
+/// `Rar!` archive signature.
+fn is_rar_signature(sig: &[u8]) -> bool {
+    sig.len() >= 4 && sig[..4] == [0x52, 0x61, 0x72, 0x21]
+}
+
+/// Comic archives nested inside a batch pack (non-directory entries with a comic extension) —
 /// the importer's batch-payload detection (parity with importer.ts COMIC_EXT_REGEX filter).
+/// Dispatches on the file SIGNATURE, not the extension: zip/cbz reads the central directory via
+/// the zip crate; a RAR pack (the dominant Usenet/scene container — issue #174) lists via `unrar lb`.
 pub fn list_nested_archives(archive_path: &Path) -> Result<Vec<String>> {
+    if is_rar_signature(&read_file_signature(archive_path)) {
+        let out = Command::new("unrar")
+            .args(["lb", "-p-"])
+            .arg(archive_path)
+            .output()
+            .context("unrar unavailable for RAR pack listing")?;
+        return Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && is_comic_name(l))
+            .map(str::to_string)
+            .collect());
+    }
+
     let mut archive = zip::ZipArchive::new(File::open(archive_path)?)?;
     let mut found = Vec::new();
     for i in 0..archive.len() {
@@ -943,11 +964,15 @@ fn fix_magic_extension(path: &Path) -> PathBuf {
     }
 }
 
-/// Extracts every nested comic archive out of a batch zip into `dest_dir`, streaming entry-by-entry
-/// (never holding the pack in memory). Mirrors the importer's routing rules: flatten to the entry's
-/// basename, timestamp-prefix on name collision, then magic-fix the extension. Returns the final
-/// on-disk paths.
+/// Extracts every nested comic archive out of a batch pack into `dest_dir`. Mirrors the importer's
+/// routing rules: flatten to the entry's basename, timestamp-prefix on name collision, then
+/// magic-fix the extension. Returns the final on-disk paths. Zip packs stream entry-by-entry
+/// (never holding the pack in memory); RAR packs (issue #174) unrar into a temp dir and move the
+/// nested comics across.
 pub fn extract_nested_archives(archive_path: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>> {
+    if is_rar_signature(&read_file_signature(archive_path)) {
+        return extract_nested_archives_rar(archive_path, dest_dir);
+    }
     fs::create_dir_all(dest_dir)?;
     let mut archive = zip::ZipArchive::new(File::open(archive_path)?)?;
     let mut written = Vec::new();
@@ -974,6 +999,78 @@ pub fn extract_nested_archives(archive_path: &Path, dest_dir: &Path) -> Result<V
         written.push(fix_magic_extension(&dest));
     }
     Ok(written)
+}
+
+/// RAR branch of extract_nested_archives (issue #174): unrar the whole pack into a temp dir, then
+/// move each nested comic into `dest_dir` with the same flatten/collision/magic-fix rules as the
+/// zip path. Success is judged by what landed on disk, never the unrar exit code (vintage RAR 2.0
+/// archives exit non-zero on benign quirks — see extract_archive_native).
+fn extract_nested_archives_rar(archive_path: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>> {
+    fs::create_dir_all(dest_dir)?;
+    // Big packs belong on the cache mount, not the container's tmpfs; fall back to the system temp
+    // dir when the cache base isn't writable (e.g. dev machines running the test suite).
+    let temp_base = {
+        let base = extraction_temp_base();
+        if fs::create_dir_all(&base).is_ok() { base } else { std::env::temp_dir() }
+    };
+    let temp = temp_base.join(format!("omnibus_pack_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp)?;
+
+    let run = Command::new("unrar")
+        .args(["x", "-y", "-o+", "-p-", "-idq"])
+        .arg(archive_path)
+        .arg(format!("{}{}", temp.display(), std::path::MAIN_SEPARATOR))
+        .output();
+    if let Err(e) = run {
+        let _ = fs::remove_dir_all(&temp);
+        anyhow::bail!("unrar unavailable for RAR pack extraction: {}", e);
+    }
+
+    let mut comics: Vec<PathBuf> = Vec::new();
+    collect_comic_files(&temp, &mut comics);
+    comics.sort();
+
+    let mut written = Vec::new();
+    for src in comics {
+        let file_name = src.file_name().unwrap_or_default().to_string_lossy().to_string();
+        if file_name.is_empty() { continue; }
+        let mut dest = dest_dir.join(&file_name);
+        if dest.exists() {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            dest = dest_dir.join(format!("{}_{}", millis, file_name));
+        }
+        log::debug!("[Importer] Extracting nested archive from RAR to Watched: {}", file_name);
+        // rename fails across filesystems (temp base vs watched mount) → copy+delete fallback.
+        if fs::rename(&src, &dest).is_err() {
+            if fs::copy(&src, &dest).is_err() { continue; }
+            let _ = fs::remove_file(&src);
+        }
+        written.push(fix_magic_extension(&dest));
+    }
+    let _ = fs::remove_dir_all(&temp);
+
+    if written.is_empty() {
+        anyhow::bail!("no nested comic archives could be extracted from the RAR pack");
+    }
+    Ok(written)
+}
+
+/// Recursively gathers every comic-extension file under `dir` (unrar preserves the pack's folder
+/// structure in the temp extraction; the watched folder wants a flat list).
+fn collect_comic_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(rd) = fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                collect_comic_files(&p, out);
+            } else if is_comic_name(&p.to_string_lossy()) {
+                out.push(p);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1187,6 +1284,59 @@ mod tests {
         assert_eq!(written[1].file_name().unwrap().to_string_lossy(), "Disguised.cbz");
         assert!(written[1].exists());
         assert!(!dest.join("Disguised.cbr").exists());
+
+        fs::remove_dir_all(&work).unwrap();
+    }
+
+    // ==== Issue #174: RAR packs (the common Usenet/scene container) must be batch-split like ZIPs.
+    // Fixture: tests/fixtures/nested_pack.cbr — a real RAR holding "Comic A 001.cbz",
+    // "sub/Comic B 002.cbz" (nested folder → tests flattening), "Comic C 003.cbr" (ZIP bytes in
+    // disguise → tests the magic fix), and "notes.txt" junk. Skips when unrar isn't on PATH
+    // (CI installs it; the Docker image ships it).
+
+    fn unrar_available() -> bool {
+        Command::new("unrar").arg("-?").output().is_ok()
+    }
+
+    fn rar_fixture() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nested_pack.cbr")
+    }
+
+    #[test]
+    fn rar_pack_nested_archives_are_listed() {
+        if !unrar_available() { eprintln!("skipping: unrar not on PATH"); return; }
+
+        let listed = list_nested_archives(&rar_fixture()).unwrap();
+        assert_eq!(listed.len(), 3, "expected the 3 nested comics, got {:?}", listed);
+        assert!(listed.iter().any(|n| n.ends_with("Comic A 001.cbz")), "{:?}", listed);
+        // unrar lists nested paths with the platform separator — accept either.
+        assert!(listed.iter().any(|n| n.ends_with("Comic B 002.cbz")), "{:?}", listed);
+        assert!(listed.iter().any(|n| n.ends_with("Comic C 003.cbr")), "{:?}", listed);
+        assert!(listed.iter().all(|n| !n.contains("notes.txt")), "junk must be filtered: {:?}", listed);
+    }
+
+    #[test]
+    fn rar_pack_nested_archives_extract_flatten_and_magic_fix() {
+        if !unrar_available() { eprintln!("skipping: unrar not on PATH"); return; }
+
+        let work = std::env::temp_dir().join(format!("omnibus_rar_nested_{}", uuid::Uuid::new_v4()));
+        let dest = work.join("watched");
+
+        let written = extract_nested_archives(&rar_fixture(), &dest).unwrap();
+        assert_eq!(written.len(), 3, "expected 3 extracted comics, got {:?}", written);
+
+        // Flattened out of the RAR's sub/ folder, straight into dest.
+        assert!(dest.join("Comic A 001.cbz").exists());
+        assert!(dest.join("Comic B 002.cbz").exists());
+        // The lying .cbr (ZIP bytes) was renamed to .cbz by the magic fix.
+        assert!(dest.join("Comic C 003.cbz").exists());
+        assert!(!dest.join("Comic C 003.cbr").exists());
+        // Junk never lands in the watched folder.
+        assert!(!dest.join("notes.txt").exists());
+
+        // Each extracted comic is a readable zip with its page intact.
+        let bytes = fs::read(dest.join("Comic B 002.cbz")).unwrap();
+        assert!(is_zip_signature(&bytes[..4.min(bytes.len())]));
 
         fs::remove_dir_all(&work).unwrap();
     }

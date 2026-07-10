@@ -27,7 +27,8 @@ export async function middleware(req: NextRequest) {
         '/api/v1/stats',      // Validates its own custom x-api-key
         '/api/uploads',       // Serves public avatars and banners
         '/api/opds',          // Serves uploaded files but checks for valid keys in the route handler
-        '/api/koreader'       // KOReader devices auth via x-auth-user/x-auth-key (no NextAuth cookie); each handler self-validates
+        '/api/koreader',      // KOReader devices auth via x-auth-user/x-auth-key (no NextAuth cookie); each handler self-validates
+        '/api/internal'       // Rust engine callbacks (notify/log) auth via X-Internal-Secret (no NextAuth cookie); each handler self-validates (issue #178)
     ];
     
     const isPublicApi = publicApiRoutes.some(route => pathname.startsWith(route));

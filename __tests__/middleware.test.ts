@@ -66,11 +66,26 @@ describe('Security: Next.js Front-Door Middleware', () => {
 
     it('should return 403 Forbidden JSON for standard users accessing admin APIs', async () => {
         mocks.getToken.mockResolvedValueOnce({ id: 'user_123', role: 'USER' });
-        const req = createReq('/api/admin/users'); 
+        const req = createReq('/api/admin/users');
         const res = await middleware(req) as Response;
 
         expect(res?.status).toBe(403);
         const data = await res.json();
         expect(data.error).toBe('Forbidden: Admin privileges required.');
+    });
+
+    // Issue #178: the Rust engine calls /api/internal/* with an X-Internal-Secret header and no
+    // NextAuth cookie. The middleware must pass these through — each handler self-authenticates via
+    // secretsMatch() — otherwise every engine notify/log callback dies at 401 before the secret is
+    // ever checked.
+    it('should pass engine /api/internal callbacks through to their self-authenticating handlers', async () => {
+        for (const pathname of ['/api/internal/notify', '/api/internal/log']) {
+            mocks.getToken.mockResolvedValueOnce(null); // engine has no session cookie
+            const res = await middleware(createReq(pathname)) as Response;
+
+            expect(res?.status, `${pathname} must not be blocked by the middleware`).not.toBe(401);
+            // Pass-through (not a redirect/deny): the pathname header the middleware forwards is set.
+            expect(res.headers.get('x-middleware-request-x-pathname')).toBe(pathname);
+        }
     });
 });

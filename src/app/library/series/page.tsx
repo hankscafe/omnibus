@@ -72,8 +72,8 @@ function SeriesContent() {
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean}>({
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean, genres?: string[]}>({
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false, genres: []
   });
 
   const [coverUploading, setCoverUploading] = useState(false);
@@ -285,7 +285,8 @@ function SeriesContent() {
                 isManga: data.isManga || false,
                 universe: data.universe || null,
                 seriesGroup: data.seriesGroup || null,
-                matchState: data.matchState || 'MATCHED'
+                matchState: data.matchState || 'MATCHED',
+                genres: Array.isArray(data.genres) ? data.genres : []
             });
 
             setEditForm({
@@ -392,7 +393,10 @@ function SeriesContent() {
   const colorists = activeIssue?.colorists || [];
   const letterers = activeIssue?.letterers || [];
   const characters = activeIssue?.characters || [];
-  const genres = activeIssue?.genres || []; 
+  // Issue genres when the selected issue has them; otherwise fall back to the series-level genres
+  // (Metron series genres / CV volume concepts, issue #180) so the chips aren't blank for
+  // freshly-synced or Metron-sourced libraries.
+  const genres = (activeIssue?.genres?.length ? activeIssue.genres : seriesInfo.genres) || [];
   const storyArcs = activeIssue?.storyArcs || [];
   const teams = activeIssue?.teams || [];
   const locations = activeIssue?.locations || [];

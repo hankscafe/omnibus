@@ -148,6 +148,7 @@ model Series {
   
   description     String?
   status          String?
+  genres          String?  // JSON array string (same convention as Issue.genres) — Metron series genres / CV volume concepts (issue #180)
   bookType        String?  // 'Print' | 'OneShot' | 'TPB' | 'GN' (Mylar booktype values); null = unknown
   coverUrl        String?
   remoteCoverUrl  String?  // Original ComicVine/Metron cover URL (coverUrl becomes a local path after caching)

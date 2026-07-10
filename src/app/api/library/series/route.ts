@@ -270,6 +270,8 @@ export async function GET(request: Request) {
       // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored XSS).
       description: sanitizeDescription(seriesRecord?.description) || null,
       universe: seriesRecord?.universe || null,
+      // Series-level genres (Metron genres / CV volume concepts, issue #180) — JSON array string in the DB.
+      genres: safeParse((seriesRecord as any)?.genres),
       seriesGroup: (seriesRecord as any)?.seriesGroup || null,
       matchState: seriesRecord?.matchState || 'UNMATCHED',
       path: folderPath,

@@ -250,12 +250,14 @@ async fn fetch_comicvine(
         sqlx::query(
             r#"UPDATE "Series" SET "coverUrl"=$1,
                "remoteCoverUrl"=COALESCE($2, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $3)
-               WHERE id=$4"#,
+               "bookType"=COALESCE("bookType", $3),
+               genres=COALESCE(genres, $4)
+               WHERE id=$5"#,
         )
         .bind(&final_cover)
         .bind(&image_url)
         .bind(guessed_book_type)
+        .bind(&vol_genres_json)
         .bind(series_id)
         .execute(&db.pool)
         .await
@@ -263,8 +265,9 @@ async fn fetch_comicvine(
         sqlx::query(
             r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6,
                "remoteCoverUrl"=COALESCE($7, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $8)
-               WHERE id=$9"#,
+               "bookType"=COALESCE("bookType", $8),
+               genres=COALESCE($9, genres)
+               WHERE id=$10"#,
         )
         .bind(&name)
         .bind(&publisher)
@@ -274,6 +277,7 @@ async fn fetch_comicvine(
         .bind(status)
         .bind(&image_url)
         .bind(guessed_book_type)
+        .bind(&vol_genres_json)
         .bind(series_id)
         .execute(&db.pool)
         .await
@@ -794,6 +798,10 @@ async fn fetch_metron(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
+    // Series-level genres from Metron's detail payload (issue #180). On a 304 the bodyless payload
+    // yields None, so the COALESCE writes below leave the existing column untouched.
+    let series_genres_json = names_json(&series_data, "genres");
+
     // Metron's series_type is authoritative for the Mylar booktype, but never clobber a manual one.
     let book_type = map_series_type(&series_data["series_type"]);
 
@@ -805,20 +813,22 @@ async fn fetch_metron(
         sqlx::query(
             r#"UPDATE "Series" SET "coverUrl"=$1, universe=COALESCE($2, universe),
                "remoteCoverUrl"=COALESCE($3, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $4)
-               WHERE id=$5"#,
+               "bookType"=COALESCE("bookType", $4),
+               genres=COALESCE(genres, $5)
+               WHERE id=$6"#,
         )
-        .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(series_id)
+        .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(&series_genres_json).bind(series_id)
         .execute(&db.pool).await
     } else {
         sqlx::query(
             r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6, universe=COALESCE($7, universe),
                "remoteCoverUrl"=COALESCE($8, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $9)
-               WHERE id=$10"#,
+               "bookType"=COALESCE("bookType", $9),
+               genres=COALESCE($10, genres)
+               WHERE id=$11"#,
         )
         .bind(&name).bind(&publisher).bind(year).bind(&description).bind(&final_cover).bind(status_str).bind(&universe)
-        .bind(&cover_remote).bind(book_type).bind(series_id)
+        .bind(&cover_remote).bind(book_type).bind(&series_genres_json).bind(series_id)
         .execute(&db.pool).await
     };
     if let Err(e) = update_res {
@@ -874,7 +884,7 @@ async fn fetch_metron(
 
     // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
     let existing_issues = sqlx::query(
-        r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState" FROM "Issue" WHERE "seriesId" = $1"#,
+        r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres FROM "Issue" WHERE "seriesId" = $1"#,
     )
     .bind(series_id)
     .fetch_all(&db.pool)
@@ -888,7 +898,7 @@ async fn fetch_metron(
     let mut by_meta: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
     if !all_meta_ids.is_empty() {
         let sql = format!(
-            r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState" FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON'"#,
+            r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState", genres FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON'"#,
             Db::in_placeholders(1, all_meta_ids.len())
         );
         let mut q = sqlx::query(&sql);
@@ -958,6 +968,19 @@ async fn fetch_metron(
             .and_then(|r| r.try_get::<Option<String>, _>("matchState").unwrap_or(None));
         let match_state_val = next_match_state(metron_existing_state);
 
+        // Issue genres from the series-level Metron genres, fill-blank only (parity with the CV
+        // volume-concepts -> issue-genres flow): locked keeps its value; an issue that already has
+        // genres keeps them; only a blank column takes the series value.
+        let existing_genres: Option<String> = existing_by_meta.or(existing_by_num)
+            .and_then(|r| r.try_get::<Option<String>, _>("genres").unwrap_or(None));
+        let genres_val: Option<String> = if is_locked {
+            existing_genres
+        } else if series_genres_json.is_some() && existing_genres.is_none() {
+            series_genres_json.clone()
+        } else {
+            existing_genres
+        };
+
         let name_val: Option<String> = if is_locked { existing_name } else { Some(issue_name) };
         let release_val: Option<String> = if is_locked { existing_release } else { issue_date.clone() };
         // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
@@ -978,9 +1001,9 @@ async fn fetch_metron(
                 // detail endpoint), so the credit columns are LEFT UNTOUCHED — the old literal-'[]'
                 // writes wiped ComicInfo.xml-derived credits on every re-sync (issue #179).
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$7 WHERE id=$8"#,
+                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$7, genres=$8 WHERE id=$9"#,
                 )
-                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&id)
+                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&genres_val).bind(&id)
                 .execute(&db.pool).await
             }
         } else if let Some(r) = existing_by_num {
@@ -996,20 +1019,20 @@ async fn fetch_metron(
                 // Credit columns left untouched — Metron's issue_list has no per-issue credits and a
                 // literal-'[]' write would wipe ComicInfo-derived data (issue #179, same as above).
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"=$6 WHERE id=$7"#,
+                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"=$6, genres=$7 WHERE id=$8"#,
                 )
-                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&id)
+                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&genres_val).bind(&id)
                 .execute(&db.pool).await
             }
         } else {
             let new_id = uuid::Uuid::new_v4().to_string();
             sqlx::query(&format!(
                 r#"INSERT INTO "Issue"
-                   (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", writers, artists, characters, "matchState", "createdAt", "updatedAt")
-                   VALUES ($1,$2,$3,'METRON',$4,'WANTED',$5,$6,$7,$8,'[]','[]','[]','MATCHED', {now}, {now})"#,
+                   (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", genres, writers, artists, characters, "matchState", "createdAt", "updatedAt")
+                   VALUES ($1,$2,$3,'METRON',$4,'WANTED',$5,$6,$7,$8,$9,'[]','[]','[]','MATCHED', {now}, {now})"#,
                 now = db.now_expr()
             ))
-            .bind(&new_id).bind(series_id).bind(&source_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover)
+            .bind(&new_id).bind(series_id).bind(&source_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&genres_val)
             .execute(&db.pool).await
         };
 
@@ -1163,6 +1186,14 @@ fn credit_names(item: &serde_json::Value, key: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Provider name-array -> JSON array string for a genres-style column (issue #180):
+/// [{"name": "Super-Hero"}, ...] -> Some("[\"Super-Hero\",...]"). Absent/empty/name-less entries
+/// -> None, so a blank column stays NULL (never a literal '[]').
+fn names_json(item: &serde_json::Value, key: &str) -> Option<String> {
+    let names = credit_names(item, key);
+    if names.is_empty() { None } else { serde_json::to_string(&names).ok() }
 }
 
 /// Role taxonomy is exact parity with Node's parseComicVineCredits (src/lib/utils.ts): one person
@@ -1329,6 +1360,18 @@ mod tests {
         let empty = cv_issue_credits(&serde_json::json!({"id": 1, "issue_number": "3"}));
         assert!(empty.writers.is_empty() && empty.artists.is_empty() && empty.characters.is_empty());
         assert!(empty.teams.is_empty() && empty.locations.is_empty());
+    }
+
+    #[test]
+    fn names_json_maps_provider_name_arrays() {
+        // Metron series genres: [{"name": "Super-Hero"}, ...] → JSON array string (issue #180).
+        let metron = serde_json::json!({"genres": [{"name": "Super-Hero"}, {"name": "Action"}, {"name": "Super-Hero"}]});
+        assert_eq!(names_json(&metron, "genres"), Some(r#"["Super-Hero","Action"]"#.to_string()));
+
+        // Absent field / empty array / names-less entries → None (never a literal "[]").
+        assert_eq!(names_json(&serde_json::json!({"id": 1}), "genres"), None);
+        assert_eq!(names_json(&serde_json::json!({"genres": []}), "genres"), None);
+        assert_eq!(names_json(&serde_json::json!({"genres": [{"id": 5}]}), "genres"), None);
     }
 
     #[test]

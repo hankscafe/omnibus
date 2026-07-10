@@ -375,6 +375,39 @@ pub(crate) fn matches_bounded_variant(title_lower: &str) -> bool {
     re_bounded_variant().is_match(title_lower)
 }
 
+/// Variant keyword lists shared by the relevance filter and the reverse-guard noise set.
+pub(crate) const BOUNDED_VARIANT_KEYWORDS: [&str; 6] = ["noir", "b&w", "sketch", "blank", "virgin", "uncut"];
+pub(crate) const OPEN_VARIANT_KEYWORDS: [&str; 7] = ["variant", "special edition", "director's cut", "directors cut", "facsimile", "black and white", "extended"];
+
+/// Noise words dropped symmetrically from request AND release-title core words by the off-series
+/// reverse guard — stop words, format/scan tokens, and variant keywords. Built once.
+fn reverse_noise_set() -> &'static std::collections::HashSet<String> {
+    static SET: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| {
+        let mut s: std::collections::HashSet<String> =
+            ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"]
+                .iter().map(|w| w.to_string()).collect();
+        for w in ["eng", "cbz", "cbr", "cb7", "zip", "rar", "webrip", "digital", "vol", "volume", "ch", "chapter", "issue", "tpb", "rip", "the", "and", "of", "by", "gn"] { s.insert(w.to_string()); }
+        for w in &BOUNDED_VARIANT_KEYWORDS { s.insert(w.to_string()); }
+        for k in &OPEN_VARIANT_KEYWORDS { for w in k.split_whitespace() { s.insert(w.to_string()); } }
+        for w in ["cover", "covers", "scan", "scans", "noads", "c2c", "empire", "mobile", "edition"] { s.insert(w.to_string()); }
+        s
+    })
+}
+
+/// OFF-SERIES REVERSE GUARD core: the release title's core series words (tags/years/issue numbers/
+/// noise stripped) that the request does NOT contain. Non-empty = the release belongs to a
+/// differently-titled series that merely CONTAINS the requested words — "Savage Wolverine #1" for a
+/// "Wolverine #1" request, "Wolverine - Blood Hunt 003" for "Wolverine #3". The required-words check
+/// can never catch these (it only detects MISSING words), and the ±1 year guard is defeated by
+/// facsimile/reprint years. Shared by the Prowlarr, Anna's Archive, and GetComics automation filters.
+pub(crate) fn off_series_extra_words(title_lower: &str, significant_query_words: &[String]) -> Vec<String> {
+    core_series_words(title_lower, reverse_noise_set())
+        .into_iter()
+        .filter(|t| !significant_query_words.contains(t))
+        .collect()
+}
+
 /// Core-title match-ratio reverse-validation (parity with prowlarr.ts:147-167).
 /// Returns true if the result should be REJECTED.
 fn fails_match_ratio(significant_query_words: &[String], result_words: &[String], is_pack: bool, ratio_config: f64) -> bool {
@@ -472,11 +505,8 @@ pub async fn filter_and_score(
 
     let stop_words: HashSet<&str> = ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"].into_iter().collect();
 
-    let bounded_variant_keywords = ["noir", "b&w", "sketch", "blank", "virgin", "uncut"];
-    let open_variant_keywords = ["variant", "special edition", "director's cut", "directors cut", "facsimile", "black and white", "extended"];
-
-    let user_wants_variant = bounded_variant_keywords.iter().any(|k| clean_original.contains(k)) ||
-                             open_variant_keywords.iter().any(|k| clean_original.contains(k));
+    let user_wants_variant = BOUNDED_VARIANT_KEYWORDS.iter().any(|k| clean_original.contains(k)) ||
+                             OPEN_VARIANT_KEYWORDS.iter().any(|k| clean_original.contains(k));
 
     let req_num = extract_number(&clean_original, is_manga, false);
 
@@ -497,17 +527,7 @@ pub async fn filter_and_score(
         .cloned()
         .collect();
 
-    // Noise set for the beta.068 reverse guard — stop words, junk/format tokens, variant keywords, and
-    // common scan tags. Dropped symmetrically from both the request and the release-title core words, so a
-    // real "Black, White & Blood" series still matches its own releases (parity with automation.ts reverseNoise).
-    let reverse_noise: HashSet<String> = {
-        let mut s: HashSet<String> = stop_words.iter().map(|w| w.to_string()).collect();
-        for w in ["eng", "cbz", "cbr", "cb7", "zip", "rar", "webrip", "digital", "vol", "volume", "ch", "chapter", "issue", "tpb", "rip", "the", "and", "of", "by", "gn"] { s.insert(w.to_string()); }
-        for w in &bounded_variant_keywords { s.insert(w.to_string()); }
-        for k in &open_variant_keywords { for w in k.split_whitespace() { s.insert(w.to_string()); } }
-        for w in ["cover", "covers", "scan", "scans", "noads", "c2c", "empire", "mobile"] { s.insert(w.to_string()); }
-        s
-    };
+    // The reverse-guard noise set now lives in reverse_noise_set() (shared with the GetComics filter).
 
     // Evaluate each result: None = rejected; Some(year_unconfirmed) = kept, where `true` marks an
     // undated release admitted only via the opt-in `prowlarr_accept_yearless` (issue #176 change B).
@@ -536,7 +556,7 @@ pub async fn filter_and_score(
         // Variant rejection is a GetComics/DDL-only filter in Node (getcomics.ts); prowlarr.ts never
         // rejects variants, so gate on is_ddl to avoid dropping legitimate Prowlarr torrents.
         if is_ddl && !user_wants_variant {
-            if open_variant_keywords.iter().any(|k| title_lower.contains(k)) { return None; }
+            if OPEN_VARIANT_KEYWORDS.iter().any(|k| title_lower.contains(k)) { return None; }
             if re_bounded_variant().is_match(&title_lower) { return None; }
         }
 
@@ -586,19 +606,17 @@ pub async fn filter_and_score(
         // Annual rejection is GetComics/DDL-only in Node (getcomics.ts:258-262); prowlarr.ts has none.
         if is_ddl && !is_looking_for_annual && title_lower.contains("annual") { return None; }
 
-        // REVERSE GUARD (Prowlarr single-issue only): the required-word/ratio checks can't tell the
-        // requested series from a differently-titled one that merely CONTAINS its words — e.g. "Wolverine
-        // - Blood Hunt 003" for a plain "Wolverine #3" ("blood" is a stop word, so the ratio gate sees only
-        // 2 extra tokens and its ">2 extra words" rule lets it through). Reject a single-issue release whose
-        // core title (tags/year/issue stripped) introduces a series word the request lacks. Skipped for
-        // packs, which legitimately carry extra words ("Complete Collection"). (beta.068)
-        if !is_ddl && req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
-            let extra: Vec<String> = core_series_words(&res.title, &reverse_noise)
-                .into_iter()
-                .filter(|t| !significant_query_words.contains(t))
-                .collect();
+        // REVERSE GUARD (single-issue only): the required-word/ratio checks can't tell the requested
+        // series from a differently-titled one that merely CONTAINS its words — "Wolverine - Blood
+        // Hunt 003" for "Wolverine #3", "Savage Wolverine #1" for "Wolverine #1". Reject a single-
+        // issue release whose core title (tags/year/issue stripped) introduces a series word the
+        // request lacks. Skipped for packs, which legitimately carry extra words ("Complete
+        // Collection"). Applies to Prowlarr (beta.068) AND Anna's Archive — GetComics results run
+        // the same guard inside getcomics::search (they bypass this filter via skip_relevance).
+        if req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
+            let extra = off_series_extra_words(&title_lower, &significant_query_words);
             if !extra.is_empty() {
-                log::debug!("[Automation Debug] Discarding off-series Prowlarr release \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
+                log::debug!("[Automation Debug] Discarding off-series release \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
                 return None;
             }
         }
@@ -740,6 +758,31 @@ mod tests {
         // Request side (strip_vol=false) keeps a volume number; result side (true) strips it.
         assert_eq!(extract_number("hellboy v2", false, false), Some(2.0));
         assert_eq!(extract_number("hellboy v2", false, true), None);
+    }
+
+    // ==== Off-series reverse guard, shared by Prowlarr AND the DDL sources (GetComics/Anna's).
+    // Field incident: a monitor search for "Wolverine #1" (2024 series) matched GetComics'
+    // "Savage Wolverine #1 (2025)" facsimile — the required-words check only catches MISSING words,
+    // the ±1 year guard was defeated by the reprint year, and the reverse guard was Prowlarr-only.
+    #[test]
+    fn off_series_extra_words_flags_prefixed_sibling_series() {
+        let wolverine = vec!["wolverine".to_string()];
+
+        // The incident title: "savage" is an extra core-series word the request lacks → reject.
+        assert_eq!(off_series_extra_words("savage wolverine #1 (2025)", &wolverine), vec!["savage"]);
+        // The original beta.068 case must keep failing on the DDL path too.
+        assert_eq!(off_series_extra_words("wolverine - blood hunt 003 (2024) (digital)", &wolverine), vec!["hunt"]);
+
+        // Legitimate releases survive: scene tags/groups/years/issue numbers are noise, not series words.
+        assert!(off_series_extra_words("wolverine 001 (2024) (f) (digital) (marika-empire)", &wolverine).is_empty());
+        // Variant keywords are noise (the variant guard owns that rejection, not this one).
+        assert!(off_series_extra_words("wolverine 001 facsimile edition (2025)", &wolverine).is_empty());
+
+        // A multi-word request keeps its own words: "Dark Wolverine #1" matches dark wolverine releases.
+        let dark = vec!["dark".to_string(), "wolverine".to_string()];
+        assert!(off_series_extra_words("dark wolverine 001 (2009) (digital)", &dark).is_empty());
+        // ...and the plain-Wolverine request still rejects the dark sibling.
+        assert_eq!(off_series_extra_words("dark wolverine 001 (2009)", &wolverine), vec!["dark"]);
     }
 
     #[test]

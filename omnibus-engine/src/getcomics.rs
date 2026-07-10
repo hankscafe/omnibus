@@ -331,6 +331,12 @@ pub async fn search(
         .map(|s| s.to_string())
         .collect();
 
+    // Significant request words for the off-series reverse guard (same shape as filter_and_score).
+    let significant_query_words: Vec<String> = original_query_words.iter()
+        .filter(|w| w.chars().count() > 2)
+        .cloned()
+        .collect();
+
     // Interactive: fan each incoming query out into the upstream variant set (+ a de-padded form so a
     // "003" request still matches GetComics' "#3" post titles). See interactive_query_variants.
     let query_list: Vec<String> = if is_interactive {
@@ -471,6 +477,22 @@ pub async fn search(
                                 None => is_relevant = false,
                                 _ => {}
                             }
+                        }
+                    }
+
+                    // OFF-SERIES REVERSE GUARD: GetComics' site search is fuzzy, so "Wolverine #1"
+                    // returns sibling series too ("Savage Wolverine #1" — field incident: a 2025
+                    // facsimile of it auto-downloaded for the 2024 Wolverine series; the required-
+                    // word check only catches MISSING words and the ±1 year guard was defeated by
+                    // the reprint year). Reject a single-issue post whose core series words include
+                    // one the request lacks — same guard Prowlarr has run since beta.068. Packs are
+                    // exempt (they legitimately carry extra words); interactive search never reaches
+                    // this block, so manual picks stay unrestricted.
+                    if is_relevant && req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
+                        let extra = crate::search_engine::off_series_extra_words(&title_lower, &significant_query_words);
+                        if !extra.is_empty() {
+                            log::debug!("[GetComics Debug] Discarding off-series post \"{}\" — extra series words {:?} not in requested \"{}\".", title, extra, clean_original);
+                            is_relevant = false;
                         }
                     }
 

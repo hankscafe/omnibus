@@ -97,8 +97,8 @@ export async function parseComicInfo(filePath: string) {
                     const { prisma } = await import('@/lib/db');
                     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
                     if (setting?.value) {
-                        const { apiClient } = await import('@/lib/api-client');
-                        const cvRes = await apiClient.get(`https://comicvine.gamespot.com/api/issue/4000-${cvIssueId}/`, {
+                        const { cachedCvGet } = await import('@/lib/metadata/metadata-cache');
+                        const cvRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4000-${cvIssueId}/`, {
                             params: { api_key: setting.value, format: 'json', field_list: 'volume' }
                         });
                         

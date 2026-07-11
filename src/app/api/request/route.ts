@@ -17,6 +17,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 import { omnibusQueue } from '@/lib/queue';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 export const dynamic = 'force-dynamic';
 
@@ -133,7 +134,7 @@ export async function POST(request: NextRequest) {
                 } else {
                     const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
                     if (cvKeySetting?.value) {
-                        const cvRes = await axios.get(`https://comicvine.gamespot.com/api/search/`, {
+                        const cvRes = await cachedCvGet(`https://comicvine.gamespot.com/api/search/`, {
                             params: { api_key: cvKeySetting.value, format: 'json', query: name, resources: 'volume', limit: 1 },
                             headers: { 'User-Agent': 'Omnibus/1.0' },
                             timeout: 5000
@@ -178,7 +179,7 @@ export async function POST(request: NextRequest) {
             try {
                 const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
                 if (cvKeySetting?.value) {
-                    const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${resolvedCvId}/`, {
+                    const cvVolRes = await cachedCvGet(`https://comicvine.gamespot.com/api/volume/4050-${resolvedCvId}/`, {
                         params: { api_key: cvKeySetting.value, format: 'json', field_list: 'publisher,description,deck,name,start_year' },
                         headers: { 'User-Agent': 'Omnibus/1.0' },
                         timeout: 4000
@@ -355,10 +356,10 @@ export async function POST(request: NextRequest) {
           const cvApiKey = cvKeySetting?.value;
           if (!cvApiKey) throw new Error("Missing ComicVine API Key");
 
-          const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issues/`, {
+          const cvRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issues/`, {
             params: {
               api_key: cvApiKey, format: 'json', filter: `volume:${resolvedCvId}`,
-              field_list: 'id,name,issue_number,cover_date,store_date,image' 
+              field_list: 'id,name,issue_number,cover_date,store_date,image'
             },
             headers: { 'User-Agent': 'Omnibus/1.0' }
           });

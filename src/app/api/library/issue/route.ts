@@ -14,6 +14,7 @@ import { sanitizeDescription } from '@/lib/utils/sanitize';
 import { safeParse } from '@/lib/utils/safe-parse';
 import { omnibusQueue } from '@/lib/queue';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -113,11 +114,11 @@ export async function GET(request: Request) {
             const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
             if (setting?.value) {
                 try {
-                    const deepRes = await axios.get(`https://comicvine.gamespot.com/api/issue/4000-${issue.metadataId}/`, {
-                        params: { 
-                            api_key: setting.value, 
-                            format: 'json', 
-                            field_list: 'person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,description,deck' 
+                    const deepRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4000-${issue.metadataId}/`, {
+                        params: {
+                            api_key: setting.value,
+                            format: 'json',
+                            field_list: 'person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,description,deck'
                         },
                         headers: { 'User-Agent': 'Omnibus/1.0' },
                         timeout: 5000

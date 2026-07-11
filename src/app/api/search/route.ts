@@ -9,6 +9,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { logApiUsage } from '@/lib/utils/system-flags';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -96,18 +97,16 @@ export async function GET(request: Request) {
           return NextResponse.json({ error: 'Server configuration error: Missing API Key' }, { status: 500 });
         }
 
-        const response = await axios.get(`${BASE_URL}/search/`, {
+        const response = await cachedCvGet(`${BASE_URL}/search/`, {
           params: {
             // ComicVine's search tokenizer chokes on slashes ("Hack/Slash" returns nothing while
             // "Hack Slash" matches — discussion #177); fold them for CV only. Metron's ?name=
             // icontains filter needs the RAW name, so the fold is scoped to this branch.
             api_key: CV_API_KEY, format: 'json', query: query.replace(/[\/\\]/g, ' ').replace(/\s+/g, ' ').trim(), resources: 'volume', limit: limit, page: page,
-            field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description' 
+            field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description'
           },
           headers: { 'User-Agent': 'Omnibus/1.0' }
         });
-        
-        await logApiUsage('comicvine', '/search');
 
         if (!response.data || !Array.isArray(response.data.results)) {
             return NextResponse.json({ results: [], hasMore: false });

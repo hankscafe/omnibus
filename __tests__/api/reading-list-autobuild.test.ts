@@ -30,6 +30,12 @@ vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 // Mock Axios for both ComicVine and Metron
 vi.mock('axios');
+// The CV path fetches through the pooled apiClient (via cachedCvGet) — alias it to the same
+// automocked axios.get so the per-test mockResolvedValueOnce queues serve both clients.
+vi.mock('@/lib/api-client', async () => {
+    const axios = (await import('axios')).default;
+    return { apiClient: { get: axios.get } };
+});
 
 const createReq = (body: any) => new Request('http://localhost/api/reading-lists/auto-build', {
     method: 'POST',

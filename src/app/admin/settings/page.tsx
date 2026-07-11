@@ -210,6 +210,7 @@ export default function SettingsPage() {
     matcher_mode: "confirm", matcher_auto_threshold: "0.90", file_metadata_priority: "false",
     unmatched_sweep_schedule: "1",
     metron_detail_credits: "false",
+    metadata_cache_enabled: "false", metadata_cache_detail_days: "7", metadata_cache_list_hours: "12", metadata_cache_max_mb: "256",
     prowlarr_accept_yearless: "false",
     convert_to_webp: "false", webp_quality: "80", cbr_conversion_enabled: "true",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
@@ -231,6 +232,34 @@ export default function SettingsPage() {
   })
 
   const [customProwlarrCategories, setCustomProwlarrCategories] = useState("")
+
+  // --- Shared CV/Metron response cache (Settings → Metadata): live stats + manual clear ---
+  const [cacheStats, setCacheStats] = useState<{ entries: number, bytes: number } | null>(null)
+  const [clearingCache, setClearingCache] = useState(false)
+
+  const loadCacheStats = () => {
+    fetch('/api/admin/metadata-cache')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && !d.error) setCacheStats(d) })
+      .catch(() => {})
+  }
+  useEffect(() => { loadCacheStats() }, [])
+
+  const clearMetadataCache = async () => {
+    setClearingCache(true)
+    try {
+      const res = await fetch('/api/admin/metadata-cache', { method: 'DELETE' })
+      const data = await res.json().catch(() => null)
+      if (res.ok) {
+        toast({ title: "Cache cleared", description: `${data?.count ?? 0} cached provider responses removed. The next sync fetches everything live.` })
+        loadCacheStats()
+      } else {
+        toast({ title: "Couldn't clear the cache", description: data?.error || "Unknown error", variant: "destructive" })
+      }
+    } finally {
+      setClearingCache(false)
+    }
+  }
 
   const [isDataLoaded, setIsDataLoaded] = useState(false)
   const [initialStateHash, setInitialStateHash] = useState("")
@@ -1112,6 +1141,60 @@ export default function SettingsPage() {
                                 <p className="text-[11px] text-muted-foreground">
                                     Metron&apos;s issue list carries no creator credits, so syncs normally leave them to ComicInfo.xml or on-demand lookups. When on, metadata syncs make one extra Metron API call per issue to fill in writers, artists, characters and story arcs — quota-heavy on large libraries (budgeted against Metron&apos;s 5,000/day limit; leftovers resume on the next sync). Each issue is only fetched once.
                                 </p>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3 bg-muted/30 p-4 rounded-lg border border-border">
+                            <div className="flex items-center space-x-2">
+                                <Switch
+                                    id="metadata-cache"
+                                    checked={config.metadata_cache_enabled === "true"}
+                                    onCheckedChange={(c) => setConfig({...config, metadata_cache_enabled: c ? "true" : "false"})}
+                                    className="scale-110 sm:scale-100"
+                                />
+                                <div className="grid gap-1 ml-2">
+                                    <Label htmlFor="metadata-cache" className="cursor-pointer font-bold text-base text-foreground">
+                                        Cache Provider Responses
+                                    </Label>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Stores ComicVine and Metron API responses locally so repeat lookups cost zero rate limit — shared by the app and the engine. Trade-off: within the windows below, syncs can return slightly stale data and the Series Monitor may notice brand-new issues up to the search/list window later. An explicit &quot;Refresh Metadata&quot; always fetches live, and window changes apply to already-cached entries immediately.
+                                    </p>
+                                </div>
+                            </div>
+                            {config.metadata_cache_enabled === "true" && (
+                                <div className="flex flex-wrap gap-4 pl-2">
+                                    <div className="grid gap-1">
+                                        <Label className="text-xs font-semibold text-foreground">Detail lookups (days)</Label>
+                                        <Input type="number" min="1" max="90" value={config.metadata_cache_detail_days || "7"}
+                                            onChange={e => setConfig({...config, metadata_cache_detail_days: e.target.value})}
+                                            className="h-9 w-28 bg-background border-border text-foreground" />
+                                    </div>
+                                    <div className="grid gap-1">
+                                        <Label className="text-xs font-semibold text-foreground">Searches &amp; lists (hours)</Label>
+                                        <Input type="number" min="1" max="168" value={config.metadata_cache_list_hours || "12"}
+                                            onChange={e => setConfig({...config, metadata_cache_list_hours: e.target.value})}
+                                            className="h-9 w-28 bg-background border-border text-foreground" />
+                                    </div>
+                                    <div className="grid gap-1">
+                                        <Label className="text-xs font-semibold text-foreground">Size cap (MB)</Label>
+                                        <Input type="number" min="16" max="4096" value={config.metadata_cache_max_mb || "256"}
+                                            onChange={e => setConfig({...config, metadata_cache_max_mb: e.target.value})}
+                                            className="h-9 w-28 bg-background border-border text-foreground" />
+                                    </div>
+                                </div>
+                            )}
+                            <div className="flex items-center gap-3 pl-2 pt-1">
+                                <p className="text-[11px] text-muted-foreground">
+                                    {cacheStats ? `${cacheStats.entries} cached responses · ${(cacheStats.bytes / 1024 / 1024).toFixed(1)} MB` : 'Cache stats unavailable.'}
+                                </p>
+                                <Button
+                                    variant="outline" size="sm"
+                                    className="h-7 px-3 text-xs font-bold border-border"
+                                    onClick={clearMetadataCache}
+                                    disabled={clearingCache || !cacheStats || cacheStats.entries === 0}
+                                >
+                                    {clearingCache ? 'Clearing...' : 'Clear Cache'}
+                                </Button>
                             </div>
                         </div>
 

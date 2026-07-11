@@ -20,6 +20,7 @@ import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 import { safeRelocateFolder, moveFileSafe } from '@/lib/utils/safe-fs';
 import { countArchivePages } from '@/lib/utils/archive-pages';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 export async function POST(request: Request) {
   try {
@@ -75,10 +76,10 @@ export async function POST(request: Request) {
             const cvKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
             const cvApiKey = cvKeySetting?.value;
             if (cvApiKey) {
-                const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${targetMetaId}/`, {
+                const cvVolRes = await cachedCvGet(`https://comicvine.gamespot.com/api/volume/4050-${targetMetaId}/`, {
                     params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,image,end_year' },
                     headers: { 'User-Agent': 'Omnibus/1.0' },
-                    timeout: 4000 
+                    timeout: 4000
                 });
                 if (cvVolRes.data?.results) {
                     const vol = cvVolRes.data.results;

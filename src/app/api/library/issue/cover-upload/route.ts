@@ -96,7 +96,8 @@ export async function DELETE(request: Request) {
                 } else {
                     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
                     if (setting?.value) {
-                        const res = await axios.get(`https://comicvine.gamespot.com/api/issue/4000-${metadataId}/`, {
+                        const { cachedCvGet } = await import('@/lib/metadata/metadata-cache');
+                        const res = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4000-${metadataId}/`, {
                             params: { api_key: setting.value, format: 'json', field_list: 'image' },
                             headers: { 'User-Agent': 'Omnibus/1.0' },
                             timeout: 8000

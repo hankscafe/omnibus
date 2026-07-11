@@ -316,7 +316,7 @@ async fn phase2_comicvine(
 
         let Some(cv_id) = cv_id else { continue };
 
-        let resp = client.get("https://comicvine.gamespot.com/api/issues/")
+        let issue_req = match client.get("https://comicvine.gamespot.com/api/issues/")
             .query(&[
                 ("api_key", cv_api_key),
                 ("format", "json"),
@@ -327,12 +327,31 @@ async fn phase2_comicvine(
             ])
             .header("User-Agent", "Omnibus/1.0")
             .timeout(std::time::Duration::from_secs(10))
-            .send().await;
+            .build()
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let full_url = issue_req.url().to_string();
 
-        crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
-        let data: Value = match resp.and_then(|r| r.error_for_status()) {
-            Ok(r) => match r.json().await { Ok(d) => d, Err(_) => continue },
-            Err(_) => continue, // Node swallows per-series CV errors.
+        // Shared response cache: with the cache on, a brand-new issue is noticed at most one
+        // list-TTL late — the documented freshness trade-off of metadata_cache_enabled.
+        let data: Value = match crate::metadata_cache::get(db, "comicvine", &full_url).await {
+            Some(hit) => hit,
+            None => {
+                let resp = client.execute(issue_req).await;
+                crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
+                match resp.and_then(|r| r.error_for_status()) {
+                    Ok(r) => match r.json::<Value>().await {
+                        Ok(d) => {
+                            crate::metadata_cache::put(db, "comicvine", &full_url, &d).await;
+                            d
+                        }
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue, // Node swallows per-series CV errors.
+                }
+            }
         };
         let cv_issues = data.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 

@@ -502,8 +502,49 @@ export function initWorker() {
                     const { cleanupMetadataExtractorCache } = await import('@/lib/metadata-extractor');
                     const memDeletedCount = cleanupMetadataExtractorCache();
 
-                    if (dbDeletedCount > 0 || memDeletedCount > 0) {
-                        Logger.log(`[Cache Cleanup] Purged ${dbDeletedCount} DB entries and ${memDeletedCount} memory entries.`, 'success');
+                    // --- MetadataCache housekeeping (shared CV/Metron response cache) ---
+                    // Expiry uses the CURRENT admin TTLs (same read-time rule the cache itself
+                    // applies), then a total-size cap deletes oldest-first. This job is pure
+                    // housekeeping — reads never serve expired rows regardless of when it runs.
+                    let metaCacheDeleted = 0;
+                    try {
+                        const ttlSettings = await prisma.systemSetting.findMany({
+                            where: { key: { in: ['metadata_cache_detail_days', 'metadata_cache_list_hours', 'metadata_cache_max_mb'] } }
+                        });
+                        const ttlConfig = Object.fromEntries(ttlSettings.map(s => [s.key, s.value]));
+                        const detailDays = parseFloat(ttlConfig.metadata_cache_detail_days || '7') || 7;
+                        const listHours = parseFloat(ttlConfig.metadata_cache_list_hours || '12') || 12;
+                        const maxBytes = (parseFloat(ttlConfig.metadata_cache_max_mb || '256') || 256) * 1024 * 1024;
+
+                        const expired = await prisma.metadataCache.deleteMany({
+                            where: {
+                                OR: [
+                                    { kind: 'detail', createdAt: { lt: new Date(Date.now() - detailDays * 24 * 60 * 60 * 1000) } },
+                                    { kind: 'list', createdAt: { lt: new Date(Date.now() - listHours * 60 * 60 * 1000) } }
+                                ]
+                            }
+                        });
+                        metaCacheDeleted += expired.count;
+
+                        // Size cap: batched oldest-first eviction (LENGTH() works on both backends).
+                        for (let guard = 0; guard < 50; guard++) {
+                            const sized: any[] = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(LENGTH(value)), 0) AS total FROM "MetadataCache"`);
+                            const total = Number(sized?.[0]?.total || 0);
+                            if (total <= maxBytes) break;
+                            const oldest = await prisma.metadataCache.findMany({
+                                orderBy: { createdAt: 'asc' }, take: 200, select: { key: true }
+                            });
+                            if (oldest.length === 0) break;
+                            const evicted = await prisma.metadataCache.deleteMany({ where: { key: { in: oldest.map(o => o.key) } } });
+                            metaCacheDeleted += evicted.count;
+                            Logger.log(`[Cache Cleanup] Metadata cache over the ${Math.round(maxBytes / 1024 / 1024)}MB cap — evicted ${evicted.count} oldest entries.`, 'info');
+                        }
+                    } catch (e) {
+                        Logger.log(`[Cache Cleanup] MetadataCache purge failed: ${getErrorMessage(e)}`, 'warn');
+                    }
+
+                    if (dbDeletedCount > 0 || memDeletedCount > 0 || metaCacheDeleted > 0) {
+                        Logger.log(`[Cache Cleanup] Purged ${dbDeletedCount} DB entries, ${memDeletedCount} memory entries, and ${metaCacheDeleted} metadata-cache responses.`, 'success');
                     } else {
                         Logger.log(`[Cache Cleanup] No expired cache entries found to purge.`, 'info');
                     }
@@ -513,11 +554,11 @@ export function initWorker() {
                             jobType: 'CACHE_CLEANUP',
                             status: 'COMPLETED',
                             durationMs: Date.now() - startTime,
-                            message: `Cache cleanup finished. Purged ${dbDeletedCount} DB entries and ${memDeletedCount} memory entries.`
+                            message: `Cache cleanup finished. Purged ${dbDeletedCount} DB entries, ${memDeletedCount} memory entries, and ${metaCacheDeleted} metadata-cache responses.`
                         }
                     });
 
-                    SystemNotifier.sendAlert('job_cache_cleanup', { description: `Cache cleanup finished. Purged ${dbDeletedCount} DB entries and ${memDeletedCount} memory entries.` }).catch(() => {});
+                    SystemNotifier.sendAlert('job_cache_cleanup', { description: `Cache cleanup finished. Purged ${dbDeletedCount} DB entries, ${memDeletedCount} memory entries, and ${metaCacheDeleted} metadata-cache responses.` }).catch(() => {});
                     break;
                 }
                 

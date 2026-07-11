@@ -6,6 +6,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 // Helper function to respect Metron's 20 req/min burst limit
 async function fetchWithBackoff(url: string, auth: any, maxRetries = 3) {
@@ -120,7 +121,7 @@ export async function POST(request: Request) {
             if (!setting?.value) return NextResponse.json({ error: "ComicVine API Key missing" }, { status: 400 });
 
             Logger.log(`[Auto-Build] Fetching ComicVine Arc details...`, 'info');
-            const eventRes = await axios.get(`https://comicvine.gamespot.com/api/story_arc/4045-${eventId}/`, {
+            const eventRes = await cachedCvGet(`https://comicvine.gamespot.com/api/story_arc/4045-${eventId}/`, {
                 params: { api_key: setting.value, format: 'json' },
                 headers: { 'User-Agent': 'Omnibus/1.0' },
                 timeout: 10000

@@ -9,6 +9,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { logApiUsage } from '@/lib/utils/system-flags';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 export const dynamic = 'force-dynamic';
 
@@ -126,16 +127,14 @@ export async function GET(request: Request) {
         // Only ask for issue lists if we are looking up a Volume!
         const fieldList = isIssue ? baseFields : `${baseFields},count_of_issues,issues`;
 
-        const res = await axios.get(`https://comicvine.gamespot.com/api/${endpoint}/`, {
-            params: { 
-                api_key: cvKey, 
-                format: 'json', 
+        const res = await cachedCvGet(`https://comicvine.gamespot.com/api/${endpoint}/`, {
+            params: {
+                api_key: cvKey,
+                format: 'json',
                 // Added count_of_issues and issues to the end
                 field_list: fieldList
             }
         });
-        
-        await logApiUsage('comicvine', `/${isIssue ? 'issue' : 'volume'}`);
         
         const issueData = res.data.results;
         if (!issueData) return NextResponse.json({ error: 'Not Found' }, { status: 404 });

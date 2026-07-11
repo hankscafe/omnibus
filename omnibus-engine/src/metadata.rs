@@ -188,7 +188,7 @@ async fn fetch_comicvine(
     let vol_url = format!("https://comicvine.gamespot.com/api/volume/4050-{}/", metadata_id);
     log::debug!("[Metadata Fetcher Debug] Requesting ComicVine Volume: {}", vol_url);
 
-    let vol_resp = client
+    let vol_req = client
         .get(&vol_url)
         .query(&[
             ("api_key", api_key),
@@ -197,16 +197,25 @@ async fn fetch_comicvine(
         ])
         .header("User-Agent", "Omnibus/1.0")
         .timeout(Duration::from_secs(15))
-        .send()
-        .await?;
+        .build()?;
+    let vol_full_url = vol_req.url().to_string();
 
-    crate::api_usage::log(&db.pool, "comicvine", &vol_url).await;
-    if vol_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        mark_flag(db, "cv_rate_limit_time").await;
-        anyhow::bail!("ComicVine rate limited (429) on volume fetch");
-    }
-
-    let vol_json: serde_json::Value = vol_resp.json().await?;
+    // Shared response cache (metadata_cache_enabled): a hit is not an upstream call, so usage
+    // logging and 429 handling only run on the real-fetch path.
+    let vol_json: serde_json::Value = match crate::metadata_cache::get(db, "comicvine", &vol_full_url).await {
+        Some(hit) => hit,
+        None => {
+            let vol_resp = client.execute(vol_req).await?;
+            crate::api_usage::log(&db.pool, "comicvine", &vol_url).await;
+            if vol_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                mark_flag(db, "cv_rate_limit_time").await;
+                anyhow::bail!("ComicVine rate limited (429) on volume fetch");
+            }
+            let j: serde_json::Value = vol_resp.json().await?;
+            crate::metadata_cache::put(db, "comicvine", &vol_full_url, &j).await;
+            j
+        }
+    };
     let vol_data = &vol_json["results"];
     if vol_data.is_null() {
         anyhow::bail!("Volume data not found on ComicVine for {}", metadata_id);
@@ -330,7 +339,7 @@ async fn fetch_comicvine(
 
         let filter_val = format!("volume:{}", metadata_id);
         let offset_str = offset.to_string();
-        let issue_resp = client
+        let issue_req = client
             .get("https://comicvine.gamespot.com/api/issues/")
             .query(&[
                 ("api_key", api_key),
@@ -345,16 +354,23 @@ async fn fetch_comicvine(
             ])
             .header("User-Agent", "Omnibus/1.0")
             .timeout(Duration::from_secs(15))
-            .send()
-            .await?;
+            .build()?;
+        let issue_full_url = issue_req.url().to_string();
 
-        crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
-        if issue_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            mark_flag(db, "cv_rate_limit_time").await;
-            anyhow::bail!("ComicVine rate limited (429) on issues fetch");
-        }
-
-        let issue_json: serde_json::Value = issue_resp.json().await?;
+        let issue_json: serde_json::Value = match crate::metadata_cache::get(db, "comicvine", &issue_full_url).await {
+            Some(hit) => hit,
+            None => {
+                let issue_resp = client.execute(issue_req).await?;
+                crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
+                if issue_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    mark_flag(db, "cv_rate_limit_time").await;
+                    anyhow::bail!("ComicVine rate limited (429) on issues fetch");
+                }
+                let j: serde_json::Value = issue_resp.json().await?;
+                crate::metadata_cache::put(db, "comicvine", &issue_full_url, &j).await;
+                j
+            }
+        };
         if offset == 0 {
             total_results = issue_json["number_of_total_results"].as_i64().unwrap_or(0) as i32;
         }
@@ -619,6 +635,14 @@ fn metron_header_i64(resp: &reqwest::Response, name: &str, default: i64) -> i64 
 /// `if_modified_since`: RFC 7231 date for conditional detail requests (metron.cloud best-practices) --
 /// the server answers 304 with no body when the resource is unchanged; callers must branch on status.
 async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &str, timeout_secs: u64, max_retries: u32, if_modified_since: Option<&str>) -> anyhow::Result<(u16, serde_json::Value)> {
+    // Shared response cache (metadata_cache_enabled): conditional requests bypass it — their whole
+    // point is asking Metron "did this change". A hit skips the per-attempt api_usage logging below
+    // entirely (it isn't an upstream call).
+    if if_modified_since.is_none() {
+        if let Some(hit) = crate::metadata_cache::get(db, "metron", url).await {
+            return Ok((200, hit));
+        }
+    }
     log::debug!("[Metron Debug] Executing Fetch: {}{}", url, if if_modified_since.is_some() { " (conditional)" } else { "" });
     for attempt in 0..max_retries {
         let mut req = client
@@ -684,7 +708,12 @@ async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &s
                 // let a truncated response overwrite good series data with "Unknown" fields. Retry it
                 // like a network error; bail after max retries.
                 match resp.json::<serde_json::Value>().await {
-                    Ok(data) => return Ok((status, data)),
+                    Ok(data) => {
+                        if status == 200 && if_modified_since.is_none() {
+                            crate::metadata_cache::put(db, "metron", url, &data).await;
+                        }
+                        return Ok((status, data));
+                    }
                     Err(e) => {
                         log::warn!("[Metron] Response body for {} did not parse as JSON (attempt {}/{}): {}", url, attempt + 1, max_retries, e);
                         if attempt + 1 == max_retries { anyhow::bail!("Metron returned an unparseable body for {}", url); }

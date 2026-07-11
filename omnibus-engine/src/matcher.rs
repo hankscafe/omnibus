@@ -231,7 +231,7 @@ async fn apply_match(db: &Db, series_id: &str, series_name: &str, source: &str, 
 /// Best ComicVine volume candidate for a series name: one /search/ call, results ranked by
 /// name_similarity. Returns (volume_id, volume_name, start_year).
 async fn cv_search_best(db: &Db, client: &reqwest::Client, api_key: &str, name: &str) -> anyhow::Result<Option<(i32, String, Option<i32>)>> {
-    let resp = client
+    let req = client
         .get("https://comicvine.gamespot.com/api/search/")
         .query(&[
             ("api_key", api_key),
@@ -243,15 +243,24 @@ async fn cv_search_best(db: &Db, client: &reqwest::Client, api_key: &str, name: 
         ])
         .header("User-Agent", "Omnibus/1.0")
         .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await?;
-    crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/search/").await;
+        .build()?;
+    let full_url = req.url().to_string();
 
-    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        crate::metadata::mark_flag(db, "cv_rate_limit_time").await;
-        anyhow::bail!("ComicVine rate limited (429) on matcher search");
-    }
-    let json: serde_json::Value = resp.json().await?;
+    // Shared response cache: a hit costs zero budget, so a cached sweep re-run is free.
+    let json: serde_json::Value = match crate::metadata_cache::get(db, "comicvine", &full_url).await {
+        Some(hit) => hit,
+        None => {
+            let resp = client.execute(req).await?;
+            crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/search/").await;
+            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                crate::metadata::mark_flag(db, "cv_rate_limit_time").await;
+                anyhow::bail!("ComicVine rate limited (429) on matcher search");
+            }
+            let j: serde_json::Value = resp.json().await?;
+            crate::metadata_cache::put(db, "comicvine", &full_url, &j).await;
+            j
+        }
+    };
     let results = json["results"].as_array().cloned().unwrap_or_default();
 
     let mut best: Option<(i32, String, Option<i32>, f64)> = None;

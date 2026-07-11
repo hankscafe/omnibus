@@ -63,6 +63,12 @@ vi.mock('@/lib/db', () => ({
 }));
 
 vi.mock('axios');
+// The CV path fetches through the pooled apiClient (via cachedCvGet) — alias it to the same
+// automocked axios.get so per-test mocks and call assertions serve both clients.
+vi.mock('@/lib/api-client', async () => {
+    const axios = (await import('axios')).default;
+    return { apiClient: { get: axios.get } };
+});
 
 vi.mock('fs', () => ({
     default: {

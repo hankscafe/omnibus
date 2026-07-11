@@ -459,7 +459,8 @@ export const Importer = {
     if (!series && cvApiKey && req.volumeId !== "0" && req.metadataSource !== 'METRON') {
         try {
             Logger.log(`[Importer] Fetching missing metadata for Volume ID: ${req.volumeId}`, 'info');
-            const cvRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${req.volumeId}/`, {
+            const { cachedCvGet } = await import('./metadata/metadata-cache');
+            const cvRes = await cachedCvGet(`https://comicvine.gamespot.com/api/volume/4050-${req.volumeId}/`, {
                 params: { api_key: cvApiKey, format: 'json', field_list: 'id,publisher,name,start_year' },
                 headers: { 'User-Agent': 'Omnibus/1.0' }
             });

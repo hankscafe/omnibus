@@ -2,7 +2,8 @@
 import { IMetadataProvider, MetadataSeries, MetadataIssue } from '../provider';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
-import { logApiUsage } from '@/lib/utils/system-flags'; 
+import { logApiUsage } from '@/lib/utils/system-flags';
+import { getCachedResponse, putCachedResponse } from '@/lib/metadata/metadata-cache';
 
 const extractName = (obj: any): string => {
     if (!obj) return '';
@@ -48,9 +49,18 @@ export class MetronProvider implements IMetadataProvider {
 
     private async fetchWithBackoff(url: string, config: any, maxRetries = 3): Promise<any> {
         const headers: Record<string, string> = { ...config.headers };
-        
+
         if (config.auth) {
             headers['Authorization'] = `Basic ${Buffer.from(`${config.auth.username}:${config.auth.password}`).toString('base64')}`;
+        }
+
+        // Shared response cache (metadata_cache_enabled): conditional (If-Modified-Since) requests
+        // bypass it — their whole point is asking Metron "did this change", which the cache can't
+        // answer. Callers check `cached` before logging API usage (a hit is not an upstream call).
+        const conditional = !!headers['If-Modified-Since'];
+        if (!conditional) {
+            const hit = await getCachedResponse('metron', url);
+            if (hit !== null) return { status: 200, data: hit, cached: true };
         }
 
         Logger.log(`[Metron Debug] Executing Fetch: ${url}`, 'debug');
@@ -93,14 +103,17 @@ export class MetronProvider implements IMetadataProvider {
 
                 let data = {};
                 if (response.status !== 204 && response.status !== 304) {
-                    try { 
-                        data = await response.json(); 
+                    try {
+                        data = await response.json();
                     } catch(e) {
                         Logger.log(`[Metron Debug] Failed to parse JSON response from ${url}`, 'error');
                     }
                 }
 
-                return { status: response.status, data };
+                if (!conditional && response.status === 200 && data && Object.keys(data).length > 0) {
+                    await putCachedResponse('metron', url, data);
+                }
+                return { status: response.status, data, cached: false };
 
             } catch (error: any) {
                 Logger.log(`[Metron Debug] Fetch Attempt ${attempt + 1} Failed: ${error.message}`, 'debug');
@@ -120,7 +133,7 @@ export class MetronProvider implements IMetadataProvider {
         const endIndex = startIndex + 10;
 
         const res = await this.fetchWithBackoff(`${this.baseUrl}/series/?name=${encodeURIComponent(query)}&page=${metronPage}`, { headers: this.requestHeaders, auth, timeout: 10000 });
-        await logApiUsage('metron', '/series');
+        if (!res.cached) await logApiUsage('metron', '/series');
         
         const rawList = res.data?.results || [];
         Logger.log(`[Metron Debug] Search returning ${rawList.length} total items. Slicing indexes ${startIndex} to ${endIndex}.`, 'debug');
@@ -220,7 +233,7 @@ export class MetronProvider implements IMetadataProvider {
             series = res.data.results[0];
         }
 
-        await logApiUsage('metron', `/series/${series.id}`);
+        if (!res.cached) await logApiUsage('metron', `/series/${series.id}`);
         Logger.log(`[Metron Debug] Raw Series Details Payload: ${JSON.stringify(series).substring(0, 150)}...`, 'debug');
 
         let coverUrl = null;
@@ -252,7 +265,7 @@ export class MetronProvider implements IMetadataProvider {
 
         while (nextUrl) {
             const res = await this.fetchWithBackoff(nextUrl, { headers: this.requestHeaders, auth, timeout: 15000 });
-            callsMade++;
+            if (!res.cached) callsMade++;
             allIssues = allIssues.concat(res.data?.results || []);
             nextUrl = res.data?.next || null;
         }
@@ -288,7 +301,7 @@ export class MetronProvider implements IMetadataProvider {
         const auth = await this.getAuth();
         const res = await this.fetchWithBackoff(`${this.baseUrl}/issue/${id}/`, { headers: this.requestHeaders, auth, timeout: 10000 });
 
-        await logApiUsage('metron', `/issue/${id}`);
+        if (!res.cached) await logApiUsage('metron', `/issue/${id}`);
         const issue = res.data;
         Logger.log(`[Metron Debug] Raw Issue Details Payload: ${JSON.stringify(issue).substring(0, 150)}...`, 'debug');
         

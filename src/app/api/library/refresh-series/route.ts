@@ -6,6 +6,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 export async function POST(request: Request) {
   try {
@@ -40,11 +41,13 @@ export async function POST(request: Request) {
 
         if (!cvApiKey) return NextResponse.json({ error: "Missing ComicVine API Key" }, { status: 400 });
 
-        const cvVolRes = await axios.get(`https://comicvine.gamespot.com/api/volume/4050-${targetId}/`, {
+        // bypassCache: an explicit admin "Refresh Metadata" must hit the provider live; the fresh
+        // response still lands in the cache for everything else.
+        const cvVolRes = await cachedCvGet(`https://comicvine.gamespot.com/api/volume/4050-${targetId}/`, {
             params: { api_key: cvApiKey, format: 'json', field_list: 'publisher,name,start_year,description,image' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 10000
-        });
+        }, true);
 
         const volData = cvVolRes.data?.results;
         if (!volData) return NextResponse.json({ error: "Could not fetch data from ComicVine" }, { status: 404 });

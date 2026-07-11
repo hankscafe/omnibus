@@ -8,7 +8,8 @@ import { parseComicVineCredits } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
-import { markSystemFlag, logApiUsage, countApiUsage } from './utils/system-flags';
+import { markSystemFlag, countApiUsage } from './utils/system-flags';
+import { cachedCvGet } from './metadata/metadata-cache';
 import { isSameIssue } from '@/lib/utils/issue-parser';
 
 // Providers rarely report when a series ends, so Omnibus guesses: no new issue
@@ -275,12 +276,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     
     let volRes;
     try {
-        volRes = await axios.get<{ error?: string; results: any }>(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
+        // Cache-aware (metadata_cache_enabled): usage logging happens inside cachedCvGet for real
+        // upstream calls only.
+        volRes = await cachedCvGet(`https://comicvine.gamespot.com/api/volume/4050-${metadataId}/`, {
             params: { api_key: setting.value, format: 'json', field_list: 'image,description,deck,publisher,start_year,name,person_credits,character_credits,concepts,end_year,count_of_issues' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 15000
         });
-        await logApiUsage('comicvine', '/volume');
     } catch (e: any) {
         if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
         throw e;
@@ -372,7 +374,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
         let issueRes;
         try {
-            issueRes = await axios.get<{ number_of_total_results: number; results: any[] }>(`https://comicvine.gamespot.com/api/issues/`, {
+            // Cache-aware: each page is its own cache entry (offset is in the key); real calls are
+            // usage-logged inside cachedCvGet, so the old aggregate issuesCallsMade logging is gone.
+            issueRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issues/`, {
                 params: {
                     api_key: setting.value, format: 'json', filter: `volume:${metadataId}`, sort: 'issue_number:asc', limit: 100, offset: offset,
                     field_list: 'id,name,issue_number,store_date,cover_date,image,deck,description'
@@ -382,7 +386,6 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             });
             issuesCallsMade++;
         } catch (e: any) {
-            if (issuesCallsMade > 0) await logApiUsage('comicvine', '/issues', issuesCallsMade); 
             if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
             throw e;
         }
@@ -472,10 +475,6 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             });
             Logger.log(`[Metadata] Series "${series.name}" marked as Ended after ${endedWindow.months}+ months without a new issue.`, 'info');
         }
-    }
-
-    if (issuesCallsMade > 0) {
-        await logApiUsage('comicvine', '/issues', issuesCallsMade);
     }
 
     try {

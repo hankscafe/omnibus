@@ -14,6 +14,7 @@ mod backup;
 mod diagnostics;
 mod manga_detector;
 mod matcher;
+mod metadata_cache;
 mod engine_config;
 mod discover;
 mod monitor;

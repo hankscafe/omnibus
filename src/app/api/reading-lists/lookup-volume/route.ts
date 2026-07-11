@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
         if (!setting?.value) return NextResponse.json({ volumeId: 0, year: null });
 
-        const cvRes = await axios.get(`https://comicvine.gamespot.com/api/issue/4040-${issueId}/`, {
+        const cvRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4040-${issueId}/`, {
             params: { api_key: setting.value, format: 'json', field_list: 'volume,cover_date' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 5000

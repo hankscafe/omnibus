@@ -296,6 +296,21 @@ model SystemSetting {
   value String
 }
 
+// Shared ComicVine/Metron response cache (opt-in: metadata_cache_enabled). Node and the engine
+// both read/write it directly — no proxy hop. Expiry is computed AT READ TIME from createdAt +
+// the CURRENT admin TTL settings (metadata_cache_detail_days / metadata_cache_list_hours), so a
+// TTL change applies to existing entries immediately. kind: "detail" (by-id lookups) | "list"
+// (searches/paginated lists). Pruned by the CACHE_CLEANUP job (expired rows + total-size cap).
+model MetadataCache {
+  key       String   @id       // sha256 of the normalized URL (api_key stripped) prefixed by provider
+  url       String             // normalized URL, for inspection/debugging
+  kind      String             // "detail" | "list"
+  value     String             // response body JSON
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 model ReadProgress {
   id          String   @id @default(cuid())
   userId      String

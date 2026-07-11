@@ -382,14 +382,20 @@ export async function POST(request: Request) {
                                 Logger.log(`[Match Series Debug] DB Created successfully for Issue ${issueNumStr}`, 'debug');
                             }
 
-                            // --- NEW: Trigger the Auto-Converter for genuine CBRs and CB7s! ---
+                            // --- Trigger the Auto-Converter for genuine CBRs and CB7s (unless disabled —
+                            //     native RAR reading serves unconverted .cbr/.rar via the engine) ---
                             if ((finalExt === '.cbr' || finalExt === '.cb7' || finalExt === '.rar') && finalIssueId) {
-                                Logger.log(`[Match Series Debug] Convertible archive detected. Queueing conversion for Issue ${finalIssueId}...`, 'debug');
-                                
-                                await omnibusQueue.add('CBR_CONVERSION',
-                                    { type: 'CBR_CONVERSION', issueId: finalIssueId },
-                                    { jobId: `CBR_CONVERSION_${finalIssueId}_${Date.now()}` }
-                                );
+                                const conversionEnabled = (await prisma.systemSetting.findUnique({ where: { key: 'cbr_conversion_enabled' } }))?.value !== 'false';
+                                if (conversionEnabled) {
+                                    Logger.log(`[Match Series Debug] Convertible archive detected. Queueing conversion for Issue ${finalIssueId}...`, 'debug');
+
+                                    await omnibusQueue.add('CBR_CONVERSION',
+                                        { type: 'CBR_CONVERSION', issueId: finalIssueId },
+                                        { jobId: `CBR_CONVERSION_${finalIssueId}_${Date.now()}` }
+                                    );
+                                } else {
+                                    Logger.log(`[Match Series Debug] CBR conversion disabled — keeping ${finalExt} for native reading.`, 'debug');
+                                }
                             }
 
                             // --- Per-issue custom cover from the Smart Matcher — written keyed by issue id

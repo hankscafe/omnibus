@@ -211,7 +211,7 @@ export default function SettingsPage() {
     unmatched_sweep_schedule: "1",
     metron_detail_credits: "false",
     prowlarr_accept_yearless: "false",
-    convert_to_webp: "false", webp_quality: "80",
+    convert_to_webp: "false", webp_quality: "80", cbr_conversion_enabled: "true",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
     oidc_force_sso: "false", oidc_auto_approve: "false", oidc_admin_group: "", oidc_user_group: "",
     folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "",
@@ -2033,11 +2033,28 @@ export default function SettingsPage() {
                                 </p>
                             </div>
     
+                            <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                                <Switch
+                                    id="cbr-conversion-toggle"
+                                    checked={config.cbr_conversion_enabled !== "false"}
+                                    onCheckedChange={(c) => setConfig({...config, cbr_conversion_enabled: c ? "true" : "false"})}
+                                    className="scale-110 sm:scale-100"
+                                />
+                                <div className="grid gap-1 ml-2">
+                                    <Label htmlFor="cbr-conversion-toggle" className="cursor-pointer font-bold text-base text-foreground">
+                                        Auto-Convert CBR/RAR to CBZ
+                                    </Label>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Converts .cbr/.rar/.cb7 archives to .cbz on import, on match, and on the scheduled sweep (recommended — CBZ reads fastest and works everywhere). When off, CBR/RAR files stay untouched and are read natively through the engine; page loads can be slightly slower, and .cb7 still needs conversion to be readable. The manual CBR Auto-Converter job keeps working either way.
+                                    </p>
+                                </div>
+                            </div>
+
                             <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border w-fit">
-                                <Switch 
+                                <Switch
                                     id="webp-toggle"
-                                    checked={config.convert_to_webp === "true"} 
-                                    onCheckedChange={(c) => setConfig({...config, convert_to_webp: c ? "true" : "false"})} 
+                                    checked={config.convert_to_webp === "true"}
+                                    onCheckedChange={(c) => setConfig({...config, convert_to_webp: c ? "true" : "false"})}
                                 />
                                 <Label htmlFor="webp-toggle" className="cursor-pointer font-bold text-base text-foreground">Convert images to WEBP</Label>
                             </div>

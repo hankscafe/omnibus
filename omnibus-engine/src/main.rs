@@ -401,6 +401,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/importer/nested", post(handle_nested_archives))
         .route("/api/library/rename", post(handle_bulk_rename))
         .route("/api/reader/page", post(handle_reader_page))
+        .route("/api/reader/entries", post(handle_reader_entries))
         .route("/api/watched-sync", post(handle_watched_sync))
         .route("/api/matcher/sweep", post(handle_matcher_sweep))
         .route("/api/backup", post(handle_backup))
@@ -617,6 +618,30 @@ async fn handle_extract_cover(
         }
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct ReaderEntriesRequest {
+    path: String,
+}
+
+/// Page LIST for the web reader: image entry names in reader order for any natively readable
+/// archive (zip directly, RAR via unrar). Node's reader/pages route has no RAR reader, so it asks
+/// here for non-zip archives instead of telling the user to wait for conversion.
+/// Same path trust model as the page endpoint below.
+async fn handle_reader_entries(
+    Json(req): Json<ReaderEntriesRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !is_absolute_non_traversing(&req.path) {
+        log::warn!("[Reader Entries] Rejected non-absolute or traversing path: {}", req.path);
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let path = req.path.clone();
+    let pages = tokio::task::spawn_blocking(move || converter::list_image_entries(std::path::Path::new(&path)))
+        .await
+        .map_err(|e| { log::error!("[Reader Entries] join error: {:?}", e); StatusCode::INTERNAL_SERVER_ERROR })?
+        .map_err(|e| { log::warn!("[Reader Entries] listing failed for {}: {:?}", req.path, e); StatusCode::INTERNAL_SERVER_ERROR })?;
+    Ok(Json(serde_json::json!({ "pages": pages })))
 }
 
 #[derive(serde::Deserialize)]

@@ -15,13 +15,43 @@ import AdmZip from 'adm-zip';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
-// Zip-family archives the reader can open directly (matches the reader's isZip check). RAR/7z can't
-// be counted here — the auto-converter turns them into .cbz and refreshes the count afterwards.
+// Zip-family archives the reader can open directly (matches the reader's isZip check). RAR can't be
+// counted here — the engine lists it via unrar (countArchivePagesViaEngine below); 7z stays 0 until
+// the auto-converter turns it into .cbz and refreshes the count.
 const ZIP_PAGE_EXT_REGEX = /\.(cbz|zip|epub)$/i;
+// RAR-family archives Node can't open; the engine reads them natively (unrar).
+const RAR_PAGE_EXT_REGEX = /\.(cbr|rar)$/i;
 
 export function isPageCountable(filePath: string | null | undefined): boolean {
     return !!filePath && ZIP_PAGE_EXT_REGEX.test(filePath);
+}
+
+export function isEngineCountable(filePath: string | null | undefined): boolean {
+    return !!filePath && RAR_PAGE_EXT_REGEX.test(filePath);
+}
+
+/**
+ * Page count for RAR-family archives via the engine's unrar-backed listing (native CBR reading —
+ * the same entry filter + natural sort as the zip counter, so OPDS-PSE indexes line up). Returns 0
+ * when the engine is unreachable or the archive is unreadable; never throws (same contract as
+ * countArchivePages).
+ */
+export async function countArchivePagesViaEngine(filePath: string | null | undefined): Promise<number> {
+    if (!filePath || !fs.existsSync(filePath)) return 0;
+    try {
+        const res = await fetch(ENGINE_URL + '/api/reader/entries', {
+            method: 'POST',
+            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ path: filePath }),
+        });
+        if (!res.ok) return 0;
+        const data = await res.json();
+        return Array.isArray(data.pages) ? data.pages.length : 0;
+    } catch {
+        return 0;
+    }
 }
 
 // MUST mirror the entry filter used by the reader (reader/pages) and the OPDS page streamer

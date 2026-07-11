@@ -108,11 +108,13 @@ fn web_re_metron_issue() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)metron\.cloud/issue/(\d+)").unwrap())
 }
 
-/// Off-thread page count for an on-disk archive; 0 when unreadable (a real RAR stays 0 until CBZ
-/// conversion counts it, matching the Node importer's zip-only counting).
+/// Off-thread page count for an on-disk archive; 0 when unreadable. Counts zip-family natively and
+/// RAR-family via the unrar listing (native CBR reading) — the pageCount=0 backfill sweep below
+/// therefore heals RAR libraries scanned by older zip-only builds without a rescan. Only a real 7z
+/// stays 0 until CBZ conversion.
 async fn count_pages_blocking(file: &str) -> i32 {
     let f = file.to_string();
-    tokio::task::spawn_blocking(move || crate::converter::count_zip_pages(Path::new(&f)))
+    tokio::task::spawn_blocking(move || crate::converter::count_archive_pages(Path::new(&f)))
         .await
         .ok()
         .flatten()

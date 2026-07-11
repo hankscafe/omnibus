@@ -5,7 +5,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { escapeXml } from '@/lib/utils/xml';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
-import { countArchivePages, isPageCountable } from '@/lib/utils/archive-pages';
+import { countArchivePages, isPageCountable, countArchivePagesViaEngine, isEngineCountable } from '@/lib/utils/archive-pages';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,14 +57,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         // --- MEMORY LEAK FIXED: Pulling directly from DB instead of loading files into RAM ---
         let pageCount = (issue as any).pageCount || 0;
         // Self-heal issues indexed before page counts were persisted: without a real pse:count,
-        // OPDS clients (Panels) show "0 pages" and refuse to stream. countArchivePages reads only
-        // the zip central directory, so healing a whole series inline stays fast; the result is
-        // written back so this runs once per issue.
+        // OPDS clients (Panels) show "0 pages" and refuse to stream. Zips are counted locally
+        // (central directory only — fast); RAR-family goes through the engine's unrar listing
+        // (native CBR reading), so unconverted .cbr issues stream too. The result is written back
+        // so this runs once per issue.
         if (!pageCount && isPageCountable(issue.filePath)) {
             pageCount = await countArchivePages(issue.filePath);
-            if (pageCount > 0) {
-                await prisma.issue.update({ where: { id: issue.id }, data: { pageCount } }).catch(() => {});
-            }
+        } else if (!pageCount && isEngineCountable(issue.filePath)) {
+            pageCount = await countArchivePagesViaEngine(issue.filePath);
+        }
+        if (!((issue as any).pageCount || 0) && pageCount > 0) {
+            await prisma.issue.update({ where: { id: issue.id }, data: { pageCount } }).catch(() => {});
         }
 
         // The Official OPDS-PSE Streaming Link with the URI Template

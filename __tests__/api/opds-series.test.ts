@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     findUniqueSeries: vi.fn(),
     updateIssue: vi.fn(),
     countArchivePages: vi.fn(),
+    countArchivePagesViaEngine: vi.fn(),
 }));
 
 vi.mock('@/lib/api-auth', () => ({ validateApiKey: mocks.validateApiKey }));
@@ -28,7 +29,9 @@ vi.mock('@/lib/library-access', () => ({
 }));
 vi.mock('@/lib/utils/archive-pages', () => ({
     countArchivePages: mocks.countArchivePages,
+    countArchivePagesViaEngine: mocks.countArchivePagesViaEngine,
     isPageCountable: (p: string | null | undefined) => !!p && /\.(cbz|zip|epub)$/i.test(p),
+    isEngineCountable: (p: string | null | undefined) => !!p && /\.(cbr|rar)$/i.test(p),
 }));
 
 const createReq = () => new Request('http://localhost/api/opds/series/ser_1');
@@ -80,16 +83,31 @@ describe('API Route: OPDS Series Feed (/api/opds/series/[id])', () => {
         expect(mocks.updateIssue).toHaveBeenCalledWith({ where: { id: 'iss_1' }, data: { pageCount: 30 } });
     });
 
-    it('leaves an un-countable archive at 0 without a DB write (converter will fix it later)', async () => {
+    it('self-heals a RAR pageCount through the engine and persists it (native CBR reading)', async () => {
         mocks.findUniqueSeries.mockResolvedValue(baseSeries([
             { id: 'iss_2', number: '2', name: 'Issue 2', filePath: '/comics/batman 02.cbr', pageCount: 0, coverUrl: null, description: null },
         ]));
+        mocks.countArchivePagesViaEngine.mockResolvedValue(24);
+
+        const res = await GET(createReq(), { params: createParams() }) as Response;
+        const xml = await res.text();
+
+        expect(xml).toContain('pse:count="24"');
+        expect(mocks.countArchivePagesViaEngine).toHaveBeenCalledWith('/comics/batman 02.cbr');
+        expect(mocks.countArchivePages).not.toHaveBeenCalled(); // RAR never goes to the zip counter
+        expect(mocks.updateIssue).toHaveBeenCalledWith({ where: { id: 'iss_2' }, data: { pageCount: 24 } });
+    });
+
+    it('leaves a RAR at 0 without a DB write when the engine cannot count it', async () => {
+        mocks.findUniqueSeries.mockResolvedValue(baseSeries([
+            { id: 'iss_2', number: '2', name: 'Issue 2', filePath: '/comics/batman 02.cbr', pageCount: 0, coverUrl: null, description: null },
+        ]));
+        mocks.countArchivePagesViaEngine.mockResolvedValue(0); // engine down / unreadable archive
 
         const res = await GET(createReq(), { params: createParams() }) as Response;
         const xml = await res.text();
 
         expect(xml).toContain('pse:count="0"');
-        expect(mocks.countArchivePages).not.toHaveBeenCalled(); // .cbr is not countable
         expect(mocks.updateIssue).not.toHaveBeenCalled();
     });
 });

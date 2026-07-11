@@ -66,6 +66,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ issueId:
         Logger.log(`[OPDS Page] Engine offload unavailable, using local extraction: ${getErrorMessage(e)}`, 'debug');
     }
 
+    // The engine handles RAR natively (that's how a RAR issue gets a non-zero pse:count at all);
+    // AdmZip below can't open one, so don't let a RAR fall through to a misleading extract error.
+    if (/\.(cbr|rar)$/i.test(issue.filePath)) {
+        return new Response('RAR page extraction requires the engine.', { status: 502 });
+    }
+
     try {
         Logger.log(`[OPDS Debug] Incoming stream request for Issue [${issueId}], Page Index [${pageIndex}]`, 'debug');
         const zip = new AdmZip(issue.filePath);

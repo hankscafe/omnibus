@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     fsStatSync: vi.fn(),
     fsReaddirSync: vi.fn(),
     countArchivePages: vi.fn(),
+    countArchivePagesViaEngine: vi.fn(),
     zipGetEntries: vi.fn(),
     fetch: vi.fn(),
     log: vi.fn(),
@@ -32,7 +33,9 @@ vi.mock('@/lib/utils/paths', () => ({
 
 vi.mock('@/lib/utils/archive-pages', () => ({
     countArchivePages: mocks.countArchivePages,
+    countArchivePagesViaEngine: mocks.countArchivePagesViaEngine,
     isPageCountable: (p: string) => /\.(cbz|zip|epub)$/i.test(p || ''),
+    isEngineCountable: (p: string) => /\.(cbr|rar)$/i.test(p || ''),
 }));
 
 vi.mock('adm-zip', () => ({
@@ -124,5 +127,26 @@ describe('API Route: Smart Matcher archive preview', () => {
     it('returns 404 for an out-of-bounds page', async () => {
         const res = await request(`path=${encodeURIComponent('/unmatched/Batman 001.cbz')}&page=9`);
         expect(res.status).toBe(404);
+    });
+
+    // ==== Native CBR reading: RAR archives count through the engine and never hit AdmZip. ====
+
+    it('info mode counts a RAR through the engine (native CBR reading)', async () => {
+        mocks.countArchivePagesViaEngine.mockResolvedValue(19);
+
+        const res = await request(`path=${encodeURIComponent('/unmatched/Batman 001.cbr')}&info=1`);
+        const data = await res.json();
+
+        expect(data.pageCount).toBe(19);
+        expect(mocks.countArchivePagesViaEngine).toHaveBeenCalled();
+        expect(mocks.countArchivePages).not.toHaveBeenCalled();
+    });
+
+    it('returns 502 for a RAR page when the engine is down instead of a misleading AdmZip error', async () => {
+        // beforeEach default: engine fetch rejects.
+        const res = await request(`path=${encodeURIComponent('/unmatched/Batman 001.cbr')}&page=0`);
+
+        expect(res.status).toBe(502);
+        expect(mocks.zipGetEntries).not.toHaveBeenCalled();
     });
 });

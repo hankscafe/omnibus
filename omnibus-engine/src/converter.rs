@@ -740,6 +740,16 @@ fn resolve_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, entry_nam
 /// Node route keeps a local sharp fallback (and still owns the auto-crop path, which has no clean
 /// image-crate equivalent).
 pub fn extract_page_webp(archive_path: &Path, entry_name: &str, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
+    // Native RAR reading (no conversion needed): resolve the entry against the unrar listing and
+    // stream just that page's bytes. The signature (not the extension) decides, same as the zip path.
+    if is_rar_signature(&read_file_signature(archive_path)) {
+        let pages = rar_image_entries(archive_path)?;
+        let name = match resolve_rar_entry(&pages, entry_name) {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+        return Ok(Some(webp_from_image_bytes(&rar_entry_bytes(archive_path, &name)?, max_width, quality)?));
+    }
     let file = File::open(archive_path)?;
     extract_page_webp_from_reader(file, entry_name, max_width, quality)
 }
@@ -789,6 +799,16 @@ pub fn count_zip_pages(path: &Path) -> Option<i32> {
 /// [`extract_page_webp`]. This is the OPDS-PSE offload: PSE clients address pages by index, not entry
 /// name. Returns None when the index is out of bounds (the Node route maps that to 404).
 pub fn extract_page_index_webp(archive_path: &Path, index: usize, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
+    // Native RAR reading: same natural-sort index addressing as the zip path, so pse:count and
+    // page indexes line up whichever format the archive happens to be.
+    if is_rar_signature(&read_file_signature(archive_path)) {
+        let pages = rar_image_entries(archive_path)?;
+        let name = match pages.get(index) {
+            Some(n) => n.clone(),
+            None => return Ok(None),
+        };
+        return Ok(Some(webp_from_image_bytes(&rar_entry_bytes(archive_path, &name)?, max_width, quality)?));
+    }
     let file = File::open(archive_path)?;
     extract_page_index_webp_from_reader(file, index, max_width, quality)
 }
@@ -808,8 +828,13 @@ fn extract_page_index_webp_from_reader<R: Read + Seek>(reader: R, index: usize, 
 fn extract_named_entry_webp<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, name: &str, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
     let mut buf = Vec::new();
     archive.by_name(name)?.read_to_end(&mut buf)?;
+    Ok(Some(webp_from_image_bytes(&buf, max_width, quality)?))
+}
 
-    let img = image::load_from_memory(&buf)?;
+/// Display-image tail shared by every page-serving format: decode, fit to `max_width` (never
+/// enlarging), WebP-encode.
+fn webp_from_image_bytes(buf: &[u8], max_width: u32, quality: f32) -> Result<Vec<u8>> {
+    let img = image::load_from_memory(buf)?;
     let (w, h) = (img.width(), img.height());
     let out = if w > max_width && w > 0 {
         let nh = (((h as u64) * (max_width as u64)) / (w as u64)).max(1) as u32;
@@ -817,7 +842,97 @@ fn extract_named_entry_webp<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, na
     } else {
         img
     };
-    Ok(Some(encode_to_webp(&out, quality)?))
+    encode_to_webp(&out, quality)
+}
+
+// ============================================================================
+// Native RAR page reading — the reader/OPDS paths were zip-only, so an unconverted
+// .cbr was unreadable (and advertised pse:count=0 to OPDS clients). These helpers
+// reuse the proven cover-route primitives: `unrar lb` to list, `unrar p` to stream
+// one entry to stdout — no temp dir, no full extraction. CBZ conversion remains the
+// recommended default (zip has real random access; solid RARs decompress serially),
+// but a library that skips or hasn't reached conversion is now readable.
+// ============================================================================
+
+/// The RAR's image pages with the SAME filter + order as `sorted_image_entries` (skip __MACOSX,
+/// image extensions, natural sort) so OPDS-PSE index addressing lines up across formats. Stdout is
+/// salvaged even on a non-zero exit (vintage RAR 2.0 quirk — success is judged by content, not exit
+/// code). Err when unrar is unavailable or the listing is empty ("not natively readable").
+fn rar_image_entries(archive_path: &Path) -> Result<Vec<String>> {
+    let listing = Command::new("unrar")
+        .args(["lb", "-p-"])
+        .arg(archive_path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("unrar listing unavailable for {:?}", archive_path.file_name().unwrap_or_default()))?;
+
+    let mut pages: Vec<String> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.to_lowercase().contains("__macosx") && is_image_name(l))
+        .map(str::to_string)
+        .collect();
+    pages.sort_by(|a, b| natural_cmp(a, b));
+    Ok(pages)
+}
+
+/// Streams ONE entry's bytes out of a RAR via `unrar p` (print to stdout — the pattern proven by
+/// the scanner's ComicInfo reader). `-inul` silences everything but the file bytes; `--` ends
+/// switch parsing so an entry starting with '-' isn't read as a flag.
+fn rar_entry_bytes(archive_path: &Path, entry: &str) -> Result<Vec<u8>> {
+    let out = Command::new("unrar")
+        .args(["p", "-inul", "-p-", "--"])
+        .arg(archive_path)
+        .arg(entry)
+        .output()?;
+    if out.stdout.is_empty() {
+        anyhow::bail!("unrar produced no bytes for entry {:?} of {:?}", entry, archive_path.file_name().unwrap_or_default());
+    }
+    Ok(out.stdout)
+}
+
+/// Reader page-name resolution against the RAR listing, mirroring `resolve_zip_entry`:
+/// exact match → slash-normalized → basename.
+fn resolve_rar_entry(pages: &[String], entry_name: &str) -> Option<String> {
+    if pages.iter().any(|p| p == entry_name) {
+        return Some(entry_name.to_string());
+    }
+    let fwd = entry_name.replace('\\', "/");
+    if let Some(p) = pages.iter().find(|p| p.replace('\\', "/") == fwd) {
+        return Some(p.clone());
+    }
+    let target_base = entry_name.rsplit(['/', '\\']).next().unwrap_or(entry_name);
+    pages.iter().find(|p| p.rsplit(['/', '\\']).next().unwrap_or(p) == target_base).cloned()
+}
+
+/// Page count of ANY natively readable archive: zip-family directly, RAR-family via the unrar
+/// listing. None when the file is neither (e.g. a real 7z — its count becomes known after CBZ
+/// conversion). Same OPDS-PSE significance as [`count_zip_pages`].
+pub fn count_archive_pages(path: &Path) -> Option<i32> {
+    if let Some(n) = count_zip_pages(path) {
+        return Some(n);
+    }
+    if is_rar_signature(&read_file_signature(path)) {
+        return rar_image_entries(path).ok().map(|p| p.len() as i32);
+    }
+    None
+}
+
+/// Image entry names of any natively readable archive in reader/OPDS order — the web reader's
+/// page list (Node has no RAR reader, so it asks the engine for non-zip archives).
+pub fn list_image_entries(path: &Path) -> Result<Vec<String>> {
+    let sig = read_file_signature(path);
+    if is_zip_signature(&sig) {
+        let file = File::open(path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        return Ok(sorted_image_entries(&mut archive));
+    }
+    if is_rar_signature(&sig) {
+        return rar_image_entries(path);
+    }
+    anyhow::bail!("unsupported archive format for page listing: {:?}", path.file_name().unwrap_or_default())
 }
 
 /// Ensures `<folder>` has a usable cover. If one already exists (custom upload, a packed cover, or a
@@ -1313,6 +1428,46 @@ mod tests {
         assert!(listed.iter().any(|n| n.ends_with("Comic B 002.cbz")), "{:?}", listed);
         assert!(listed.iter().any(|n| n.ends_with("Comic C 003.cbr")), "{:?}", listed);
         assert!(listed.iter().all(|n| !n.contains("notes.txt")), "junk must be filtered: {:?}", listed);
+    }
+
+    // ==== Native RAR page reading: the reader/OPDS paths must list, count, and extract pages from
+    // an unconverted .cbr. Fixture: tests/fixtures/reader_pages.cbr — a real RAR holding three real
+    // 1x1 PNGs named 01.png / 02.png / 10.png (10 sorting after 2 proves natural order). Skips when
+    // unrar isn't on PATH (CI installs it; the Docker image ships it).
+
+    fn reader_rar_fixture() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reader_pages.cbr")
+    }
+
+    #[test]
+    fn rar_pages_list_and_count_in_natural_order() {
+        if !unrar_available() { eprintln!("skipping: unrar not on PATH"); return; }
+
+        let pages = list_image_entries(&reader_rar_fixture()).unwrap();
+        assert_eq!(pages, vec!["01.png", "02.png", "10.png"]);
+        assert_eq!(count_archive_pages(&reader_rar_fixture()), Some(3));
+
+        // The ComicInfo fixture carries metadata alongside its single page — non-image entries
+        // must not count as pages (an inflated pse:count would break OPDS-PSE clients).
+        let with_xml = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/comicinfo_pack.cbr");
+        assert_eq!(count_archive_pages(&with_xml), Some(1));
+    }
+
+    #[test]
+    fn rar_page_extraction_by_index_and_entry() {
+        if !unrar_available() { eprintln!("skipping: unrar not on PATH"); return; }
+
+        // OPDS-PSE index addressing: natural-sort position 2 = "10.png".
+        let by_index = extract_page_index_webp(&reader_rar_fixture(), 2, 100, 80.0).unwrap();
+        let bytes = by_index.expect("page index 2 must resolve");
+        assert_eq!(&bytes[..4], b"RIFF", "reader pages are WebP-encoded");
+
+        // Web-reader entry addressing.
+        assert!(extract_page_webp(&reader_rar_fixture(), "02.png", 100, 80.0).unwrap().is_some());
+
+        // Misses map to None (the Node routes turn that into a 404, not a 500).
+        assert!(extract_page_index_webp(&reader_rar_fixture(), 99, 100, 80.0).unwrap().is_none());
+        assert!(extract_page_webp(&reader_rar_fixture(), "nope.png", 100, 80.0).unwrap().is_none());
     }
 
     #[test]

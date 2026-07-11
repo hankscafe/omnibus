@@ -758,13 +758,28 @@ export const Importer = {
       fileName = path.basename(finalPath);
 
       if (finalPath.toLowerCase().endsWith('.cbr') || finalPath.toLowerCase().endsWith('.rar') || finalPath.toLowerCase().endsWith('.cb7')) {
-          Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');
-          const { convertCbrToCbz } = await import('./converter');
-          const convertedPath = await convertCbrToCbz(finalPath);
-          if (convertedPath) {
-              finalPath = convertedPath;
-              fileName = path.basename(finalPath);
+          const conversionEnabled = (await prisma.systemSetting.findUnique({ where: { key: 'cbr_conversion_enabled' } }))?.value !== 'false';
+          if (conversionEnabled) {
+              Logger.log(`[Import] CBR detected in library, converting to CBZ...`, 'info');
+              const { convertCbrToCbz } = await import('./converter');
+              const convertedPath = await convertCbrToCbz(finalPath);
+              if (convertedPath) {
+                  finalPath = convertedPath;
+                  fileName = path.basename(finalPath);
+              }
+          } else {
+              Logger.log(`[Import] CBR conversion disabled — keeping ${fileName} as-is (read natively via the engine).`, 'info');
           }
+      }
+
+      // Late page count: the AdmZip count above only handles zip sources, so a CBR import lands
+      // here with 0 — count the final file now (converted .cbz locally, unconverted .cbr/.rar via
+      // the engine's unrar listing) so OPDS-PSE never advertises a fresh import as "0 pages".
+      if (pageCount === 0 && /\.(cbz|zip|cbr|rar)$/i.test(finalPath)) {
+          const { countArchivePages, countArchivePagesViaEngine, isEngineCountable } = await import('./utils/archive-pages');
+          pageCount = isEngineCountable(finalPath)
+              ? await countArchivePagesViaEngine(finalPath)
+              : await countArchivePages(finalPath);
       }
 
       if (series?.id) {

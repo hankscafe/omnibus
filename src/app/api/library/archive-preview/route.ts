@@ -10,8 +10,9 @@
 // Same trust model as archive-cover: admin token + locked to library roots and the unmatched dir
 // (re-checked on every request — the client echoing the resolved file back cannot escape them).
 // Pages come from the engine's index-mode extractor (resized WebP, the same endpoint the OPDS
-// streamer uses) with a local AdmZip fallback. CBR/RAR can't be page-listed (zip-only) — the UI
-// falls back to the existing single-page archive-cover for those.
+// streamer uses) with a local AdmZip fallback for zips. CBR/RAR is counted and extracted through
+// the engine's native unrar reading; only when the engine is unreachable does the UI fall back to
+// the single-page archive-cover (pageCount 0).
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
@@ -22,7 +23,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { isPathWithinRoots, UNMATCHED_DIR } from '@/lib/utils/paths';
 import { COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
-import { countArchivePages } from '@/lib/utils/archive-pages';
+import { countArchivePages, countArchivePagesViaEngine, isEngineCountable } from '@/lib/utils/archive-pages';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 export const dynamic = 'force-dynamic';
@@ -63,8 +64,12 @@ export async function GET(req: NextRequest) {
         }
 
         if (infoMode) {
-            // pageCount 0 for a RAR-family file — the client shows the archive-cover fallback then.
-            return NextResponse.json({ file: filePath, pageCount: await countArchivePages(filePath) });
+            // Zips count locally; RAR-family through the engine (native unrar reading). 0 only when
+            // the engine is unreachable/unreadable — the client shows the archive-cover fallback then.
+            const pageCount = isEngineCountable(filePath)
+                ? await countArchivePagesViaEngine(filePath)
+                : await countArchivePages(filePath);
+            return NextResponse.json({ file: filePath, pageCount });
         }
 
         if (!Number.isInteger(pageIndex) || pageIndex < 0) {
@@ -88,6 +93,11 @@ export async function GET(req: NextRequest) {
             }
         } catch (e) {
             Logger.log(`[Archive Preview] Engine offload unavailable, using local extraction: ${getErrorMessage(e)}`, 'debug');
+        }
+
+        // No local fallback exists for RAR — AdmZip below can't open it.
+        if (isEngineCountable(filePath)) {
+            return new NextResponse('RAR page extraction requires the engine.', { status: 502 });
         }
 
         // Local fallback: identical list/filter/sort to the OPDS page route, serving original bytes.

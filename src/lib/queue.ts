@@ -155,7 +155,9 @@ export async function syncSchedules() {
     await addJob('WEEKLY_DIGEST', config.weekly_digest_schedule, digestCron);
     // --------------------------------
     
-    await addJob('CBR_CONVERSION', config.cbr_conversion_schedule);
+    // cbr_conversion_enabled=false: no scheduled conversion sweep (native RAR reading serves CBRs);
+    // the manual "Run Now" trigger keeps working regardless.
+    await addJob('CBR_CONVERSION', config.cbr_conversion_enabled === 'false' ? '0' : config.cbr_conversion_schedule);
     await addJob('EMBED_METADATA', config.embed_metadata_schedule);
     await addJob('EXPORT_SERIES_JSON', config.series_json_schedule);
     await addJob('CACHE_CLEANUP', config.cache_cleanup_schedule);

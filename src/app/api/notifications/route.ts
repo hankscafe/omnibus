@@ -46,7 +46,7 @@ export async function GET() {
     // These do not use the 'notified' flag, they simply show up if there is work to be done.
     if (role === 'ADMIN') {
         // All independent — run them (and the loose-file readdir) concurrently.
-        const [pendingReqs, pendingUsers, openReports, stalledReqs, unmatchedSeriesCount, looseFilesCount] = await Promise.all([
+        const [pendingReqs, pendingUsers, openReports, stalledReqs, unmatchedSeriesCount, looseFilesCount, sweepResultSetting] = await Promise.all([
             prisma.request.findMany({
                 where: { status: 'PENDING_APPROVAL' },
                 include: { user: { select: { username: true } } },
@@ -78,6 +78,7 @@ export async function GET() {
                 } catch (e) {}
                 return 0;
             })(),
+            prisma.systemSetting.findUnique({ where: { key: 'last_unmatched_sweep_result' } }),
         ]);
 
         const totalUnmatched = unmatchedSeriesCount + looseFilesCount;
@@ -117,6 +118,25 @@ export async function GET() {
                 date: new Date()
             });
         }
+
+        // Background sweep result (discussion #177) — dynamic like the alerts above: the engine
+        // overwrites last_unmatched_sweep_result on every run, so a later run that matched nothing
+        // (or a "nothing to do" pass once the queue empties) naturally clears this. The 24h cap
+        // keeps a final result from lingering forever if the scheduler/engine goes quiet.
+        try {
+            const sweep = sweepResultSetting?.value ? JSON.parse(sweepResultSetting.value) : null;
+            const sweepMatched = (sweep?.byFile || 0) + (sweep?.bySearch || 0);
+            if (sweep?.status === 'COMPLETED' && sweepMatched > 0 && sweep.finishedAt && Date.now() - sweep.finishedAt < 24 * 60 * 60 * 1000) {
+                formatted.push({
+                    id: 'admin_sweep_alert',
+                    type: 'admin_sweep',
+                    title: 'Background Sweep Matched Series',
+                    description: `The unmatched sweep auto-matched ${sweepMatched} series (${sweep.byFile || 0} from file metadata, ${sweep.bySearch || 0} by search).`,
+                    imageUrl: null,
+                    date: new Date(sweep.finishedAt)
+                });
+            }
+        } catch (e) { /* pre-upgrade or corrupt value — no alert */ }
     }
 
     // Sort all notifications by date descending

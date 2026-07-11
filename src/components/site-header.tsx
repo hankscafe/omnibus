@@ -7,9 +7,9 @@ import { useSession, signOut } from "next-auth/react"
 import { useTheme } from "next-themes"
 import { Button } from "@/components/ui/button"
 import { 
-  ShieldAlert, LogOut, User as UserIcon, Sun, Moon, Key, Loader2, 
+  ShieldAlert, LogOut, User as UserIcon, Sun, Moon, Key, Loader2,
   Bell, Image as ImageIcon, Trophy, Wrench, Menu, UserPlus, AlertTriangle,
-  FolderSearch, Search
+  FolderSearch, Search, Sparkles
 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -107,6 +107,7 @@ function NotificationBell() {
               else if (n.type === 'admin_user') targetLink = "/admin/users";
               else if (n.type === 'admin_report') targetLink = "/admin/reports";
               else if (n.type === 'admin_unmatched') targetLink = "/admin/smart-match";
+              else if (n.type === 'admin_sweep') targetLink = "/admin/smart-match";
               else if (n.type === 'admin_stalled') targetLink = "/admin";
 
               return (
@@ -129,6 +130,10 @@ function NotificationBell() {
                       <div className="h-12 w-12 shrink-0 bg-purple-100 dark:bg-purple-900/30 rounded-full shadow-inner overflow-hidden border border-purple-400 dark:border-purple-500/50 flex items-center justify-center">
                         <FolderSearch className="h-6 w-6 text-purple-600 dark:text-purple-500" />
                       </div>
+                  ) : n.type === 'admin_sweep' ? (
+                      <div className="h-12 w-12 shrink-0 bg-green-100 dark:bg-green-900/30 rounded-full shadow-inner overflow-hidden border border-green-400 dark:border-green-500/50 flex items-center justify-center">
+                        <Sparkles className="h-6 w-6 text-green-600 dark:text-green-500" />
+                      </div>
                   ) : n.type === 'admin_stalled' ? (
                       <div className="h-12 w-12 shrink-0 bg-orange-100 dark:bg-orange-900/30 rounded-full shadow-inner overflow-hidden border border-orange-400 dark:border-orange-500/50 flex items-center justify-center">
                         <Search className="h-6 w-6 text-orange-600 dark:text-orange-500" />
@@ -145,7 +150,7 @@ function NotificationBell() {
                       {n.type === 'trophy' ? `Trophy Unlocked: ${n.title}` : (n.title || 'Requested Issue')}
                     </p>
                     
-                    {['report', 'admin_report', 'admin_user', 'admin_req'].includes(n.type) && (
+                    {['report', 'admin_report', 'admin_user', 'admin_req', 'admin_sweep'].includes(n.type) && (
                         <p className="text-[11px] sm:text-[10px] text-muted-foreground line-clamp-1 italic mb-1 border-l-2 border-muted pl-1">{n.description}</p>
                     )}
 
@@ -163,6 +168,8 @@ function NotificationBell() {
                         <div className="flex items-center gap-1.5"><Bell className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-orange-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-orange-600 tracking-widest">Needs Approval</span></div>
                     ) : n.type === 'admin_unmatched' ? (
                         <div className="flex items-center gap-1.5"><FolderSearch className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-purple-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-purple-600 tracking-widest">Needs Matching</span></div>
+                    ) : n.type === 'admin_sweep' ? (
+                        <div className="flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-green-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-green-600 tracking-widest">Auto-Matched</span></div>
                     ) : n.type === 'admin_stalled' ? (
                         <div className="flex items-center gap-1.5"><Search className="h-3.5 w-3.5 sm:h-3 sm:w-3 text-orange-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-orange-600 tracking-widest">Interactive Search</span></div>
                     ) : (

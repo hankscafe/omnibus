@@ -84,16 +84,55 @@ pub async fn is_getcomics_enabled(db: &sqlx::AnyPool) -> bool {
 
 /// Records a Cloudflare-block timestamp so the rest of the app can back off / surface it in the UI.
 async fn mark_cloudflare_flag(db: &sqlx::AnyPool) {
+    mark_time_flag(db, "cloudflare_block_time").await;
+}
+
+/// Records a GetComics 429 timestamp (same shape as cloudflare_block_time / metron_rate_limit_time)
+/// so the app can surface "GetComics is rate limiting us" instead of silent empty searches.
+async fn mark_getcomics_rate_limit_flag(db: &sqlx::AnyPool) {
+    mark_time_flag(db, "getcomics_rate_limit_time").await;
+}
+
+async fn mark_time_flag(db: &sqlx::AnyPool, key: &str) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis().to_string())
         .unwrap_or_default();
     let _ = sqlx::query(
-        r#"INSERT INTO "SystemSetting" (key, value) VALUES ('cloudflare_block_time', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
+        r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
     )
+    .bind(key)
     .bind(now_ms)
     .execute(db)
     .await;
+}
+
+/// Parses a human size fragment ("Size : 350 MB", "1.2 GB", "900 kb", "1.2 GiB") to bytes.
+/// GetComics prints these in the search-result teaser and per download section (Kapowarr reads the
+/// same text). None when no size is present or the unit is unrecognized.
+pub(crate) fn parse_size_bytes(text: &str) -> Option<i64> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"(?i)size\s*[:\-]\s*([0-9][0-9.,]*)\s*([kmgt])i?b\b").unwrap());
+    let caps = re.captures(text)?;
+    let num: f64 = caps[1].replace(',', "").parse().ok()?;
+    let mult = match caps[2].to_lowercase().as_str() {
+        "k" => 1024f64,
+        "m" => 1024f64 * 1024.0,
+        "g" => 1024f64 * 1024.0 * 1024.0,
+        "t" => 1024f64 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((num * mult) as i64)
+}
+
+/// LARGEST size mentioned in a blob of article text — multi-part posts list one size per download
+/// section, and the demotion decision below should key on the biggest thing the page offers.
+pub(crate) fn max_size_bytes(text: &str) -> Option<i64> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"(?i)size\s*[:\-]\s*[0-9][0-9.,]*\s*[kmgt]i?b\b").unwrap());
+    re.find_iter(text)
+        .filter_map(|m| parse_size_bytes(m.as_str()))
+        .max()
 }
 
 /// Which Cloudflare solver the engine talks to. FlareSolverr and Byparr share the `/v1` request
@@ -132,7 +171,34 @@ pub async fn solver_config(db: &sqlx::AnyPool) -> SolverConfig {
 }
 
 async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
-    let res = client.get(url).send().await?;
+    // Bounded 429 handling (Kapowarr-parity): honor Retry-After (else exponential backoff), flag
+    // the throttle for the UI, and after the budget give up with an error — a rate limit means the
+    // source yields nothing THIS round; it is never a blocklist event and never fails the request.
+    let mut res = client.get(url).send().await?;
+    for attempt in 0..2u32 {
+        if res.status() != 429 {
+            break;
+        }
+        mark_getcomics_rate_limit_flag(db).await;
+        let wait = res
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(5 * 2u64.pow(attempt));
+        if wait > 90 {
+            // Sleeping out a long ban inside a search would stall the whole queue — bail now and
+            // let the scheduled retry sweeps come back later.
+            anyhow::bail!("GetComics rate limited (429) for {}; server asked for {}s — deferring", url, wait);
+        }
+        log::warn!("[GetComics] 429 rate limited for {}; backing off {}s (attempt {}/2).", url, wait, attempt + 1);
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        res = client.get(url).send().await?;
+    }
+    if res.status() == 429 {
+        mark_getcomics_rate_limit_flag(db).await;
+        anyhow::bail!("GetComics rate limited (429) for {} after backoff retries", url);
+    }
     if res.status() == 403 {
         if let Some(flare_url) = flaresolverr.filter(|f| !f.is_empty()) {
             let sc = solver_config(db).await;
@@ -392,19 +458,26 @@ pub async fn search(
                 Err(e) => { log::warn!("[GetComics] Fetch failed for \"{}\": {}", q, e); break; }
             };
 
-            // Extract (title, link) first so the non-Send scraper types are dropped before any await.
-            let posts_data: Vec<(String, String)> = {
+            // Extract (title, link, size) first so the non-Send scraper types are dropped before any
+            // await. Size comes from the teaser text each article carries on the RESULTS page
+            // ("Size : 350 MB") — no extra request needed (Kapowarr reads the same text).
+            let posts_data: Vec<(String, String, i64)> = {
                 let document = Html::parse_document(&html);
                 let posts: Vec<_> = document.select(&article_sel).collect();
                 if posts.is_empty() { break; } // reached the end of pagination
                 posts.iter().filter_map(|article| {
                     article.select(&a_sel).next().map(|a| {
-                        (a.inner_html().trim().to_string(), a.value().attr("href").unwrap_or("").to_string())
+                        let teaser = article.text().collect::<Vec<_>>().join(" ");
+                        (
+                            a.inner_html().trim().to_string(),
+                            a.value().attr("href").unwrap_or("").to_string(),
+                            parse_size_bytes(&teaser).unwrap_or(0),
+                        )
                     })
-                }).filter(|(t, l)| !t.is_empty() && !l.is_empty()).collect()
+                }).filter(|(t, l, _)| !t.is_empty() && !l.is_empty()).collect()
             };
 
-            for (title, link) in posts_data {
+            for (title, link, size) in posts_data {
                 let title_lower = title.to_lowercase();
                 let mut is_relevant = true;
 
@@ -504,7 +577,7 @@ pub async fn search(
 
                 if is_relevant {
                     q_results.push(ProwlarrResult {
-                        guid: link.clone(), title, size: 0, indexer: "GetComics".to_string(),
+                        guid: link.clone(), title, size, indexer: "GetComics".to_string(),
                         seeders: 100, peers: 0, info_url: link.clone(), download_url: link,
                         protocol: "ddl".to_string(), publish_date: "N/A".to_string(), info_hash: None,
                     });
@@ -703,6 +776,16 @@ fn find_label_year(label: &str) -> Option<i32> {
 /// occurrence). The caller tries these in order at download time, so one-per-hoster avoids re-attempting
 /// several Cloudflare-gated getcomics.org/dls/ links (each can cost a 300s solve) while still giving
 /// real mirror fallbacks.
+/// The enabled hoster order with every getcomics_* entry moved to the END (relative order kept in
+/// both halves) — the large-download ranking (gc_avoid_large_downloads). Pure, unit-tested.
+fn demote_getcomics_hosters(enabled_order: &[String]) -> Vec<String> {
+    let (gc, rest): (Vec<String>, Vec<String>) = enabled_order
+        .iter()
+        .cloned()
+        .partition(|h| h.starts_with("getcomics"));
+    rest.into_iter().chain(gc).collect()
+}
+
 fn rank_and_dedupe(mut links: Vec<DeepLinkResult>, enabled_order: &[String]) -> Vec<DeepLinkResult> {
     links.sort_by(|a, b| {
         let pos_a = enabled_order.iter().position(|x| x == &a.hoster).unwrap_or(usize::MAX);
@@ -805,13 +888,32 @@ pub async fn scrape_deep_link(
     let prefs = if prefs.is_empty() { default_hoster_prefs() } else { prefs };
     let enabled_order: Vec<String> = prefs.iter().filter(|p| p.enabled).map(|p| p.hoster.clone()).collect();
 
+    // Large-download demotion (Kapowarr #77 parity, gc_avoid_large_downloads — default ON):
+    // GetComics' own servers throttle/choke on big files, so when the page's LARGEST advertised
+    // size crosses the threshold, both getcomics_* hosters move to the END of the ranking order —
+    // third-party mirrors get tried first. Demote, never exclude: if the mirrors fail, the GC
+    // servers remain the last-resort fallback exactly as before.
+    const LARGE_DOWNLOAD_BYTES: i64 = 400 * 1024 * 1024;
+    let avoid_large = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'gc_avoid_large_downloads'"#)
+        .fetch_optional(db).await.ok().flatten().as_deref() != Some("false");
+    let article_size = max_size_bytes(&html);
+    let ranking_order: Vec<String> = if avoid_large && article_size.map(|s| s >= LARGE_DOWNLOAD_BYTES).unwrap_or(false) {
+        log::info!(
+            "[GetComics] Article advertises {} MB — demoting GetComics-hosted links behind third-party mirrors.",
+            article_size.unwrap_or(0) / (1024 * 1024)
+        );
+        demote_getcomics_hosters(&enabled_order)
+    } else {
+        enabled_order.clone()
+    };
+
     // Multi-pack section-targeting first — it must judge the page's sections before the flat sweep
     // collapses them into one pool.
     if let Some(t) = target {
         match select_pack_section(sections, t, &enabled_order) {
             SectionSelection::Ambiguous => return Ok(DeepLinkOutcome::Ambiguous),
             SectionSelection::Section(links) => {
-                let candidates = rank_and_dedupe(links, &enabled_order);
+                let candidates = rank_and_dedupe(links, &ranking_order);
                 if let Some(top) = candidates.first() {
                     log::info!("[GetComics] Selected hoster: {} (+{} fallback(s)).", top.hoster, candidates.len() - 1);
                 }
@@ -833,7 +935,7 @@ pub async fn scrape_deep_link(
     // getcomics_main (the /dls/ main server) sits high by default because its direct download succeeds
     // for most issues; only the subset behind a live Cloudflare challenge falls through to the
     // download-time manual-hold.
-    let candidates = rank_and_dedupe(found_links, &enabled_order);
+    let candidates = rank_and_dedupe(found_links, &ranking_order);
 
     if let (Some(top), Some(pref)) = (candidates.first(), enabled_order.first()) {
         if &top.hoster != pref {
@@ -848,6 +950,56 @@ pub async fn scrape_deep_link(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==== Size parsing (Kapowarr-parity: the "Size : X" text on teasers/sections) ====
+
+    #[test]
+    fn parse_size_bytes_reads_getcomics_size_strings() {
+        assert_eq!(parse_size_bytes("Size : 350 MB"), Some(350 * 1024 * 1024));
+        assert_eq!(parse_size_bytes("size: 1.2 GB"), Some((1.2f64 * 1024.0 * 1024.0 * 1024.0) as i64));
+        assert_eq!(parse_size_bytes("Size : 900 kb"), Some(900 * 1024));
+        assert_eq!(parse_size_bytes("Size : 1.5 GiB"), Some((1.5f64 * 1024.0 * 1024.0 * 1024.0) as i64));
+        assert_eq!(parse_size_bytes("Size : 1,024 MB"), Some(1024 * 1024 * 1024));
+        // Teaser text around it doesn't confuse the parser.
+        assert_eq!(
+            parse_size_bytes("Language : English | Year : 2024 | Size : 62 MB | Format: CBR"),
+            Some(62 * 1024 * 1024)
+        );
+        // No size / not a size → None (result carries 0, UI renders '-', demotion never triggers).
+        assert_eq!(parse_size_bytes("Wolverine #3 (2024)"), None);
+        assert_eq!(parse_size_bytes("Size : unknown"), None);
+    }
+
+    #[test]
+    fn max_size_bytes_takes_the_largest_section() {
+        // Multi-part post: demotion keys on the biggest advertised archive.
+        let article = "Vol. 1 Size : 250 MB ... Vol. 2 Size : 1.1 GB ... Vol. 3 Size : 800 MB";
+        assert_eq!(max_size_bytes(article), Some((1.1f64 * 1024.0 * 1024.0 * 1024.0) as i64));
+        assert_eq!(max_size_bytes("no sizes here"), None);
+    }
+
+    // ==== Large-download hoster demotion (gc_avoid_large_downloads) ====
+
+    #[test]
+    fn demote_getcomics_hosters_moves_gc_to_the_end_keeping_relative_order() {
+        let order: Vec<String> = ["getcomics_direct", "getcomics_main", "mediafire", "mega", "pixeldrain"]
+            .iter().map(|s| s.to_string()).collect();
+        let demoted = demote_getcomics_hosters(&order);
+        assert_eq!(demoted, vec!["mediafire", "mega", "pixeldrain", "getcomics_direct", "getcomics_main"]);
+
+        // Ranking a link set with the demoted order puts the mirror first, GC as fallback.
+        let links = vec![
+            DeepLinkResult { url: "https://getcomics.org/dls/x".into(), hoster: "getcomics_main".into() },
+            DeepLinkResult { url: "https://comicfiles.ru/y".into(), hoster: "getcomics_direct".into() },
+            DeepLinkResult { url: "https://mediafire.com/z".into(), hoster: "mediafire".into() },
+        ];
+        let ranked = rank_and_dedupe(links, &demoted);
+        assert_eq!(ranked[0].hoster, "mediafire");
+        assert_eq!(ranked[1].hoster, "getcomics_direct");
+        // GC-only pages still work — demotion never excludes.
+        let gc_only = vec![DeepLinkResult { url: "https://getcomics.org/dls/x".into(), hoster: "getcomics_main".into() }];
+        assert_eq!(rank_and_dedupe(gc_only, &demoted).len(), 1);
+    }
 
     #[test]
     fn parse_issue_range_detects_batches_but_not_years() {

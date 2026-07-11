@@ -211,6 +211,7 @@ export default function SettingsPage() {
     unmatched_sweep_schedule: "1",
     metron_detail_credits: "false",
     metadata_cache_enabled: "false", metadata_cache_detail_days: "7", metadata_cache_list_hours: "12", metadata_cache_max_mb: "256",
+    gc_avoid_large_downloads: "true",
     prowlarr_accept_yearless: "false",
     convert_to_webp: "false", webp_quality: "80", cbr_conversion_enabled: "true",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
@@ -1844,7 +1845,24 @@ export default function SettingsPage() {
                     <div className="space-y-4">
                         <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Hoster Priority</h3>
                         <p className="text-xs text-muted-foreground">If multiple hosters are available for a comic, Omnibus will prioritize them in this order. You can also disable hosters you do not want to use.</p>
-                        
+
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Switch
+                                id="gc-avoid-large"
+                                checked={config.gc_avoid_large_downloads !== "false"}
+                                onCheckedChange={(c) => setConfig({...config, gc_avoid_large_downloads: c ? "true" : "false"})}
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="gc-avoid-large" className="cursor-pointer font-bold text-base text-foreground">
+                                    Prefer Mirrors for Large Downloads (&gt;400MB)
+                                </Label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    GetComics&apos; own servers throttle big files. When a result advertises more than 400MB, its GetComics-hosted links drop below the third-party mirrors in the order above — they stay available as the last-resort fallback, never excluded.
+                                </p>
+                            </div>
+                        </div>
+
                         <div className="border border-border rounded-lg bg-muted/20 p-2 space-y-1">
                             {hosterPriority.map((item, idx) => (
                                 <div key={item.hoster} className={`flex items-center justify-between p-3 bg-background border border-border rounded shadow-sm transition-opacity ${!item.enabled ? 'opacity-50' : ''}`}>

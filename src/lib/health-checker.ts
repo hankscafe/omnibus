@@ -219,6 +219,16 @@ export async function runSystemHealthCheck() {
         results.push({ id: 'hoster_limit', name: '3rd Party Hoster Limit', status: 'ok', message: 'Normal' });
     }
 
+    // GetComics 429 throttle — flag stamped by the engine's search/scrape backoff. A 429 clears on
+    // its own and affected searches park as AWAITING_RELEASE and re-fire on the sweep cadence, so a
+    // recent stamp is a warning (searches are degraded right now), never an error.
+    const gcLimitTime = parseInt(config.getcomics_rate_limit_time || '0');
+    if (gcLimitTime > Date.now() - (60 * 60 * 1000)) {
+        results.push({ id: 'gc_limit', name: 'GetComics Rate Limit', status: 'warning', message: 'GetComics returned 429 (rate limited) within the last hour. Searches back off and retry automatically.' });
+    } else {
+        results.push({ id: 'gc_limit', name: 'GetComics Rate Limit', status: 'ok', message: 'Normal' });
+    }
+
     // 7. DOWNLOAD CLIENT CONFIGURATION CHECK
     const downloadClientCount = await prisma.downloadClient.count();
     if (downloadClientCount === 0) {

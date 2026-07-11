@@ -11,6 +11,26 @@ export async function markSystemFlag(flag: 'cloudflare_block_time' | 'cv_rate_li
     } catch (e) {}
 }
 
+// Total calls recorded for a provider inside its rolling window (Node + engine write the same
+// SystemSetting counters, so this sees combined traffic). Budget gate for opt-in Metron
+// detail-credit calls; malformed/absent JSON counts as zero.
+export async function countApiUsage(service: 'comicvine' | 'metron'): Promise<number> {
+    const key = service === 'comicvine' ? 'cv_api_usage' : 'metron_api_usage';
+    const windowMs = service === 'comicvine' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    try {
+        const existing = await prisma.systemSetting.findUnique({ where: { key } });
+        if (!existing?.value) return 0;
+        const usage: Record<string, number[]> = JSON.parse(existing.value);
+        return Object.values(usage).reduce(
+            (sum, arr) => sum + (Array.isArray(arr) ? arr.filter(ts => now - ts < windowMs).length : 0),
+            0
+        );
+    } catch {
+        return 0;
+    }
+}
+
 export async function logApiUsage(service: 'comicvine' | 'metron', endpoint: string, count: number = 1) {
     const key = service === 'comicvine' ? 'cv_api_usage' : 'metron_api_usage';
     // ComicVine limits are hourly. Metron limits are daily.

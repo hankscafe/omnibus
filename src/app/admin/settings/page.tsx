@@ -114,7 +114,8 @@ const SYSTEM_EVENTS = [
   { id: "job_issue_monitor", label: "New Issue Monitor Complete", desc: "Notifies when the monitor successfully checks for new releases." },
   { id: "job_discover_sync", label: "Discover Sync Complete", desc: "Notifies when the discover timeline and popular comics refresh." },
   { id: "job_diagnostics", label: "System Diagnostics Complete", desc: "Notifies when automated system diagnostics have been run." },
-  { id: "job_cache_cleanup", label: "Cache Cleanup Complete", desc: "Notifies when the automated cache cleanup finishes." }
+  { id: "job_cache_cleanup", label: "Cache Cleanup Complete", desc: "Notifies when the automated cache cleanup finishes." },
+  { id: "job_unmatched_sweep", label: "Unmatched Sweep Matched Series", desc: "Notifies when the background sweep auto-matches unmatched series (or fails)." }
 ];
 
 export default function SettingsPage() {
@@ -208,6 +209,7 @@ export default function SettingsPage() {
     awaiting_retry_days: "7", flag_stalled_requests: "true",
     matcher_mode: "confirm", matcher_auto_threshold: "0.90", file_metadata_priority: "false",
     unmatched_sweep_schedule: "1",
+    metron_detail_credits: "false",
     prowlarr_accept_yearless: "false",
     convert_to_webp: "false", webp_quality: "80",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
@@ -1092,6 +1094,23 @@ export default function SettingsPage() {
                                 </Label>
                                 <p className="text-[11px] text-muted-foreground">
                                     When on, metadata syncs only fill in blanks — titles, synopses, credits and genres that came from ComicInfo.xml / series.json are never overwritten by the provider. Manually locked series and issues are protected either way. Turn off to let provider refreshes replace file-derived data.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Switch
+                                id="metron-detail-credits"
+                                checked={config.metron_detail_credits === "true"}
+                                onCheckedChange={(c) => setConfig({...config, metron_detail_credits: c ? "true" : "false"})}
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="metron-detail-credits" className="cursor-pointer font-bold text-base text-foreground">
+                                    Metron: Fetch Per-Issue Credits
+                                </Label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Metron&apos;s issue list carries no creator credits, so syncs normally leave them to ComicInfo.xml or on-demand lookups. When on, metadata syncs make one extra Metron API call per issue to fill in writers, artists, characters and story arcs — quota-heavy on large libraries (budgeted against Metron&apos;s 5,000/day limit; leftovers resume on the next sync). Each issue is only fetched once.
                                 </p>
                             </div>
                         </div>

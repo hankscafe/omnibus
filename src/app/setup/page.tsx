@@ -41,7 +41,8 @@ const DISCORD_EVENTS = [
   { id: "job_issue_monitor", label: "New Issue Monitor Complete", desc: "Notifies when the monitor successfully checks for new releases." },
   { id: "job_discover_sync", label: "Discover Sync Complete", desc: "Notifies when the discover timeline and popular comics refresh." },
   { id: "job_diagnostics", label: "System Diagnostics Complete", desc: "Notifies when automated system diagnostics have been run." },
-  { id: "job_cache_cleanup", label: "Cache Cleanup Complete", desc: "Notifies when the automated cache cleanup finishes." }
+  { id: "job_cache_cleanup", label: "Cache Cleanup Complete", desc: "Notifies when the automated cache cleanup finishes." },
+  { id: "job_unmatched_sweep", label: "Unmatched Sweep Matched Series", desc: "Notifies when the background sweep auto-matches unmatched series (or fails)." }
 ];
 
 const hosterDisplayNames: Record<string, string> = {

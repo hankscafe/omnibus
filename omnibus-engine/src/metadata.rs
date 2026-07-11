@@ -62,6 +62,11 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
     let file_priority: bool = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'file_metadata_priority'"#)
         .fetch_optional(&db.pool).await.ok().flatten().as_deref() == Some("true");
 
+    // metron_detail_credits (opt-in, quota-heavy): fetch per-issue credits via Metron detail calls —
+    // one /issue/{id}/ call per not-yet-deep-synced issue, gated against the 5,000/day window.
+    let metron_detail_credits: bool = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'metron_detail_credits'"#)
+        .fetch_optional(&db.pool).await.ok().flatten().as_deref() == Some("true");
+
     let mut ok_count = 0usize;
     let mut fail_count = 0usize;
     for series in series_list {
@@ -97,7 +102,7 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
             "METRON" => {
                 fetch_metron(
                     &db, &client, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover,
-                    last_sync.as_deref(), full_fetch, has_custom_cover, &cover_source, file_priority,
+                    last_sync.as_deref(), full_fetch, has_custom_cover, &cover_source, file_priority, metron_detail_credits,
                 ).await
             }
             other => {
@@ -746,6 +751,7 @@ async fn fetch_metron(
     has_custom_cover: bool,
     cover_source: &str,
     file_priority: bool,
+    detail_credits: bool,
 ) -> anyhow::Result<i32> {
     let auth = match metron_auth(&db.pool).await {
         Some(a) => a,
@@ -862,6 +868,11 @@ async fn fetch_metron(
     let metron_total = series_data["issue_count"].as_i64().unwrap_or(0);
     if !full_fetch && status_str == "Ended" && metron_total > 0 && local_count >= metron_total {
         log::info!("[Metadata] {} is Ended and complete ({}/{}) — skipping Metron issue fetch.", series_name, local_count, metron_total);
+        // Credit enrichment still runs on this shortcut path — otherwise an Ended-and-complete
+        // series could never be backfilled after the admin enables metron_detail_credits.
+        if detail_credits {
+            metron_detail_credits_nonfatal(db, client, &auth, series_id, series_name, file_priority).await?;
+        }
         return Ok(0);
     }
 
@@ -1082,8 +1093,131 @@ async fn fetch_metron(
         }
     }
 
+    if detail_credits {
+        metron_detail_credits_nonfatal(db, client, &auth, series_id, series_name, file_priority).await?;
+    }
+
     log::info!("[Metadata] Successfully synced {} Metron issues for {}.", synced_count, series_name);
     Ok(synced_count)
+}
+
+/// Non-fatal wrapper around metron_detail_credit_pass: only a FATAL_RATE_LIMIT (Metron has cut us
+/// off — the batch must halt to protect our IP) propagates; any other error just logs, because the
+/// series sync itself already succeeded and leftover issues simply retry on the next sync.
+async fn metron_detail_credits_nonfatal(
+    db: &Db,
+    client: &Client,
+    auth: &(String, String),
+    series_id: &str,
+    series_name: &str,
+    file_priority: bool,
+) -> anyhow::Result<()> {
+    match metron_detail_credit_pass(db, client, auth, series_id, series_name, file_priority).await {
+        Ok((enriched, deferred)) => {
+            if enriched > 0 {
+                log::info!(
+                    "[Metadata] Enriched {} Metron issue(s) of {} with detail-call credits{}.",
+                    enriched, series_name,
+                    if deferred > 0 { format!(" ({} deferred on budget)", deferred) } else { String::new() }
+                );
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if e.to_string().contains("FATAL_RATE_LIMIT") {
+                return Err(e);
+            }
+            log::warn!("[Metadata] Metron credit enrichment for {} stopped early: {} — remaining issues retry next sync.", series_name, e);
+            Ok(())
+        }
+    }
+}
+
+/// Opt-in per-issue Metron credit enrichment (metron_detail_credits): the issue_list endpoint
+/// carries no credits, so each issue costs one /issue/{id}/ detail call. Budget-gated against the
+/// 5,000/day Metron window with a reserve so normal syncing never starves — issues left over stay
+/// non-DEEP_SYNCED and are picked up on the next sync (same deferral model as the unmatched sweep,
+/// discussion #177). Fetched credits merge through the never-wipe policy (issue #179) and the issue
+/// is promoted to DEEP_SYNCED, which also stops the view-time lazy fetch from re-paying for it.
+/// Returns (enriched, deferred_on_budget).
+async fn metron_detail_credit_pass(
+    db: &Db,
+    client: &Client,
+    auth: &(String, String),
+    series_id: &str,
+    series_name: &str,
+    file_priority: bool,
+) -> anyhow::Result<(usize, usize)> {
+    const METRON_DAILY_LIMIT: usize = 5000;
+    const METRON_RESERVE: usize = 500;
+
+    // Locked (hasCustomMetadata) issues are excluded outright: the merge policy would keep every
+    // existing column anyway, so the detail call would be a pure quota burn.
+    let rows = sqlx::query(
+        r#"SELECT id, "metadataId", number, writers, artists, "coverArtists", colorists, letterers, characters, teams, "storyArcs"
+           FROM "Issue"
+           WHERE "seriesId" = $1 AND "metadataSource" = 'METRON' AND "metadataId" IS NOT NULL
+             AND "matchState" <> 'DEEP_SYNCED' AND CAST("hasCustomMetadata" AS INTEGER) = 0"#,
+    )
+    .bind(series_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let mut enriched = 0usize;
+    for (i, row) in rows.iter().enumerate() {
+        let calls = crate::api_usage::metron_calls_last_day(&db.pool).await;
+        if crate::matcher::budget_exhausted(calls, METRON_DAILY_LIMIT, METRON_RESERVE) {
+            let deferred = rows.len() - i;
+            log::info!("[Metadata] Metron daily budget reached ({} calls) — deferring credit enrichment for {} issue(s) of {} to the next sync.", calls, deferred, series_name);
+            return Ok((enriched, deferred));
+        }
+
+        let issue_id: String = row.get("id");
+        let meta_id: String = row.get("metadataId");
+        let issue_num: String = row.try_get("number").unwrap_or_default();
+
+        let url = format!("https://metron.cloud/api/issue/{}/", meta_id);
+        let (status, data) = metron_fetch(db, client, auth, &url, 10, 2, None).await?;
+        if status == 404 {
+            // Gone from Metron — promote anyway so we never re-pay for a lookup that can't succeed.
+            let _ = sqlx::query(r#"UPDATE "Issue" SET "matchState"='DEEP_SYNCED' WHERE id=$1"#)
+                .bind(&issue_id).execute(&db.pool).await;
+            log::debug!("[Metron Debug] Issue {} (#{}) returned 404 during credit enrichment — marked DEEP_SYNCED.", meta_id, issue_num);
+            continue;
+        }
+
+        let credits = metron_issue_credits(&data);
+        let col = |name: &str| -> Option<String> { row.try_get::<Option<String>, _>(name).unwrap_or(None) };
+        let writers_val = merge_credit_json(col("writers"), &credits.writers, false, file_priority);
+        let artists_val = merge_credit_json(col("artists"), &credits.artists, false, file_priority);
+        let cover_artists_val = merge_credit_json(col("coverArtists"), &credits.cover_artists, false, file_priority);
+        let colorists_val = merge_credit_json(col("colorists"), &credits.colorists, false, file_priority);
+        let letterers_val = merge_credit_json(col("letterers"), &credits.letterers, false, file_priority);
+        let characters_val = merge_credit_json(col("characters"), &credits.characters, false, file_priority);
+        let teams_val = merge_credit_json(col("teams"), &credits.teams, false, file_priority);
+        let story_arcs_val = merge_credit_json(col("storyArcs"), &credits.story_arcs, false, file_priority);
+
+        let res = sqlx::query(
+            r#"UPDATE "Issue" SET writers=$1, artists=$2, "coverArtists"=$3, colorists=$4, letterers=$5,
+               characters=$6, teams=$7, "storyArcs"=$8, "matchState"='DEEP_SYNCED' WHERE id=$9"#,
+        )
+        .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
+        .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&story_arcs_val)
+        .bind(&issue_id)
+        .execute(&db.pool).await;
+
+        if let Err(e) = res {
+            log::error!("[Metadata] Failed to write Metron detail credits for issue #{} of {}: {:?}", issue_num, series_name, e);
+        } else {
+            enriched += 1;
+        }
+    }
+
+    Ok((enriched, 0))
 }
 
 /// Maps Metron's series_type (e.g. "One-Shot", "Trade Paperback", "Ongoing Series") to the
@@ -1172,9 +1306,9 @@ pub(crate) async fn mark_flag(db: &Db, key: &str) {
     .await;
 }
 
-/// Per-issue credits and key appearances parsed from a ComicVine ISSUE LIST item (issue #179).
-/// The /issues/ list endpoint returns these association fields when asked (Discover already relies
-/// on person_credits there), so the sync gets full credits with ZERO extra API calls.
+/// Per-issue credits and key appearances parsed from a provider issue payload (issue #179):
+/// ComicVine's /issues/ list items (which return association fields when asked — zero extra API
+/// calls) or Metron's /issue/{id}/ detail payload (opt-in, one call per issue).
 #[derive(Default)]
 pub(crate) struct CvIssueCredits {
     pub writers: Vec<String>,
@@ -1185,6 +1319,8 @@ pub(crate) struct CvIssueCredits {
     pub characters: Vec<String>,
     pub teams: Vec<String>,
     pub locations: Vec<String>,
+    /// Metron detail only — CV's list items don't carry story_arc_credits.
+    pub story_arcs: Vec<String>,
 }
 
 fn push_unique(vec: &mut Vec<String>, name: &str) {
@@ -1232,6 +1368,38 @@ pub(crate) fn cv_issue_credits(item: &serde_json::Value) -> CvIssueCredits {
     c.characters = credit_names(item, "character_credits");
     c.teams = credit_names(item, "team_credits");
     c.locations = credit_names(item, "location_credits");
+    c
+}
+
+/// Per-issue credits parsed from a Metron ISSUE DETAIL payload (/issue/{id}/ — the issue_list
+/// endpoint carries no credits at all). Role taxonomy is exact parity with Node's
+/// MetronProvider.getIssueDetails: substring match on each role name, one creator can land in
+/// several buckets, names dedup per bucket preserving first-seen order.
+pub(crate) fn metron_issue_credits(item: &serde_json::Value) -> CvIssueCredits {
+    let mut c = CvIssueCredits::default();
+    if let Some(credits) = item.get("credits").and_then(|v| v.as_array()) {
+        for cr in credits {
+            let name = cr.get("creator")
+                .map(|v| v.get("name").and_then(|n| n.as_str()).or_else(|| v.as_str()).unwrap_or(""))
+                .unwrap_or("");
+            let roles: Vec<String> = match cr.get("role") {
+                Some(serde_json::Value::Array(arr)) => arr.iter()
+                    .map(|r| r.get("name").and_then(|n| n.as_str()).or_else(|| r.as_str()).unwrap_or("").to_lowercase())
+                    .collect(),
+                Some(serde_json::Value::String(s)) => vec![s.to_lowercase()],
+                _ => Vec::new(),
+            };
+            let has = |needle: &str| roles.iter().any(|r| r.contains(needle));
+            if has("writer") { push_unique(&mut c.writers, name); }
+            if has("artist") || has("penciller") || has("inker") { push_unique(&mut c.artists, name); }
+            if has("cover") { push_unique(&mut c.cover_artists, name); }
+            if has("color") { push_unique(&mut c.colorists, name); }
+            if has("letter") { push_unique(&mut c.letterers, name); }
+        }
+    }
+    c.characters = credit_names(item, "characters");
+    c.teams = credit_names(item, "teams");
+    c.story_arcs = credit_names(item, "arcs");
     c
 }
 
@@ -1393,6 +1561,43 @@ mod tests {
         let empty = cv_issue_credits(&serde_json::json!({"id": 1, "issue_number": "3"}));
         assert!(empty.writers.is_empty() && empty.artists.is_empty() && empty.characters.is_empty());
         assert!(empty.teams.is_empty() && empty.locations.is_empty());
+    }
+
+    #[test]
+    fn metron_issue_credits_parses_detail_payload() {
+        // Shape of Metron's /issue/{id}/ detail response: credits carry a creator object and a
+        // role ARRAY of {id, name}; appearances are name-object arrays.
+        let issue = serde_json::json!({
+            "credits": [
+                {"creator": {"name": "Chip Zdarsky"}, "role": [{"id": 1, "name": "Writer"}]},
+                {"creator": {"name": "Marco Checchetto"}, "role": [{"id": 2, "name": "Penciller"}, {"id": 3, "name": "Inker"}]},
+                {"creator": {"name": "Frank Martin"}, "role": [{"id": 4, "name": "Colorist"}]},
+                {"creator": {"name": "Clayton Cowles"}, "role": [{"id": 5, "name": "Letterer"}]},
+                {"creator": {"name": "John Romita Jr."}, "role": [{"id": 6, "name": "Cover"}]},
+                {"creator": {"name": "Devin Lewis"}, "role": [{"id": 7, "name": "Editor"}]}
+            ],
+            "characters": [ {"name": "Daredevil"}, {"name": "Kingpin"} ],
+            "teams": [ {"name": "The Hand"} ],
+            "arcs": [ {"name": "Devil's Reign"} ]
+        });
+
+        let c = metron_issue_credits(&issue);
+        assert_eq!(c.writers, vec!["Chip Zdarsky"]);
+        // Penciller + Inker land the person once in the artists bucket (dedup).
+        assert_eq!(c.artists, vec!["Marco Checchetto"]);
+        assert_eq!(c.cover_artists, vec!["John Romita Jr."]);
+        assert_eq!(c.colorists, vec!["Frank Martin"]);
+        assert_eq!(c.letterers, vec!["Clayton Cowles"]);
+        assert_eq!(c.characters, vec!["Daredevil", "Kingpin"]);
+        assert_eq!(c.teams, vec!["The Hand"]);
+        assert_eq!(c.story_arcs, vec!["Devil's Reign"]);
+        // Editors have no DB column — never bucketed.
+        assert!(!c.writers.contains(&"Devin Lewis".to_string()));
+
+        // Bodyless/creditless payload (e.g. after a 404-guard slip) parses to all-empty, which
+        // merge_credit_json treats as "leave the existing columns alone".
+        let empty = metron_issue_credits(&serde_json::json!({"id": 9, "number": "3"}));
+        assert!(empty.writers.is_empty() && empty.artists.is_empty() && empty.story_arcs.is_empty());
     }
 
     #[test]

@@ -213,6 +213,12 @@ export const DiscordNotifier = {
           embed.description = payload.description || "The automated cache cleanup has finished running.";
           embed.color = 9807270; // Gray
           break;
+
+        case 'job_unmatched_sweep':
+          embed.title = "🧩 Unmatched Sweep Complete";
+          embed.description = payload.description || "The background unmatched-series sweep has finished running.";
+          embed.color = 3066993; // Green
+          break;
       }
 
       for (const hook of activeWebhooks) {

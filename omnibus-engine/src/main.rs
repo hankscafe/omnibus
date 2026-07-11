@@ -1300,14 +1300,23 @@ async fn handle_matcher_sweep(State(state): State<Arc<AppState>>) -> StatusCode 
         let db = state.db.clone();
         let start_time = std::time::Instant::now();
         match matcher::run_unmatched_sweep(state.db.clone()).await {
-            Ok(summary) => {
+            Ok(outcome) => {
                 let duration = start_time.elapsed().as_millis() as i32;
-                write_joblog(&db, "UNMATCHED_SWEEP", "COMPLETED", duration, summary).await;
+                write_joblog(&db, "UNMATCHED_SWEEP", "COMPLETED", duration, outcome.summary.clone()).await;
+                // Notify only when the sweep actually matched something — an hourly "nothing to do"
+                // would train admins to ignore the event entirely.
+                if outcome.matched > 0 {
+                    notify_node("job_unmatched_sweep", outcome.summary.trim_start_matches("[Matcher] ")).await;
+                }
             }
             Err(e) => {
                 let duration = start_time.elapsed().as_millis() as i32;
                 log::error!("[Matcher] Unmatched sweep failed: {:?}", e);
+                matcher::record_sweep_result(&db, serde_json::json!({
+                    "status": "FAILED", "error": e.to_string(), "finishedAt": matcher::now_ms(),
+                })).await;
                 write_joblog(&db, "UNMATCHED_SWEEP", "FAILED", duration, format!("Unmatched sweep failed: {}", e)).await;
+                notify_node("job_unmatched_sweep", "The unmatched-series sweep failed. Check the engine logs.").await;
             }
         }
     });

@@ -8,7 +8,7 @@ import { parseComicVineCredits } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
-import { markSystemFlag, logApiUsage } from './utils/system-flags';
+import { markSystemFlag, logApiUsage, countApiUsage } from './utils/system-flags';
 import { isSameIssue } from '@/lib/utils/issue-parser';
 
 // Providers rarely report when a series ends, so Omnibus guesses: no new issue
@@ -131,10 +131,15 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     releaseDate: isLocked ? targetRecord!.releaseDate : issue.releaseDate,
                     description: issue.description,
                     coverUrl: issue.coverUrl,
-                    writers: JSON.stringify(issue.writers),
-                    artists: JSON.stringify(issue.artists),
-                    characters: JSON.stringify(issue.characters),
-                    matchState: 'MATCHED' 
+                    // Metron's issue_list carries no per-issue credits — the old unconditional
+                    // JSON.stringify wrote literal '[]' and wiped ComicInfo.xml-derived credits on
+                    // every re-sync (issue #179; engine parity: columns left untouched when empty).
+                    ...(issue.writers?.length ? { writers: JSON.stringify(issue.writers) } : {}),
+                    ...(issue.artists?.length ? { artists: JSON.stringify(issue.artists) } : {}),
+                    ...(issue.characters?.length ? { characters: JSON.stringify(issue.characters) } : {}),
+                    // An issue the view-time lazy enrichment already deep-fetched keeps DEEP_SYNCED
+                    // so it is never redundantly re-fetched (engine parity: next_match_state).
+                    matchState: targetRecord?.matchState === 'DEEP_SYNCED' ? 'DEEP_SYNCED' : 'MATCHED'
                 };
 
                 if (existingByMetaId) {
@@ -171,6 +176,71 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     });
                     Logger.log(`[Metadata] Series "${series.name}" marked as Ended after ${endedWindow.months}+ months without a new issue.`, 'info');
                 }
+            }
+
+            // Opt-in per-issue credit enrichment (metron_detail_credits): the issue_list carries no
+            // credits, so each not-yet-deep-synced issue costs one /issue/{id}/ detail call. Budgeted
+            // against Metron's 5,000/day window with a reserve — leftovers stay non-DEEP_SYNCED and
+            // resume on the next sync. Engine parity: metadata.rs metron_detail_credit_pass. Runs
+            // before the EMBED_METADATA queue below so the fetched credits reach the archives too.
+            const detailCreditsOn = (await prisma.systemSetting.findUnique({ where: { key: 'metron_detail_credits' } }))?.value === 'true';
+            if (detailCreditsOn) {
+                const fillOnly = (await prisma.systemSetting.findUnique({ where: { key: 'file_metadata_priority' } }))?.value === 'true';
+                // Locked (hasCustomMetadata) issues are excluded outright: the merge policy would
+                // keep every existing column anyway, so the detail call would be a pure quota burn.
+                const candidates = await prisma.issue.findMany({
+                    where: {
+                        seriesId: series.id,
+                        metadataSource: 'METRON',
+                        metadataId: { not: null },
+                        matchState: { not: 'DEEP_SYNCED' },
+                        hasCustomMetadata: false
+                    }
+                });
+                // Never-wipe merge (issue #179): undefined = leave the column untouched. An empty
+                // provider list never overwrites; file_metadata_priority only fills blanks.
+                const mergeCredits = (existing: string | null, fetched: string[] | undefined): string | undefined => {
+                    if (!fetched || fetched.length === 0) return undefined;
+                    const existingHasData = !!existing && existing.trim() !== '' && existing.trim() !== '[]';
+                    return (fillOnly && existingHasData) ? undefined : JSON.stringify(fetched);
+                };
+                let enriched = 0;
+                for (const candidate of candidates) {
+                    const used = await countApiUsage('metron');
+                    if (used + 500 >= 5000) {
+                        Logger.log(`[Metadata] Metron daily budget reached (${used} calls) — deferring credit enrichment for ${candidates.length - enriched} issue(s) of "${series.name}" to the next sync.`, 'info');
+                        break;
+                    }
+                    try {
+                        const detail = await metron.getIssueDetails(candidate.metadataId!);
+                        await prisma.issue.update({
+                            where: { id: candidate.id },
+                            data: {
+                                writers: mergeCredits(candidate.writers, detail.writers),
+                                artists: mergeCredits(candidate.artists, detail.artists),
+                                coverArtists: mergeCredits(candidate.coverArtists, detail.coverArtists),
+                                colorists: mergeCredits(candidate.colorists, detail.colorists),
+                                letterers: mergeCredits(candidate.letterers, detail.letterers),
+                                characters: mergeCredits(candidate.characters, detail.characters),
+                                teams: mergeCredits(candidate.teams, detail.teams),
+                                storyArcs: mergeCredits(candidate.storyArcs, detail.storyArcs),
+                                matchState: 'DEEP_SYNCED'
+                            }
+                        });
+                        enriched++;
+                    } catch (e: any) {
+                        if (e.response?.status === 404) {
+                            // Gone from Metron — promote anyway so we never re-pay for the lookup.
+                            await prisma.issue.update({ where: { id: candidate.id }, data: { matchState: 'DEEP_SYNCED' } }).catch(() => {});
+                            continue;
+                        }
+                        if (e.message?.includes('FATAL_RATE_LIMIT') || e.response?.status === 429) await markSystemFlag('metron_rate_limit_time');
+                        // The series sync itself already succeeded — stop enriching, retry next sync.
+                        Logger.log(`[Metadata] Metron credit enrichment stopped early for "${series.name}": ${getErrorMessage(e)} — remaining issues retry next sync.`, 'warn');
+                        break;
+                    }
+                }
+                if (enriched > 0) Logger.log(`[Metadata] Enriched ${enriched} Metron issue(s) of "${series.name}" with detail-call credits.`, 'info');
             }
 
             try {

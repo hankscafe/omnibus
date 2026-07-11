@@ -20,11 +20,41 @@ use crate::db::Db;
 use sqlx::Row;
 use std::path::Path;
 
+/// Aggregate result of one sweep pass: the human-readable summary for the JobLog, plus the count
+/// of series the sweep actually matched (drives "only notify when something happened").
+pub struct SweepOutcome {
+    pub summary: String,
+    pub matched: usize,
+}
+
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Persists the structured result of the latest sweep (SystemSetting `last_unmatched_sweep_result`)
+/// so the Smart Matcher UI can show what the background sweep did without parsing JobLog messages.
+/// Best-effort — a write failure never fails the sweep itself.
+pub async fn record_sweep_result(db: &Db, value: serde_json::Value) {
+    if let Err(e) = sqlx::query(
+        r#"INSERT INTO "SystemSetting" (key, value) VALUES ('last_unmatched_sweep_result', $1)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
+    )
+    .bind(value.to_string())
+    .execute(&db.pool)
+    .await
+    {
+        log::warn!("[Matcher] Could not persist the sweep result: {:?}", e);
+    }
+}
+
 /// One scheduled pass over UNMATCHED series. Returns the human-readable summary for the job log.
 /// Budget-aware: free file evidence always runs; API work (issue-id resolution, name search) stops
 /// once ComicVine's hourly window nears the wall and RESUMES on the next scheduled run — the fix
 /// for "matching just gives up after the rate limit" (discussion #177).
-pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<String> {
+pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
     let get_setting = |key: &'static str| {
         let pool = db.pool.clone();
         async move {
@@ -41,7 +71,10 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<String> {
     if mode == "custom" {
         let msg = "[Matcher] matcher_mode=custom — automatic matching disabled; sweep skipped.".to_string();
         log::info!("{}", msg);
-        return Ok(msg);
+        record_sweep_result(&db, serde_json::json!({
+            "status": "SKIPPED", "mode": mode, "finishedAt": now_ms(),
+        })).await;
+        return Ok(SweepOutcome { summary: msg, matched: 0 });
     }
     let threshold = get_setting("matcher_auto_threshold").await
         .and_then(|v| v.trim().parse::<f64>().ok())
@@ -62,7 +95,11 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<String> {
     if total == 0 {
         let msg = "[Matcher] Unmatched sweep: nothing to do.".to_string();
         log::info!("{}", msg);
-        return Ok(msg);
+        record_sweep_result(&db, serde_json::json!({
+            "status": "COMPLETED", "mode": mode, "total": 0, "byFile": 0, "bySearch": 0,
+            "forAdmin": 0, "deferred": 0, "searches": 0, "finishedAt": now_ms(),
+        })).await;
+        return Ok(SweepOutcome { summary: msg, matched: 0 });
     }
     log::info!("[Matcher] Unmatched sweep starting: {} series (mode: {}).", total, mode);
 
@@ -149,7 +186,12 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<String> {
         if searches_this_run > 0 { format!(" — {} CV searches used", searches_this_run) } else { String::new() }
     );
     log::info!("{}", summary);
-    Ok(summary)
+    record_sweep_result(&db, serde_json::json!({
+        "status": "COMPLETED", "mode": mode, "total": total, "byFile": by_file, "bySearch": by_search,
+        "forAdmin": for_admin, "deferred": deferred + unprocessed, "searches": searches_this_run,
+        "finishedAt": now_ms(),
+    })).await;
+    Ok(SweepOutcome { summary, matched: by_file + by_search })
 }
 
 /// Applies a match, guarding the (metadataSource, metadataId) unique — a second series already

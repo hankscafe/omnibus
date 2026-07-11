@@ -139,6 +139,21 @@ pub async fn cv_calls_last_hour(pool: &AnyPool) -> usize {
     count_recent(usage.as_deref(), now_ms, 60 * 60 * 1000)
 }
 
+/// Metron calls recorded in the last 24 hours (Node + engine combined) — the budget gate for the
+/// opt-in per-issue credit detail calls (metadata.rs, metron_detail_credits).
+pub async fn metron_calls_last_day(pool: &AnyPool) -> usize {
+    let usage: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'metron_api_usage'"#)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    count_recent(usage.as_deref(), now_ms, 24 * 60 * 60 * 1000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

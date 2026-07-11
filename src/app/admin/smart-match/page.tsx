@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw } from "lucide-react"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -48,6 +48,38 @@ function writeScanCache(provider: string, data: Record<string, any>) {
         }
         sessionStorage.setItem(`${SCAN_CACHE_PREFIX}-${provider}`, JSON.stringify({ ts: Date.now(), data }));
     } catch {}
+}
+
+function timeAgo(ms: number): string {
+    const diff = Date.now() - ms;
+    if (diff < 60_000) return 'just now';
+    const mins = Math.floor(diff / 60_000);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+}
+
+// One-line status of the background unmatched sweep (discussion #177), from /api/admin/sweep.
+function describeSweep(info: any): string {
+    const r = info?.lastResult;
+    if (!r) {
+        const triggered = Number(info?.lastTriggered);
+        return triggered > 0
+            ? `Last triggered ${timeAgo(triggered)} — no result recorded yet.`
+            : 'Retries unmatched items automatically using embedded file IDs (plus provider search in Trust/Auto mode). No run recorded yet.';
+    }
+    const when = r.finishedAt ? timeAgo(r.finishedAt) : 'recently';
+    if (r.status === 'FAILED') return `Last run failed ${when}${r.error ? ` — ${r.error}` : ''}. It retries on schedule.`;
+    if (r.status === 'SKIPPED') return `Skipped ${when} — automatic matching is off in Custom mode.`;
+    if (!r.total) return `Last run ${when}: nothing to retry.`;
+    const parts = [
+        `${r.byFile || 0} matched from file metadata`,
+        `${r.bySearch || 0} auto-matched by search`,
+        `${r.forAdmin || 0} left for you`,
+    ];
+    if (r.deferred) parts.push(`${r.deferred} deferred (API budget)`);
+    return `Last run ${when}: ${parts.join(' · ')}${r.searches ? ` — ${r.searches} CV searches used` : ''}.`;
 }
 
 export default function SmartMatchPage() {
@@ -133,6 +165,72 @@ export default function SmartMatchPage() {
     };
 
     const { toast } = useToast();
+
+    // --- Background sweep status (discussion #177): what the scheduled retry sweep did last ---
+    const [sweepInfo, setSweepInfo] = useState<any>(null);
+    const [sweepQueued, setSweepQueued] = useState(false);
+    const sweepPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const fetchSweepInfo = async (): Promise<any | null> => {
+        try {
+            const res = await fetch('/api/admin/sweep', { cache: 'no-store' });
+            if (!res.ok) return null;
+            const data = await res.json();
+            setSweepInfo(data);
+            return data;
+        } catch {
+            return null;
+        }
+    };
+
+    // Silent re-fetch of the unmatched list (no loading spinner) after a sweep run matches items.
+    const reloadUnmatched = async () => {
+        try {
+            const res = await fetch(`/api/admin/unmatched?_t=${Date.now()}`, { cache: 'no-store' });
+            const data = await res.json();
+            if (res.ok && Array.isArray(data)) setUnmatched(data);
+        } catch {}
+    };
+
+    useEffect(() => {
+        fetchSweepInfo();
+        return () => { if (sweepPollRef.current) clearInterval(sweepPollRef.current); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const runSweepNow = async () => {
+        setSweepQueued(true);
+        const prevFinished = sweepInfo?.lastResult?.finishedAt || 0;
+        try {
+            const res = await fetch('/api/admin/jobs/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job: 'unmatched_sweep' })
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => null);
+                throw new Error(data?.error || 'Failed to queue the sweep.');
+            }
+            toast({ title: "Sweep queued", description: "Running in the background — results appear here when it finishes." });
+            // Poll for the new result. The sweep paces CV searches ~2s apart, so a run can take
+            // minutes; give up after 10 minutes and let the card refresh on the next visit.
+            let ticks = 0;
+            if (sweepPollRef.current) clearInterval(sweepPollRef.current);
+            sweepPollRef.current = setInterval(async () => {
+                ticks += 1;
+                const data = await fetchSweepInfo();
+                const finished = data?.lastResult?.finishedAt || 0;
+                if (finished > prevFinished || ticks >= 60) {
+                    if (sweepPollRef.current) { clearInterval(sweepPollRef.current); sweepPollRef.current = null; }
+                    setSweepQueued(false);
+                    if (finished > prevFinished) reloadUnmatched();
+                }
+            }, 10000);
+        } catch (e: unknown) {
+            setSweepQueued(false);
+            toast({ title: "Couldn't queue the sweep", description: getErrorMessage(e), variant: "destructive" });
+        }
+    };
 
     useEffect(() => {
         fetch('/api/admin/config')
@@ -607,6 +705,35 @@ export default function SmartMatchPage() {
                     Metron Series <ExternalLink className="w-3 h-3 text-muted-foreground/70" />
                 </a>
             </div>
+
+            {/* BACKGROUND SWEEP STATUS (discussion #177) */}
+            {sweepInfo && (
+                <Card className="mt-6 p-4 border-border bg-muted/30">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className="p-2.5 bg-primary/10 rounded-lg shrink-0">
+                                <History className="w-5 h-5 text-primary" />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="font-bold text-foreground flex items-center gap-2 flex-wrap">
+                                    Background Sweep
+                                    <span className="text-[10px] font-bold uppercase tracking-wider bg-muted px-2 py-0.5 rounded-md text-muted-foreground">
+                                        every {sweepInfo.scheduleHours}h · {sweepInfo.matcherMode} mode
+                                    </span>
+                                </div>
+                                <p className={`text-sm mt-0.5 ${sweepInfo.lastResult?.status === 'FAILED' ? 'text-red-500' : 'text-muted-foreground'}`}>
+                                    {describeSweep(sweepInfo)}
+                                </p>
+                            </div>
+                        </div>
+                        <Button variant="outline" onClick={runSweepNow} disabled={sweepQueued} className="shrink-0 font-bold border-border">
+                            {sweepQueued
+                                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin shrink-0" /> <span className="whitespace-nowrap">Sweeping...</span></>
+                                : <><RefreshCw className="w-4 h-4 mr-2 shrink-0" /> <span className="whitespace-nowrap">Run Sweep Now</span></>}
+                        </Button>
+                    </div>
+                </Card>
+            )}
 
             {unmatched.length === 0 ? (
                 <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">

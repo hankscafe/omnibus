@@ -31,6 +31,22 @@ struct ScanComicInfo {
     comic_vine_issue_id: Option<String>,
     metron_id: Option<String>,
     metron_issue_id: Option<String>,
+    // Narrative + credit fields (discussion #177): stored per issue at scan so a tagged library's
+    // metadata lands in the app without burning provider API budget. Comma-separated list tags.
+    notes: Option<String>,
+    title: Option<String>,
+    summary: Option<String>,
+    genre: Option<String>,
+    writer: Option<String>,
+    penciller: Option<String>,
+    inker: Option<String>,
+    cover_artist: Option<String>,
+    colorist: Option<String>,
+    letterer: Option<String>,
+    characters: Option<String>,
+    teams: Option<String>,
+    locations: Option<String>,
+    story_arc: Option<String>,
 }
 
 struct DerivedMeta {
@@ -103,9 +119,20 @@ async fn count_pages_blocking(file: &str) -> i32 {
         .unwrap_or(0)
 }
 
-/// Reads ComicInfo.xml out of a CBZ/ZIP. RAR/CBR is not a zip, so it returns None
-/// (matches Node's AdmZip, which also can't read ComicInfo from a real RAR).
+/// Reads ComicInfo.xml out of a comic archive. CBZ/ZIP reads via the zip crate; CBR/RAR (discussion
+/// #177) lists + prints the entry via unrar, so CBR-only tagged libraries contribute ComicInfo
+/// evidence at scan time too instead of relying solely on series.json.
 fn parse_comic_info(path: &Path) -> Option<ScanComicInfo> {
+    // Signature-dispatch (extensions lie): "Rar!" -> unrar; anything else tries zip.
+    let mut sig = [0u8; 4];
+    let is_rar = File::open(path)
+        .and_then(|mut f| f.read(&mut sig))
+        .map(|n| n >= 4 && sig[..4] == [0x52, 0x61, 0x72, 0x21])
+        .unwrap_or(false);
+    if is_rar {
+        return parse_comic_info_rar(path);
+    }
+
     let file = File::open(path).ok()?;
     let mut archive = ZipArchive::new(file).ok()?;
 
@@ -116,12 +143,40 @@ fn parse_comic_info(path: &Path) -> Option<ScanComicInfo> {
                 if entry.read_to_string(&mut xml).is_ok() {
                     // Sanitize bare ampersands without breaking real entities (parity with metadata-extractor.ts:34).
                     let xml = sanitize_xml_ampersands(&xml);
-                    return quick_xml::de::from_str(&xml).ok();
+                    return quick_xml::de::from_str(xml.trim_start_matches('\u{feff}')).ok();
                 }
             }
         }
     }
     None
+}
+
+/// RAR branch: find the ComicInfo entry case-insensitively via `unrar lb`, then print it to stdout
+/// with `unrar p`. Any missing binary / listing / parse failure is a None — the scan proceeds on
+/// the folder's other evidence (series.json, folder name).
+fn parse_comic_info_rar(path: &Path) -> Option<ScanComicInfo> {
+    let list = std::process::Command::new("unrar")
+        .args(["lb", "-p-"])
+        .arg(path)
+        .output()
+        .ok()?;
+    let entry = String::from_utf8_lossy(&list.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| l.rsplit(['/', '\\']).next().unwrap_or("").eq_ignore_ascii_case("comicinfo.xml"))
+        .map(str::to_string)?;
+    let out = std::process::Command::new("unrar")
+        .args(["p", "-inul", "-p-"])
+        .arg(path)
+        .arg(&entry)
+        .output()
+        .ok()?;
+    if out.stdout.is_empty() {
+        return None;
+    }
+    let xml = String::from_utf8_lossy(&out.stdout).to_string();
+    let xml = sanitize_xml_ampersands(&xml);
+    quick_xml::de::from_str(xml.trim_start_matches('\u{feff}')).ok()
 }
 
 /// Replaces `&` that is not the start of a valid XML entity with `&amp;`.
@@ -169,6 +224,198 @@ fn is_numeric_entity(s: &str) -> bool {
     i > start && i < bytes.len() && bytes[i] == b';'
 }
 
+/// Folder-level Mylar-spec series.json (discussion #177). Omnibus writes these itself
+/// (metadata_writer) and Mylar-migrated libraries arrive with them. `comicid` is the ComicVine
+/// VOLUME id per the Mylar spec — a direct, zero-API series match that works even when the folder's
+/// archives are RAR/CBR (where ComicInfo.xml can't be read pre-conversion).
+#[derive(Debug, Default)]
+struct SeriesJsonInfo {
+    comicid: Option<i64>,
+    name: Option<String>,
+    publisher: Option<String>,
+    year: Option<i32>,
+    description: Option<String>,
+    booktype: Option<String>,
+    /// Mapped to Omnibus status values: "Ended" | "Ongoing".
+    status: Option<String>,
+}
+
+fn parse_series_json(content: &str) -> Option<SeriesJsonInfo> {
+    let v: serde_json::Value = serde_json::from_str(content).ok()?;
+    let m = v.get("metadata")?;
+    if !m.is_object() {
+        return None;
+    }
+    let get_str = |k: &str| m.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let comicid = m.get("comicid")
+        .and_then(|c| c.as_i64().or_else(|| c.as_str().and_then(|s| s.trim().parse().ok())))
+        .filter(|id| *id > 0);
+    let year = m.get("year")
+        .and_then(|y| y.as_i64().or_else(|| y.as_str().and_then(|s| s.trim().parse().ok())))
+        .map(|y| y as i32)
+        .filter(|y| *y != 0);
+    let status = get_str("status").map(|s| if s.eq_ignore_ascii_case("ended") { "Ended".to_string() } else { "Ongoing".to_string() });
+    Some(SeriesJsonInfo {
+        comicid,
+        name: get_str("name"),
+        publisher: get_str("publisher"),
+        year,
+        description: get_str("description_text"),
+        booktype: get_str("booktype"),
+        status,
+    })
+}
+
+/// Reads `<folder>/series.json` if present. Any read/parse failure is a None (the scan proceeds on
+/// ComicInfo/folder-name evidence), but a malformed file in a tagged library is worth a log line.
+fn read_series_json(folder: &Path) -> Option<SeriesJsonInfo> {
+    let path = folder.join("series.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let parsed = parse_series_json(&content);
+    if parsed.is_none() {
+        log::warn!("[Scanner] {} exists but is not a parseable Mylar-spec series.json — ignoring it.", path.display());
+    }
+    parsed
+}
+
+fn notes_re_issue_id() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)issue\s*id\s*:?\s*#?(\d+)").unwrap())
+}
+fn notes_re_cvdb() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)CVDB(\d+)").unwrap())
+}
+
+/// (cv_issue_id, metron_issue_id) from a ComicTagger/Mylar `<Notes>` tag (discussion #177):
+/// "[Issue ID 123456]" (provider named in the surrounding text; Comic Vine unless Metron is named)
+/// or the newer short form "[CVDB987]". Older tagged files carry ONLY Notes — no Web, no dedicated
+/// id tags — and previously fell all the way through to name-search.
+fn notes_issue_ids(notes: &str) -> (Option<i32>, Option<i32>) {
+    if let Some(id) = capture_i32(notes_re_cvdb(), notes) {
+        return (Some(id), None);
+    }
+    if let Some(id) = capture_i32(notes_re_issue_id(), notes) {
+        if notes.to_lowercase().contains("metron") {
+            return (None, Some(id));
+        }
+        return (Some(id), None);
+    }
+    (None, None)
+}
+
+/// Per-issue narrative/credit columns from a file's own ComicInfo (discussion #177). Comma-separated
+/// list tags become JSON array strings; absent/empty fields stay None — never a literal '[]' — so
+/// the provider syncs' fill/never-clobber policies treat them as blanks to fill.
+#[derive(Default)]
+struct IssueFileMeta {
+    name: Option<String>,
+    description: Option<String>,
+    genres: Option<String>,
+    writers: Option<String>,
+    artists: Option<String>,
+    cover_artists: Option<String>,
+    colorists: Option<String>,
+    letterers: Option<String>,
+    characters: Option<String>,
+    teams: Option<String>,
+    locations: Option<String>,
+    story_arcs: Option<String>,
+}
+
+fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
+    let Some(i) = info else { return IssueFileMeta::default() };
+    let text = |s: &Option<String>| s.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let list = |s: &Option<String>| -> Option<String> {
+        let j = crate::watched_sync::split_to_json(s.as_deref());
+        if j == "[]" { None } else { Some(j) }
+    };
+    // Penciller + Inker merge into the artists bucket (parity with metadata-extractor.ts), deduped
+    // preserving first-seen order.
+    let artists = {
+        let mut v: Vec<String> = Vec::new();
+        for s in [&i.penciller, &i.inker].into_iter().flatten() {
+            for part in s.split(',') {
+                let t = part.trim();
+                if !t.is_empty() && !v.iter().any(|x| x == t) {
+                    v.push(t.to_string());
+                }
+            }
+        }
+        if v.is_empty() { None } else { serde_json::to_string(&v).ok() }
+    };
+    IssueFileMeta {
+        name: text(&i.title),
+        description: text(&i.summary),
+        genres: list(&i.genre),
+        writers: list(&i.writer),
+        artists,
+        cover_artists: list(&i.cover_artist),
+        colorists: list(&i.colorist),
+        letterers: list(&i.letterer),
+        characters: list(&i.characters),
+        teams: list(&i.teams),
+        locations: list(&i.locations),
+        story_arcs: list(&i.story_arc),
+    }
+}
+
+/// Folder-level identity evidence for the unmatched-retry sweep (matcher.rs): the first comic
+/// file's ComicInfo + the folder's series.json — the same precedence the scanner uses — with the
+/// live issue-id→volume resolution gated behind `allow_api` (budget-aware callers). Returns
+/// (metadataSource, metadataId, cv_id, metron_id) when the files identify the series.
+pub(crate) async fn folder_match_evidence(
+    db: &Db,
+    client: &reqwest::Client,
+    folder: &Path,
+    allow_api: bool,
+) -> Option<(String, String, Option<i32>, Option<i32>)> {
+    let f = folder.to_path_buf();
+    let (info, sj) = tokio::task::spawn_blocking(move || {
+        let first = crate::converter::first_comic_file(&f);
+        let info = first.as_ref().and_then(|p| parse_comic_info(p));
+        let sj = read_series_json(&f);
+        (info, sj)
+    })
+    .await
+    .ok()?;
+
+    let mut derived = info.as_ref().map(derive_meta);
+    if let Some(sj_id) = sj.as_ref().and_then(|j| j.comicid) {
+        match derived.as_mut() {
+            Some(d) => {
+                if d.cv_id.is_none() && d.metron_id.is_none() {
+                    d.cv_id = Some(sj_id as i32);
+                    d.recompute_resolved();
+                }
+            }
+            None => {
+                derived = Some(DerivedMeta {
+                    cv_id: Some(sj_id as i32),
+                    metron_id: None,
+                    cv_issue_id: None,
+                    metron_issue_id: None,
+                    metadata_id: Some(sj_id.to_string()),
+                    metadata_issue_id: None,
+                    metadata_source: "COMICVINE".to_string(),
+                    is_manga: false,
+                    parsed_year: sj.as_ref().and_then(|j| j.year),
+                });
+            }
+        }
+    }
+    if allow_api {
+        if let Some(d) = derived.as_mut() {
+            if d.metadata_id.is_none() {
+                let name = info.as_ref().and_then(|i| i.series.as_deref()).map(str::trim).filter(|s| !s.is_empty())
+                    .or_else(|| sj.as_ref().and_then(|j| j.name.as_deref()));
+                resolve_dynamic_ids(db, client, d, name).await;
+            }
+        }
+    }
+    derived.and_then(|d| d.metadata_id.clone().map(|id| (d.metadata_source.clone(), id, d.cv_id, d.metron_id)))
+}
+
 fn derive_meta(info: &ScanComicInfo) -> DerivedMeta {
     let mut cv_id = info.comic_vine_volume_id.as_deref().and_then(parse_i32);
     let mut cv_issue_id = info.comic_vine_issue_id.as_deref().and_then(parse_i32);
@@ -187,6 +434,16 @@ fn derive_meta(info: &ScanComicInfo) -> DerivedMeta {
         }
         if metron_issue_id.is_none() {
             metron_issue_id = capture_i32(web_re_metron_issue(), web);
+        }
+    }
+
+    // Notes fallback (discussion #177): older ComicTagger/Mylar files carry the provider issue id
+    // only inside <Notes> ("[Issue ID 123456]" / "[CVDB987]") — no Web URL, no dedicated tags.
+    if cv_issue_id.is_none() && metron_issue_id.is_none() {
+        if let Some(notes) = &info.notes {
+            let (cv_n, metron_n) = notes_issue_ids(notes);
+            cv_issue_id = cv_n;
+            metron_issue_id = metron_n;
         }
     }
 
@@ -800,17 +1057,21 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
     // Series name / year / publisher derivation, shared by the parallel phase (for manga detection) and
     // the insert loop, so the two can't drift.
-    fn derive_folder_basics(info: &Option<ScanComicInfo>, folder_name: &str) -> (String, i32, String) {
-        let derived = info.as_ref().map(derive_meta);
-        let clean_name = info.as_ref().and_then(|i| i.series.clone()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    // Identity precedence (discussion #177): per-file ComicInfo -> folder series.json -> folder name.
+    fn derive_folder_basics(info: Option<&ScanComicInfo>, sj: Option<&SeriesJsonInfo>, folder_name: &str) -> (String, i32, String) {
+        let derived = info.map(derive_meta);
+        let clean_name = info.and_then(|i| i.series.clone()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+            .or_else(|| sj.and_then(|j| j.name.clone()))
             .unwrap_or_else(|| {
                 let stripped = trailing_year_re().replace(folder_name, "").trim().to_string();
                 if stripped.is_empty() { "Unknown Series".to_string() } else { stripped }
             });
         let year = derived.as_ref().and_then(|d| d.parsed_year)
+            .or_else(|| sj.and_then(|j| j.year))
             .or_else(|| any_year_re().captures(folder_name).and_then(|c| c[1].parse::<i32>().ok()))
             .unwrap_or(0);
-        let publisher = info.as_ref().and_then(|i| i.publisher.clone()).map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+        let publisher = info.and_then(|i| i.publisher.clone()).map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+            .or_else(|| sj.and_then(|j| j.publisher.clone()))
             .unwrap_or_else(|| "Other".to_string());
         (clean_name, year, publisher)
     }
@@ -818,7 +1079,12 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     struct ParsedFolder {
         folder_path: String,
         files: Vec<String>,
-        info: Option<ScanComicInfo>,
+        /// Per-file ComicInfo, index-aligned with `files` — each issue carries its OWN identity and
+        /// narrative metadata (previously only the first archive was parsed, which stamped the first
+        /// issue's provider id onto every issue in the folder — discussion #177).
+        infos: Vec<Option<ScanComicInfo>>,
+        /// Folder-level Mylar-spec series.json, when present.
+        sj: Option<SeriesJsonInfo>,
         clean_name: String,
         year: i32,
         publisher: String,
@@ -838,22 +1104,33 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let western_pubs = western_pubs.clone();
         folder_parse_set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
-            let first = files[0].clone();
-            let info = tokio::task::spawn_blocking(move || parse_comic_info(Path::new(&first))).await.unwrap_or(None);
+
+            // Parse EVERY file's ComicInfo (not just the first) plus the folder's series.json in one
+            // blocking task — per-issue identity/metadata and a zero-API series id (discussion #177).
+            let fp = folder_path.clone();
+            let fl = files.clone();
+            let (infos, sj) = tokio::task::spawn_blocking(move || {
+                let infos: Vec<Option<ScanComicInfo>> = fl.iter().map(|f| parse_comic_info(Path::new(f))).collect();
+                let sj = read_series_json(Path::new(&fp));
+                (infos, sj)
+            })
+            .await
+            .unwrap_or((Vec::new(), None));
 
             let folder_name = Path::new(&folder_path).file_name().unwrap_or_default().to_string_lossy().to_string();
-            let (clean_name, year, publisher) = derive_folder_basics(&info, &folder_name);
+            let first_info = infos.first().and_then(|o| o.as_ref());
+            let (clean_name, year, publisher) = derive_folder_basics(first_info, sj.as_ref(), &folder_name);
             // 3-tier manga detection runs HERE (in the bounded parallel phase) instead of one-at-a-time in
             // the sequential insert loop below — otherwise the AniList HTTP call (10s timeout, 3rd tier)
             // serialized across every unknown-publisher folder during a large first scan.
-            let comicinfo_manga = info.as_ref().map(derive_meta).map(|d| d.is_manga).unwrap_or(false);
+            let comicinfo_manga = first_info.map(derive_meta).map(|d| d.is_manga).unwrap_or(false);
             let is_manga = if comicinfo_manga || lib_is_manga {
                 true
             } else {
                 crate::manga_detector::detect_manga(&client, &clean_name, &publisher, year, &manga_pubs, &western_pubs).await
             };
 
-            ParsedFolder { folder_path, files, info, clean_name, year, publisher, is_manga }
+            ParsedFolder { folder_path, files, infos, sj, clean_name, year, publisher, is_manga }
         });
     }
     let mut parsed_folders: Vec<ParsedFolder> = Vec::new();
@@ -862,17 +1139,49 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     }
 
     for pf in parsed_folders {
-        let ParsedFolder { folder_path, files, info, clean_name, year, publisher, is_manga } = pf;
+        let ParsedFolder { folder_path, files, infos, sj, clean_name, year, publisher, is_manga } = pf;
 
         log::debug!("[Scanner Debug] Indexing new folder ({} archives): {}", files.len(), folder_path);
 
-        let mut derived = info.as_ref().map(derive_meta);
+        let first_info = infos.first().and_then(|o| o.as_ref());
+        let mut derived = first_info.map(derive_meta);
+
+        // series.json identity (discussion #177): the Mylar-spec comicid is the ComicVine VOLUME id —
+        // a direct match with ZERO API calls that also covers RAR/CBR folders (ComicInfo unreadable).
+        // ComicInfo ids (when present) still take precedence; series.json fills the gap.
+        if let Some(sj_id) = sj.as_ref().and_then(|j| j.comicid) {
+            match derived.as_mut() {
+                Some(d) => {
+                    if d.cv_id.is_none() && d.metron_id.is_none() {
+                        d.cv_id = Some(sj_id as i32);
+                        d.recompute_resolved();
+                        log::debug!("[Scanner Debug] series.json comicid {} matched folder {}.", sj_id, folder_path);
+                    }
+                }
+                None => {
+                    derived = Some(DerivedMeta {
+                        cv_id: Some(sj_id as i32),
+                        metron_id: None,
+                        cv_issue_id: None,
+                        metron_issue_id: None,
+                        metadata_id: Some(sj_id.to_string()),
+                        metadata_issue_id: None,
+                        metadata_source: "COMICVINE".to_string(),
+                        is_manga: false,
+                        parsed_year: sj.as_ref().and_then(|j| j.year),
+                    });
+                    log::debug!("[Scanner Debug] series.json comicid {} matched folder {} (no readable ComicInfo).", sj_id, folder_path);
+                }
+            }
+        }
 
         // Dynamic resolution (parity with parseComicInfo step 3): files tagged with only an issue id
         // get their owning volume/series id resolved live, so they land MATCHED. Sequential + cached —
-        // one API call per unique series name/year across the whole scan.
+        // one API call per unique series name/year across the whole scan. A series.json comicid above
+        // already satisfies the volume id, so tagged Mylar libraries skip this entirely.
         if let Some(d) = derived.as_mut() {
-            let series_name = info.as_ref().and_then(|i| i.series.as_deref()).map(str::trim).filter(|s| !s.is_empty());
+            let series_name = first_info.and_then(|i| i.series.as_deref()).map(str::trim).filter(|s| !s.is_empty())
+                .or_else(|| sj.as_ref().and_then(|j| j.name.as_deref()));
             resolve_dynamic_ids(&db, &http_client, d, series_name).await;
         }
 
@@ -903,18 +1212,23 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
         // Series Group comes only from the file's ComicInfo.xml (ComicVine/Metron don't supply it);
         // captured here at series creation so {SeriesGroup} folder patterns work for scanned libraries.
-        let series_group = info
-            .as_ref()
+        let series_group = first_info
             .and_then(|i| i.series_group.clone())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
         // ON CONFLICT DO NOTHING guards the @@unique([metadataSource, metadataId]) constraint —
         // a duplicate matched series is skipped (parity with Node's create-throws-then-skip).
+        // Narrative series fields ride along from series.json when present (fill-at-create; the
+        // provider sync's fill/never-clobber policies own later updates).
+        let sj_description = sj.as_ref().and_then(|j| j.description.clone());
+        let sj_status = sj.as_ref().and_then(|j| j.status.clone());
+        let sj_booktype = sj.as_ref().and_then(|j| j.booktype.clone());
+
         let insert_res = sqlx::query(&format!(
             r#"INSERT INTO "Series"
-               (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "seriesGroup", "libraryId", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, {now}, {now})
+               (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "seriesGroup", "libraryId", description, status, "bookType", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, {now}, {now})
                ON CONFLICT DO NOTHING"#,
             now = db.now_expr()
         ))
@@ -931,6 +1245,9 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         .bind(is_manga)
         .bind(&series_group)
         .bind(&library_id)
+        .bind(&sj_description)
+        .bind(&sj_status)
+        .bind(&sj_booktype)
         .execute(&db.pool)
         .await;
 
@@ -950,37 +1267,59 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         }
         series_inserted += 1;
 
-        // Issue-level identity comes from the first archive's ComicInfo (parity with Node).
-        let issue_real_meta = derived.as_ref().and_then(|d| d.metadata_issue_id.clone());
-
+        // Each issue carries its OWN provider identity + narrative metadata from its own ComicInfo
+        // (discussion #177). The old shape stamped the FIRST archive's issue id onto every issue in
+        // the folder — issue #2..#N all carried issue #1's provider id (marked MATCHED), so the
+        // view-time enrichment fetched issue #1's credits for all of them until a sync self-healed.
         let mut folder_issue_count = 0;
-        for file in &files {
+        for (idx, file) in files.iter().enumerate() {
             let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
             let issue_num = issue_number_from_filename(&file_name);
 
+            let file_info = infos.get(idx).and_then(|o| o.as_ref());
+            let file_derived = file_info.map(derive_meta);
             let issue_id = Uuid::new_v4().to_string();
-            let (issue_meta_id, issue_match_state) = match &issue_real_meta {
-                Some(id) => (id.clone(), "MATCHED"),
-                None => (format!("unmatched_{}", Uuid::new_v4()), "UNMATCHED"),
+            let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
+                Some(d) if d.metadata_issue_id.is_some() => (
+                    d.metadata_issue_id.clone().unwrap(),
+                    d.metadata_source.clone(),
+                    "MATCHED",
+                ),
+                _ => (format!("unmatched_{}", Uuid::new_v4()), metadata_source.clone(), "UNMATCHED"),
             };
+            let fm = issue_file_meta(file_info);
 
             // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
             let page_count = count_pages_blocking(file).await;
 
             if let Err(e) = sqlx::query(&format!(
                 r#"INSERT INTO "Issue"
-                   (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount", "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, {now}, {now})"#,
+                   (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
+                    name, description, genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
+                    "createdAt", "updatedAt")
+                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, {now}, {now})"#,
                 now = db.now_expr()
             ))
             .bind(&issue_id)
             .bind(&series_id)
             .bind(&issue_meta_id)
-            .bind(&metadata_source)
+            .bind(&issue_source)
             .bind(issue_match_state)
             .bind(&issue_num)
             .bind(file)
             .bind(page_count)
+            .bind(&fm.name)
+            .bind(&fm.description)
+            .bind(&fm.genres)
+            .bind(&fm.writers)
+            .bind(&fm.artists)
+            .bind(&fm.cover_artists)
+            .bind(&fm.colorists)
+            .bind(&fm.letterers)
+            .bind(&fm.characters)
+            .bind(&fm.teams)
+            .bind(&fm.locations)
+            .bind(&fm.story_arcs)
             .execute(&db.pool)
             .await
             {
@@ -1071,10 +1410,14 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
         let issue_id = Uuid::new_v4().to_string();
         let page_count = count_pages_blocking(&file).await;
+        // Narrative metadata from the file's own ComicInfo (discussion #177) — same as 5A.
+        let fm = issue_file_meta(info.as_ref());
         if let Err(e) = sqlx::query(&format!(
             r#"INSERT INTO "Issue"
-               (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, {now}, {now})"#,
+               (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
+                name, description, genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
+                "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, {now}, {now})"#,
             now = db.now_expr()
         ))
         .bind(&issue_id)
@@ -1085,6 +1428,18 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         .bind(&issue_num)
         .bind(&file)
         .bind(page_count)
+        .bind(&fm.name)
+        .bind(&fm.description)
+        .bind(&fm.genres)
+        .bind(&fm.writers)
+        .bind(&fm.artists)
+        .bind(&fm.cover_artists)
+        .bind(&fm.colorists)
+        .bind(&fm.letterers)
+        .bind(&fm.characters)
+        .bind(&fm.teams)
+        .bind(&fm.locations)
+        .bind(&fm.story_arcs)
         .execute(&db.pool)
         .await
         {
@@ -1231,6 +1586,152 @@ async fn delete_issue(db: &Db, issue_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==== Discussion #177: trust embedded file metadata (Mylar-migrated libraries). ====
+
+    #[test]
+    fn parse_comic_info_reads_rar_archives() {
+        // ComicInfo.xml must be readable from CBR/RAR too — a CBR-only tagged library previously got
+        // NOTHING from ComicInfo at scan (zip-only reader), leaving series.json as the only evidence.
+        // Fixture: tests/fixtures/comicinfo_pack.cbr (real RAR: ComicInfo.xml + one page). Skips when
+        // unrar isn't on PATH (CI installs it; the Docker image ships it).
+        if std::process::Command::new("unrar").arg("-?").output().is_err() {
+            eprintln!("skipping: unrar not on PATH");
+            return;
+        }
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/comicinfo_pack.cbr");
+        let info = parse_comic_info(&fixture).expect("ComicInfo should parse out of the RAR");
+        assert_eq!(info.series.as_deref(), Some("Wolverine"));
+        assert_eq!(info.title.as_deref(), Some("Trial by Fire"));
+        assert_eq!(info.characters.as_deref(), Some("Wolverine, Nightcrawler"));
+
+        let d = derive_meta(&info);
+        // The Web URL issue id (4000-1071543) resolves; Notes corroborates it.
+        assert_eq!(d.cv_issue_id, Some(1071543));
+        assert_eq!(d.metadata_source, "COMICVINE");
+    }
+
+    #[test]
+    fn series_json_parses_mylar_spec() {
+        // The exact shape Omnibus's own metadata_writer exports (Mylar v1.0.2) — guaranteed round-trip.
+        let mylar = r#"{
+            "version": "1.0.2",
+            "metadata": {
+                "type": "comicSeries",
+                "publisher": "DC Comics",
+                "imprint": null,
+                "name": "Batman",
+                "comicid": 796,
+                "year": 2011,
+                "description_text": "The Dark Knight.",
+                "description_formatted": null,
+                "volume": null,
+                "booktype": "Print",
+                "age_rating": null,
+                "collects": null,
+                "comic_image": "",
+                "total_issues": 57,
+                "publication_run": "2011 - 2016",
+                "status": "Ended"
+            }
+        }"#;
+        let sj = parse_series_json(mylar).unwrap();
+        assert_eq!(sj.comicid, Some(796));
+        assert_eq!(sj.name.as_deref(), Some("Batman"));
+        assert_eq!(sj.publisher.as_deref(), Some("DC Comics"));
+        assert_eq!(sj.year, Some(2011));
+        assert_eq!(sj.description.as_deref(), Some("The Dark Knight."));
+        assert_eq!(sj.booktype.as_deref(), Some("Print"));
+        assert_eq!(sj.status.as_deref(), Some("Ended"));
+
+        // Mylar-in-the-wild variants: comicid as a string; "Continuing" maps to Ongoing.
+        let cont = r#"{"metadata": {"comicid": "12345", "status": "Continuing"}}"#;
+        let sj = parse_series_json(cont).unwrap();
+        assert_eq!(sj.comicid, Some(12345));
+        assert_eq!(sj.status.as_deref(), Some("Ongoing"));
+
+        // Garbage / missing metadata object → None (never a half-parsed identity).
+        assert!(parse_series_json("not json").is_none());
+        assert!(parse_series_json(r#"{"version": "1.0.2"}"#).is_none());
+        // comicid 0 / negative is not a real id.
+        assert!(parse_series_json(r#"{"metadata": {"comicid": 0}}"#).unwrap().comicid.is_none());
+    }
+
+    #[test]
+    fn notes_issue_ids_extract_comictagger_and_mylar_patterns() {
+        // ComicTagger / Mylar long form (Comic Vine): "[Issue ID 123456]"
+        assert_eq!(
+            notes_issue_ids("Tagged with ComicTagger 1.6.0 using info from Comic Vine on 2023-01-01 12:00:00. [Issue ID 123456]"),
+            (Some(123456), None)
+        );
+        // Newer ComicTagger short form: "[CVDB987]"
+        assert_eq!(notes_issue_ids("Tagged with the ninjas.walk.alone fork [CVDB987]"), (Some(987), None));
+        // Metron-tagged files own the plain "Issue ID" form when the notes name Metron.
+        assert_eq!(notes_issue_ids("Tagged with ComicTagger using info from Metron on 2024-05-05. [Issue ID 55]"), (None, Some(55)));
+        // No recognizable ids.
+        assert_eq!(notes_issue_ids("hand-tagged, no provider"), (None, None));
+    }
+
+    #[test]
+    fn derive_meta_falls_back_to_notes_issue_id() {
+        // Files tagged with Notes-but-no-Web (older ComicTagger) must still resolve an issue id.
+        let info = ScanComicInfo {
+            notes: Some("Tagged with ComicTagger using info from Comic Vine [Issue ID 4242]".to_string()),
+            ..Default::default()
+        };
+        let d = derive_meta(&info);
+        assert_eq!(d.cv_issue_id, Some(4242));
+        assert_eq!(d.metadata_source, "COMICVINE");
+        assert_eq!(d.metadata_issue_id.as_deref(), Some("4242"));
+
+        // Dedicated tags and the Web URL still outrank Notes.
+        let info = ScanComicInfo {
+            comic_vine_issue_id: Some("1".to_string()),
+            notes: Some("[CVDB2]".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(derive_meta(&info).cv_issue_id, Some(1));
+    }
+
+    #[test]
+    fn issue_file_meta_maps_comicinfo_narrative_fields() {
+        let info = ScanComicInfo {
+            title: Some("The Long Halloween".to_string()),
+            summary: Some("A killer strikes on holidays.".to_string()),
+            genre: Some("Crime, Super-Hero".to_string()),
+            writer: Some("Jeph Loeb".to_string()),
+            penciller: Some("Tim Sale".to_string()),
+            inker: Some("Tim Sale, Someone Else".to_string()),
+            cover_artist: Some("Tim Sale".to_string()),
+            colorist: Some("Gregory Wright".to_string()),
+            letterer: Some("Richard Starkings".to_string()),
+            characters: Some("Batman, Harvey Dent".to_string()),
+            teams: Some("GCPD".to_string()),
+            locations: Some("Gotham City".to_string()),
+            story_arc: Some("The Long Halloween".to_string()),
+            ..Default::default()
+        };
+        let m = issue_file_meta(Some(&info));
+        assert_eq!(m.name.as_deref(), Some("The Long Halloween"));
+        assert_eq!(m.description.as_deref(), Some("A killer strikes on holidays."));
+        assert_eq!(m.genres.as_deref(), Some(r#"["Crime","Super-Hero"]"#));
+        assert_eq!(m.writers.as_deref(), Some(r#"["Jeph Loeb"]"#));
+        // Penciller + Inker merge into artists, deduped, first-seen order.
+        assert_eq!(m.artists.as_deref(), Some(r#"["Tim Sale","Someone Else"]"#));
+        assert_eq!(m.cover_artists.as_deref(), Some(r#"["Tim Sale"]"#));
+        assert_eq!(m.colorists.as_deref(), Some(r#"["Gregory Wright"]"#));
+        assert_eq!(m.letterers.as_deref(), Some(r#"["Richard Starkings"]"#));
+        assert_eq!(m.characters.as_deref(), Some(r#"["Batman","Harvey Dent"]"#));
+        assert_eq!(m.teams.as_deref(), Some(r#"["GCPD"]"#));
+        assert_eq!(m.locations.as_deref(), Some(r#"["Gotham City"]"#));
+        assert_eq!(m.story_arcs.as_deref(), Some(r#"["The Long Halloween"]"#));
+
+        // Absent fields stay None — never a literal '[]' (the provider-sync fill policies key on NULL).
+        let empty = issue_file_meta(Some(&ScanComicInfo::default()));
+        assert!(empty.name.is_none() && empty.writers.is_none() && empty.genres.is_none());
+        let none = issue_file_meta(None);
+        assert!(none.name.is_none() && none.characters.is_none());
+    }
 
     #[test]
     fn strip_leading_zeros_matches_js() {

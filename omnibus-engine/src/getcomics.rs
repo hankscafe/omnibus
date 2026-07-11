@@ -222,7 +222,7 @@ pub(crate) fn interactive_query_variants(queries: &[String]) -> Vec<String> {
     let re_trailing_year = regex::Regex::new(r"\s\d{4}$").unwrap();
     let re_trailing_issue = regex::Regex::new(r"\s#?\d+(?:\.\d+)?$").unwrap();
     let re_pad = regex::Regex::new(r"\b0+(\d{1,3})\b").unwrap();
-    let clean_sym = |s: &str| s.replace([':', '-', '&'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    let clean_sym = |s: &str| s.replace([':', '-', '&', '/', '\\'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
     let depad = |s: &str| re_pad.replace_all(s, "$1").to_string();
     let mut seen: HashSet<String> = HashSet::new();
     let mut list: Vec<String> = Vec::new();
@@ -958,6 +958,15 @@ mod tests {
         assert!(v.contains(&"Wolverine 003".to_string()), "year-stripped form: {:?}", v);
         assert!(v.contains(&"Wolverine".to_string()), "name-only broad form: {:?}", v);
         // "Wolverine 3 2024" being present already proves 003→3 de-padded while the 2024 year stays intact.
+    }
+
+    #[test]
+    fn interactive_variants_fold_slash_titles() {
+        // Discussion #177: "Hack/Slash" never matched — GetComics/CV searches choke on the slash.
+        // The symbol-cleaned variant must fold '/' to a space like it already does for ':', '-', '&'.
+        let v = interactive_query_variants(&["Hack/Slash 003".to_string()]);
+        assert!(v.contains(&"Hack Slash 003".to_string()), "slash folded: {:?}", v);
+        assert!(v.contains(&"Hack Slash 3".to_string()), "slash folded + de-padded: {:?}", v);
     }
 
     // Builds the Cookie header + UA the engine replays to get past Cloudflare on a getcomics.org/dls/ download.

@@ -568,7 +568,8 @@ fn clean_naming_leftovers(input: &str) -> String {
 }
 
 /// Splits a comma-separated ComicInfo field into a JSON array string (e.g. "A, B" -> `["A","B"]`).
-fn split_to_json(s: Option<&str>) -> String {
+/// Shared with the scanner's issue_file_meta (discussion #177).
+pub(crate) fn split_to_json(s: Option<&str>) -> String {
     match s {
         Some(v) => {
             let parts: Vec<&str> = v.split(',').map(|p| p.trim()).filter(|p| !p.is_empty()).collect();

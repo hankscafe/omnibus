@@ -98,7 +98,10 @@ export async function GET(request: Request) {
 
         const response = await axios.get(`${BASE_URL}/search/`, {
           params: {
-            api_key: CV_API_KEY, format: 'json', query: query, resources: 'volume', limit: limit, page: page,
+            // ComicVine's search tokenizer chokes on slashes ("Hack/Slash" returns nothing while
+            // "Hack Slash" matches — discussion #177); fold them for CV only. Metron's ?name=
+            // icontains filter needs the RAW name, so the fold is scoped to this branch.
+            api_key: CV_API_KEY, format: 'json', query: query.replace(/[\/\\]/g, ' ').replace(/\s+/g, ' ').trim(), resources: 'volume', limit: limit, page: page,
             field_list: 'id,name,start_year,publisher,count_of_issues,image,deck,description' 
           },
           headers: { 'User-Agent': 'Omnibus/1.0' }

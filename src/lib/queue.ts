@@ -95,7 +95,8 @@ export async function syncSchedules() {
                     'library_sync_schedule', 'metadata_sync_schedule', 'monitor_sync_schedule',
                     'diagnostics_sync_schedule', 'backup_sync_schedule', 'backup_sync_day', 'popular_sync_schedule',
                     'weekly_digest_schedule', 'weekly_digest_day', 'cbr_conversion_schedule', 'embed_metadata_schedule',
-                    'series_json_schedule', 'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule'
+                    'series_json_schedule', 'cache_cleanup_schedule', 'watched_sync_schedule', 'health_check_schedule',
+                    'unmatched_sweep_schedule'
                 ]
             }
         }
@@ -161,6 +162,8 @@ export async function syncSchedules() {
 
     // --- REPLACED: Converted hardcoded 15m intervals to dynamic user variables ---
     await addJob('WATCHED_FOLDER_SYNC', config.watched_sync_schedule || '0.25'); 
+    // Unmatched-series retry sweep (discussion #177): budget-aware; default hourly.
+    await addJob('UNMATCHED_SWEEP', config.unmatched_sweep_schedule || '1');
     await addJob('SYSTEM_HEALTH_CHECK', config.health_check_schedule || '0.25'); 
 
     // Leave the GitHub update checker at 24 hours
@@ -418,6 +421,29 @@ export function initWorker() {
                     } catch (err: any) {
                         Logger.log(`[BullMQ] Failed to process Rust search response: ${err.message}`, 'error');
                         await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
+                    }
+                    break;
+                }
+
+                case 'UNMATCHED_SWEEP': {
+                    // Unmatched-series retry sweep (discussion #177): the engine re-checks embedded
+                    // file metadata (series.json / ComicInfo — free) and, under an auto-accepting
+                    // matcher_mode, name-searches within the ComicVine budget. Detached like the
+                    // watched-folder sweep: the engine writes the UNMATCHED_SWEEP JobLog itself.
+                    await prisma.systemSetting.upsert({
+                        where: { key: 'last_unmatched_sweep' },
+                        update: { value: nowStr },
+                        create: { key: 'last_unmatched_sweep', value: nowStr }
+                    });
+
+                    Logger.log(`[BullMQ] Forwarding unmatched-series sweep to Rust Engine...`, 'info');
+                    try {
+                        const rustResponse = await fetch(ENGINE_URL + '/api/matcher/sweep', { method: 'POST', headers: engineHeaders() });
+                        if (!rustResponse.ok) throw new Error(`Rust returned status ${rustResponse.status}`);
+                        Logger.log(`[BullMQ] Rust Engine accepted the unmatched-series sweep.`, 'info');
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Failed to offload unmatched sweep to Rust: ${getErrorMessage(e)}`, 'error');
+                        throw e;
                     }
                     break;
                 }

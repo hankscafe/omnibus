@@ -43,6 +43,9 @@ export async function GET(request: Request) {
     const pendingOnly = searchParams.get('pending') === 'true';
     const monitored = searchParams.get('monitored') === 'true';
     const era = searchParams.get('era') || 'ALL';
+    // Series status filter (discussion #177): lets admins isolate Ongoing/Ended series and combine
+    // with select-all + bulk-monitor for one-click mass monitoring.
+    const seriesStatus = searchParams.get('status') || 'ALL';
     const bookTypeFilter = searchParams.get('bookType') || 'ALL';
     const readStatus = searchParams.get('readStatus') || 'ALL';
 
@@ -78,6 +81,7 @@ export async function GET(request: Request) {
     if (favorites) where.AND.push({ favorites: { some: { userId } } });
     if (unmatchedOnly) where.AND.push({ matchState: 'UNMATCHED' });
     if (monitored) where.AND.push({ monitored: true });
+    if (seriesStatus === 'Ongoing' || seriesStatus === 'Ended') where.AND.push({ status: seriesStatus });
 
     if (pendingOnly) {
         where.AND.push({

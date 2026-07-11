@@ -65,6 +65,24 @@ describe('API Route: Library Advanced Search', () => {
         expect(series.isPendingReq).toBe(false);
     });
 
+    it('filters by series status for mass-monitor workflows (discussion #177)', async () => {
+        // Filter Ongoing series, select all, bulk-monitor — previously status had no filter at all.
+        const req = new Request('http://localhost/api/library?status=Ongoing');
+        await GET(req);
+
+        const queryArg = mocks.findManySeries.mock.calls[0][0].where;
+        expect(queryArg.AND).toEqual(
+            expect.arrayContaining([{ status: 'Ongoing' }])
+        );
+
+        // Unknown values are ignored (no injection into the where clause).
+        mocks.findManySeries.mockClear();
+        await GET(new Request('http://localhost/api/library?status=Bogus'));
+        const arg2 = mocks.findManySeries.mock.calls[0][0].where;
+        const clauses = Array.isArray(arg2.AND) ? arg2.AND : [];
+        expect(clauses.some((c: any) => 'status' in c)).toBe(false);
+    });
+
     it('should default to a broad OR search if no prefix is provided', async () => {
         const req = createReq('batman');
         await GET(req);

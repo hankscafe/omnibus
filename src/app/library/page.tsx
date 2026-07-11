@@ -159,6 +159,7 @@ function LibraryContent() {
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false) 
   const [monitoredFilter, setMonitoredFilter] = useState(false)
   const [eraFilter, setEraFilter] = useState("ALL")
+  const [statusFilter, setStatusFilter] = useState("ALL")
   const [bookTypeFilter, setBookTypeFilter] = useState("ALL")
   const [readStatus, setReadStatus] = useState("ALL")
   const [randomTrigger, setRandomTrigger] = useState(0)
@@ -222,7 +223,8 @@ function LibraryContent() {
   const filtersRef = useRef({
       search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
       sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
-      bookType: bookTypeFilter, read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
+      bookType: bookTypeFilter, read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger,
+      status: statusFilter
   });
 
   useEffect(() => {
@@ -237,9 +239,10 @@ function LibraryContent() {
       filtersRef.current = {
           search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
           sort: sortOption, favs: showFavoritesOnly, monitored: monitoredFilter, era: eraFilter,
-          bookType: bookTypeFilter, read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger
+          bookType: bookTypeFilter, read: readStatus, col: activeCollection, limit: pageSize, random: randomTrigger,
+          status: statusFilter
       };
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, monitoredFilter, eraFilter, bookTypeFilter, readStatus, activeCollection, pageSize, randomTrigger]);
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, monitoredFilter, eraFilter, bookTypeFilter, readStatus, activeCollection, pageSize, randomTrigger, statusFilter]);
 
   useEffect(() => {
       document.title = "Omnibus - Library";
@@ -316,6 +319,7 @@ function LibraryContent() {
       if (f.favs) params.append('favorites', 'true');
       if (f.monitored) params.append('monitored', 'true');
       if (f.era !== 'ALL') params.append('era', f.era);
+      if (f.status !== 'ALL') params.append('status', f.status);
       if (f.bookType !== 'ALL') params.append('bookType', f.bookType);
       if (f.read !== 'ALL') params.append('readStatus', f.read);
       if (f.col !== 'ALL') params.append('collection', f.col);
@@ -395,7 +399,7 @@ function LibraryContent() {
       if (isFirstRender.current) return;
       setPage(1); 
       loadLibraryData(1, false, false); 
-  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, bookTypeFilter, readStatus, randomTrigger, pageSize, loadLibraryData])
+  }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, bookTypeFilter, readStatus, randomTrigger, pageSize, loadLibraryData, statusFilter])
 
   const toggleViewMode = (mode: 'grid' | 'list') => {
       setViewMode(mode)
@@ -723,7 +727,7 @@ function LibraryContent() {
       } catch (e: any) { toastRef.current({ title: "Delete Failed", description: e.message, variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
-  const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || bookTypeFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL";
+  const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || bookTypeFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL" || statusFilter !== "ALL";
 
   return (
     <div className="container mx-auto py-10 px-6 relative transition-colors duration-300">
@@ -853,6 +857,17 @@ function LibraryContent() {
                       <SelectItem value="UNREAD">Unread</SelectItem>
                       <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
                       <SelectItem value="COMPLETED">Completed</SelectItem>
+                  </SelectContent>
+              </Select>
+
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger aria-label="Filter by series status" className="flex-1 sm:w-[130px] sm:flex-none h-10 sm:h-9 bg-background shadow-sm border-border">
+                      <div className="flex items-center gap-2 truncate"><Activity className="w-3 h-3 shrink-0 text-muted-foreground"/> <SelectValue placeholder="Status" /></div>
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
+                      <SelectItem value="ALL">Any Status</SelectItem>
+                      <SelectItem value="Ongoing">Ongoing</SelectItem>
+                      <SelectItem value="Ended">Ended</SelectItem>
                   </SelectContent>
               </Select>
 

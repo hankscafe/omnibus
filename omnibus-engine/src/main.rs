@@ -13,6 +13,7 @@ mod watched_sync;
 mod backup;
 mod diagnostics;
 mod manga_detector;
+mod matcher;
 mod engine_config;
 mod discover;
 mod monitor;
@@ -401,6 +402,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/library/rename", post(handle_bulk_rename))
         .route("/api/reader/page", post(handle_reader_page))
         .route("/api/watched-sync", post(handle_watched_sync))
+        .route("/api/matcher/sweep", post(handle_matcher_sweep))
         .route("/api/backup", post(handle_backup))
         .route("/api/diagnostics/ghosts", post(handle_ghost_check))
         .route("/api/diagnostics/storage", post(handle_storage_scan))
@@ -1289,6 +1291,28 @@ async fn handle_getcomics_scrape(
             Json(ScrapeResponse { success: false, ambiguous: false, links: Vec::new() })
         }
     }
+}
+
+async fn handle_matcher_sweep(State(state): State<Arc<AppState>>) -> StatusCode {
+    log::info!("Received request to run the unmatched-series retry sweep.");
+
+    tokio::spawn(async move {
+        let db = state.db.clone();
+        let start_time = std::time::Instant::now();
+        match matcher::run_unmatched_sweep(state.db.clone()).await {
+            Ok(summary) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                write_joblog(&db, "UNMATCHED_SWEEP", "COMPLETED", duration, summary).await;
+            }
+            Err(e) => {
+                let duration = start_time.elapsed().as_millis() as i32;
+                log::error!("[Matcher] Unmatched sweep failed: {:?}", e);
+                write_joblog(&db, "UNMATCHED_SWEEP", "FAILED", duration, format!("Unmatched sweep failed: {}", e)).await;
+            }
+        }
+    });
+
+    StatusCode::OK
 }
 
 async fn handle_watched_sync(State(state): State<Arc<AppState>>) -> StatusCode {

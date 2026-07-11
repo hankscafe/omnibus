@@ -57,6 +57,11 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
     // refresh always re-checks every issue, even on a finished series.
     let full_fetch = series_ids.is_some();
 
+    // file_metadata_priority (discussion #177): provider syncs only fill blanks; embedded-file
+    // metadata (ComicInfo.xml / series.json) is never overwritten unless the admin turns this off.
+    let file_priority: bool = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'file_metadata_priority'"#)
+        .fetch_optional(&db.pool).await.ok().flatten().as_deref() == Some("true");
+
     let mut ok_count = 0usize;
     let mut fail_count = 0usize;
     for series in series_list {
@@ -77,7 +82,7 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
             "COMICVINE" => match &cv_api_key {
                 Some(key) if !key.is_empty() => {
                     fetch_comicvine(
-                        &db, &client, key, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover, full_fetch, has_custom_cover, &cover_source,
+                        &db, &client, key, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover, full_fetch, has_custom_cover, &cover_source, file_priority,
                     ).await
                 }
                 Some(_) => {
@@ -92,7 +97,7 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
             "METRON" => {
                 fetch_metron(
                     &db, &client, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover,
-                    last_sync.as_deref(), full_fetch, has_custom_cover, &cover_source,
+                    last_sync.as_deref(), full_fetch, has_custom_cover, &cover_source, file_priority,
                 ).await
             }
             other => {
@@ -172,6 +177,7 @@ async fn fetch_comicvine(
     full_fetch: bool,
     has_custom_cover: bool,
     cover_source: &str,
+    file_priority: bool,
 ) -> anyhow::Result<i32> {
     // ---- 1. Volume details ----
     let vol_url = format!("https://comicvine.gamespot.com/api/volume/4050-{}/", metadata_id);
@@ -246,18 +252,24 @@ async fn fetch_comicvine(
     // coverUrl becomes a local path. The bookType heuristic only fills a blank (never clobbers
     // a manual categorization). Parity with metadata-fetcher.ts (beta.032-034).
     // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
-    let update_res = if series_is_locked(db, series_id).await {
+    let update_res = if series_is_locked(db, series_id).await || file_priority {
+        // Locked OR file-priority: narrative fields stay as the files/admin set them; the cover and
+        // blank-fills (incl. description/status, which the files may not have carried) still apply.
         sqlx::query(
             r#"UPDATE "Series" SET "coverUrl"=$1,
                "remoteCoverUrl"=COALESCE($2, "remoteCoverUrl"),
                "bookType"=COALESCE("bookType", $3),
-               genres=COALESCE(genres, $4)
-               WHERE id=$5"#,
+               genres=COALESCE(genres, $4),
+               description=COALESCE(description, $5),
+               status=COALESCE(status, $6)
+               WHERE id=$7"#,
         )
         .bind(&final_cover)
         .bind(&image_url)
         .bind(guessed_book_type)
         .bind(&vol_genres_json)
+        .bind(&description)
+        .bind(status)
         .bind(series_id)
         .execute(&db.pool)
         .await
@@ -446,10 +458,11 @@ async fn fetch_comicvine(
                 (false, None, None, None, None, false, None)
             };
 
-            let name_val = if is_locked { existing_name } else { cv_name };
+            let name_val = prefer_existing(existing_name, cv_name, is_locked, file_priority);
             let release_val = if is_locked { existing_release } else { issue_date.clone() };
-            // A locked (manually edited) issue keeps its description; otherwise take the provider's.
-            let desc_val = if is_locked { existing_desc } else { cv_desc.clone() };
+            // A locked (manually edited) issue keeps its description; file-priority keeps a non-empty
+            // ComicInfo-derived one; otherwise take the provider's.
+            let desc_val = prefer_existing(existing_desc, cv_desc.clone(), is_locked, file_priority);
             // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
             let cover_val = if has_custom_cover { existing_cover } else { cv_cover.clone() };
             // When locked keep existing genres; otherwise only (re)write when the volume has them and the issue doesn't yet.
@@ -470,14 +483,14 @@ async fn fetch_comicvine(
                 existing_row.and_then(|r| r.try_get::<Option<String>, _>(col).unwrap_or(None))
             };
             let match_state_val = next_match_state(existing_col("matchState"));
-            let writers_val = merge_credit_json(existing_col("writers"), &credits.writers, is_locked);
-            let artists_val = merge_credit_json(existing_col("artists"), &credits.artists, is_locked);
-            let cover_artists_val = merge_credit_json(existing_col("coverArtists"), &credits.cover_artists, is_locked);
-            let colorists_val = merge_credit_json(existing_col("colorists"), &credits.colorists, is_locked);
-            let letterers_val = merge_credit_json(existing_col("letterers"), &credits.letterers, is_locked);
-            let characters_val = merge_credit_json(existing_col("characters"), &credits.characters, is_locked);
-            let teams_val = merge_credit_json(existing_col("teams"), &credits.teams, is_locked);
-            let locations_val = merge_credit_json(existing_col("locations"), &credits.locations, is_locked);
+            let writers_val = merge_credit_json(existing_col("writers"), &credits.writers, is_locked, file_priority);
+            let artists_val = merge_credit_json(existing_col("artists"), &credits.artists, is_locked, file_priority);
+            let cover_artists_val = merge_credit_json(existing_col("coverArtists"), &credits.cover_artists, is_locked, file_priority);
+            let colorists_val = merge_credit_json(existing_col("colorists"), &credits.colorists, is_locked, file_priority);
+            let letterers_val = merge_credit_json(existing_col("letterers"), &credits.letterers, is_locked, file_priority);
+            let characters_val = merge_credit_json(existing_col("characters"), &credits.characters, is_locked, file_priority);
+            let teams_val = merge_credit_json(existing_col("teams"), &credits.teams, is_locked, file_priority);
+            let locations_val = merge_credit_json(existing_col("locations"), &credits.locations, is_locked, file_priority);
 
             let res = if let Some(r) = existing_by_cv {
                 let id: String = r.get("id");
@@ -732,6 +745,7 @@ async fn fetch_metron(
     full_fetch: bool,
     has_custom_cover: bool,
     cover_source: &str,
+    file_priority: bool,
 ) -> anyhow::Result<i32> {
     let auth = match metron_auth(&db.pool).await {
         Some(a) => a,
@@ -809,15 +823,18 @@ async fn fetch_metron(
     let final_cover = resolve_cover(client, cover_remote.as_deref(), folder_path, current_cover, has_custom_cover, cover_source).await;
 
     // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
-    let update_res = if series_is_locked(db, series_id).await {
+    let update_res = if series_is_locked(db, series_id).await || file_priority {
         sqlx::query(
             r#"UPDATE "Series" SET "coverUrl"=$1, universe=COALESCE($2, universe),
                "remoteCoverUrl"=COALESCE($3, "remoteCoverUrl"),
                "bookType"=COALESCE("bookType", $4),
-               genres=COALESCE(genres, $5)
-               WHERE id=$6"#,
+               genres=COALESCE(genres, $5),
+               description=COALESCE(description, $6),
+               status=COALESCE(status, $7)
+               WHERE id=$8"#,
         )
-        .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(&series_genres_json).bind(series_id)
+        .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(&series_genres_json)
+        .bind(&description).bind(status_str).bind(series_id)
         .execute(&db.pool).await
     } else {
         sqlx::query(
@@ -981,7 +998,7 @@ async fn fetch_metron(
             existing_genres
         };
 
-        let name_val: Option<String> = if is_locked { existing_name } else { Some(issue_name) };
+        let name_val: Option<String> = prefer_existing(existing_name, Some(issue_name), is_locked, file_priority);
         let release_val: Option<String> = if is_locked { existing_release } else { issue_date.clone() };
         // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
         let cover_val: Option<String> = if has_custom_cover { existing_cover } else { issue_cover.clone() };
@@ -1144,7 +1161,7 @@ async fn resolve_cover(client: &Client, image_url: Option<&str>, folder_path: &s
     fallback
 }
 
-async fn mark_flag(db: &Db, key: &str) {
+pub(crate) async fn mark_flag(db: &Db, key: &str) {
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis().to_string()).unwrap_or_default();
     let _ = sqlx::query(
         r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
@@ -1229,11 +1246,27 @@ pub(crate) fn next_match_state(existing: Option<String>) -> &'static str {
 /// keeps its value; an unlocked issue takes the provider's list only when the provider actually
 /// supplied one. An empty fetch NEVER overwrites existing data — the literal-'[]' writes this
 /// replaces destroyed ComicInfo.xml-derived credits on every re-sync.
-pub(crate) fn merge_credit_json(existing: Option<String>, fetched: &[String], locked: bool) -> Option<String> {
+pub(crate) fn merge_credit_json(existing: Option<String>, fetched: &[String], locked: bool, fill_only: bool) -> Option<String> {
     if locked || fetched.is_empty() {
         return existing;
     }
+    // file_metadata_priority (discussion #177): provider data only FILLS blanks — a non-empty
+    // existing value (ComicInfo/series.json-derived or manual) is never replaced.
+    let existing_has_data = existing.as_deref().map(|e| !e.trim().is_empty() && e.trim() != "[]").unwrap_or(false);
+    if fill_only && existing_has_data {
+        return existing;
+    }
     serde_json::to_string(fetched).ok().or(existing)
+}
+
+/// Narrative-field write policy: locked keeps existing; file_metadata_priority keeps a non-empty
+/// existing value; otherwise the provider's value applies (exact legacy semantics when fill_only=false).
+fn prefer_existing(existing: Option<String>, provider: Option<String>, locked: bool, fill_only: bool) -> Option<String> {
+    if locked {
+        return existing;
+    }
+    let has = existing.as_deref().map(|e| !e.trim().is_empty()).unwrap_or(false);
+    if fill_only && has { existing } else { provider }
 }
 
 fn cv_is_ended(v: &serde_json::Value) -> bool {
@@ -1404,16 +1437,37 @@ mod tests {
 
         // Unlocked + provider supplied data → provider wins (normal sync semantics).
         assert_eq!(
-            merge_credit_json(existing.clone(), &["A".to_string(), "B".to_string()], false),
+            merge_credit_json(existing.clone(), &["A".to_string(), "B".to_string()], false, false),
             Some(r#"["A","B"]"#.to_string())
         );
         // Unlocked + provider has NOTHING → keep what we have. This is the '[]' wipe from
         // issue #179: a re-sync must never destroy ComicInfo-derived or manually added credits.
-        assert_eq!(merge_credit_json(existing.clone(), &[], false), existing);
+        assert_eq!(merge_credit_json(existing.clone(), &[], false, false), existing);
         // Locked (hasCustomMetadata) → existing always wins, even against provider data.
-        assert_eq!(merge_credit_json(existing.clone(), &["A".to_string()], true), existing);
+        assert_eq!(merge_credit_json(existing.clone(), &["A".to_string()], true, false), existing);
         // Nothing anywhere → stays NULL (never write a literal '[]').
-        assert_eq!(merge_credit_json(None, &[], false), None);
+        assert_eq!(merge_credit_json(None, &[], false, false), None);
+    }
+
+    #[test]
+    fn merge_credit_json_fill_only_prefers_file_metadata() {
+        // Discussion #177: with file_metadata_priority ON, provider syncs only FILL blanks —
+        // ComicInfo-derived values are never replaced unless the admin refreshes deliberately.
+        let existing = Some(r#"["From ComicInfo.xml"]"#.to_string());
+
+        // fill_only + existing non-empty → existing wins even against provider data.
+        assert_eq!(merge_credit_json(existing.clone(), &["Provider".to_string()], false, true), existing);
+        // fill_only + genuinely blank (NULL or the legacy literal '[]') → provider fills.
+        assert_eq!(
+            merge_credit_json(None, &["Provider".to_string()], false, true),
+            Some(r#"["Provider"]"#.to_string())
+        );
+        assert_eq!(
+            merge_credit_json(Some("[]".to_string()), &["Provider".to_string()], false, true),
+            Some(r#"["Provider"]"#.to_string())
+        );
+        // fill_only + provider empty → keep existing (both protections compose).
+        assert_eq!(merge_credit_json(existing.clone(), &[], false, true), existing);
     }
 
     #[test]

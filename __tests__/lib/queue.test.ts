@@ -423,6 +423,31 @@ describe('Cron: BullMQ Worker Router', () => {
         }));
     });
 
+    it('forwards UNMATCHED_SWEEP to the engine matcher and bumps its schedule timer', async () => {
+        initWorker();
+
+        const mockJob = {
+            id: 'job_unmatched',
+            data: { type: 'UNMATCHED_SWEEP' },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        expect(mocks.systemSettingUpsert).toHaveBeenCalledWith(
+            expect.objectContaining({ where: { key: 'last_unmatched_sweep' } })
+        );
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/matcher/sweep`,
+            expect.objectContaining({
+                method: 'POST',
+                headers: expect.objectContaining({ 'X-Internal-Secret': 'test-secret' })
+            })
+        );
+        // The engine owns the UNMATCHED_SWEEP JobLog (detached run), like the watched-folder sweep.
+        expect(mocks.jobLogCreate).not.toHaveBeenCalled();
+    });
+
     it('should fail DISCOVER_SYNC when the engine is unreachable', async () => {
         initWorker();
         mocks.engineFetch.mockRejectedValueOnce(new Error('fetch failed'));

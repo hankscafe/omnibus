@@ -206,6 +206,8 @@ export default function SettingsPage() {
     discover_manga_filter_mode: "SHOW_ALL", discover_manga_allowed_publishers: "",
     download_retry_delay: "5",
     awaiting_retry_days: "7", flag_stalled_requests: "true",
+    matcher_mode: "confirm", matcher_auto_threshold: "0.90", file_metadata_priority: "false",
+    unmatched_sweep_schedule: "1",
     prowlarr_accept_yearless: "false",
     convert_to_webp: "false", webp_quality: "80",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
@@ -1050,6 +1052,50 @@ export default function SettingsPage() {
                     </div>
 
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
+                        <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Label className="text-base font-bold text-foreground">Match Confidence Mode</Label>
+                            <Select value={config.matcher_mode || "confirm"} onValueChange={(v) => setConfig({...config, matcher_mode: v})}>
+                                <SelectTrigger className="h-12 sm:h-10 w-full sm:w-[340px] bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
+                                <SelectContent className="bg-popover border-border">
+                                    <SelectItem value="trust" className="focus:bg-primary/10 focus:text-primary">Trust — auto-accept file IDs & confident matches</SelectItem>
+                                    <SelectItem value="confirm" className="focus:bg-primary/10 focus:text-primary">Confirm — file IDs auto, suggestions need approval</SelectItem>
+                                    <SelectItem value="auto" className="focus:bg-primary/10 focus:text-primary">Auto — file IDs auto, only near-exact name matches</SelectItem>
+                                    <SelectItem value="custom" className="focus:bg-primary/10 focus:text-primary">Custom — no automation, match by hand / custom ID</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <p className="text-[11px] text-muted-foreground">
+                                How much matching automation to allow. Embedded provider IDs (ComicInfo.xml / series.json) are deterministic and always applied except in Custom mode. The hourly background sweep retries unmatched series within the ComicVine rate budget, so big library imports finish matching themselves instead of stalling at the 200/hr wall.
+                            </p>
+                            {config.matcher_mode === "trust" && (
+                                <div className="flex items-center gap-3 pt-1">
+                                    <Input
+                                        type="number" min="0.5" max="1" step="0.05"
+                                        value={config.matcher_auto_threshold || "0.90"}
+                                        onChange={e => setConfig({...config, matcher_auto_threshold: e.target.value})}
+                                        className="h-10 w-28 bg-background border-border text-foreground"
+                                    />
+                                    <span className="text-[11px] text-muted-foreground">Similarity required to auto-accept a name-search match (0.5-1.0, default 0.90).</span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                            <Switch
+                                id="file-metadata-priority"
+                                checked={config.file_metadata_priority === "true"}
+                                onCheckedChange={(c) => setConfig({...config, file_metadata_priority: c ? "true" : "false"})}
+                                className="scale-110 sm:scale-100"
+                            />
+                            <div className="grid gap-1 ml-2">
+                                <Label htmlFor="file-metadata-priority" className="cursor-pointer font-bold text-base text-foreground">
+                                    Prefer Embedded File Metadata
+                                </Label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    When on, metadata syncs only fill in blanks — titles, synopses, credits and genres that came from ComicInfo.xml / series.json are never overwritten by the provider. Manually locked series and issues are protected either way. Turn off to let provider refreshes replace file-derived data.
+                                </p>
+                            </div>
+                        </div>
+
                         <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
                             <Switch
                                 id="export-series-json"

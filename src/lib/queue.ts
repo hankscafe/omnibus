@@ -236,6 +236,20 @@ export function initWorker() {
                         }
                     }
 
+                    // Pack guard for brand-new issues: packs bypass the single-issue number check and
+                    // the off-series reverse guard (#181), and year-anchor on the SERIES year — so a
+                    // "Complete Collection (2019)" can win the search for an issue that shipped this
+                    // week (or hasn't shipped yet), download, and then fail import into a dead request.
+                    // No pack reliably contains an issue this fresh, so suppress packs whenever the
+                    // requested issue is unreleased or less than 30 days old.
+                    if (allowPacksForThisRequest && requestedIssueReleaseDate) {
+                        const releasedMs = new Date(requestedIssueReleaseDate).getTime();
+                        if (!isNaN(releasedMs) && Date.now() - releasedMs < 30 * 24 * 60 * 60 * 1000) {
+                            Logger.log(`[BullMQ] ${name} released ${requestedIssueReleaseDate} (or not yet) — too new for a pack to contain it. Disabling packs for this search.`, 'info');
+                            allowPacksForThisRequest = false;
+                        }
+                    }
+
                     try {
                         const rustResponse = await fetch(ENGINE_URL + '/api/automation/search', {
                             method: 'POST',
@@ -375,7 +389,13 @@ export function initWorker() {
                                     await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: manualHold.url, activeDownloadName: safeTitle } });
                                     Logger.log(`[BullMQ] All hosters failed for ${name}; holding link for manual download.`, 'warn');
                                 } else {
-                                    Logger.log(`[BullMQ] All ${candidates.length} hoster candidate(s) failed for ${name}.`, 'error');
+                                    // Without this write the request stayed DOWNLOADING forever — invisible to
+                                    // the stalled-retry cron (its reconciler only matches live client torrents)
+                                    // and blocking the monitor's dedup from ever re-requesting the issue. Park
+                                    // it STALLED: the cron retries the last link on its tight cadence, and the
+                                    // monitor's dead-request sweep re-searches it once retries exhaust.
+                                    await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED', progress: 0 } });
+                                    Logger.log(`[BullMQ] All ${candidates.length} hoster candidate(s) failed for ${name}. Marking STALLED for retry.`, 'error');
                                 }
                             })().catch((e: any) => Logger.log(`[BullMQ] Built-in DDL fallback crashed: ${e.message}`, 'error'));
 
@@ -800,8 +820,16 @@ export function initWorker() {
                             return reqNum ? isSameIssue(reqNum, c.issue_number) : false;
                         });
 
+                        // A candidate with NO release date at all is almost always a just-solicited issue
+                        // the provider hasn't dated yet — is_released defaults TRUE in that case, which
+                        // used to fire an immediate (premature) search that failed into a parked state.
+                        // Treat it as not-yet-searchable: park AWAITING_RELEASE and let the Phase 3b sweep
+                        // re-search on the slow cadence, by which time the date (or the issue) exists.
+                        // has_date === undefined (older engine build) keeps the legacy behavior.
+                        const dateless = c.has_date === false;
+
                         if (alreadyReq) {
-                            if (alreadyReq.status === 'UNRELEASED' && c.is_released) {
+                            if (alreadyReq.status === 'UNRELEASED' && c.is_released && !dateless) {
                                 details += `[UPGRADE] ${c.search_name} released. Triggering search...\n`;
                                 await prisma.request.update({ where: { id: alreadyReq.id }, data: { status: 'PENDING' } });
                                 searchAndDownload(alreadyReq.id, c.search_name, c.issue_year, c.publisher, c.is_manga).catch(() => {});
@@ -809,7 +837,7 @@ export function initWorker() {
                                 alreadyReq.status = 'PENDING';
                             }
                         } else {
-                            const issueStatus = c.is_released ? 'PENDING' : 'UNRELEASED';
+                            const issueStatus = c.is_released ? (dateless ? 'AWAITING_RELEASE' : 'PENDING') : 'UNRELEASED';
                             details += `[NEW] Queued ${issueStatus}: ${c.search_name}\n`;
                             const newReq = await prisma.request.create({
                                 data: {
@@ -825,7 +853,7 @@ export function initWorker() {
                                 }
                             });
                             existingReqs.push(newReq);
-                            if (c.is_released) {
+                            if (c.is_released && !dateless) {
                                 searchAndDownload(newReq.id, c.search_name, c.issue_year, c.publisher, c.is_manga).catch(() => {});
                                 newRequestsFound++;
                             }
@@ -868,33 +896,46 @@ export function initWorker() {
                         }
                     }
 
-                    // Phase 3b -- AWAITING_RELEASE retry sweep. Requests that searched clean (no source had
-                    // them yet) are re-searched on a slow, release-friendly cadence (awaiting_retry_days,
-                    // default 7) — instead of the tight per-minute retry a real download failure gets — so a
-                    // title that later lands on an indexer/GetComics gets picked up. Snoozed items (an admin
-                    // dismissed the health warning) are skipped until their snooze expires (issue #175).
-                    let awaitingRetried = 0;
+                    // Phase 3b -- dead-request re-search sweep. Parked states are re-searched on a slow,
+                    // release-friendly cadence (awaiting_retry_days, default 7) — instead of the tight
+                    // per-minute retry a real download failure gets:
+                    //   AWAITING_RELEASE — searched clean, no source had it yet (issue #175);
+                    //   MANUAL_DDL      — held for a manual click that never came. New hosters/releases may
+                    //                     have appeared since; a one-click hold must not be a dead end;
+                    //   STALLED (dead)  — only the ones the 60s retry cron can't touch: no http download
+                    //                     link (search errors, edition-ambiguity stalls) or retries
+                    //                     exhausted (retryCount >= 3). Live STALLED stays with the cron.
+                    // Previously ONLY AWAITING_RELEASE was swept; the other two were stuck until the admin
+                    // DELETED the request, because the monitor's candidate dedup sees the existing request
+                    // and never creates a fresh one. Snoozed items (an admin dismissed the health warning)
+                    // are skipped until their snooze expires (issue #175) — snooze is also the off switch
+                    // for admins who want a MANUAL_DDL hold left alone.
+                    let parkedRetried = 0;
                     const awaitingRetryDays = Math.max(1, parseInt(
                         (await prisma.systemSetting.findUnique({ where: { key: 'awaiting_retry_days' } }))?.value || '7'
                     ) || 7);
                     const awaitingCutoff = new Date(Date.now() - awaitingRetryDays * 24 * 60 * 60 * 1000);
                     const nowTs = new Date();
-                    const awaitingRequests = await prisma.request.findMany({
+                    const parkedRequests = (await prisma.request.findMany({
                         where: {
-                            status: 'AWAITING_RELEASE',
+                            status: { in: ['AWAITING_RELEASE', 'MANUAL_DDL', 'STALLED'] },
                             updatedAt: { lt: awaitingCutoff },
                             OR: [{ snoozedUntil: null }, { snoozedUntil: { lt: nowTs } }]
                         },
-                        select: { id: true, volumeId: true, activeDownloadName: true }
-                    });
-                    const awaitingVolIds = [...new Set(awaitingRequests.map(r => r.volumeId).filter(Boolean))] as string[];
+                        select: { id: true, volumeId: true, activeDownloadName: true, status: true, retryCount: true, downloadLink: true }
+                    })).filter(r =>
+                        r.status !== 'STALLED'
+                        || (r.retryCount || 0) >= 3
+                        || !(r.downloadLink || '').startsWith('http')
+                    );
+                    const awaitingVolIds = [...new Set(parkedRequests.map(r => r.volumeId).filter(Boolean))] as string[];
                     const awaitingSeries = awaitingVolIds.length
                         ? await prisma.series.findMany({
                             where: { OR: [{ metadataId: { in: awaitingVolIds } }, { id: { in: awaitingVolIds } }] },
                             select: { id: true, metadataId: true, publisher: true, isManga: true, year: true, issues: { select: { number: true, releaseDate: true } } }
                         })
                         : [];
-                    for (const req of awaitingRequests) {
+                    for (const req of parkedRequests) {
                         const s = awaitingSeries.find(x => x.metadataId === req.volumeId || x.id === req.volumeId);
                         const reqNum = parseFloat(extractIssueNumber(req.activeDownloadName || ""));
                         // Prefer the matched issue's release year for a tighter search; fall back to the series year.
@@ -903,18 +944,19 @@ export function initWorker() {
                             const skel = s.issues.find((i: any) => parseFloat(i.number) === reqNum);
                             if (skel?.releaseDate) searchYear = skel.releaseDate.split('-')[0];
                         }
-                        await prisma.request.update({ where: { id: req.id }, data: { status: 'PENDING' } });
+                        // Reset retryCount so a fresh find gets the cron's full download-retry budget.
+                        await prisma.request.update({ where: { id: req.id }, data: { status: 'PENDING', retryCount: 0, progress: 0 } });
                         searchAndDownload(req.id, req.activeDownloadName || "", searchYear, s?.publisher || "Unknown", s?.isManga || false).catch(() => {});
-                        awaitingRetried++;
+                        parkedRetried++;
                     }
-                    if (awaitingRetried > 0) details += `[AWAITING] Re-searched ${awaitingRetried} awaiting-release request(s) after ${awaitingRetryDays}d.\n`;
+                    if (parkedRetried > 0) details += `[PARKED] Re-searched ${parkedRetried} parked request(s) (awaiting/manual/dead-stalled) after ${awaitingRetryDays}d.\n`;
 
                     await prisma.jobLog.create({
                         data: {
                             jobType: 'SERIES_MONITOR',
                             status: 'COMPLETED',
                             durationMs: Date.now() - startTime,
-                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades, ${awaitingRetried} awaiting re-searched.`
+                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades, ${parkedRetried} parked re-searched.`
                         }
                     });
                     break;

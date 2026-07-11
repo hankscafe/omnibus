@@ -26,6 +26,10 @@ pub struct MonitorCandidate {
     pub issue_number: String,
     pub issue_year: String,
     pub is_released: bool,
+    /// Whether the provider supplied ANY release date (store or cover). is_released defaults to
+    /// true when no date exists, so the Node worker uses this to park date-less candidates as
+    /// AWAITING_RELEASE instead of searching prematurely for a just-solicited issue.
+    pub has_date: bool,
     pub publisher: String,
     pub is_manga: bool,
     pub image_url: Option<String>,
@@ -278,6 +282,7 @@ async fn phase1_metron(
                 issue_number: m_num_str.clone(),
                 issue_year,
                 is_released,
+                has_date: issue_date.is_some(),
                 publisher: s.publisher.clone().unwrap_or_else(|| "Unknown".to_string()),
                 is_manga: s.is_manga,
                 image_url,
@@ -385,6 +390,7 @@ async fn phase2_comicvine(
                 issue_number: cv_num_str.clone(),
                 issue_year,
                 is_released,
+                has_date: issue_date.is_some(),
                 publisher: publisher.clone().unwrap_or_else(|| "Unknown".to_string()),
                 is_manga,
                 image_url,

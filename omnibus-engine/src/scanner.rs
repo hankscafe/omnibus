@@ -24,6 +24,9 @@ struct ScanComicInfo {
     publisher: Option<String>,
     volume: Option<String>,
     year: Option<String>,
+    month: Option<String>,
+    day: Option<String>,
+    number: Option<String>,
     manga: Option<String>,
     web: Option<String>,
     series_group: Option<String>,
@@ -306,6 +309,39 @@ fn notes_issue_ids(notes: &str) -> (Option<i32>, Option<i32>) {
     (None, None)
 }
 
+/// ISO release date (YYYY-MM-DD, the shape providers write and the calendar indexes on) from
+/// ComicInfo `<Year>/<Month>/<Day>` (discussion #182 — completes the embed round-trip: the embed
+/// writer already emits all three from Issue.releaseDate). A month is REQUIRED: many taggers stamp
+/// `<Year>` alone with the SERIES year on every issue (our own embed writer falls back to it), and
+/// reading that back as a release date would fabricate per-issue dates. A missing/invalid day
+/// rounds to the 1st (ComicVine/Mylar cover-date convention; older ComicTagger omits Day).
+pub(crate) fn compose_release_date(year: Option<i32>, month: Option<i32>, day: Option<i32>) -> Option<String> {
+    let y = year.filter(|y| (1000..=2999).contains(y))?;
+    let m = month.filter(|m| (1..=12).contains(m))?;
+    let d = day.filter(|d| (1..=31).contains(d)).unwrap_or(1);
+    Some(format!("{:04}-{:02}-{:02}", y, m, d))
+}
+
+fn comicinfo_number_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^(-?)0*(\d+(?:\.\d+)?[a-zA-Z]*)$").unwrap())
+}
+
+/// Issue number for a scanned file (discussion #182): the file's own ComicInfo `<Number>` wins —
+/// it's the tagger's ground truth, where filename parsing only guesses — with the filename as the
+/// fallback. Plain numeric shapes normalize like the filename parser's output (leading zeros
+/// stripped, sign kept) so is_same_issue dedupe and sorting behave identically for both origins;
+/// fancier numbers ("½", "1.MU") are stored verbatim.
+fn issue_number_for_file(info: Option<&ScanComicInfo>, file_name: &str) -> String {
+    if let Some(num) = info.and_then(|i| i.number.as_deref()).map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(caps) = comicinfo_number_re().captures(num) {
+            return format!("{}{}", &caps[1], &caps[2]);
+        }
+        return num.to_string();
+    }
+    issue_number_from_filename(file_name)
+}
+
 /// Per-issue narrative/credit columns from a file's own ComicInfo (discussion #177). Comma-separated
 /// list tags become JSON array strings; absent/empty fields stay None — never a literal '[]' — so
 /// the provider syncs' fill/never-clobber policies treat them as blanks to fill.
@@ -313,6 +349,7 @@ fn notes_issue_ids(notes: &str) -> (Option<i32>, Option<i32>) {
 struct IssueFileMeta {
     name: Option<String>,
     description: Option<String>,
+    release_date: Option<String>,
     genres: Option<String>,
     writers: Option<String>,
     artists: Option<String>,
@@ -332,6 +369,34 @@ struct IssueFileMeta {
 /// gap; no id at all is the caller's UNMATCHED path.
 fn scanned_issue_match_state(fm: &IssueFileMeta) -> &'static str {
     if fm.writers.is_some() || fm.artists.is_some() { "DEEP_SYNCED" } else { "MATCHED" }
+}
+
+/// Backfill UPDATE promoting a library's MATCHED, file-backed issues that already carry a real
+/// provider id AND creative credits (populated from ComicInfo at scan since beta.083, or by the
+/// CV list-call credit sync) to DEEP_SYNCED — the state today's scan stamps directly
+/// (scanned_issue_match_state). $1 = libraryId.
+/// Fill-only UPDATE re-flowing series.json fields into an EXISTING Series row (scan 5F): each
+/// column takes the file's value only when the column is blank (publisher's scan-default 'Other'
+/// counts as blank); the trailing self-reference keeps a column untouched when the file has
+/// nothing either. $1..$5 = description, status, booktype, publisher, year; $6 = series id.
+fn series_json_fill_blanks_sql() -> &'static str {
+    r#"UPDATE "Series" SET
+           description = COALESCE(NULLIF(description, ''), $1, description),
+           status      = COALESCE(NULLIF(status, ''), $2, status),
+           "bookType"  = COALESCE(NULLIF("bookType", ''), $3, "bookType"),
+           publisher   = COALESCE(NULLIF(NULLIF(publisher, ''), 'Other'), $4, publisher),
+           year        = COALESCE(NULLIF(year, 0), $5, year)
+       WHERE id = $6"#
+}
+
+fn restamp_credit_complete_sql() -> &'static str {
+    r#"UPDATE "Issue" SET "matchState" = 'DEEP_SYNCED'
+       WHERE "matchState" = 'MATCHED'
+         AND "filePath" IS NOT NULL AND "filePath" <> ''
+         AND "metadataId" IS NOT NULL AND "metadataId" <> '' AND "metadataId" NOT LIKE 'unmatched%'
+         AND ((writers IS NOT NULL AND writers <> '' AND writers <> '[]')
+              OR (artists IS NOT NULL AND artists <> '' AND artists <> '[]'))
+         AND "seriesId" IN (SELECT id FROM "Series" WHERE "libraryId" = $1)"#
 }
 
 fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
@@ -358,6 +423,11 @@ fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
     IssueFileMeta {
         name: text(&i.title),
         description: text(&i.summary),
+        release_date: compose_release_date(
+            i.year.as_deref().and_then(parse_i32),
+            i.month.as_deref().and_then(parse_i32),
+            i.day.as_deref().and_then(parse_i32),
+        ),
         genres: list(&i.genre),
         writers: list(&i.writer),
         artists,
@@ -1285,9 +1355,8 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let mut folder_issue_count = 0;
         for (idx, file) in files.iter().enumerate() {
             let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
-            let issue_num = issue_number_from_filename(&file_name);
-
             let file_info = infos.get(idx).and_then(|o| o.as_ref());
+            let issue_num = issue_number_for_file(file_info, &file_name);
             let file_derived = file_info.map(derive_meta);
             let issue_id = Uuid::new_v4().to_string();
             let fm = issue_file_meta(file_info);
@@ -1306,9 +1375,9 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             if let Err(e) = sqlx::query(&format!(
                 r#"INSERT INTO "Issue"
                    (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
-                    name, description, genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
+                    name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
                     "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, {now}, {now})"#,
+                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, {now}, {now})"#,
                 now = db.now_expr()
             ))
             .bind(&issue_id)
@@ -1321,6 +1390,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             .bind(page_count)
             .bind(&fm.name)
             .bind(&fm.description)
+            .bind(&fm.release_date)
             .bind(&fm.genres)
             .bind(&fm.writers)
             .bind(&fm.artists)
@@ -1388,7 +1458,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
     for (series_id, file, info) in parsed_files {
         let file_name = Path::new(&file).file_name().unwrap_or_default().to_string_lossy().to_string();
-        let issue_num = issue_number_from_filename(&file_name);
+        let issue_num = issue_number_for_file(info.as_ref(), &file_name);
 
         // Dedupe against the series' existing issues by number. On a match the file was renamed/moved —
         // repoint the existing row's filePath rather than inserting a second row for the same issue.
@@ -1426,9 +1496,9 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         if let Err(e) = sqlx::query(&format!(
             r#"INSERT INTO "Issue"
                (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
-                name, description, genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
+                name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
                 "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, {now}, {now})"#,
+               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, {now}, {now})"#,
             now = db.now_expr()
         ))
         .bind(&issue_id)
@@ -1441,6 +1511,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         .bind(page_count)
         .bind(&fm.name)
         .bind(&fm.description)
+        .bind(&fm.release_date)
         .bind(&fm.genres)
         .bind(&fm.writers)
         .bind(&fm.artists)
@@ -1620,6 +1691,91 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         if genre_filled > 0 { log::info!("[Scan] Filled series genres from file metadata for {} series.", genre_filled); }
     }
 
+    // ---------------------------------------------------------
+    // 5F. SERIES.JSON FILL-BLANKS FOR EXISTING SERIES (discussion #182 — local-first ingest)
+    // ---------------------------------------------------------
+    // The series INSERT above is ON CONFLICT DO NOTHING and 5B never touches an existing parent
+    // Series row, so a series.json edited (or added) AFTER first index never re-flowed — the only
+    // recourse was delete-and-rescan. Fill-only: blanks fill from the folder's series.json; any
+    // existing value (provider, manual, or first-scan) always wins, so this can never clobber.
+    let blank_series = sqlx::query(
+        r#"SELECT id, "folderPath" FROM "Series"
+           WHERE "libraryId" = $1 AND "folderPath" IS NOT NULL AND "folderPath" <> ''
+             AND (description IS NULL OR description = ''
+                  OR status IS NULL OR status = ''
+                  OR "bookType" IS NULL OR "bookType" = ''
+                  OR publisher IS NULL OR publisher = '' OR publisher = 'Other'
+                  OR year IS NULL OR year = 0)"#,
+    )
+    .bind(&library_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+
+    if !blank_series.is_empty() {
+        // Bounded-parallel series.json reads (tiny files, but the library may sit on a network
+        // mount); series without one drop out here at the cost of a single failed open each.
+        let sj_sem = Arc::new(Semaphore::new(cfg.scan_workers));
+        let mut sj_set: JoinSet<Option<(String, SeriesJsonInfo)>> = JoinSet::new();
+        for row in blank_series {
+            let id: String = row.get("id");
+            let folder: String = row.get("folderPath");
+            let sem = sj_sem.clone();
+            sj_set.spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                tokio::task::spawn_blocking(move || read_series_json(Path::new(&folder)).map(|sj| (id, sj)))
+                    .await
+                    .ok()
+                    .flatten()
+            });
+        }
+        let mut sj_filled = 0;
+        while let Some(res) = sj_set.join_next().await {
+            let Ok(Some((sid, sj))) = res else { continue };
+            if sj.description.is_none() && sj.status.is_none() && sj.booktype.is_none()
+                && sj.publisher.is_none() && sj.year.is_none()
+            {
+                continue;
+            }
+            // Per-column blank guards live in the UPDATE itself (same reasoning as 5E), so a
+            // concurrent provider sync writing a real value between our SELECT and now can't be
+            // clobbered.
+            if sqlx::query(series_json_fill_blanks_sql())
+            .bind(&sj.description)
+            .bind(&sj.status)
+            .bind(&sj.booktype)
+            .bind(&sj.publisher)
+            .bind(sj.year)
+            .bind(&sid)
+            .execute(&db.pool)
+            .await
+            .is_ok()
+            {
+                sj_filled += 1;
+            }
+        }
+        if sj_filled > 0 { log::info!("[Scan] Re-flowed series.json fields into {} existing series (fill-blank only).", sj_filled); }
+    }
+
+    // ---------------------------------------------------------
+    // 5G. RE-STAMP CREDIT-COMPLETE ISSUES (discussion #182 — local-first ingest)
+    // ---------------------------------------------------------
+    // Libraries scanned by pre-beta.090 builds carry issues whose ComicInfo credits already sit in
+    // the DB but whose matchState stayed MATCHED — so opening each one still costs a provider call
+    // and the file-complete sync skip never engages. Promote them the way today's scan would have
+    // (scanned_issue_match_state): a real provider id + creative credits = enrichment-complete.
+    match sqlx::query(restamp_credit_complete_sql())
+        .bind(&library_id)
+        .execute(&db.pool)
+        .await
+    {
+        Ok(r) if r.rows_affected() > 0 => {
+            log::info!("[Scan] Re-stamped {} credit-complete issue(s) to DEEP_SYNCED (no provider call needed on open).", r.rows_affected());
+        }
+        Ok(_) => {}
+        Err(e) => log::warn!("[Scan] Credit-complete re-stamp failed: {:?}", e),
+    }
+
     let duration = start_time.elapsed();
     log::info!(
         "⚡ Scan complete in {:?}! Added {} Series and {} Issues.",
@@ -1669,6 +1825,151 @@ mod tests {
         // A summary without credits is NOT enrichment-complete.
         let fm = IssueFileMeta { description: Some("A synopsis".to_string()), ..Default::default() };
         assert_eq!(scanned_issue_match_state(&fm), "MATCHED");
+    }
+
+    #[test]
+    fn compose_release_date_requires_year_and_month() {
+        // Full Y/M/D → ISO date, zero-padded (lexical = chronological for the calendar index).
+        assert_eq!(compose_release_date(Some(2011), Some(9), Some(21)).as_deref(), Some("2011-09-21"));
+        // Missing/invalid day rounds to the 1st (cover-date convention; older ComicTagger omits Day).
+        assert_eq!(compose_release_date(Some(2011), Some(9), None).as_deref(), Some("2011-09-01"));
+        assert_eq!(compose_release_date(Some(2011), Some(9), Some(0)).as_deref(), Some("2011-09-01"));
+        // Year alone is NOT a release date — taggers stamp <Year> with the series year on every
+        // issue, and reading that back would fabricate per-issue dates.
+        assert_eq!(compose_release_date(Some(2011), None, Some(21)), None);
+        // Nonsense values never produce a date.
+        assert_eq!(compose_release_date(Some(2011), Some(13), None), None);
+        assert_eq!(compose_release_date(Some(0), Some(9), None), None);
+        assert_eq!(compose_release_date(None, Some(9), Some(21)), None);
+    }
+
+    #[test]
+    fn issue_file_meta_release_date_round_trips_embed_writer_output() {
+        // The embed writer emits <Year>09</Year>-style zero-padded strings — they must parse back.
+        let info = ScanComicInfo {
+            year: Some("2016".to_string()),
+            month: Some("03".to_string()),
+            day: Some("09".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(issue_file_meta(Some(&info)).release_date.as_deref(), Some("2016-03-09"));
+        // <Year> only (our own writer's series-year fallback) → no fabricated date.
+        let year_only = ScanComicInfo { year: Some("2016".to_string()), ..Default::default() };
+        assert!(issue_file_meta(Some(&year_only)).release_date.is_none());
+    }
+
+    #[test]
+    fn issue_number_prefers_comicinfo_number_over_filename() {
+        let with = |n: &str| ScanComicInfo { number: Some(n.to_string()), ..Default::default() };
+        // ComicInfo <Number> is the tagger's ground truth — it outranks the filename guess.
+        assert_eq!(issue_number_for_file(Some(&with("7")), "Saga 012.cbz"), "7");
+        // Normalized like the filename parser's output so is_same_issue dedupe matches both origins.
+        assert_eq!(issue_number_for_file(Some(&with("007")), "x.cbz"), "7");
+        assert_eq!(issue_number_for_file(Some(&with("-001")), "x.cbz"), "-1");
+        assert_eq!(issue_number_for_file(Some(&with("00.5")), "x.cbz"), "0.5");
+        assert_eq!(issue_number_for_file(Some(&with("12a")), "x.cbz"), "12a");
+        assert_eq!(issue_number_for_file(Some(&with(" 4 ")), "x.cbz"), "4");
+        // Non-plain shapes are stored verbatim (the DB number column is a string).
+        assert_eq!(issue_number_for_file(Some(&with("½")), "x.cbz"), "½");
+        assert_eq!(issue_number_for_file(Some(&with("1.MU")), "x.cbz"), "1.MU");
+        // Blank/absent <Number> falls back to filename parsing.
+        assert_eq!(issue_number_for_file(Some(&with("  ")), "Saga 012.cbz"), "12");
+        assert_eq!(issue_number_for_file(None, "Saga 012.cbz"), "12");
+        assert_eq!(issue_number_for_file(Some(&ScanComicInfo::default()), "Batman #5.cbz"), "5");
+    }
+
+    #[tokio::test]
+    async fn restamp_promotes_only_matched_file_backed_credit_complete_issues() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1) // each :memory: connection is its own DB — keep exactly one
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "libraryId" TEXT)"#)
+            .execute(&pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, "matchState" TEXT, "metadataId" TEXT, writers TEXT, artists TEXT)"#)
+            .execute(&pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Series" (id, "libraryId") VALUES ('s1', 'lib1'), ('s2', 'lib2')"#)
+            .execute(&pool).await.unwrap();
+
+        for (id, sid, fp, ms, mid, w, a) in [
+            // i1: MATCHED + file + real id + writers → PROMOTES (the pre-beta.090 scan shape).
+            ("i1", "s1", Some("/a.cbz"), "MATCHED", "111", Some(r#"["Zdarsky"]"#), None::<&str>),
+            // i2: artists alone also count as credits → PROMOTES.
+            ("i2", "s1", Some("/b.cbz"), "MATCHED", "112", None, Some(r#"["Checchetto"]"#)),
+            // i3: credits but an unmatched placeholder id → stays (no provider identity to trust).
+            ("i3", "s1", Some("/c.cbz"), "MATCHED", "unmatched_x", Some(r#"["W"]"#), None),
+            // i4: no credits → stays (enrichment can still add value).
+            ("i4", "s1", Some("/d.cbz"), "MATCHED", "114", Some("[]"), Some("")),
+            // i5: WANTED skeleton without a file → stays (never opened, not a lazy-fetch source).
+            ("i5", "s1", None, "MATCHED", "115", Some(r#"["W"]"#), None),
+            // i6: already DEEP_SYNCED → untouched.
+            ("i6", "s1", Some("/e.cbz"), "DEEP_SYNCED", "116", Some(r#"["W"]"#), None),
+            // i7: other library → out of scope for this scan.
+            ("i7", "s2", Some("/f.cbz"), "MATCHED", "117", Some(r#"["W"]"#), None),
+        ] {
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "filePath", "matchState", "metadataId", writers, artists) VALUES ($1, $2, $3, $4, $5, $6, $7)"#)
+                .bind(id).bind(sid).bind(fp).bind(ms).bind(mid).bind(w).bind(a)
+                .execute(&pool).await.unwrap();
+        }
+
+        let res = sqlx::query(restamp_credit_complete_sql()).bind("lib1").execute(&pool).await.unwrap();
+        assert_eq!(res.rows_affected(), 2, "exactly i1 + i2 promote");
+        let promoted: Vec<String> = sqlx::query(r#"SELECT id FROM "Issue" WHERE "matchState" = 'DEEP_SYNCED' ORDER BY id"#)
+            .fetch_all(&pool).await.unwrap()
+            .iter().map(|r| r.get::<String, _>("id")).collect();
+        assert_eq!(promoted, vec!["i1", "i2", "i6"]);
+    }
+
+    #[tokio::test]
+    async fn series_json_fill_blanks_never_clobbers_existing_values() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, description TEXT, status TEXT, "bookType" TEXT, publisher TEXT, year INTEGER)"#)
+            .execute(&pool).await.unwrap();
+        // s1: everything blank (publisher at the scan default 'Other', year 0) → all fill.
+        // s2: everything already set → NOTHING moves, even though the file offers values.
+        sqlx::query(r#"INSERT INTO "Series" VALUES ('s1', NULL, '', NULL, 'Other', 0), ('s2', 'kept', 'Ongoing', 'TPB', 'Marvel', 1999)"#)
+            .execute(&pool).await.unwrap();
+
+        for sid in ["s1", "s2"] {
+            sqlx::query(series_json_fill_blanks_sql())
+                .bind(Some("The Dark Knight.")).bind(Some("Ended")).bind(Some("Print"))
+                .bind(Some("DC Comics")).bind(Some(2011))
+                .bind(sid)
+                .execute(&pool).await.unwrap();
+        }
+        let rows = sqlx::query(r#"SELECT * FROM "Series" ORDER BY id"#).fetch_all(&pool).await.unwrap();
+        let s1 = &rows[0];
+        assert_eq!(s1.get::<String, _>("description"), "The Dark Knight.");
+        assert_eq!(s1.get::<String, _>("status"), "Ended");
+        assert_eq!(s1.get::<String, _>("bookType"), "Print");
+        assert_eq!(s1.get::<String, _>("publisher"), "DC Comics");
+        assert_eq!(s1.get::<i64, _>("year"), 2011);
+        let s2 = &rows[1];
+        assert_eq!(s2.get::<String, _>("description"), "kept");
+        assert_eq!(s2.get::<String, _>("status"), "Ongoing");
+        assert_eq!(s2.get::<String, _>("bookType"), "TPB");
+        assert_eq!(s2.get::<String, _>("publisher"), "Marvel");
+        assert_eq!(s2.get::<i64, _>("year"), 1999);
+
+        // A series.json missing every field (all-None binds) leaves a blank row blank — the
+        // trailing self-reference in each COALESCE keeps NULL instead of erroring or fabricating.
+        sqlx::query(r#"INSERT INTO "Series" VALUES ('s3', NULL, NULL, NULL, '', NULL)"#)
+            .execute(&pool).await.unwrap();
+        sqlx::query(series_json_fill_blanks_sql())
+            .bind(None::<String>).bind(None::<String>).bind(None::<String>)
+            .bind(None::<String>).bind(None::<i32>)
+            .bind("s3")
+            .execute(&pool).await.unwrap();
+        let s3 = sqlx::query(r#"SELECT description, publisher FROM "Series" WHERE id = 's3'"#)
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(s3.get::<Option<String>, _>("description"), None);
+        // The self-reference preserves the ORIGINAL blank ('' stays '', not NULL).
+        assert_eq!(s3.get::<Option<String>, _>("publisher"), Some(String::new()));
     }
 
     // ==== Discussion #177: trust embedded file metadata (Mylar-migrated libraries). ====

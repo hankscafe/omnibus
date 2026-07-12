@@ -84,6 +84,9 @@ export async function GET(request: Request) {
         const issues = pageRows.map((i: any) => {
             let cover = i.coverUrl;
             if (cover && !cover.startsWith('/api/')) cover = `/api/library/cover?path=${encodeURIComponent(cover)}`;
+            // Local-first ingest (discussion #182): a file-backed issue with no provider cover renders
+            // its own archive's first page (the route falls back to the series cover internally).
+            else if (!cover && i.filePath) cover = `/api/library/cover?issueId=${encodeURIComponent(i.id)}`;
             else if (!cover && i.series?.folderPath) cover = `/api/library/cover?path=${encodeURIComponent(i.series.folderPath)}`;
             return {
                 id: i.id,

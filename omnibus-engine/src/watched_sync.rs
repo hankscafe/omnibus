@@ -18,6 +18,10 @@ struct ComicInfo {
     number: Option<String>,
     year: Option<i32>,
     #[serde(default)]
+    month: Option<i32>,
+    #[serde(default)]
+    day: Option<i32>,
+    #[serde(default)]
     volume: Option<String>,
     publisher: Option<String>,
     manga: Option<String>,
@@ -409,6 +413,9 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 log::debug!("[Watched Sync Debug] Issue {} #{} resolved → metadataId={}, source={}, matchState={}", series_name, issue_num, issue_meta_id, issue_meta_source, issue_match_state);
                 let issue_title = info.title.clone().unwrap_or_default();
                 let issue_summary = info.summary.clone().unwrap_or_default();
+                // ISO release date from <Year>/<Month>/<Day> (discussion #182, parity with the
+                // scanner) — without it a keyless local-first import never gets calendar dates.
+                let release_date = crate::scanner::compose_release_date(info.year, info.month, info.day);
                 let file_path_str = final_dest.to_string_lossy().to_string();
 
                 // pageCount feeds OPDS-PSE (pse:count); 0 for a not-yet-converted RAR.
@@ -442,6 +449,7 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                                "filePath"=$2,
                                name=COALESCE(NULLIF(name, ''), $3),
                                description=COALESCE(NULLIF(description, ''), $4),
+                               "releaseDate"=COALESCE(NULLIF("releaseDate", ''), $13),
                                writers=CASE WHEN writers IS NOT NULL AND writers <> '' AND writers <> '[]' THEN writers ELSE $5 END,
                                artists=CASE WHEN artists IS NOT NULL AND artists <> '' AND artists <> '[]' THEN artists ELSE $6 END,
                                characters=CASE WHEN characters IS NOT NULL AND characters <> '' AND characters <> '[]' THEN characters ELSE $7 END,
@@ -454,17 +462,19 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                     .bind(&issue_num).bind(&file_path_str).bind(&issue_title).bind(&issue_summary)
                     .bind(&writers_json).bind(&artists_json).bind(&characters_json)
                     .bind(&issue_meta_id).bind(&issue_meta_source).bind(issue_match_state).bind(page_count).bind(&eid)
+                    .bind(&release_date)
                     .execute(&db.pool).await
                 } else {
                     sqlx::query(&format!(
-                        r#"INSERT INTO "Issue" (id, "seriesId", number, status, "filePath", name, description, writers, artists, characters, "matchState", "metadataId", "metadataSource", "pageCount", "createdAt")
-                           VALUES ($1, $2, $3, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, {now})"#,
+                        r#"INSERT INTO "Issue" (id, "seriesId", number, status, "filePath", name, description, writers, artists, characters, "matchState", "metadataId", "metadataSource", "pageCount", "releaseDate", "createdAt")
+                           VALUES ($1, $2, $3, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, {now})"#,
                         now = db.now_expr()
                     ))
                     .bind(&issue_id).bind(&series_id).bind(&issue_num).bind(&file_path_str)
                     .bind(&issue_title).bind(&issue_summary)
                     .bind(&writers_json).bind(&artists_json).bind(&characters_json)
                     .bind(issue_match_state).bind(&issue_meta_id).bind(&issue_meta_source).bind(page_count)
+                    .bind(&release_date)
                     .execute(&db.pool).await
                 };
 

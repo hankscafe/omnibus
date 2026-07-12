@@ -221,9 +221,15 @@ export async function GET(request: Request) {
             const fileName = issue.filePath ? path.basename(issue.filePath) : null;
             const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
             
-            const finalIssueCoverUrl = issue.coverUrl && (issue.coverUrl.startsWith('http') || issue.coverUrl.match(/^[a-zA-Z]:\\/))
-                ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}` 
+            let finalIssueCoverUrl = issue.coverUrl && (issue.coverUrl.startsWith('http') || issue.coverUrl.match(/^[a-zA-Z]:\\/))
+                ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}`
                 : issue.coverUrl;
+            // Local-first ingest (discussion #182): a file-backed issue with no provider cover shows
+            // its own archive's first page instead of inheriting the series cover — the cover route
+            // renders it via the engine and falls back to the series cover when it can't.
+            if (!finalIssueCoverUrl && issue.filePath && existingPaths.has(issue.filePath)) {
+                finalIssueCoverUrl = `/api/library/cover?issueId=${encodeURIComponent(issue.id)}`;
+            }
 
             const formatted = {
                 id: issue.id, 

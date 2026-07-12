@@ -2,13 +2,77 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { isPathWithinRoots } from '@/lib/utils/paths';
+import { CACHE_DIR as BASE_CACHE_DIR, isPathWithinRoots } from '@/lib/utils/paths';
+import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org', 'metron.cloud', 'static.metron.cloud'];
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// First-page issue covers (discussion #182, local-first ingest): rendered once via the engine,
+// then served from disk. Weekly-unaccessed eviction — unlike reader pages these are grid-hot, and
+// the read path touches mtime to keep live ones out of the reaper.
+const ISSUE_COVER_CACHE_DIR = path.join(BASE_CACHE_DIR, 'issue_covers');
+
+setInterval(() => {
+    try {
+        if (!fs.existsSync(ISSUE_COVER_CACHE_DIR)) return;
+        const now = Date.now();
+        for (const file of fs.readdirSync(ISSUE_COVER_CACHE_DIR)) {
+            const filePath = path.join(ISSUE_COVER_CACHE_DIR, file);
+            if (now - fs.statSync(filePath).mtimeMs > 7 * 24 * 60 * 60 * 1000) {
+                fs.unlinkSync(filePath);
+            }
+        }
+    } catch (e) { /* best-effort cleanup */ }
+}, 60 * 60 * 1000);
+
+// Renders page 0 of an issue archive as a WebP cover via the engine's reader endpoint (the only
+// RAR-capable extractor) with an mtime-keyed disk cache. Null on ANY failure (engine down, page
+// unreadable, file gone) — the caller falls back to the series folder cover.
+async function renderIssueFirstPage(archivePath: string): Promise<Buffer | null> {
+    let stat;
+    try {
+        stat = await fs.promises.stat(archivePath);
+    } catch {
+        return null;
+    }
+    const cacheKey = crypto.createHash('md5').update(`${archivePath}-cover0-${stat.mtimeMs}`).digest('hex') + '.webp';
+    const cacheFile = path.join(ISSUE_COVER_CACHE_DIR, cacheKey);
+    try {
+        const cached = await fs.promises.readFile(cacheFile);
+        fs.promises.utimes(cacheFile, new Date(), new Date()).catch(() => {});
+        return cached;
+    } catch { /* miss → render */ }
+
+    try {
+        const engineRes = await fetch(ENGINE_URL + '/api/reader/page', {
+            method: 'POST',
+            headers: engineHeaders({ 'Content-Type': 'application/json' }),
+            // 640px covers the series-detail hero; grid thumbnails downscale client-side.
+            body: JSON.stringify({ path: archivePath, index: 0, width: 640, quality: 80 }),
+        });
+        if (!engineRes.ok) return null;
+        const buffer = Buffer.from(await engineRes.arrayBuffer());
+        if (buffer.length === 0) return null;
+
+        // Atomic temp→rename write (same pattern as the reader page cache) so concurrent grid
+        // requests can't read a half-written cover. Best-effort, fire-and-forget.
+        try {
+            if (!fs.existsSync(ISSUE_COVER_CACHE_DIR)) fs.mkdirSync(ISSUE_COVER_CACHE_DIR, { recursive: true });
+            const tempFile = `${cacheFile}.${Date.now()}.${Math.random().toString(36).substring(7)}.tmp`;
+            fs.promises.writeFile(tempFile, buffer)
+                .then(() => fs.promises.rename(tempFile, cacheFile))
+                .catch(() => { fs.promises.unlink(tempFile).catch(() => {}); });
+        } catch { /* cache write is optional */ }
+        return buffer;
+    } catch {
+        return null;
+    }
+}
 
 function getFallbackImage() {
     const svg = `
@@ -36,7 +100,39 @@ function getFallbackImage() {
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const filePath = searchParams.get('path');
+  let filePath = searchParams.get('path');
+  const issueId = searchParams.get('issueId');
+
+  // --- ISSUE FIRST-PAGE COVERS (discussion #182, local-first ingest) ---
+  // ?issueId=<id>: an issue scanned without provider metadata has no coverUrl row of its own; its
+  // archive's first page IS its cover, rendered on demand with zero API calls. Any failure falls
+  // through to the series folder cover via the existing directory branch below.
+  if (issueId) {
+    try {
+      const issue = await prisma.issue.findUnique({
+        where: { id: issueId },
+        select: { filePath: true, series: { select: { folderPath: true } } },
+      });
+      if (issue?.filePath) {
+        // Containment re-checked even though the path came from our own DB — defense in depth,
+        // same posture as the ?path= branch.
+        const libraries = await prisma.library.findMany();
+        if (isPathWithinRoots(path.normalize(issue.filePath), libraries.map(l => l.path))) {
+          const buffer = await renderIssueFirstPage(issue.filePath);
+          if (buffer) {
+            return new NextResponse(buffer as unknown as BodyInit, {
+              headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'public, max-age=86400' },
+            });
+          }
+        }
+      }
+      filePath = issue?.series?.folderPath || null;
+    } catch (e) {
+      Logger.log(`[Cover] Issue first-page render failed for ${issueId}: ${getErrorMessage(e)}`, 'warn');
+      filePath = null;
+    }
+    if (!filePath) return getFallbackImage();
+  }
 
   if (!filePath) return new Response("Missing path", { status: 400 });
 

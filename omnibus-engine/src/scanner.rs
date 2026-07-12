@@ -2408,4 +2408,178 @@ mod tests {
         });
         assert!(has_comicinfo, "embed job wrote ComicInfo.xml into the fixture cbz");
     }
+
+    // ------------------------------------------------------------------
+    // Discussion #182 Phase 3 acceptance: the full local-first round trip.
+    //
+    // A provider-synced library that has been embedded (ComicInfo.xml) and exported (series.json)
+    // must survive a complete DB wipe — a rescan rebuilds the same series and issue rows from the
+    // FILES ALONE, and the rebuilt series is file-complete so the scheduled sync never spends
+    // provider calls on it. "Zero API" is structural: the test DB carries no provider credentials
+    // (any accidental fetch would fail loudly), and the embedded ComicInfo carries the volume id,
+    // so the scanner never even attempts dynamic resolution. Self-contained — a real file-backed
+    // SQLite DB (a :memory: pool would give every connection its own database) and a real cbz.
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn round_trip_embed_export_wipe_rescan_rebuilds_identically_with_zero_api() {
+        let base = std::env::temp_dir().join(format!("omnibus_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let series_dir = base.join("Batman (2011)");
+        std::fs::create_dir_all(&series_dir).expect("create fixture series dir");
+
+        // The filename deliberately says "001" while the DB (and therefore the embedded
+        // ComicInfo <Number>) says "5" — the rescan must trust the tag, not the filename.
+        let cbz = series_dir.join("Batman 001 (2011).cbz");
+        {
+            use std::io::Write as _;
+            let f = File::create(&cbz).expect("create fixture cbz");
+            let mut zw = zip::ZipWriter::new(f);
+            for name in ["01.jpg", "02.jpg", "03.jpg"] {
+                zw.start_file(name, zip::write::FileOptions::default()).unwrap();
+                zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+
+        let db_file = base.join("rt.db");
+        File::create(&db_file).expect("pre-create sqlite file");
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+
+        // Minimal Prisma-shaped schema — just the columns the scan/embed/export paths touch.
+        for ddl in [
+            r#"CREATE TABLE "Library" (id TEXT PRIMARY KEY, name TEXT, path TEXT, "isManga" INTEGER DEFAULT 0)"#,
+            r#"CREATE TABLE "Request" ("volumeId" TEXT, status TEXT)"#,
+            r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
+            r#"CREATE TABLE "ReadProgress" ("issueId" TEXT)"#,
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "folderPath" TEXT, name TEXT, year INTEGER, publisher TEXT,
+                "metadataId" TEXT, "metadataSource" TEXT, "matchState" TEXT, "cvId" INTEGER, "metronId" INTEGER,
+                "isManga" INTEGER DEFAULT 0, "seriesGroup" TEXT, "libraryId" TEXT, description TEXT, status TEXT,
+                "bookType" TEXT, genres TEXT, universe TEXT, monitored INTEGER DEFAULT 0, "coverUrl" TEXT,
+                "remoteCoverUrl" TEXT, "hasCustomCover" INTEGER DEFAULT 0, "seriesJsonWritten" INTEGER DEFAULT 0,
+                "createdAt" TEXT, "updatedAt" TEXT, UNIQUE("metadataSource", "metadataId"))"#,
+            r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataId" TEXT, "metadataSource" TEXT,
+                "matchState" TEXT, number TEXT, status TEXT, "filePath" TEXT, "pageCount" INTEGER DEFAULT 0,
+                name TEXT, description TEXT, "releaseDate" TEXT, genres TEXT, writers TEXT, artists TEXT,
+                "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT, teams TEXT, locations TEXT,
+                "storyArcs" TEXT, universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
+                "coverUrl" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
+        }
+
+        // Seed the state a provider sync would have left behind. Publisher "DC Comics" is in the
+        // default western list, so manga detection short-circuits before its AniList network tier.
+        let folder_str = series_dir.to_string_lossy().replace('\\', "/");
+        let cbz_str = cbz.to_string_lossy().replace('\\', "/");
+        sqlx::query(r#"INSERT INTO "Library" (id, name, path) VALUES ('rt_lib', 'RT', $1)"#)
+            .bind(base.to_string_lossy().replace('\\', "/"))
+            .execute(&db.pool).await.unwrap();
+        sqlx::query(
+            r#"INSERT INTO "Series" (id, "folderPath", name, year, publisher, "metadataId", "metadataSource",
+                   "matchState", "cvId", "libraryId", description, status, "bookType", genres)
+               VALUES ('rt_series', $1, 'Batman', 2011, 'DC Comics', '796', 'COMICVINE',
+                   'MATCHED', 796, 'rt_lib', 'The Dark Knight returns.', 'Ended', 'Print', '["Crime","Super-Hero"]')"#,
+        )
+        .bind(&folder_str)
+        .execute(&db.pool).await.unwrap();
+        sqlx::query(
+            r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status,
+                   "filePath", "pageCount", name, description, "releaseDate", genres, writers, artists,
+                   "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs")
+               VALUES ('rt_issue', 'rt_series', '900001', 'COMICVINE', 'DEEP_SYNCED', '5', 'DOWNLOADED',
+                   $1, 3, 'Night of the Owls', 'A conspiracy of owls.', '2012-05-09', '["Crime","Super-Hero"]',
+                   '["Scott Snyder"]', '["Greg Capullo"]', '["Greg Capullo"]', '["FCO Plascencia"]',
+                   '["Richard Starkings"]', '["Batman"]', '["Court of Owls"]', '["Gotham City"]',
+                   '["Night of the Owls"]')"#,
+        )
+        .bind(&cbz_str)
+        .execute(&db.pool).await.unwrap();
+
+        // -- 1. Embed + export. NO export_series_json row exists: this also proves the flipped
+        //       default (absent = ON) end-to-end — the embed job must still write series.json.
+        let (ok, fail, sj_count) = crate::metadata_writer::process_embed_job(
+            db.clone(),
+            crate::metadata_writer::EmbedRequest { series_id: Some("rt_series".to_string()), issue_ids: None },
+        )
+        .await
+        .expect("embed job");
+        assert_eq!((ok, fail, sj_count), (1, 0, 1), "ComicInfo embedded + series.json exported (default ON)");
+
+        let sj_raw = std::fs::read_to_string(series_dir.join("series.json")).expect("series.json written");
+        let sj: serde_json::Value = serde_json::from_str(&sj_raw).unwrap();
+        assert_eq!(sj["metadata"]["comicid"], 796);
+        assert_eq!(sj["metadata"]["status"], "Ended");
+        // publication_run derives from Issue.releaseDate — the Phase 2 round-trip feeding this file.
+        assert_eq!(sj["metadata"]["publication_run"], "May 2012 - May 2012");
+
+        // -- 2. Wipe the database. The files are now the only source of truth.
+        sqlx::query(r#"DELETE FROM "Issue""#).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"DELETE FROM "Series""#).execute(&db.pool).await.unwrap();
+
+        // -- 3. Rescan from disk alone.
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "rt_lib".to_string(), None)
+            .await
+            .expect("rescan after wipe");
+
+        // -- 4. The series came back identical, from ComicInfo + series.json.
+        let s = sqlx::query(
+            r#"SELECT id, name, year, publisher, "metadataId", "metadataSource", "matchState",
+                      description, status, "bookType", genres FROM "Series" WHERE "libraryId" = 'rt_lib'"#,
+        )
+        .fetch_one(&db.pool).await.expect("exactly one rebuilt series");
+        assert_eq!(s.get::<String, _>("name"), "Batman");
+        assert_eq!(s.get::<i64, _>("year"), 2011);
+        assert_eq!(s.get::<String, _>("publisher"), "DC Comics");
+        assert_eq!(s.get::<Option<String>, _>("metadataId").as_deref(), Some("796"));
+        assert_eq!(s.get::<String, _>("metadataSource"), "COMICVINE");
+        assert_eq!(s.get::<String, _>("matchState"), "MATCHED");
+        assert_eq!(s.get::<Option<String>, _>("description").as_deref(), Some("The Dark Knight returns."));
+        assert_eq!(s.get::<Option<String>, _>("status").as_deref(), Some("Ended"));
+        assert_eq!(s.get::<Option<String>, _>("bookType").as_deref(), Some("Print"));
+        // Series genres re-aggregate from the issues' ComicInfo (scan 5E).
+        assert_eq!(s.get::<Option<String>, _>("genres").as_deref(), Some(r#"["Crime","Super-Hero"]"#));
+
+        // -- 5. The issue came back identical, from its own ComicInfo.
+        let series_id: String = s.get("id");
+        let i = sqlx::query(
+            r#"SELECT number, "matchState", "metadataId", "metadataSource", status, "pageCount",
+                      name, description, "releaseDate", genres, writers, artists, "coverArtists",
+                      colorists, letterers, characters, teams, locations, "storyArcs"
+               FROM "Issue" WHERE "seriesId" = $1"#,
+        )
+        .bind(&series_id)
+        .fetch_one(&db.pool).await.expect("exactly one rebuilt issue");
+        assert_eq!(i.get::<String, _>("number"), "5", "ComicInfo <Number> beat the '001' in the filename");
+        assert_eq!(i.get::<Option<String>, _>("releaseDate").as_deref(), Some("2012-05-09"), "Y/M/D round-tripped");
+        assert_eq!(i.get::<String, _>("matchState"), "DEEP_SYNCED", "credits from file → no lazy fetch on open");
+        assert_eq!(i.get::<Option<String>, _>("metadataId").as_deref(), Some("900001"));
+        assert_eq!(i.get::<String, _>("metadataSource"), "COMICVINE");
+        assert_eq!(i.get::<String, _>("status"), "DOWNLOADED");
+        assert_eq!(i.get::<i64, _>("pageCount"), 3);
+        assert_eq!(i.get::<Option<String>, _>("name").as_deref(), Some("Night of the Owls"));
+        assert_eq!(i.get::<Option<String>, _>("description").as_deref(), Some("A conspiracy of owls."));
+        assert_eq!(i.get::<Option<String>, _>("genres").as_deref(), Some(r#"["Crime","Super-Hero"]"#));
+        assert_eq!(i.get::<Option<String>, _>("writers").as_deref(), Some(r#"["Scott Snyder"]"#));
+        assert_eq!(i.get::<Option<String>, _>("artists").as_deref(), Some(r#"["Greg Capullo"]"#));
+        assert_eq!(i.get::<Option<String>, _>("coverArtists").as_deref(), Some(r#"["Greg Capullo"]"#));
+        assert_eq!(i.get::<Option<String>, _>("colorists").as_deref(), Some(r#"["FCO Plascencia"]"#));
+        assert_eq!(i.get::<Option<String>, _>("letterers").as_deref(), Some(r#"["Richard Starkings"]"#));
+        assert_eq!(i.get::<Option<String>, _>("characters").as_deref(), Some(r#"["Batman"]"#));
+        assert_eq!(i.get::<Option<String>, _>("teams").as_deref(), Some(r#"["Court of Owls"]"#));
+        assert_eq!(i.get::<Option<String>, _>("locations").as_deref(), Some(r#"["Gotham City"]"#));
+        assert_eq!(i.get::<Option<String>, _>("storyArcs").as_deref(), Some(r#"["Night of the Owls"]"#));
+
+        // -- 6. Zero recurring cost: the rebuilt series is file-complete, so the scheduled
+        //       metadata sweep excludes it — browsing AND idling spend no provider calls.
+        let complete: i64 = sqlx::query_scalar(&format!(
+            r#"SELECT COUNT(*) FROM "Series" WHERE "metadataId" IS NOT NULL AND {}"#,
+            crate::metadata::file_complete_predicate()
+        ))
+        .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(complete, 1, "the rebuilt series is excluded from the scheduled provider sweep");
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

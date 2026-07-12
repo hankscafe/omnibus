@@ -772,8 +772,10 @@ export function initWorker() {
                         create: { key: 'last_series_json_sync', value: nowStr }
                     });
 
+                    // Default ON since discussion #182 — only an explicit "false" opts out (parity
+                    // with the engine's write_series_json gate; absent row = enabled).
                     const exportEnabled = await prisma.systemSetting.findUnique({ where: { key: 'export_series_json' } });
-                    if (exportEnabled?.value !== 'true') {
+                    if (exportEnabled?.value === 'false') {
                         await prisma.jobLog.create({
                             data: {
                                 jobType: 'EXPORT_SERIES_JSON',

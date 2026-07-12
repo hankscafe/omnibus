@@ -284,6 +284,30 @@ describe('Cron: BullMQ Worker Router', () => {
         }));
     });
 
+    it('should run EXPORT_SERIES_JSON when the setting row is absent (default ON, discussion #182)', async () => {
+        initWorker();
+
+        // Fresh install / never-touched toggle: no SystemSetting row at all.
+        mocks.systemSettingFindUnique.mockResolvedValueOnce(null);
+        mocks.engineFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ exported: 2, total: 3 }) });
+
+        const mockJob = {
+            id: 'job_export_default',
+            data: { type: 'EXPORT_SERIES_JSON' },
+            updateProgress: vi.fn()
+        };
+
+        await mocks.workerCb.current(mockJob);
+
+        expect(mocks.engineFetch).toHaveBeenCalledWith(
+            `${ENGINE_URL}/api/metadata/export-series-json`,
+            expect.objectContaining({ method: 'POST' })
+        );
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ jobType: 'EXPORT_SERIES_JSON', status: 'COMPLETED' })
+        }));
+    });
+
     it('should skip EXPORT_SERIES_JSON with a warning log when the export feature is disabled', async () => {
         initWorker();
 

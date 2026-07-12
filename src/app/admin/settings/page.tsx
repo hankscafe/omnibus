@@ -194,7 +194,7 @@ export default function SettingsPage() {
     primary_metadata_source: "COMICVINE",
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030", download_path: "", cv_api_key: "",
     metron_user: "", metron_pass: "",
-    export_series_json: "false",
+    export_series_json: "true",
     metadata_write_comicinfo: "true",
     cover_source: "metadata",
     series_ended_months: "18",
@@ -1202,8 +1202,8 @@ export default function SettingsPage() {
                         <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
                             <Switch
                                 id="export-series-json"
-                                checked={config.export_series_json === "true"} 
-                                onCheckedChange={(c) => setConfig({...config, export_series_json: c ? "true" : "false"})} 
+                                checked={config.export_series_json !== "false"}
+                                onCheckedChange={(c) => setConfig({...config, export_series_json: c ? "true" : "false"})}
                                 className="scale-110 sm:scale-100"
                             />
                             <div className="grid gap-1 ml-2">
@@ -1211,7 +1211,7 @@ export default function SettingsPage() {
                                     Export series.json for Komga / Kavita
                                 </Label>
                                 <p className="text-[11px] text-muted-foreground">
-                                    Automatically writes a Mylar-format (v1.0.2) <code>series.json</code> file to the root of your series folders. This allows external reading servers to instantly recognize your metadata if you map them to the same storage drive.
+                                    Automatically writes a Mylar-format (v1.0.2) <code>series.json</code> file to the root of your series folders. External reading servers mapped to the same storage recognize your metadata instantly, and together with embedded ComicInfo.xml it makes your library fully self-describing — a rescan (even into a fresh database) rebuilds everything without new metadata-provider calls. Omnibus never overwrites a <code>series.json</code> it didn&apos;t create, so curated Mylar libraries are safe.
                                 </p>
                             </div>
                         </div>
@@ -2146,7 +2146,7 @@ export default function SettingsPage() {
                                         Auto-Convert CBR/RAR to CBZ
                                     </Label>
                                     <p className="text-[11px] text-muted-foreground">
-                                        Converts .cbr/.rar/.cb7 archives to .cbz on import, on match, and on the scheduled sweep (recommended — CBZ reads fastest and works everywhere). When off, CBR/RAR files stay untouched and are read natively through the engine; page loads can be slightly slower, and .cb7 still needs conversion to be readable. The manual CBR Auto-Converter job keeps working either way.
+                                        Converts .cbr/.rar/.cb7 archives to .cbz on import, on match, and on the scheduled sweep (recommended — CBZ reads fastest and works everywhere). When off, CBR/RAR files stay untouched and are read natively through the engine; page loads can be slightly slower, .cb7 still needs conversion to be readable, and metadata embedding skips them (ComicInfo.xml can only be written into .cbz — RAR archives are read-only). The manual CBR Auto-Converter job keeps working either way.
                                     </p>
                                 </div>
                             </div>

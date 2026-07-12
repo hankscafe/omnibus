@@ -36,7 +36,7 @@ export default function ScheduledJobsPage() {
   const [metadataSyncSchedule, setMetadataSyncSchedule] = useState("24")
   const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0")
   const [seriesJsonSchedule, setSeriesJsonSchedule] = useState("0")
-  const [seriesJsonEnabled, setSeriesJsonEnabled] = useState(false)
+  const [seriesJsonEnabled, setSeriesJsonEnabled] = useState(true) // default ON (discussion #182)
   const [librarySyncSchedule, setLibrarySyncSchedule] = useState("12") 
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
@@ -144,7 +144,9 @@ export default function ScheduledJobsPage() {
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (embedItem) setEmbedMetadataSchedule(embedItem.value);
         if (seriesJsonItem) setSeriesJsonSchedule(seriesJsonItem.value);
-        setSeriesJsonEnabled(seriesJsonEnabledItem?.value === 'true');
+        // Default ON since discussion #182 — an absent row means enabled (parity with the
+        // engine's write_series_json gate); only an explicit "false" reads as off.
+        setSeriesJsonEnabled(seriesJsonEnabledItem?.value !== 'false');
         if (libItem) setLibrarySyncSchedule(libItem.value);
         if (monitorItem) setMonitorSyncSchedule(monitorItem.value);
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
@@ -373,7 +375,7 @@ export default function ScheduledJobsPage() {
                 <Card className="shadow-sm border-border bg-background transition-all hover:shadow-md">
                     <CardHeader className="pb-3">
                         <CardTitle className="flex items-center gap-2 text-lg text-foreground"><FileJson className="w-5 h-5 text-primary" /> Embed XML Metadata</CardTitle>
-                        <CardDescription className="text-muted-foreground">Writes ComicInfo.xml data directly into your downloaded .cbz archives.</CardDescription>
+                        <CardDescription className="text-muted-foreground">Writes ComicInfo.xml data directly into your downloaded .cbz archives. CBR/RAR files are read-only (RAR can&apos;t be rewritten) — keep the CBR Auto-Converter on if you want those tagged too.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                         <Select value={embedMetadataSchedule} onValueChange={setEmbedMetadataSchedule}>

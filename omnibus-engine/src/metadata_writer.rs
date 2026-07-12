@@ -301,9 +301,13 @@ fn format_month_year(date_str: &str) -> String {
 /// Gated on `export_series_json` + DB-tracked file ownership. Parity with writeSeriesJson
 /// (metadata-writer.ts, beta.032-034).
 pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
+    // Default ON since discussion #182 (local-first ingest): the export is what makes a wipe/
+    // rebuild or a Komga/Kavita share round-trip without re-paying provider calls, and the
+    // ownership guard below already protects curated Mylar libraries. Only an explicit admin
+    // opt-out ("false") disables it; an absent row is the new default.
     let enabled = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'export_series_json'"#)
         .fetch_optional(&db.pool).await.ok().flatten();
-    if enabled.as_deref() != Some("true") {
+    if enabled.as_deref() == Some("false") {
         return false;
     }
 

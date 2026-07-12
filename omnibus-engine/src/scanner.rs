@@ -325,6 +325,15 @@ struct IssueFileMeta {
     story_arcs: Option<String>,
 }
 
+/// Match state a scanned file's issue row carries (discussion #182, local-first ingest): an issue
+/// whose OWN ComicInfo supplied both a provider id AND creative credits is enrichment-complete —
+/// DEEP_SYNCED means opening it never costs a provider call (the view-time lazy fetch only fires
+/// below DEEP_SYNCED). An id without credits stays MATCHED so lazy enrichment can still fill the
+/// gap; no id at all is the caller's UNMATCHED path.
+fn scanned_issue_match_state(fm: &IssueFileMeta) -> &'static str {
+    if fm.writers.is_some() || fm.artists.is_some() { "DEEP_SYNCED" } else { "MATCHED" }
+}
+
 fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
     let Some(i) = info else { return IssueFileMeta::default() };
     let text = |s: &Option<String>| s.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
@@ -1281,15 +1290,15 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             let file_info = infos.get(idx).and_then(|o| o.as_ref());
             let file_derived = file_info.map(derive_meta);
             let issue_id = Uuid::new_v4().to_string();
+            let fm = issue_file_meta(file_info);
             let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
                 Some(d) if d.metadata_issue_id.is_some() => (
                     d.metadata_issue_id.clone().unwrap(),
                     d.metadata_source.clone(),
-                    "MATCHED",
+                    scanned_issue_match_state(&fm),
                 ),
                 _ => (format!("unmatched_{}", Uuid::new_v4()), metadata_source.clone(), "UNMATCHED"),
             };
-            let fm = issue_file_meta(file_info);
 
             // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
             let page_count = count_pages_blocking(file).await;
@@ -1401,10 +1410,12 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             continue;
         }
 
+        // Narrative metadata from the file's own ComicInfo (discussion #177) — same as 5A.
+        let fm = issue_file_meta(info.as_ref());
         let derived = info.as_ref().map(derive_meta);
         let (issue_meta_id, issue_source, issue_match_state) = match &derived {
             Some(d) => match &d.metadata_issue_id {
-                Some(id) => (id.clone(), d.metadata_source.clone(), "MATCHED"),
+                Some(id) => (id.clone(), d.metadata_source.clone(), scanned_issue_match_state(&fm)),
                 None => (format!("unmatched_{}", Uuid::new_v4()), d.metadata_source.clone(), "UNMATCHED"),
             },
             None => (format!("unmatched_{}", Uuid::new_v4()), "LOCAL".to_string(), "UNMATCHED"),
@@ -1412,8 +1423,6 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
         let issue_id = Uuid::new_v4().to_string();
         let page_count = count_pages_blocking(&file).await;
-        // Narrative metadata from the file's own ComicInfo (discussion #177) — same as 5A.
-        let fm = issue_file_meta(info.as_ref());
         if let Err(e) = sqlx::query(&format!(
             r#"INSERT INTO "Issue"
                (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
@@ -1536,8 +1545,10 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             let sem = count_sem.clone();
             count_set.spawn(async move {
                 let _permit = sem.acquire_owned().await.ok();
+                // count_archive_pages, not count_zip_pages: this backfill is what heals RAR
+                // libraries scanned by pre-native-reading builds (the Panels "0 pages" fix).
                 let count = tokio::task::spawn_blocking(move || {
-                    crate::converter::count_zip_pages(Path::new(&file_path))
+                    crate::converter::count_archive_pages(Path::new(&file_path))
                 })
                 .await
                 .ok()
@@ -1557,6 +1568,56 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             }
         }
         if backfilled > 0 { log::info!("[Scan] Backfilled page counts for {} issue(s).", backfilled); }
+    }
+
+    // ---------------------------------------------------------
+    // 5E. SERIES GENRES FROM FILES (discussion #182 — local-first ingest)
+    // ---------------------------------------------------------
+    // The series-level genres column previously only ever came from a provider sync. A tagged
+    // library already carries genres per issue (ComicInfo <Genre>), so blank series columns fill
+    // with the DISTINCT union of their own issues' genres — fill-blank only; a provider or manual
+    // value always wins. Without this, the sync's new file-completeness skip would leave tagged
+    // libraries without series genres forever.
+    let genre_rows = sqlx::query(
+        r#"SELECT s.id AS sid, i.genres AS g FROM "Issue" i
+           JOIN "Series" s ON i."seriesId" = s.id
+           WHERE s."libraryId" = $1 AND (s.genres IS NULL OR s.genres = '' OR s.genres = '[]')
+             AND i.genres IS NOT NULL AND i.genres <> '[]'"#,
+    )
+    .bind(&library_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+
+    if !genre_rows.is_empty() {
+        let mut per_series: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for row in &genre_rows {
+            let sid: String = row.get("sid");
+            let g: String = row.try_get("g").unwrap_or_default();
+            if let Ok(list) = serde_json::from_str::<Vec<String>>(&g) {
+                let bucket = per_series.entry(sid).or_default();
+                for genre in list {
+                    let t = genre.trim().to_string();
+                    if !t.is_empty() && !bucket.iter().any(|x| x == &t) {
+                        bucket.push(t);
+                    }
+                }
+            }
+        }
+        let mut genre_filled = 0;
+        for (sid, genres) in per_series {
+            if genres.is_empty() { continue; }
+            if let Ok(json) = serde_json::to_string(&genres) {
+                // Blank-guard re-checked in the UPDATE — a concurrent sync writing real provider
+                // genres between our SELECT and now must not be clobbered.
+                if sqlx::query(r#"UPDATE "Series" SET genres = $1 WHERE id = $2 AND (genres IS NULL OR genres = '' OR genres = '[]')"#)
+                    .bind(&json).bind(&sid).execute(&db.pool).await.is_ok()
+                {
+                    genre_filled += 1;
+                }
+            }
+        }
+        if genre_filled > 0 { log::info!("[Scan] Filled series genres from file metadata for {} series.", genre_filled); }
     }
 
     let duration = start_time.elapsed();
@@ -1588,6 +1649,27 @@ async fn delete_issue(db: &Db, issue_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==== Discussion #182: local-first ingest — file-complete issues skip provider enrichment. ====
+
+    #[test]
+    fn scanned_issue_match_state_deep_syncs_credit_complete_files() {
+        // No credits: the id is known but enrichment can still add value → MATCHED (lazy fetch stays).
+        let fm = IssueFileMeta::default();
+        assert_eq!(scanned_issue_match_state(&fm), "MATCHED");
+
+        // Writers from ComicInfo → enrichment-complete; opening the issue must cost zero API calls.
+        let fm = IssueFileMeta { writers: Some(r#"["Chip Zdarsky"]"#.to_string()), ..Default::default() };
+        assert_eq!(scanned_issue_match_state(&fm), "DEEP_SYNCED");
+
+        // Artists alone also count as creative credits.
+        let fm = IssueFileMeta { artists: Some(r#"["Marco Checchetto"]"#.to_string()), ..Default::default() };
+        assert_eq!(scanned_issue_match_state(&fm), "DEEP_SYNCED");
+
+        // A summary without credits is NOT enrichment-complete.
+        let fm = IssueFileMeta { description: Some("A synopsis".to_string()), ..Default::default() };
+        assert_eq!(scanned_issue_match_state(&fm), "MATCHED");
+    }
 
     // ==== Discussion #177: trust embedded file metadata (Mylar-migrated libraries). ====
 

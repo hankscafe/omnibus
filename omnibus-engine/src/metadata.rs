@@ -6,6 +6,21 @@ use std::time::Duration;
 use regex::Regex;
 use reqwest::Client;
 
+/// SQL predicate (embeddable in a WHERE, table referenced as "Series") matching a FILE-COMPLETE
+/// series — one whose local files already supplied everything a provider sync would add
+/// (discussion #182, local-first ingest): a description, at least one owned issue, and every
+/// owned issue enrichment-complete (DEEP_SYNCED — stamped by the scanner/watched-sync when the
+/// file's ComicInfo carried credits, by view-time enrichment, or by metron_detail_credits).
+/// The scheduled sweep EXCLUDES these; a targeted/manual refresh never applies this predicate.
+pub(crate) fn file_complete_predicate() -> &'static str {
+    r#"("Series".description IS NOT NULL AND "Series".description <> ''
+        AND EXISTS (SELECT 1 FROM "Issue" fi WHERE fi."seriesId" = "Series".id AND fi."filePath" IS NOT NULL)
+        AND NOT EXISTS (
+            SELECT 1 FROM "Issue" fi WHERE fi."seriesId" = "Series".id AND fi."filePath" IS NOT NULL
+              AND (fi."matchState" IS NULL OR fi."matchState" <> 'DEEP_SYNCED')
+        ))"#
+}
+
 pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::Result<()> {
     // ComicVine API key (Metron series don't need it, so this is optional).
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
@@ -40,7 +55,24 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
             q.fetch_all(&db.pool).await?
         }
         None => {
-            let sql = format!(r#"{series_select} WHERE "metadataId" IS NOT NULL ORDER BY "updatedAt" ASC LIMIT 15"#);
+            // Local-first ingest (discussion #182): the scheduled sweep skips series whose FILES
+            // already provided everything — for a fully-tagged library the recurring sync cost
+            // drops to zero API calls. Gaps and untagged series keep syncing exactly as before,
+            // and a manual "Refresh Metadata" (series_ids given) always fetches live.
+            let skipped: i64 = sqlx::query_scalar(&format!(
+                r#"SELECT COUNT(*) FROM "Series" WHERE "metadataId" IS NOT NULL AND {fc}"#,
+                fc = file_complete_predicate()
+            ))
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or(0);
+            if skipped > 0 {
+                log::info!("[Metadata] Scheduled sync skipping {} file-complete series (local metadata already covers them).", skipped);
+            }
+            let sql = format!(
+                r#"{series_select} WHERE "metadataId" IS NOT NULL AND NOT {fc} ORDER BY "updatedAt" ASC LIMIT 15"#,
+                fc = file_complete_predicate()
+            );
             sqlx::query(&sql)
                 .fetch_all(&db.pool)
                 .await?
@@ -1532,6 +1564,51 @@ pub(crate) fn is_same_issue(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==== Discussion #182: the scheduled sync must skip series whose FILES already supplied
+    // everything (description + every owned issue DEEP_SYNCED) — zero recurring API cost for a
+    // fully-tagged library. Exercised against a real in-memory pool because the predicate is
+    // correlated-subquery SQL, not Rust logic.
+
+    #[tokio::test]
+    async fn file_complete_predicate_excludes_only_fully_tagged_series() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1) // each :memory: connection is its own DB — keep exactly one
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, description TEXT, "metadataId" TEXT)"#)
+            .execute(&pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, "matchState" TEXT)"#)
+            .execute(&pool).await.unwrap();
+
+        // s1: file-complete (description + every OWNED issue DEEP_SYNCED)     → skipped.
+        // s2: an owned issue still only MATCHED                               → keeps syncing.
+        // s3: description but zero owned issues (WANTED skeletons only)       → keeps syncing.
+        // s4: issues complete but NO description                              → keeps syncing.
+        for (id, desc) in [("s1", Some("d")), ("s2", Some("d")), ("s3", Some("d")), ("s4", None::<&str>)] {
+            sqlx::query(r#"INSERT INTO "Series" (id, description, "metadataId") VALUES ($1, $2, '123')"#)
+                .bind(id).bind(desc).execute(&pool).await.unwrap();
+        }
+        for (id, sid, fp, ms) in [
+            ("i1", "s1", Some("/a.cbz"), "DEEP_SYNCED"),
+            ("i2", "s1", Some("/b.cbz"), "DEEP_SYNCED"),
+            ("i3", "s2", Some("/c.cbz"), "MATCHED"),
+            ("i4", "s3", None::<&str>, "MATCHED"),
+            ("i5", "s4", Some("/d.cbz"), "DEEP_SYNCED"),
+        ] {
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "filePath", "matchState") VALUES ($1, $2, $3, $4)"#)
+                .bind(id).bind(sid).bind(fp).bind(ms).execute(&pool).await.unwrap();
+        }
+
+        let sql = format!(
+            r#"SELECT id FROM "Series" WHERE "metadataId" IS NOT NULL AND NOT {} ORDER BY id"#,
+            file_complete_predicate()
+        );
+        let rows = sqlx::query(&sql).fetch_all(&pool).await.unwrap();
+        let ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>("id")).collect();
+        assert_eq!(ids, vec!["s2", "s3", "s4"], "only s1 is file-complete");
+    }
 
     #[test]
     fn is_same_issue_handles_zeros_decimals_suffixes() {

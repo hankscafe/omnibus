@@ -390,19 +390,23 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                     } else { None }
                 });
                 let resolved_issue_id = metron_issue_id.clone().or_else(|| cv_issue_id.clone());
-                let (issue_meta_id, issue_meta_source, issue_match_state): (String, String, &str) = match &resolved_issue_id {
-                    Some(id) => {
-                        let src = if metron_issue_id.is_some() || meta_source == "METRON" { "METRON" } else { "COMICVINE" };
-                        (id.clone(), src.to_string(), "MATCHED")
-                    }
-                    None => (format!("unmatched_{}", uuid::Uuid::new_v4()), "LOCAL".to_string(), "UNMATCHED"),
-                };
-                log::debug!("[Watched Sync Debug] Issue {} #{} resolved → metadataId={}, source={}, matchState={}", series_name, issue_num, issue_meta_id, issue_meta_source, issue_match_state);
-
                 // Credits parsed from ComicInfo.xml (parity with the main importer).
                 let writers_json = split_to_json(info.writer.as_deref());
                 let artists_json = split_to_json(info.penciller.as_deref());
                 let characters_json = split_to_json(info.characters.as_deref());
+
+                let (issue_meta_id, issue_meta_source, issue_match_state): (String, String, &str) = match &resolved_issue_id {
+                    Some(id) => {
+                        let src = if metron_issue_id.is_some() || meta_source == "METRON" { "METRON" } else { "COMICVINE" };
+                        // Local-first ingest (discussion #182, parity with the scanner): an id AND
+                        // creative credits from the file = enrichment-complete → DEEP_SYNCED, so
+                        // opening the imported issue never costs a provider call.
+                        let state = if writers_json != "[]" || artists_json != "[]" { "DEEP_SYNCED" } else { "MATCHED" };
+                        (id.clone(), src.to_string(), state)
+                    }
+                    None => (format!("unmatched_{}", uuid::Uuid::new_v4()), "LOCAL".to_string(), "UNMATCHED"),
+                };
+                log::debug!("[Watched Sync Debug] Issue {} #{} resolved → metadataId={}, source={}, matchState={}", series_name, issue_num, issue_meta_id, issue_meta_source, issue_match_state);
                 let issue_title = info.title.clone().unwrap_or_default();
                 let issue_summary = info.summary.clone().unwrap_or_default();
                 let file_path_str = final_dest.to_string_lossy().to_string();

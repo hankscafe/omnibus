@@ -54,6 +54,20 @@ export async function GET(request: Request) {
                            issue.matchState !== 'DEEP_SYNCED' &&
                            !(issue as any).hasCustomMetadata; // a manually curated issue is never re-fetched over
 
+    // file_metadata_priority (discussions #177/#182): the view-time merge is fill-blanks-only when
+    // the admin prefers embedded file metadata — an existing non-empty value (ComicInfo-derived or
+    // manual) is never replaced by the provider's. Parity with the engine's merge_credit_json;
+    // previously this route overwrote file credits whenever the provider returned data.
+    const fillOnly = needsDeepFetch
+        ? (await prisma.systemSetting.findUnique({ where: { key: 'file_metadata_priority' } }))?.value === 'true'
+        : false;
+    const mergeList = (fetched: string[] | undefined, existing: string[]): string[] => {
+        const f = fetched || [];
+        if (f.length === 0) return existing;          // never-wipe (#179)
+        if (fillOnly && existing.length > 0) return existing; // fill-blanks-only
+        return f;
+    };
+
     if (needsDeepFetch && issue.metadataId) {
         if (issue.metadataSource === 'METRON') {
             try {
@@ -61,15 +75,18 @@ export async function GET(request: Request) {
                 const metron = new MetronProvider();
                 const deepData = await metron.getIssueDetails(issue.metadataId); // Guaranteed string
 
-                const newDescription = deepData.description || issue.description;
-                const finalWriters = (deepData.writers?.length || 0) > 0 ? deepData.writers : parsedWriters;
-                const finalArtists = (deepData.artists?.length || 0) > 0 ? deepData.artists : parsedArtists;
-                const finalCoverArtists = (deepData.coverArtists?.length || 0) > 0 ? deepData.coverArtists : parsedCoverArtists;
-                const finalColorists = (deepData.colorists?.length || 0) > 0 ? deepData.colorists : parsedColorists;
-                const finalLetterers = (deepData.letterers?.length || 0) > 0 ? deepData.letterers : parsedLetterers;
-                const finalCharacters = (deepData.characters?.length || 0) > 0 ? deepData.characters : parsedCharacters;
-                const finalStoryArcs = (deepData.storyArcs?.length || 0) > 0 ? deepData.storyArcs : ["NONE"];
-                const finalTeams = (deepData.teams?.length || 0) > 0 ? deepData.teams : parsedTeams;
+                const newDescription = fillOnly && issue.description ? issue.description : (deepData.description || issue.description);
+                const finalWriters = mergeList(deepData.writers, parsedWriters);
+                const finalArtists = mergeList(deepData.artists, parsedArtists);
+                const finalCoverArtists = mergeList(deepData.coverArtists, parsedCoverArtists);
+                const finalColorists = mergeList(deepData.colorists, parsedColorists);
+                const finalLetterers = mergeList(deepData.letterers, parsedLetterers);
+                const finalCharacters = mergeList(deepData.characters, parsedCharacters);
+                // ["NONE"] only when BOTH sides are empty — the old shape dropped file-derived arcs
+                // to the sentinel whenever the provider returned none (the #179 wipe class).
+                const mergedArcs = mergeList(deepData.storyArcs, parsedStoryArcs);
+                const finalStoryArcs = mergedArcs.length > 0 ? mergedArcs : ["NONE"];
+                const finalTeams = mergeList(deepData.teams, parsedTeams);
 
                 await prisma.issue.update({
                     where: { id: issue.id },
@@ -135,18 +152,19 @@ export async function GET(request: Request) {
                             deepData.location_credits
                         );
 
-                        const newDescription = deepData.description || deepData.deck || issue.description;
+                        const newDescription = fillOnly && issue.description ? issue.description : (deepData.description || deepData.deck || issue.description);
 
-                        const finalWriters = writers.length > 0 ? writers : parsedWriters;
-                        const finalArtists = artists.length > 0 ? artists : parsedArtists;
-                        const finalCoverArtists = coverArtists.length > 0 ? coverArtists : parsedCoverArtists;
-                        const finalColorists = colorists.length > 0 ? colorists : parsedColorists;
-                        const finalLetterers = letterers.length > 0 ? letterers : parsedLetterers;
-                        const finalCharacters = characters.length > 0 ? characters : parsedCharacters;
-                        const finalGenres = genres.length > 0 ? genres : parsedGenres;
-                        const finalStoryArcs = storyArcs.length > 0 ? storyArcs : ["NONE"];
-                        const finalTeams = teams.length > 0 ? teams : parsedTeams;
-                        const finalLocations = locations.length > 0 ? locations : parsedLocations;
+                        const finalWriters = mergeList(writers, parsedWriters);
+                        const finalArtists = mergeList(artists, parsedArtists);
+                        const finalCoverArtists = mergeList(coverArtists, parsedCoverArtists);
+                        const finalColorists = mergeList(colorists, parsedColorists);
+                        const finalLetterers = mergeList(letterers, parsedLetterers);
+                        const finalCharacters = mergeList(characters, parsedCharacters);
+                        const finalGenres = mergeList(genres, parsedGenres);
+                        const mergedArcs = mergeList(storyArcs, parsedStoryArcs);
+                        const finalStoryArcs = mergedArcs.length > 0 ? mergedArcs : ["NONE"];
+                        const finalTeams = mergeList(teams, parsedTeams);
+                        const finalLocations = mergeList(locations, parsedLocations);
 
                         await prisma.issue.update({
                             where: { id: issue.id },

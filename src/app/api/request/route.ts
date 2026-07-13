@@ -214,7 +214,27 @@ export async function POST(request: NextRequest) {
     const initialStatus = (requesterIsAdmin || requester?.autoApproveRequests) ? 'PENDING' : 'PENDING_APPROVAL';
 
     const safePublisher = publisher || "Unknown";
-    const isManga = await detectManga({ name, publisher: { name: safePublisher }, year: parseInt(year) });
+    // Detection precedence: an existing Series row's isManga (set by the scanner's full waterfall,
+    // incl. ComicInfo + AniList) beats a request-time re-detection, which only has name+publisher.
+    let existingSeries: { isManga: boolean } | null = null;
+    if (resolvedCvId) {
+        try {
+            existingSeries = (await prisma.series.findUnique({
+                where: { metadataSource_metadataId: { metadataSource, metadataId: resolvedCvId.toString() } },
+                select: { isManga: true }
+            })) ?? null;
+        } catch {}
+    }
+    const isManga = existingSeries
+        ? existingSeries.isManga
+        : await detectManga({ name, publisher: { name: safePublisher }, year: parseInt(year) });
+
+    if (isManga) {
+        const mangaGate = await prisma.systemSetting.findUnique({ where: { key: 'manga_requests_enabled' } });
+        if (mangaGate?.value === 'false') {
+            return NextResponse.json({ error: 'Manga requests are disabled by the administrator (Settings → Filters).' }, { status: 403 });
+        }
+    }
     const libraryTypeFolder = isManga ? 'Manga' : 'Comics';
 
     if (type === 'volume') {
@@ -523,7 +543,8 @@ export async function PATCH(request: NextRequest) {
       let publisher = "";
       let description = "";
       let seriesNameForBatch = reqRecord.volumeId;
-      
+      let seriesIsManga: boolean | null = null;
+
       if (reqRecord.volumeId && reqRecord.volumeId !== "0") {
          const series = await prisma.series.findFirst({ where: { metadataId: reqRecord.volumeId } });
          if (series) {
@@ -531,6 +552,7 @@ export async function PATCH(request: NextRequest) {
              publisher = series.publisher || "Unknown";
              description = series.description || "";
              seriesNameForBatch = series.name;
+             seriesIsManga = series.isManga;
          }
       }
       
@@ -586,8 +608,12 @@ export async function PATCH(request: NextRequest) {
           }).catch(() => {});
       }
 
-      const isManga = await detectManga({ name: searchName, publisher: { name: publisher } });
-      
+      // The Series row (upserted at request time with the full-precedence verdict) is authoritative;
+      // re-detection here only has name+publisher and is the fallback for series-less requests.
+      const isManga = seriesIsManga !== null
+          ? seriesIsManga
+          : await detectManga({ name: searchName, publisher: { name: publisher } });
+
       searchAndDownload(id, searchName, year, publisher, isManga, skipIndexers).catch(e => Logger.log(getErrorMessage(e), 'error'));
     }
 

@@ -205,6 +205,7 @@ export default function SettingsPage() {
     show_popular_issues: "true", show_new_releases: "true", 
     manga_publishers: "", western_publishers: "",
     discover_manga_filter_mode: "SHOW_ALL", discover_manga_allowed_publishers: "",
+    manga_requests_enabled: "true",
     download_retry_delay: "5",
     awaiting_retry_days: "7", flag_stalled_requests: "true",
     matcher_mode: "confirm", matcher_auto_threshold: "0.90", file_metadata_priority: "false",
@@ -2515,16 +2516,28 @@ export default function SettingsPage() {
                             {config.discover_manga_filter_mode === "ALLOWED_ONLY" && (
                                 <div className="space-y-2 animate-in fade-in zoom-in-95 mt-2">
                                     <Label className="text-foreground font-semibold">Allowed Manga Publishers (Comma Separated)</Label>
-                                    <textarea 
+                                    <textarea
                                         rows={2}
-                                        value={config.discover_manga_allowed_publishers || ""} 
-                                        onChange={e => setConfig({...config, discover_manga_allowed_publishers: e.target.value})} 
-                                        placeholder="e.g. viz media, shueisha, kodansha" 
+                                        value={config.discover_manga_allowed_publishers || ""}
+                                        onChange={e => setConfig({...config, discover_manga_allowed_publishers: e.target.value})}
+                                        placeholder="e.g. viz media, shueisha, kodansha"
                                         className="flex min-h-[60px] w-full rounded-md border border-input bg-muted/20 px-3 py-2 text-sm shadow-sm text-foreground border-border"
                                     />
                                     <p className="text-[10px] text-muted-foreground">Only manga from these publishers will be allowed on the Discover page. All other manga will be hidden.</p>
                                 </div>
                             )}
+
+                            <div className="flex items-center justify-between pt-3 border-t border-border">
+                                <div className="space-y-0.5 pr-4">
+                                    <Label htmlFor="manga-requests-toggle" className="text-foreground font-semibold">Allow Manga Requests</Label>
+                                    <p className="text-[10px] text-muted-foreground">When off, requests detected as manga are rejected before any download automation runs. Library scans and series already in your library are unaffected.</p>
+                                </div>
+                                <Switch
+                                    id="manga-requests-toggle"
+                                    checked={config.manga_requests_enabled !== "false"}
+                                    onCheckedChange={(c) => setConfig({...config, manga_requests_enabled: c ? "true" : "false"})}
+                                />
+                            </div>
                         </div>
                     </div>
 

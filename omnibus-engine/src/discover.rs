@@ -22,7 +22,8 @@ const DEFAULT_MANGA_PUBLISHERS: &[&str] = &[
     "gee-whiz", "suiseisha", "ascii media works", "ichijinsha", "project-h", "irodori", "eros comix",
 ];
 
-const MANGA_CONCEPTS: &[&str] = &["manga", "shonen", "seinen", "shojo", "josei", "manhwa", "manhua", "webtoon"];
+// Parity with MANGA_CONCEPTS in src/lib/manga-detector.ts — keep the two lists identical.
+const MANGA_CONCEPTS: &[&str] = &["manga", "shonen", "seinen", "shojo", "josei", "manhwa", "manhua", "webtoon", "tankobon", "doujinshi"];
 
 fn re_year_paren() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -99,6 +100,30 @@ struct DiscoverConfig {
 }
 
 impl DiscoverConfig {
+    /// Blocklist portion shared by the ComicVine and Metron paths. Both args pre-lowercased;
+    /// `haystack` is the keyword-scan text (title + synopsis).
+    fn blocklist_allows(&self, pub_name: &str, haystack: &str) -> bool {
+        if !self.filter_enabled { return true; }
+        if !self.blocked_publishers.is_empty() && self.blocked_publishers.iter().any(|bp| contains_word(pub_name, bp)) {
+            return false;
+        }
+        if !self.blocked_keywords.is_empty() && self.blocked_keywords.iter().any(|bk| contains_word(haystack, bk)) {
+            return false;
+        }
+        true
+    }
+
+    /// Manga-mode portion shared by the ComicVine and Metron paths. Args pre-lowercased.
+    fn manga_mode_allows(&self, is_manga: bool, pub_name: &str, name: &str) -> bool {
+        if !is_manga { return true; }
+        match self.manga_filter_mode.as_str() {
+            "HIDE_ALL" => false,
+            "ALLOWED_ONLY" => !self.allowed_manga_pubs.is_empty()
+                && self.allowed_manga_pubs.iter().any(|amp| pub_name.contains(amp.as_str()) || name.contains(amp.as_str())),
+            _ => true,
+        }
+    }
+
     /// Publisher/keyword blocklist + manga-mode filtering (parity with queue.ts `isValid`).
     fn is_valid(&self, item: &Value) -> bool {
         let pub_name = item.pointer("/volume/publisher/name").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();
@@ -106,37 +131,44 @@ impl DiscoverConfig {
         let empty: Vec<Value> = Vec::new();
         let concepts = item.pointer("/volume/concepts").and_then(|v| v.as_array()).unwrap_or(&empty);
 
-        if self.filter_enabled {
-            if !self.blocked_publishers.is_empty() && self.blocked_publishers.iter().any(|bp| contains_word(&pub_name, bp)) {
-                log::debug!("[Discover Sync Debug] Filtered out \"{}\" due to blocked publisher: {}", vol_name, pub_name);
-                return false;
-            }
-            if !self.blocked_keywords.is_empty() {
-                // Scan the title + deck + (HTML-stripped) description: adult content often has an
-                // innocuous title but an explicit synopsis, and all three fields are already fetched.
-                let deck = item.get("deck").and_then(|v| v.as_str()).unwrap_or("");
-                let desc = item.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                let haystack = format!("{} {} {}", vol_name, deck, strip_html_tags(desc)).to_lowercase();
-                if self.blocked_keywords.iter().any(|bk| contains_word(&haystack, bk)) {
-                    log::debug!("[Discover Sync Debug] Filtered out \"{}\" due to blocked keyword", vol_name);
-                    return false;
-                }
-            }
+        // Scan the title + deck + (HTML-stripped) description: adult content often has an
+        // innocuous title but an explicit synopsis, and all three fields are already fetched.
+        let deck = item.get("deck").and_then(|v| v.as_str()).unwrap_or("");
+        let desc = item.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let haystack = format!("{} {} {}", vol_name, deck, strip_html_tags(desc)).to_lowercase();
+        if !self.blocklist_allows(&pub_name, &haystack) {
+            log::debug!("[Discover Sync Debug] Filtered out \"{}\" by publisher/keyword blocklist", vol_name);
+            return false;
         }
 
-        let is_manga_pub = self.manga_publishers.iter().any(|mp| pub_name.contains(mp.as_str()));
-        let has_manga_concept = concepts.iter().any(|c| {
-            let n = c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-            MANGA_CONCEPTS.contains(&n.as_str())
-        });
+        let is_manga = self.manga_publishers.iter().any(|mp| pub_name.contains(mp.as_str()))
+            || concepts.iter().any(|c| {
+                let n = c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                MANGA_CONCEPTS.contains(&n.as_str())
+            });
+        if !self.manga_mode_allows(is_manga, &pub_name, &vol_name) {
+            log::debug!("[Discover Sync Debug] Filtered out \"{}\" by manga mode {}", vol_name, self.manga_filter_mode);
+            return false;
+        }
+        true
+    }
 
-        if is_manga_pub || has_manga_concept {
-            if self.manga_filter_mode == "HIDE_ALL" { return false; }
-            if self.manga_filter_mode == "ALLOWED_ONLY" {
-                let allowed = !self.allowed_manga_pubs.is_empty()
-                    && self.allowed_manga_pubs.iter().any(|amp| pub_name.contains(amp.as_str()) || vol_name.contains(amp.as_str()));
-                if !allowed { return false; }
-            }
+    /// Metron-path filtering with the fields Metron actually supplies: no CV concepts, so the
+    /// manga signal is publisher list + series genres (Metron has a literal "Manga" genre).
+    /// Previously the Metron branch pushed every item unfiltered — the manga filter was CV-only.
+    fn is_valid_metron(&self, publisher: &str, series_name: &str, desc: &str, genres: &[String]) -> bool {
+        let pub_name = publisher.trim().to_lowercase();
+        let name = series_name.trim().to_lowercase();
+        let haystack = format!("{} {}", name, desc.to_lowercase());
+        if !self.blocklist_allows(&pub_name, &haystack) {
+            log::debug!("[Discover Sync Debug] Filtered out Metron \"{}\" by publisher/keyword blocklist", series_name);
+            return false;
+        }
+        let is_manga = self.manga_publishers.iter().any(|mp| pub_name.contains(mp.as_str()))
+            || genres.iter().any(|g| MANGA_CONCEPTS.contains(&g.to_lowercase().as_str()));
+        if !self.manga_mode_allows(is_manga, &pub_name, &name) {
+            log::debug!("[Discover Sync Debug] Filtered out Metron \"{}\" by manga mode {}", series_name, self.manga_filter_mode);
+            return false;
         }
         true
     }
@@ -333,6 +365,18 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
 
     let client = Client::builder().user_agent("Omnibus/1.0").build()?;
 
+    // One filter config for BOTH source branches: the Metron path previously bypassed the
+    // blocklists and manga mode entirely (they were ComicVine-only).
+    let cfg = DiscoverConfig {
+        cv_api_key,
+        filter_enabled,
+        blocked_publishers: split_lower(get("filter_publishers")),
+        blocked_keywords: split_lower(get("filter_keywords")),
+        manga_filter_mode: manga_filter_mode.clone(),
+        allowed_manga_pubs: split_lower(get("discover_manga_allowed_publishers")),
+        manga_publishers,
+    };
+
     let (new_releases, popular): (Vec<Value>, Vec<Value>) = if primary_source == "METRON" {
         let metron_user = config.get("metron_user").cloned().unwrap_or_default();
         let metron_pass = crate::secret_crypto::decrypt_str(&db.pool, config.get("metron_pass").map(|s| s.as_str()).unwrap_or("")).await;
@@ -432,6 +476,17 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
                 let series_display = series_name.clone().unwrap_or_else(|| "Unknown".to_string());
                 let description = item.get("desc").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or("No description available.");
 
+                // Series genres when the payload carries them (objects with a name, or plain strings).
+                let genres: Vec<String> = item.pointer("/series/genres").and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|g| {
+                        g.as_str().map(|s| s.to_string())
+                            .or_else(|| g.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                    }).collect())
+                    .unwrap_or_default();
+                if !cfg.is_valid_metron(publisher, &series_display, description, &genres) {
+                    continue;
+                }
+
                 releases.push(json!({
                     "id": item.get("id").cloned().unwrap_or(Value::Null),
                     "volumeId": parsed_series_id.unwrap_or(0),
@@ -453,16 +508,6 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
 
         (releases, Vec::new())
     } else {
-        let cfg = DiscoverConfig {
-            cv_api_key,
-            filter_enabled,
-            blocked_publishers: split_lower(get("filter_publishers")),
-            blocked_keywords: split_lower(get("filter_keywords")),
-            manga_filter_mode: manga_filter_mode.clone(),
-            allowed_manga_pubs: split_lower(get("discover_manga_allowed_publishers")),
-            manga_publishers,
-        };
-
         // Run both categories concurrently (parity with Promise.all). Either error fails the job.
         let (new_res, pop_res) = tokio::join!(
             cfg.fetch_category(&db.pool, &client, "store_date:desc"),
@@ -557,6 +602,36 @@ mod tests {
         assert!(!allowed.is_valid(&item("Kodansha", "AOT", &["seinen"])));  // manga, not allowed
         let show = cfg("SHOW_ALL", false);
         assert!(show.is_valid(&item("Kodansha", "AOT", &["seinen"])));
+    }
+
+    #[test]
+    fn metron_items_respect_manga_mode_and_blocklists() {
+        // The Metron branch used to push every item unfiltered — the Discover manga filter and
+        // blocklists were ComicVine-only. is_valid_metron must apply the same rules using the
+        // fields Metron actually has (publisher, series name, desc, series genres).
+        let hide = cfg("HIDE_ALL", true);
+        assert!(!hide.is_valid_metron("VIZ Media", "Naruto", "", &[]));                      // manga publisher
+        assert!(!hide.is_valid_metron("Other Pub", "Some Series", "", &["Manga".into()]));   // Metron genre
+        assert!(hide.is_valid_metron("Marvel", "Spider-Man", "", &["Super-Hero".into()]));   // western passes
+        assert!(!hide.is_valid_metron("Evil Comics Inc", "Hero", "", &[]));                  // blocked publisher
+        assert!(!hide.is_valid_metron("Marvel", "Innocent", "an adult story", &[]));         // blocked keyword in desc
+
+        let allowed = cfg("ALLOWED_ONLY", false);
+        assert!(allowed.is_valid_metron("VIZ Media", "Naruto", "", &[]));                    // allowed manga pub
+        assert!(!allowed.is_valid_metron("Kodansha", "AOT", "", &["Manga".into()]));         // manga, not allowed
+
+        let show = cfg("SHOW_ALL", false);
+        assert!(show.is_valid_metron("Kodansha", "AOT", "", &[]));                           // SHOW_ALL keeps manga
+        // Blocklist only applies when the content filter is enabled.
+        assert!(show.is_valid_metron("Evil Comics Inc", "Hero", "", &[]));
+    }
+
+    #[test]
+    fn manga_concepts_match_the_node_detector_list() {
+        // Parity: manga-detector.ts includes tankobon/doujinshi; the Discover list had drifted.
+        let hide = cfg("HIDE_ALL", false);
+        assert!(!hide.is_valid(&item("Other", "X", &["Tankobon"])));
+        assert!(!hide.is_valid(&item("Other", "X", &["Doujinshi"])));
     }
 
     #[test]

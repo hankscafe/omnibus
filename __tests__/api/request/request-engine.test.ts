@@ -20,7 +20,7 @@ vi.mock('@/lib/db', () => ({
     prisma: {
         user: { findUnique: vi.fn() },
         request: { create: vi.fn(), findFirst: vi.fn() },
-        series: { upsert: vi.fn() },
+        series: { upsert: vi.fn(), findUnique: vi.fn() },
         systemSetting: { findUnique: vi.fn() }
     }
 }));

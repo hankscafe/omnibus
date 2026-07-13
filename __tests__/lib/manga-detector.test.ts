@@ -78,6 +78,33 @@ describe('Logic: Manga Detector', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    it('detects manga from provider genres (Metron genre / Series.genres) without network calls', async () => {
+        const metadata = {
+            name: 'Attack on Titan',
+            publisher: { name: 'Unknown' },
+            genres: ['Action', 'Manga']
+        } as any;
+
+        const result = await detectManga(metadata);
+
+        expect(result).toBe(true);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('does not treat non-manga genres as a manga signal', async () => {
+        // Western publisher bypass keeps this off AniList; genres alone must not flip it.
+        const metadata = {
+            name: 'Saga',
+            publisher: { name: 'Image Comics' },
+            genres: ['Science Fiction', 'Fantasy']
+        } as any;
+
+        const result = await detectManga(metadata);
+
+        expect(result).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('should return false if publisher, concepts, and AniList all fail to detect Manga', async () => {
         const metadata = { 
             name: 'Batman',

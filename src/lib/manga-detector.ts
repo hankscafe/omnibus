@@ -75,6 +75,19 @@ export async function detectManga(
     }
 
     // --------------------------------------------------------
+    // WATERFALL STEP 2b: Provider Genres (Metron genre list / Series.genres)
+    // --------------------------------------------------------
+    if (comicVineData?.genres && Array.isArray(comicVineData.genres)) {
+        const hasMangaGenre = comicVineData.genres.some((g: any) =>
+            MANGA_CONCEPTS.includes(String(g?.name ?? g).toLowerCase())
+        );
+        if (hasMangaGenre) {
+            Logger.log(`[Manga Engine] Identified via Provider Genres`, 'info');
+            return true;
+        }
+    }
+
+    // --------------------------------------------------------
     // WATERFALL STEP 2.5: Western Publisher Hard-Bypass
     // --------------------------------------------------------
     if (comicVineData?.publisher?.name) {

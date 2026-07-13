@@ -88,4 +88,49 @@ describe('Security: Next.js Front-Door Middleware', () => {
             expect(res.headers.get('x-middleware-request-x-pathname')).toBe(pathname);
         }
     });
+
+    // Admin auto-logout: once the jwt callback flags a session as expired the cookie holds a
+    // truthy { error: "SessionExpired" } token. `isAuth = !!token` treated that as logged-in,
+    // leaving enforcement entirely to a client-side effect. The middleware must reject it.
+    describe('inactivity expiry enforcement', () => {
+        const HOUR = 60 * 60 * 1000;
+
+        it('redirects a SessionExpired-flagged token to /login on UI routes', async () => {
+            mocks.getToken.mockResolvedValueOnce({ error: 'SessionExpired' });
+            const res = await middleware(createReq('/library')) as Response;
+
+            expect([302, 307]).toContain(res?.status);
+            expect(res?.headers.get('Location')).toMatch(/\/login/);
+        });
+
+        it('returns 401 for a SessionExpired-flagged token on API routes', async () => {
+            mocks.getToken.mockResolvedValueOnce({ error: 'SessionExpired' });
+            const res = await middleware(createReq('/api/library/series')) as Response;
+
+            expect(res?.status).toBe(401);
+        });
+
+        it('rejects an admin token whose lastActive is beyond the 2h window even if the cookie was never rewritten', async () => {
+            mocks.getToken.mockResolvedValueOnce({ id: 'admin_1', role: 'ADMIN', lastActive: Date.now() - 3 * HOUR });
+            const res = await middleware(createReq('/admin/settings')) as Response;
+
+            expect([302, 307]).toContain(res?.status);
+            expect(res?.headers.get('Location')).toMatch(/\/login/);
+        });
+
+        it('still admits an admin token inside the window', async () => {
+            mocks.getToken.mockResolvedValueOnce({ id: 'admin_1', role: 'ADMIN', lastActive: Date.now() - 30 * 60 * 1000 });
+            const res = await middleware(createReq('/admin/settings')) as Response;
+
+            expect(res?.headers.get('Location')).toBeNull();
+            expect(res.headers.get('x-middleware-request-x-pathname')).toBe('/admin/settings');
+        });
+
+        it('gives a regular USER the 6h window (3h idle still admitted)', async () => {
+            mocks.getToken.mockResolvedValueOnce({ id: 'user_1', role: 'USER', lastActive: Date.now() - 3 * HOUR });
+            const res = await middleware(createReq('/library')) as Response;
+
+            expect(res?.headers.get('Location')).toBeNull();
+        });
+    });
 });

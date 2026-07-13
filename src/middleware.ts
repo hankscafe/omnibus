@@ -2,10 +2,16 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 import { Logger } from '@/lib/logger'
+import { isInactivityExpired } from '@/lib/session-timeout'
 export async function middleware(req: NextRequest) {
   const token = await getToken({ req })
+  // A token flagged { error: "SessionExpired" } by the jwt callback is still a truthy object, and
+  // an idle-beyond-window token may exist in a cookie that was never rewritten (no client refetch
+  // ran). Both must be treated as logged out server-side, not just by the client-side signOut.
   const isAuth = !!token
-  
+    && !(token as any).error
+    && !isInactivityExpired((token as any).role, (token as any).lastActive)
+
   const pathname = req.nextUrl.pathname
   const isAuthPage = pathname.startsWith('/login')
   const isAdminPage = pathname.startsWith('/admin')

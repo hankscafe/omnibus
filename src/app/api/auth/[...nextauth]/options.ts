@@ -8,6 +8,7 @@ import { decrypt2FA } from "@/lib/encryption";
 import crypto from "crypto";
 import { Logger } from "@/lib/logger";
 import { grantAllLibraries, setUserLibraryAccess, getDefaultLibraryIds } from "@/lib/library-access";
+import { isInactivityExpired } from "@/lib/session-timeout";
 
 // --- SECURITY SAFEGUARD ---
 const defaultSecret = 'change_this_to_a_random_secure_string_123!';
@@ -223,8 +224,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         return false;
       },
       async jwt({ token, user, trigger, session }) {
-        const ADMIN_TIMEOUT_MS = 2 * 60 * 60 * 1000; 
-        const USER_TIMEOUT_MS = 6 * 60 * 60 * 1000;  
         if (user) {
           token.id = user.id;
           token.role = (user as any).role;
@@ -235,19 +234,20 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           token.picture = user.image;
           token.sessionVersion = (user as any).sessionVersion;
           token.lastActive = Date.now();
-          token.lastSessionCheck = Date.now(); 
+          token.lastSessionCheck = Date.now();
         }
+        // Expiry gate BEFORE the update-trigger slide: a queued activity ping must not revive a
+        // session that already timed out.
+        if (isInactivityExpired(token.role as string, token.lastActive as number)) return { error: "SessionExpired" };
         if (trigger === "update") {
             if (session?.user?.image !== undefined) token.picture = session.user.image;
-            if (session?.sessionVersion !== undefined) token.sessionVersion = session.sessionVersion; 
+            if (session?.sessionVersion !== undefined) token.sessionVersion = session.sessionVersion;
             token.lastActive = Date.now();
-            token.lastSessionCheck = Date.now(); 
+            token.lastSessionCheck = Date.now();
         }
-        if (token.lastActive) {
-            const timeoutLimit = token.role === "ADMIN" ? ADMIN_TIMEOUT_MS : USER_TIMEOUT_MS;
-            if (Date.now() - (token.lastActive as number) > timeoutLimit) return { error: "SessionExpired" };
-            else token.lastActive = Date.now();
-        }
+        // Deliberately NO lastActive refresh on ambient reads (the SessionProvider's 300s refetch
+        // and background polls run this callback constantly and used to keep the window from ever
+        // elapsing). The window slides only at sign-in and via the SessionActivityTracker ping.
         if (token.id) {
             const now = Date.now();
             const lastCheck = (token.lastSessionCheck as number) || 0;

@@ -36,7 +36,11 @@ export default function ScheduledJobsPage() {
   const [metadataSyncSchedule, setMetadataSyncSchedule] = useState("24")
   const [embedMetadataSchedule, setEmbedMetadataSchedule] = useState("0")
   const [seriesJsonSchedule, setSeriesJsonSchedule] = useState("0")
+  // Feature toggles are READ-ONLY here (Phase 3, one owner per setting): the series.json export
+  // lives in Settings → Metadata and CBR auto-conversion in Settings → Library & Files. This page
+  // only reflects their state so a scheduled job that would skip is explained, never flips them.
   const [seriesJsonEnabled, setSeriesJsonEnabled] = useState(true) // default ON (discussion #182)
+  const [cbrConversionEnabled, setCbrConversionEnabled] = useState(true) // default ON
   const [librarySyncSchedule, setLibrarySyncSchedule] = useState("12") 
   const [monitorSyncSchedule, setMonitorSyncSchedule] = useState("24") 
   const [diagnosticsSyncSchedule, setDiagnosticsSyncSchedule] = useState("168")
@@ -67,7 +71,7 @@ export default function ScheduledJobsPage() {
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null)
 
   const currentStateString = JSON.stringify({
-      metadataSyncSchedule, embedMetadataSchedule, seriesJsonSchedule, seriesJsonEnabled, librarySyncSchedule,
+      metadataSyncSchedule, embedMetadataSchedule, seriesJsonSchedule, librarySyncSchedule,
       monitorSyncSchedule, diagnosticsSyncSchedule, backupSyncSchedule, backupSyncDay,
       cacheCleanupSchedule, popularSyncSchedule, converterSyncSchedule,
       weeklyDigestSchedule, weeklyDigestDay, watchedSyncSchedule, healthCheckSchedule
@@ -147,6 +151,8 @@ export default function ScheduledJobsPage() {
         // Default ON since discussion #182 — an absent row means enabled (parity with the
         // engine's write_series_json gate); only an explicit "false" reads as off.
         setSeriesJsonEnabled(seriesJsonEnabledItem?.value !== 'false');
+        const cbrEnabledItem = data.settings.find((c: any) => c.key === 'cbr_conversion_enabled');
+        setCbrConversionEnabled(cbrEnabledItem?.value !== 'false');
         if (libItem) setLibrarySyncSchedule(libItem.value);
         if (monitorItem) setMonitorSyncSchedule(monitorItem.value);
         if (diagItem) setDiagnosticsSyncSchedule(diagItem.value);
@@ -166,19 +172,6 @@ export default function ScheduledJobsPage() {
       setLoading(false)
       setTimeout(() => setIsDataLoaded(true), 500);
     }
-  };
-
-  // Scheduling the series.json job requires the export feature itself; enabling
-  // the schedule turns the feature on (saved together with the schedules)
-  const handleSeriesJsonScheduleChange = (v: string) => {
-      setSeriesJsonSchedule(v);
-      if (v !== "0" && !seriesJsonEnabled) {
-          setSeriesJsonEnabled(true);
-          toast({
-              title: "series.json Export Required",
-              description: "This job needs the series.json export feature, so it has been switched on. It will be saved together with your schedule changes."
-          });
-      }
   };
 
   // --- ADDED: Updated signature payload to accept the two new job triggers ---
@@ -215,7 +208,6 @@ export default function ScheduledJobsPage() {
                       metadata_sync_schedule: metadataSyncSchedule,
                       embed_metadata_schedule: embedMetadataSchedule,
                       series_json_schedule: seriesJsonSchedule,
-                      export_series_json: seriesJsonEnabled ? "true" : "false",
                       library_sync_schedule: librarySyncSchedule,
                       monitor_sync_schedule: monitorSyncSchedule,
                       diagnostics_sync_schedule: diagnosticsSyncSchedule,
@@ -396,7 +388,7 @@ export default function ScheduledJobsPage() {
                         <CardDescription className="text-muted-foreground">Writes Mylar-format series.json files to series folders for Komga / Kavita.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        <Select value={seriesJsonEnabled ? seriesJsonSchedule : "0"} onValueChange={handleSeriesJsonScheduleChange}>
+                        <Select value={seriesJsonSchedule} onValueChange={setSeriesJsonSchedule}>
                             <SelectTrigger className="bg-background border-border text-foreground"><SelectValue /></SelectTrigger>
                             <SelectContent className="bg-popover border-border">
                                 {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
@@ -404,7 +396,8 @@ export default function ScheduledJobsPage() {
                         </Select>
                         {!seriesJsonEnabled && (
                             <p className="text-[11px] text-amber-600 dark:text-amber-500 font-medium leading-snug">
-                                The series.json export feature is currently disabled. Selecting a schedule will enable it automatically.
+                                The series.json export feature is turned off, so this schedule won&apos;t run. Enable it in{' '}
+                                <Link href="/admin/settings" className="underline font-bold hover:text-amber-700 dark:hover:text-amber-400">Settings &rarr; Metadata</Link>.
                             </p>
                         )}
                         <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('export_series_json')} disabled={runningJob === 'export_series_json' || !seriesJsonEnabled}>
@@ -425,6 +418,12 @@ export default function ScheduledJobsPage() {
                                 {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
                             </SelectContent>
                         </Select>
+                        {!cbrConversionEnabled && (
+                            <p className="text-[11px] text-amber-600 dark:text-amber-500 font-medium leading-snug">
+                                Auto-conversion is turned off, so the scheduled sweep will skip CBRs. Re-enable it in{' '}
+                                <Link href="/admin/settings" className="underline font-bold hover:text-amber-700 dark:hover:text-amber-400">Settings &rarr; Library &amp; Files</Link>. Run Now still converts manually.
+                            </p>
+                        )}
                         <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('converter')} disabled={runningJob === 'converter'}>
                             {runningJob === 'converter' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
                         </Button>

@@ -34,31 +34,32 @@ While I know AI-assisted ("vibe-coded") projects can sometimes be met with skept
 
 ---
 
-## Recent Highlights (June 2026)
+## Recent Highlights (July 2026)
 
 The last several releases added a lot. The biggest things to be aware of:
 
-* **Hybrid Rust Engine:** Performance-critical work — archive conversion, cover extraction, downloads, and Watched-folder syncing — now runs on a dedicated high-performance Rust engine alongside the Next.js app, with full behavior parity.
-* **PostgreSQL Support:** SQLite remains the zero-config default, but larger libraries can now run on PostgreSQL. A guided SQLite&nbsp;→&nbsp;Postgres migration path is documented in [UPGRADING.md](UPGRADING.md).
-* **Encrypted Credentials at Rest:** All stored API keys, client passwords, and secrets are now encrypted in the database, alongside hardened engine and deployment authentication.
-* **Cover Art Management:** Automatic cover extraction from the first archive page, a configurable cover source, and admin custom-cover uploads (locked so metadata syncs won't overwrite them).
-* **Comic Metadata Editor + Series Groups:** Edit series and per-issue metadata directly in the UI (optionally written back into `ComicInfo.xml`), and group related runs with the new `{SeriesGroup}` and `{UniverseName}` naming variables.
-* **Smart Matcher Upgrades:** Manual metadata editing, bulk matching, dual-provider (ComicVine + Metron) lookups, archive-extracted covers, and overwrite-safety guards.
+* **Self-Describing Library (Local-First Ingest):** Scans now read `series.json` (Mylar format) and embedded `ComicInfo.xml` — including inside RAR archives — so a properly tagged library browses, builds its calendar, and even rebuilds itself into a fresh database with **zero metadata-provider API calls**. `series.json` export is on by default (Omnibus never overwrites one it didn't create), and your files supply release dates, issue numbers, and covers directly.
+* **Native CBR/RAR Reading:** The Rust engine reads `.cbr`/`.rar` archives directly — in the web reader *and* streamed to OPDS apps like Panels — so conversion to `.cbz` is now optional (the auto-converter remains on by default and recommended).
+* **Smarter Matching:** A configurable Match Confidence Mode (Trust / Confirm / Auto / Custom), plus an hourly budget-aware background sweep that keeps retrying unmatched series within the ComicVine rate limit — big imports finish matching themselves, and auto-matches surface in the admin notification bell.
+* **Request Lifecycle Self-Healing:** Stalled downloads recover automatically, not-yet-available titles wait in a dedicated Awaiting-Release state (with per-request snooze) instead of counting as failures, and dead requests are swept back into the queue — no more deleting a request to make it retry.
+* **Manga Filtering, Everywhere:** Manga detection (publisher lists, provider genres/concepts, AniList cross-reference, `ComicInfo` tags) now drives Discover visibility modes under **both** ComicVine and Metron, and a new "Allow Manga Requests" gate can keep manga out of the download pipeline entirely.
+* **Search Quality:** GetComics results show download sizes in interactive search, oversized files prefer third-party mirrors automatically, rate limits get real backoff handling, and undated scene releases can be accepted via an opt-in (dated releases always win).
+* **Metadata Response Cache (Opt-In):** A shared ComicVine/Metron response cache (with admin-tunable freshness windows and a size cap) makes repeat lookups cost zero rate limit across both the app and the engine.
+* **Redesigned Settings:** Settings are reorganized into 8 task-focused tabs, with per-tab unsaved-change indicators so you always know exactly where your unsaved edits live.
+* **Session Security:** Inactivity auto-logout that actually fires — admins after 2 idle hours, users after 6 — with server-side enforcement, alongside encrypted credentials at rest.
+* **Hybrid Rust Engine & PostgreSQL:** Performance-critical work (scanning, conversion, covers, downloads, matching) runs on a dedicated Rust engine, and larger libraries can run on PostgreSQL — SQLite stays the zero-config default. Engine concurrency is fully tunable from the UI. Migration path in [UPGRADING.md](UPGRADING.md).
 * **Manual File Upload:** Drop comic files into your **Watched** or **Unmatched** folder straight from the browser — no server filesystem access required. Built to recover Cloudflare-gated downloads you had to fetch by hand.
-* **Anna's Archive Source:** Search Anna's Archive as a first-class source alongside GetComics and your indexers (interactive, or automated with a premium API key).
-* **Resilient GetComics Downloads:** A selectable Cloudflare solver (FlareSolverr **or** Byparr), automatic hoster fallback, and a manual-download hold for gated links.
-* **Library-Wide Duplicate Alerts:** The health dashboard now flags duplicate files across your entire library.
-* **Reader Enhancements:** Pinch-to-zoom and per-series reading preferences that persist per title, plus stronger manga/NSFW Discover filters.
 
 ---
 
 ## Table of Contents
-- [Recent Highlights](#recent-highlights-june-2026)
+- [Recent Highlights](#recent-highlights-july-2026)
 - [About Omnibus](#about-omnibus)
 - [Features & Navigation](#features--navigation)
   - [Authentication & Security](#authentication--security)
   - [Homepage](#homepage)
   - [Library & Metadata](#library--metadata)
+  - [Manga Support](#manga-support)
   - [Series Page](#series-page)
   - [Web Reader](#web-reader)
   - [External Readers & OPDS Support](#external-readers--opds-support)
@@ -90,6 +91,8 @@ The secure gateway to your personal comic universe. Omnibus ensures your collect
 * **Two-Factor Authentication (2FA):** Users can secure their local accounts using TOTP authenticator apps (Google Authenticator, Authy, Bitwarden).
 * **Multi-User Gateway & Impersonation:** Create independent accounts for friends and family. Admins can even temporarily "Impersonate" users to help troubleshoot their accounts.
 * **Active Session Management:** Logged in on a public computer? Revoke all other active sessions directly from your profile settings.
+* **Inactivity Auto-Logout:** Sessions expire after real inactivity — 2 hours for admins, 6 hours for regular users — enforced server-side. Background polling and open tabs don't count as activity; actually using the app does.
+* **Encrypted Credentials at Rest:** All stored API keys, download-client passwords, and secrets are encrypted in the database using your `NEXTAUTH_SECRET` as the master key.
 * **First-Time Setup Detection:** If the database is completely fresh and no administrator account exists yet, the login system intelligently redirects to the built-in Setup Wizard to help you configure your libraries.
 
 ### Homepage
@@ -121,7 +124,7 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 
 * **Responsive Design:** A beautifully styled, mobile-first interface that provides a frictionless login experience whether you are on a smartphone, tablet, or desktop monitor.
 * **"Jump Back In" Shelf:** A dynamically updated carousel that tracks your exact page in ongoing issues. Jump back into the action with a single click.
-* **"Recently Added" Section:** A dynamically updated carousel that shows the 7 most recent series addtions to the library with the ability to jump directly to that series page.
+* **"Recently Added" Section:** A dynamically updated carousel that shows the 7 most recent series additions to the library with the ability to jump directly to that series page.
 * **Discovery Feed:** Browse auto-updating "New Releases" and "Popular Issues" pulled directly from the ComicVine or Metron API and cached for performance.
 * **Interactive Search:** Search the external databases for any series or issue. View covers, publishers, and issue counts to ensure you are requesting exactly what you want.
 * **Color-Coded Badges:** Omnibus uses a color-coded badge system on the Discover and Search grids to let you know exactly what is in your library and what the automated downloader is doing.
@@ -154,7 +157,10 @@ A meticulously organized, highly performant view of your physical files, built t
 </p>
 
 * **Embedded Metadata (ComicInfo.xml):** Omnibus doesn't just read metadata—it writes it. Omnibus can automatically generate and embed standard `ComicInfo.xml` files directly into your `.cbz` archives, ensuring your metadata travels with your files.
-* **Dual Metadata Engines:** Choose between ComicVine (default) or Metron.Cloud as your primary metadata source. Omnibus reads embedded ComicInfo.xml files inside your archives and seamlessly syncs with your selected provider to pull high-res covers, synopses, and creator credits. (Note: Metron integration also powers the forward-looking Release Calendar!)
+* **Self-Describing Library (series.json + Local-First Scans):** Omnibus writes Mylar-format `series.json` files to your series folders (on by default; it never overwrites a `series.json` it didn't create, so curated Mylar libraries are safe) and reads them — plus embedded `ComicInfo.xml`, even inside RAR archives — during every scan. A properly tagged library gets its provider IDs, release dates, issue numbers, credits, and covers straight from the files: browsing, the calendar, and even a full rescan into a fresh database work with **zero metadata-provider API calls**. External readers like Komga and Kavita mapped to the same storage recognize your metadata instantly.
+* **Dual Metadata Engines:** Choose between ComicVine (default) or Metron.Cloud as your primary metadata source. Omnibus reads embedded ComicInfo.xml files inside your archives and seamlessly syncs with your selected provider to pull high-res covers, synopses, creator credits, and genres. (Note: Metron integration also powers the forward-looking Release Calendar!)
+* **Per-Issue Credits & Genres:** Syncs capture writers, artists, characters, story arcs, and genres down to the individual issue. Metron users can opt in to a per-issue credit pass that's budgeted against Metron's daily API quota and resumes across syncs.
+* **Provider Response Cache (Opt-In):** A shared, database-backed cache for ComicVine/Metron responses with admin-tunable freshness windows and a size cap. Repeat lookups cost zero rate limit across both the app and the Rust engine, and an explicit "Refresh Metadata" always fetches live.
 * **In-App Metadata Editor:** Edit series-level and per-issue metadata (title, year, publisher, summary, creators, and more) right in the browser. Changes can optionally be written straight back into each archive's `ComicInfo.xml`, and a sync-lock keeps your manual edits from being overwritten by the next provider refresh.
 * **Series Groups & Universes:** Organize related runs with the `{SeriesGroup}` and `{UniverseName}` naming variables — perfect for shelving a multi-title crossover event or an entire publisher universe together.
 * **Cover Art Management:** Omnibus extracts a cover from the first page of each archive, lets you choose your preferred cover source, and allows admins to upload a custom cover for any series (locked so automated syncs never overwrite it).
@@ -169,6 +175,15 @@ A meticulously organized, highly performant view of your physical files, built t
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.
 * **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view to easily navigate massive collections.
 
+### Manga Support
+Manga is a first-class citizen, not an afterthought. Omnibus detects it, shelves it, names it, and filters it — your call how much of it you want to see.
+
+* **Layered Detection:** Series are identified as manga using a waterfall of signals: your configurable manga/western publisher lists, provider genres and concepts (ComicVine concepts, Metron's Manga genre), an AniList cross-reference with fuzzy year matching, and the `<Manga>` tag inside `ComicInfo.xml`. Once the scanner has made its call, that verdict sticks — requests and downloads reuse it instead of re-guessing.
+* **Dedicated Manga Libraries & Naming:** Flag any library as a Manga destination and detected manga routes there automatically, with its own file-naming pattern (e.g. `{Series} Vol. {Issue}`) separate from your western comics.
+* **Discover Visibility Modes:** Show all manga, hide it entirely, or allow only specific publishers on the Discover page — and the filter works identically whether ComicVine or Metron is your primary source.
+* **Manga Request Gate:** An "Allow Manga Requests" toggle can keep manga out of the download pipeline completely: when off, requests detected as manga are politely rejected before any automation fires. Library scans and series you already own are unaffected.
+* **Right-to-Left Reading:** The web reader's RTL mode and vertical webtoon scrolling handle manga the way it's meant to be read, with preferences saved per series.
+
 ### Series Page
 The dedicated hub for an individual comic run or manga volume. This page aggregates all metadata, reading progress, and file management for a specific series into one beautiful layout.
 
@@ -181,7 +196,7 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 <p align="center">
   <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/series_page_incomplete.png?raw=true" width="500" alt="Series page incomplete" />
   <br>
-  <strong>A series page showing a series that currently has all available issues.</strong>
+  <strong>A series page with missing issues flagged, ready for a one-click "Request Missing".</strong>
 </p>
 
 * **Hero Banner & Synopsis:** A premium, visually striking header displaying high-resolution cover art, publisher logos, release years, and a full story synopsis.
@@ -212,7 +227,7 @@ A completely custom, zero-friction reading experience built natively into the br
   <strong>Reader page settings.</strong>
 </p>
 
-* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.epub` archives, and will convert `.cbr` automatically to `.cbz`.
+* **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.epub`, **and** `.cbr`/`.rar` archives — the Rust engine reads RAR directly, so legacy archives are readable the moment they land. The CBR→CBZ auto-converter stays on by default (CBZ reads fastest, works everywhere, and is required for metadata embedding), but it's now a choice, not a requirement.
 * **Reading Directions:** One-click toggles for Left-to-Right (Standard Comics), Right-to-Left (Manga), and continuous Vertical Scrolling (Webtoons).
 * **Dynamic Page Layouts:** Single Page, Double Page, or "Double Page (No Cover)" to preserve correct spread alignments.
   * Adjust the gutter gap between 2-page spreads (Seamless, Small, Large).
@@ -221,10 +236,10 @@ A completely custom, zero-friction reading experience built natively into the br
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
 * **Live Image Adjustments:** Adjust brightness and contrast overlays independently of your device settings for late-night reading sessions.
 * **Pinch-to-Zoom & Per-Series Preferences:** Pinch (or scroll-wheel) to zoom and pan high-detail pages, and save reading preferences — direction, layout, and fit — on a per-series basis so each title reopens exactly the way you like it.
-* **Progressive Web App (PWA) & Offline Reading:** Install Omnibus to your home screen as a PWA. Users can click the "Offline" button in the Web Reader to silently cache an entire issue to their device's local storage, allowing them to read flawlessly without an active internet connection.
+* **Progressive Web App (PWA) & Offline Reading:** Install Omnibus to your home screen as a PWA. Users can click the "Offline" button in the Web Reader to silently cache an entire issue to their device's local storage, allowing them to read flawlessly without an active internet connection. Installed PWAs also get a dedicated refresh button in the header (iOS standalone apps have no pull-to-refresh).
 
 ### External Readers & OPDS Support
-Omnibus features a native OPDS 1.2 server with the **Page Streaming Extension (PSE)**, allowing you to read your server's library directly in your favorite mobile and tablet apps without downloading the entire file first.
+Omnibus features a native OPDS 1.2 server with the **Page Streaming Extension (PSE)**, allowing you to read your server's library directly in your favorite mobile and tablet apps without downloading the entire file first. Streaming covers `.cbz` and `.cbr`/`.rar` alike — RAR pages are served through the Rust engine, so Panels and friends can read your unconverted archives too.
 
 **Supported OPDS Apps:**
 * **iOS / iPadOS:** Panels, Paperback, Chunky
@@ -274,6 +289,7 @@ A centralized hub to track upcoming comic and manga releases so you never miss a
 
 * **Omnibus Tracked Series:** A personalized calendar displaying upcoming releases specifically for the series you already own and monitor.
   * **Tracked Series:** Automatically scans your monitored library items and groups upcoming issues by month and exact release day.
+  * **Release-State Badges:** Every entry advances through three states as time passes — 🟣 **Unreleased** (release date is in the future), 🟠 **Released** (it's out, but not in your library yet), and 🟢 **In Library** (the file has landed on your disk). Paging back through past weeks shows exactly what you caught and what you missed.
   * **Navigation:** Features quick-action buttons to jump directly to the series page or read the most recent issues leading up to the new release.
 * **Global Pull List:** Powered by the Metron.Cloud integration, this tab lets you browse a worldwide catalog of upcoming comic releases week by week.
   * **Navigation:** Easily page forward and backward through upcoming weeks to see what publishers are dropping soon.
@@ -332,6 +348,8 @@ These rules are fully surfaced in the Settings UI, allowing administrators to mo
 ### Settings & Administration
 Complete, granular control over your instance, your users, and your underlying automation.
 
+Settings are organized into **8 task-focused tabs** — Metadata, Library & Files, Search & Indexers, Downloads, Discovery & Filtering, Notifications, Access & Security, and System — with per-tab **unsaved-change indicators** so you always know exactly which tab holds edits you haven't saved yet. Every setting lives in exactly one place; the Scheduled Jobs page shows read-only feature-state notes (with links to the owning tab) instead of duplicating toggles.
+
 <p align="center">
   <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_1.png?raw=true" width="500" alt="Admin page" />
   <br>
@@ -348,7 +366,19 @@ Complete, granular control over your instance, your users, and your underlying a
   <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_2.png?raw=true" width="500" alt="Admin page" />
   <br>
   <strong>Admin page showing active downloads and request management sections.</strong>
-</p> 
+</p>
+
+<p align="center">
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/settings.png?raw=true" width="500" alt="Settings page" />
+  <br>
+  <strong>The System Settings page, organized into 8 task-focused tabs with per-tab unsaved-change indicators.</strong>
+</p>
+
+<p align="center">
+  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/scheduled_jobs.png?raw=true" width="500" alt="Scheduled jobs page" />
+  <br>
+  <strong>The Scheduled Jobs page — every background job's cadence in one place, with manual Run Now triggers.</strong>
+</p>
 
 * **High-Performance Architecture:** Built to handle massive terabyte-scale libraries. Features an optimized OPDS feed, asynchronous streaming cipher engines for backups, and B-Tree indexed database lookups.
 * **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
@@ -356,6 +386,9 @@ Complete, granular control over your instance, your users, and your underlying a
 * **Anna's Archive Search Source:** Search Anna's Archive (the shadow-library aggregator) as a first-class source alongside GetComics and your indexers. Use it in interactive search (no API key required — gated files drop to the manual queue) or prioritize it as an automated source (requires a premium API key plus a passing connection test). Includes a configurable mirror base URL with automatic failover as Anna's Archive rotates domains.
 * **Selectable Cloudflare Solver:** Route requests through a FlareSolverr **or** Byparr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics, with a configurable solve timeout. When a link stays gated, Omnibus holds it for manual download — and you can hand the file back via Manual File Upload.
 * **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the AI misses, you can manually input a specific ComicVine Volume ID or Metron Series ID to force a perfect match. Includes bulk processing for whole folders at once, an inline metadata editor (Series Group / Universe and per-issue covers included), archive-extracted cover previews, and overwrite-safety guards so a re-match never clobbers existing files.
+* **Match Confidence Modes & Background Sweep:** Choose how much matching automation you trust — **Trust** (auto-accept confident matches, with a tunable similarity threshold), **Confirm** (file IDs auto, suggestions need approval), **Auto** (only near-exact name matches), or **Custom** (fully manual). An hourly, ComicVine-budget-aware background sweep keeps retrying unmatched series so large imports finish matching themselves instead of stalling at the rate-limit wall — successful auto-matches light up the admin notification bell and a results card on the Smart Match page.
+* **Request Lifecycle Self-Healing:** Downloads that stall after repeated retries recover automatically, titles that aren't available on any source yet wait in a dedicated **Awaiting-Release** state (re-searched on a slow cadence, with per-request snooze) instead of counting as failures, and a periodic sweep revives dead requests — you never have to delete a request just to make it retry.
+* **Search Quality Controls:** GetComics results advertise their download size in interactive search; releases over 400MB automatically prefer third-party mirrors over GetComics' throttled servers (never excluded, just re-ordered); rate limits are respected with real backoff and a health-panel warning; and an opt-in accepts undated scene releases when nothing dated exists (a release *with* a matching year always wins). Bulk packs/collections can be allowed and even prioritized for faster library building.
 * **Deep Diagnostics Engine:**
   * Ghost Records: Find and purge database entries pointing to files you deleted outside of Omnibus.
   * Orphaned Files: Find comic files sitting on your hard drive that Omnibus hasn't indexed, saving you wasted disk space.
@@ -380,15 +413,17 @@ Complete, granular control over your instance, your users, and your underlying a
 * **Custom Trophy Engine:** Admins can create custom milestones and achievements (e.g., "Read 50 Comics", "Explore 5 Publishers") with uploadable icons. Omnibus automatically evaluates and awards these trophies to users as they interact with the library.
 * **Library Path Mapping:** Omnibus supports multiple libraries to easily map multiple root directories from your NAS (e.g., separate folders for `/comics`, `/manga`, and `/magazines`).
 * **WEBP Image Compression:** Save massive amounts of disk space and radically improve Web Reader performance by enabling automatic WEBP compression. Omnibus can convert heavy JPEGs and PNGs to highly optimized WEBP files during CBR-to-CBZ conversions or bulk repacks.
+* **Engine Performance Tuning:** Six UI-tunable concurrency knobs for the Rust engine — scan workers, convert workers, CPU cap, blocking threads, a memory ceiling, and database pool size — with safe auto-derived defaults. Perfect for keeping a NAS responsive during a terabyte-scale import, or letting a beefy server rip.
 * **Internal Page Repacking:** A powerful admin tool to standardize the insides of your comic archives. Omnibus can extract an entire series, rename the internal image files sequentially (e.g., page_0001.jpg), compress them, and repack them into clean, standardized .cbz files.
 * **Alerts & Notifications:**
   * **Push Notifications:** Native support for Discord Webhooks, Telegram Bots, Pushover, and Apprise (supporting 80+ external services).
   * **SMTP Email Notifications:** Send beautiful HTML emails for approvals, completed requests, and Weekly Digests.
   * **Custom Email Templates:** A built-in code editor allows admins to customize the exact text and HTML layout of all outgoing automated emails using dynamic variables.
 * **API & Service Configuration:** Securely plug in your ComicVine API keys, Metron credentials, Indexer details, and Download Client URLs.
-* [**External API Integrations:**](https://github.com/hankscafe/omnibus/blob/main/docs/API.md) Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely.
+* [**External API Integrations:**](https://github.com/hankscafe/omnibus/blob/main/docs/API.md) Generate an API key to allow external applications (like Discord Bots or Dashboards) to fetch stats and interact with Omnibus securely. Includes a ready-made [Homepage](https://gethomepage.dev) dashboard widget config exposing system health, library totals, monthly growth, and active downloads — plus a live in-app API tester.
 * **Safe Configuration:** Dual-guard unsaved changes protection to ensure admins never accidentally lose their configuration progress.
-* **Scheduled Tasks (Cron):** Configure how often Omnibus should scan your disk for new files, refresh metadata, or check indexers for missing requested issues.
+* **Scheduled Tasks (Cron):** Configure how often Omnibus should scan your disk for new files, refresh metadata, embed ComicInfo.xml, export series.json, convert archives, back up the database, or check indexers for missing requested issues — each job with its own cadence and a manual "Run Now" trigger.
+* **Automated Backups & One-Click Restore:** Scheduled, encrypted database backups on your chosen day and cadence, with a browser-based restore that merges a backup file straight back into a running instance.
 * **Live System Logs:** A built-in log viewer to easily troubleshoot API limits, failed downloads, or matching errors.
 ---
 
@@ -400,7 +435,8 @@ Complete, granular control over your instance, your users, and your underlying a
 | [![Library diagnostics page](https://github.com/hankscafe/omnibus/blob/main/docs/images/diagnostics.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/diagnostics.png?raw=true) | [![Issue reports page](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_1.png?raw=true) | [![Issue reports admin response](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_2.png?raw=true) |
 | [![Issue reports resolution](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_3.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_3.png?raw=true) | [![My Requests page](https://github.com/hankscafe/omnibus/blob/main/docs/images/my_requests.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/my_requests.png?raw=true) | [![Smart Matcher page](https://github.com/hankscafe/omnibus/blob/main/docs/images/smart_matcher.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/smart_matcher.png?raw=true) |
 | [![Storage Deep Dive page](https://github.com/hankscafe/omnibus/blob/main/docs/images/storage_deep_dive.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/storage_deep_dive.png?raw=true) | [![System Logs live terminal](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_1.png?raw=true) | [![System Logs page](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_2.png?raw=true) |
-| [![User Management page](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true) | | |
+| [![User Management page](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true) | [![Admin alert configuration](https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_alerts.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_alerts.png?raw=true) | [![First-run setup wizard](https://github.com/hankscafe/omnibus/blob/main/docs/images/setup_page.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/setup_page.png?raw=true) |
+| [![Homepage overview](https://github.com/hankscafe/omnibus/blob/main/docs/images/home_page.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/home_page.png?raw=true) | | |
 
 ---
 

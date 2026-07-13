@@ -61,11 +61,14 @@ export async function GET(req: NextRequest) {
 
     const [totalSeries, totalIssues, totalRequests, completed30d, failed30d, totalUsers] = await prisma.$transaction([
       prisma.series.count(), prisma.issue.count(), prisma.request.count(),
-      // Successful imports are recorded as COMPLETED (IMPORTED is a legacy status nothing writes now),
-      // so count both — otherwise "monthly growth" is always 0.
-      prisma.request.count({ where: { status: { in: ['IMPORTED', 'COMPLETED'] }, createdAt: { gte: thirtyDaysAgo } } }),
-      // Failed/given-up downloads end up STALLED (FAILED/ERROR are legacy); include it so the metric isn't ~0.
-      prisma.request.count({ where: { status: { in: ['FAILED', 'ERROR', 'STALLED'] }, createdAt: { gte: thirtyDaysAgo } } }),
+      // Monthly growth = issues that physically landed in the library this window.
+      // Scan-populated libraries never create completed Requests (the engine inserts
+      // Issue rows directly), so counting the Request table pinned this at 0.
+      // createdAt, not updatedAt: metadata syncs touch updatedAt on every row.
+      prisma.issue.count({ where: { filePath: { not: null }, createdAt: { gte: thirtyDaysAgo } } }),
+      // Failed/given-up downloads end up STALLED (FAILED/ERROR are legacy).
+      // updatedAt = when the request last transitioned, matching /api/admin/stats.
+      prisma.request.count({ where: { status: { in: ['FAILED', 'ERROR', 'STALLED'] }, updatedAt: { gte: thirtyDaysAgo } } }),
       prisma.user.count()
     ]);
 

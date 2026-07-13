@@ -6,10 +6,10 @@ import Link from "next/link"
 import { useSession, signOut } from "next-auth/react"
 import { useTheme } from "next-themes"
 import { Button } from "@/components/ui/button"
-import { 
+import {
   ShieldAlert, LogOut, User as UserIcon, Sun, Moon, Key, Loader2,
   Bell, Image as ImageIcon, Trophy, Wrench, Menu, UserPlus, AlertTriangle,
-  FolderSearch, Search, Sparkles
+  FolderSearch, Search, Sparkles, RefreshCw
 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -194,6 +194,15 @@ export function SiteHeader() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
 
+  // Installed-PWA detection: iOS standalone has no pull-to-refresh, so we surface a manual one.
+  const [isStandalonePwa, setIsStandalonePwa] = useState(false)
+  useEffect(() => {
+    const standalone =
+      window.matchMedia?.('(display-mode: standalone)')?.matches ||
+      (window.navigator as any).standalone === true;
+    setIsStandalonePwa(!!standalone);
+  }, [])
+
   const [passModalOpen, setPassModalOpen] = useState(false)
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" })
   const [passLoading, setPassLoading] = useState(false)
@@ -319,6 +328,18 @@ export function SiteHeader() {
             </div>
           ) : (
             <>
+              {isStandalonePwa && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-10 w-10 md:hidden"
+                  onClick={() => window.location.reload()}
+                  aria-label="Refresh app"
+                >
+                  <RefreshCw className="h-5 w-5 text-foreground" />
+                </Button>
+              )}
+
               {session && <NotificationBell />}
 
               <button

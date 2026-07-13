@@ -814,8 +814,9 @@ function LibraryContent() {
               </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row flex-wrap gap-3 items-center w-full">
-              <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 max-w-full">
+          {/* Mobile: 2-up grid so the dropdowns don't stack one-per-row; sm+: original wrapped flex row */}
+          <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-row sm:flex-wrap sm:items-center w-full">
+              <div className="col-span-2 flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 max-w-full">
                   <Button aria-label="Filter by favorite status" variant={showFavoritesOnly ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
                       <Heart className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''} sm:mr-2`} />
                       <span className="hidden sm:inline-block">Favorites</span>

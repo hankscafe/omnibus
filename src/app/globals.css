@@ -251,4 +251,31 @@
   [aria-disabled="true"], [data-disabled] {
     @apply cursor-not-allowed opacity-50;
   }
+
+  /* --- THEMED SCROLLBARS --- */
+  /* Tokens (not literal colors) so they track light/dark and every data-theme skin. */
+  /* Modern Chrome/Firefox use the standard properties; the -webkit rules cover Safari. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }

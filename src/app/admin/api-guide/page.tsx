@@ -72,6 +72,9 @@ export default function ApiGuidePage() {
               - field: { data: totalIssues }
                 label: Issues
                 format: number
+              - field: { data: completed30d }
+                label: Added (30d)
+                format: number
               - field: { data: activeDownloads }
                 label: Downloads
                 format: number`;
@@ -214,7 +217,7 @@ export default function ApiGuidePage() {
                         <tr className="hover:bg-muted/30 transition-colors">
                             <td className="px-4 py-3 font-mono font-bold text-foreground">completed30d</td>
                             <td className="px-4 py-3"><Badge variant="secondary" className="font-mono text-[10px] bg-muted text-muted-foreground border-border">number</Badge></td>
-                            <td className="px-4 py-3 text-muted-foreground">Successful imports in the last 30 days.</td>
+                            <td className="px-4 py-3 text-muted-foreground">Monthly growth: issues added to the library in the last 30 days (scans and downloads).</td>
                         </tr>
                         <tr className="hover:bg-muted/30 transition-colors">
                             <td className="px-4 py-3 font-mono font-bold text-foreground">failed30d</td>

@@ -637,7 +637,8 @@ export function RequestSearch() {
                                           </div>
                                       )})}
                                   </div>
-                                  <ScrollBar orientation="horizontal" />
+                                  {/* Taller than the h-2.5 default: this row is the modal's main nav surface */}
+                                  <ScrollBar orientation="horizontal" className="h-4" />
                               </ScrollArea>
                           ) : (<p className="text-sm text-muted-foreground">No individual issues found.</p>)}
                       </div>

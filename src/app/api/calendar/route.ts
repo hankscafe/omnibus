@@ -5,8 +5,16 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
+import { isReleasedYet } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
+
+// UNRELEASED -> RELEASED -> IN_LIBRARY as the date passes and the file lands.
+// IMPORTED/COMPLETED covers rows imported before filePath was consistently backfilled.
+function libraryState(issue: { releaseDate: string | null; filePath: string | null; status: string | null }) {
+    if (issue.filePath || issue.status === 'IMPORTED' || issue.status === 'COMPLETED') return 'IN_LIBRARY';
+    return isReleasedYet(issue.releaseDate, null) ? 'RELEASED' : 'UNRELEASED';
+}
 
 export async function GET(request: Request) {
     try {
@@ -78,7 +86,8 @@ export async function GET(request: Request) {
             return {
                 id: issue.id, seriesId: issue.seriesId, seriesName: issue.series?.name || "Unknown Series",
                 issueNumber: issue.number, issueName: issue.name, publisher: issue.series?.publisher || "Unknown",
-                releaseDate: issue.releaseDate, coverUrl: safeCover, seriesPath: issue.series?.folderPath
+                releaseDate: issue.releaseDate, coverUrl: safeCover, seriesPath: issue.series?.folderPath,
+                libraryState: libraryState(issue)
             };
         });
 

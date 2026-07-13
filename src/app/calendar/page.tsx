@@ -28,7 +28,8 @@ interface UpcomingIssue {
     metadataSource?: string;
     parsedDay?: string;
     monitored?: boolean;
-    inLibrary?: boolean; 
+    inLibrary?: boolean;
+    libraryState?: 'UNRELEASED' | 'RELEASED' | 'IN_LIBRARY';
 }
 
 export default function CalendarPage() {
@@ -301,9 +302,19 @@ export default function CalendarPage() {
                                                     ) : (
                                                         <ImageIcon className="w-8 h-8 text-muted-foreground/30 m-auto h-full" />
                                                     )}
-                                                    <div className="absolute top-2 right-2 bg-purple-600 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest">
-                                                        Unreleased
-                                                    </div>
+                                                    {issue.libraryState === 'IN_LIBRARY' ? (
+                                                        <div className="absolute top-2 right-2 bg-emerald-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest shadow-md">
+                                                            In Library
+                                                        </div>
+                                                    ) : issue.libraryState === 'RELEASED' ? (
+                                                        <div className="absolute top-2 right-2 bg-amber-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest shadow-md">
+                                                            Released
+                                                        </div>
+                                                    ) : (
+                                                        <div className="absolute top-2 right-2 bg-purple-600 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest">
+                                                            Unreleased
+                                                        </div>
+                                                    )}
                                                     
                                                     {/* Hidden on mobile to prevent overlay flash issues, visible on desktop hover */}
                                                     <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex items-center justify-center z-10 pointer-events-none">

@@ -10,7 +10,7 @@ import { RECOMMENDED_PUBLISHERS, RECOMMENDED_KEYWORDS } from "@/lib/filter-defau
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { Save, ArrowLeft, Loader2, CheckCircle, Zap, FolderOpen } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -20,6 +20,8 @@ import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { StatusBox, SYSTEM_EVENTS, hosterDisplayNames } from "./tabs/shared"
+import { computeDirtyTabs } from "./tabs/dirty"
+import { SettingsTabsList } from "./tabs/tabs-list"
 import { MetadataTab } from "./tabs/metadata-tab"
 import { LibraryFilesTab } from "./tabs/library-files-tab"
 import { SearchIndexersTab } from "./tabs/search-indexers-tab"
@@ -190,6 +192,12 @@ export default function SettingsPage() {
   });
 
   const hasUnsavedChanges = isDataLoaded && initialStateHash !== "" && currentStateString !== initialStateHash;
+
+  // Per-tab dirty markers for the tab bar (Phase 2). Both snapshots share the shape serialized
+  // above, so the initial hash doubles as the initial snapshot.
+  const dirtyTabs = hasUnsavedChanges
+      ? computeDirtyTabs(JSON.parse(currentStateString), JSON.parse(initialStateHash))
+      : [];
 
   const isSourceAvailable = (source: string) => {
     if (source === "COMICVINE") {
@@ -882,16 +890,7 @@ export default function SettingsPage() {
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full space-y-6">
 
-        <TabsList className="flex w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] h-auto bg-muted border border-border gap-1 p-1 justify-start lg:justify-center">
-          <TabsTrigger value="metadata" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Metadata</TabsTrigger>
-          <TabsTrigger value="library" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Library & Files</TabsTrigger>
-          <TabsTrigger value="search" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Search & Indexers</TabsTrigger>
-          <TabsTrigger value="downloads" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Downloads</TabsTrigger>
-          <TabsTrigger value="discovery" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Discovery & Filtering</TabsTrigger>
-          <TabsTrigger value="notifications" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Notifications</TabsTrigger>
-          <TabsTrigger value="access" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">Access & Security</TabsTrigger>
-          <TabsTrigger value="system" className="px-4 py-2.5 sm:py-2 text-sm sm:text-xs data-[state=active]:bg-background data-[state=active]:text-primary font-bold">System</TabsTrigger>
-        </TabsList>
+        <SettingsTabsList dirtyTabs={dirtyTabs} />
 
         <TabsContent value="metadata"><MetadataTab s={s} /></TabsContent>
         <TabsContent value="library"><LibraryFilesTab s={s} /></TabsContent>

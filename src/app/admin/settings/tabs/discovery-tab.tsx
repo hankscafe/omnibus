@@ -106,13 +106,27 @@ export function DiscoveryTab({ s }: { s: SettingsBag }) {
                         </div>
                     </div>
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
-                        <div>
-                            <h3 className="text-lg font-bold text-foreground flex items-center gap-2 pb-2">
-                                <Database className="w-5 h-5 text-primary" /> Auto-Tagging Logic
-                            </h3>
-                            <p className="text-[0.8rem] text-muted-foreground">Omnibus automatically detects if an imported series is Manga based on the publisher. Customize the keywords used for detection below.</p>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-foreground flex items-center gap-2 pb-2">
+                                    <Database className="w-5 h-5 text-primary" /> Auto-Tagging Logic
+                                </h3>
+                                <p className="text-[0.8rem] text-muted-foreground">Omnibus automatically detects if an imported series is Manga based on the publisher. Customize the keywords used for detection below.</p>
+                            </div>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="font-bold border-border hover:bg-muted text-foreground shadow-sm shrink-0 w-full sm:w-auto h-12 sm:h-9"
+                                onClick={() => setConfig({
+                                    ...config,
+                                    manga_publishers: DEFAULT_MANGA_PUBLISHERS.join(", "),
+                                    western_publishers: DEFAULT_WESTERN_PUBLISHERS.join(", ")
+                                })}
+                            >
+                                Load Default Lists
+                            </Button>
                         </div>
-                        
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="flex flex-col gap-2 h-full">
                                 <Label className="text-foreground font-semibold">Western Publishers (Comma Separated)</Label>
@@ -137,26 +151,24 @@ export function DiscoveryTab({ s }: { s: SettingsBag }) {
                                 <p className="text-[10px] opacity-0 pointer-events-none select-none hidden md:block">Spacer</p>
                             </div>
                         </div>
-                        
-                        <div className="flex justify-start mt-2">
-                            <Button 
-                                variant="secondary" 
-                                size="sm" 
-                                className="font-bold border border-border shadow-sm text-xs"
-                                onClick={() => setConfig({
-                                    ...config,
-                                    manga_publishers: DEFAULT_MANGA_PUBLISHERS.join(", "),
-                                    western_publishers: DEFAULT_WESTERN_PUBLISHERS.join(", ")
-                                })}
-                            >
-                                Load Default Lists
-                            </Button>
-                        </div>
                     </div>
                     {/* CONTENT FILTERING */}
                     <div className="space-y-4 pt-6 border-t border-border mt-6">
-                        <Label className="text-base font-bold text-foreground">Content Filtering</Label>
-                        
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div>
+                                <Label className="text-base font-bold text-foreground">Content Filtering</Label>
+                                <p className="text-[0.8rem] text-muted-foreground mt-1">Blocklists that hide adult/NSFW content from Discover and search results.</p>
+                            </div>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={applyRecommendedFilters}
+                                className="font-bold border-border hover:bg-muted text-foreground shadow-sm shrink-0 w-full sm:w-auto h-12 sm:h-9"
+                            >
+                                Load NSFW Defaults
+                            </Button>
+                        </div>
+
                         <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border mt-4">
                             <Switch 
                                 id="filter-toggle"
@@ -168,15 +180,6 @@ export function DiscoveryTab({ s }: { s: SettingsBag }) {
                         </div>
                         
                         <div className="space-y-4 mt-4">
-                            <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex flex-col sm:flex-row justify-between items-center gap-4 mb-4">
-                                <div className="text-sm text-foreground/80">
-                                    <strong className="text-primary">Quick Setup:</strong> Load a pre-configured blocklist of common adult/NSFW publishers and keywords.
-                                </div>
-                                <Button variant="secondary" onClick={applyRecommendedFilters} className="h-12 sm:h-10 w-full sm:w-auto font-bold shrink-0 bg-background border-border shadow-sm text-foreground hover:bg-muted">
-                                    Load NSFW Defaults
-                                </Button>
-                            </div>
-
                             <div className="grid gap-2">
                                 <Label className="text-foreground font-semibold">Blocked Publishers (Comma Separated)</Label>
                                 <textarea 
@@ -198,15 +201,17 @@ export function DiscoveryTab({ s }: { s: SettingsBag }) {
                                 />
                             </div>
                             <div className="grid gap-2 mt-4 pt-4 border-t border-border">
-                                <div className="bg-primary/5 p-4 rounded-lg border border-primary/20 flex flex-col sm:flex-row justify-between items-center gap-4 mb-2">
-                                    <div className="text-sm text-foreground/80">
-                                        <strong className="text-primary">Quick Setup:</strong> Load a pre-configured blocklist of common foreign publishers to hide them from Manual Search.
-                                    </div>
-                                    <Button variant="secondary" onClick={applyForeignFilters} className="h-12 sm:h-10 w-full sm:w-auto font-bold shrink-0 bg-background border-border shadow-sm text-foreground hover:bg-muted">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-1">
+                                    <Label className="text-foreground font-semibold">Foreign Publisher Blocklist (Comma Separated)</Label>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={applyForeignFilters}
+                                        className="font-bold border-border hover:bg-muted text-foreground shadow-sm shrink-0 w-full sm:w-auto h-12 sm:h-9"
+                                    >
                                         Load Foreign Defaults
                                     </Button>
                                 </div>
-                                <Label className="text-foreground font-semibold">Foreign Publisher Blocklist (Comma Separated)</Label>
                                 <textarea 
                                     rows={3}
                                     value={config.filter_foreign_publishers || ""} 

@@ -147,6 +147,13 @@ describe('Settings tabs (Phase 1 reorganization)', () => {
         expect(screen.getByText(/Custom Request Headers/i)).toBeInTheDocument();
     });
 
+    it('AccessSecurityTab tells the user API-key actions apply immediately (not via Save)', () => {
+        // Phase 2 save-model polish: keys are the one section that persists on click, while
+        // everything else waits for the global Save — that difference must be stated.
+        render(<AccessSecurityTab s={mkBag()} />);
+        expect(screen.getByText(/immediately/i)).toBeInTheDocument();
+    });
+
     it('SystemTab hosts engine performance, environment paths, and the Docker test area', () => {
         render(<SystemTab s={mkBag()} />);
         expect(screen.getByText(/Engine Performance \(Concurrency\)/i)).toBeInTheDocument();

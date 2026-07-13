@@ -132,7 +132,7 @@ export function AccessSecurityTab({ s }: { s: SettingsBag }) {
             <Card className="shadow-sm border-border bg-background mb-6">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-foreground"><Webhook className="w-5 h-5 text-primary" /> External API Integrations</CardTitle>
-                    <CardDescription className="text-muted-foreground">Generate API keys to allow external applications (like Discord Bots or Homepage Dashboards) to fetch stats and interact with Omnibus securely.</CardDescription>
+                    <CardDescription className="text-muted-foreground">Generate API keys to allow external applications (like Discord Bots or Homepage Dashboards) to fetch stats and interact with Omnibus securely. <span className="font-semibold text-foreground/80">Keys are created and revoked immediately — unlike the rest of this page, they don&apos;t wait for Save All Changes.</span></CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

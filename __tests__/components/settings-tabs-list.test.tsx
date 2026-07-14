@@ -44,4 +44,14 @@ describe('Component: SettingsTabsList', () => {
         renderList([]);
         expect(screen.queryAllByLabelText(/unsaved changes/i)).toHaveLength(0);
     });
+
+    it('wraps into a 2-column grid on phones and restores the flex row at sm+', () => {
+        // At 375px only 2 of 8 tabs fit the old horizontal-scroll bar (scrollbar hidden = no
+        // affordance) and off-screen dirty dots were invisible. Mobile gets a wrapped grid with
+        // every tab (and its dot) visible; sm+ keeps the original scrolling flex row.
+        renderList([]);
+        const list = screen.getByRole('tablist');
+        expect(list.className).toContain('grid-cols-2');
+        expect(list.className).toContain('sm:flex');
+    });
 });

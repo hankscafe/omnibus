@@ -1,7 +1,7 @@
 # Omnibus
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/banner.png?raw=true" alt="Omnibus Banner" />
+  <img src="docs/images/banner.png" alt="Omnibus Banner" />
   <br>
   <em>The ultimate all-in-one, self-hosted comic book and manga app.</em>
 </p>
@@ -81,7 +81,7 @@ The last several releases added a lot. The biggest things to be aware of:
 The secure gateway to your personal comic universe. Omnibus ensures your collection remains private while offering a beautiful, welcoming entry point for you and your authorized users.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/login_page.png?raw=true" width="500" alt="Login page" />
+  <img src="docs/images/login_page.png" width="500" alt="Login page" />
   <br>
   <strong>Login page.</strong>
 </p>
@@ -99,25 +99,25 @@ The secure gateway to your personal comic universe. Omnibus ensures your collect
 The Dashboard is the personalized nerve center of your collection. It dynamically updates based on the logged-in user to provide a tailored snapshot of their reading journey.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/discover_no_popular-new.png?raw=true" width="500" alt="Homepage with Jump Back In section" />
+  <img src="docs/images/discover_no_popular-new.png" width="500" alt="Homepage with Jump Back In section" />
   <br>
   <strong>Discover page with the 'Popular Series' and 'New Releases' sections disabled, also shows 'Jump Back In', 'Because you read...', and 'Recently Added' sections</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/discover_NEW.png?raw=true" width="500" alt="Homepage discoery sections" />
+  <img src="docs/images/discover_NEW.png" width="500" alt="Homepage discoery sections" />
   <br>
   <strong>Homepage discovery section with Popular Issues and New Releases.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/one_click_request.png?raw=true" width="500" alt="Series request from home page" />
+  <img src="docs/images/one_click_request.png" width="500" alt="Series request from home page" />
   <br>
   <strong>Series window when clicking issue/series from the discover sections.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/request_2.png?raw=true" width="500" alt="Series request and monitor" />
+  <img src="docs/images/request_2.png" width="500" alt="Series request and monitor" />
   <br>
   <strong>Users can choose to monitor the series when they are making a request so future releases to a series will be automatically downloaded.</strong>
 </p>
@@ -145,13 +145,13 @@ The Dashboard is the personalized nerve center of your collection. It dynamicall
 A meticulously organized, highly performant view of your physical files, built to handle massive, multi-terabyte collections smoothly.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/library_page.png?raw=true" width="500" alt="Library page" />
+  <img src="docs/images/library_page.png" width="500" alt="Library page" />
   <br>
   <strong>The library page which features infinite scrolling.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/library_action_buttons.png?raw=true" width="500" alt="Library page series action buttons" />
+  <img src="docs/images/library_action_buttons.png" width="500" alt="Library page series action buttons" />
   <br>
   <strong>The library page action buttons.</strong>
 </p>
@@ -188,13 +188,13 @@ Manga is a first-class citizen, not an afterthought. Omnibus detects it, shelves
 The dedicated hub for an individual comic run or manga volume. This page aggregates all metadata, reading progress, and file management for a specific series into one beautiful layout.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/series_page_complete.png?raw=true" width="500" alt="Series page complete" />
+  <img src="docs/images/series_page_complete.png" width="500" alt="Series page complete" />
   <br>
   <strong>A series page showing a series that currently has all available issues.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/series_page_incomplete.png?raw=true" width="500" alt="Series page incomplete" />
+  <img src="docs/images/series_page_incomplete.png" width="500" alt="Series page incomplete" />
   <br>
   <strong>A series page with missing issues flagged, ready for a one-click "Request Missing".</strong>
 </p>
@@ -216,13 +216,13 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/reader_page.png?raw=true" width="500" alt="Reader page" />
+  <img src="docs/images/reader_page.png" width="500" alt="Reader page" />
   <br>
   <strong>Reader page and controls.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/reader_settings.png?raw=true" width="500" alt="Reader page settings" />
+  <img src="docs/images/reader_settings.png" width="500" alt="Reader page settings" />
   <br>
   <strong>Reader page settings.</strong>
 </p>
@@ -269,7 +269,7 @@ Omnibus acts as a master "save state" for your physical e-ink devices (Kobo, Kin
 Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/reading_lists_NEW.png?raw=true" width="500" alt="Reading lists page" />
+  <img src="docs/images/reading_lists_NEW.png" width="500" alt="Reading lists page" />
   <br>
   <strong>Reading lists page showing 2 story arcs added.</strong>
 </p>
@@ -296,13 +296,13 @@ A centralized hub to track upcoming comic and manga releases so you never miss a
   * **One-Click Requests & Subscriptions:** See a new series that looks interesting? You can click "Request Issue" to grab just that single book, or click "Request Series" to subscribe to it. Subscribing automatically tells Omnibus to monitor the series and download all future issues as they release.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/release_calendar-tracked_series_NEW.png?raw=true" width="500" alt="User profile page" />
+  <img src="docs/images/release_calendar-tracked_series_NEW.png" width="500" alt="User profile page" />
   <br>
   <strong>Omnibus Tracked Series section of the Release Calendar page.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/release_calendar-global.png?raw=true" width="500" alt="User profile page" />
+  <img src="docs/images/release_calendar-global.png" width="500" alt="User profile page" />
   <br>
   <strong>Global Pull List section of the Release Calendar page.</strong>
 </p>
@@ -311,13 +311,13 @@ A centralized hub to track upcoming comic and manga releases so you never miss a
 A personalized space for each user on your server to manage their identity, track their unique reading habits, and customize their Omnibus experience to fit their workflow.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/user_profile.png?raw=true" width="500" alt="User profile page" />
+  <img src="docs/images/user_profile.png" width="500" alt="User profile page" />
   <br>
   <strong>Users profile page showing customizable header and avatar as well as collapsable information sections.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/profile_header.png?raw=true" width="500" alt="User profile page" />
+  <img src="docs/images/profile_header.png" width="500" alt="User profile page" />
   <br>
   <strong>Users profile menu from header where you can log out or change password.</strong>
 </p>
@@ -351,31 +351,31 @@ Complete, granular control over your instance, your users, and your underlying a
 Settings are organized into **8 task-focused tabs** — Metadata, Library & Files, Search & Indexers, Downloads, Discovery & Filtering, Notifications, Access & Security, and System — with per-tab **unsaved-change indicators** so you always know exactly which tab holds edits you haven't saved yet. Every setting lives in exactly one place; the Scheduled Jobs page shows read-only feature-state notes (with links to the owning tab) instead of duplicating toggles.
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_NEW.png?raw=true" width="500" alt="Admin page" />
+  <img src="docs/images/admin_NEW.png" width="500" alt="Admin page" />
   <br>
   <strong>Admin page showing data cards and configuration pages.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/system_diagnostics.png?raw=true" width="500" alt="Admin page" />
+  <img src="docs/images/system_diagnostics.png" width="500" alt="Admin page" />
   <br>
   <strong>System Diagnostics modal</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_2.png?raw=true" width="500" alt="Admin page" />
+  <img src="docs/images/admin_2.png" width="500" alt="Admin page" />
   <br>
   <strong>Admin page showing active downloads and request management sections.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/settings_NEW.png?raw=true" width="500" alt="Settings page" />
+  <img src="docs/images/settings_NEW.png" width="500" alt="Settings page" />
   <br>
   <strong>The System Settings page, organized into 8 task-focused tabs with per-tab unsaved-change indicators.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/hankscafe/omnibus/blob/main/docs/images/scheduled_jobs_NEW.png?raw=true" width="500" alt="Scheduled jobs page" />
+  <img src="docs/images/scheduled_jobs_NEW.png" width="500" alt="Scheduled jobs page" />
   <br>
   <strong>The Scheduled Jobs page — every background job's cadence in one place, with manual Run Now triggers.</strong>
 </p>
@@ -431,12 +431,12 @@ Settings are organized into **8 task-focused tabs** — Metadata, Library & File
 
 | | | |
 |:---:|:---:|:---:|
-| [![Analytics page showing data cards](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_1.png?raw=true) | [![Analytics page showing purge option for unread series](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/analytics_2.png?raw=true) | [![Requests awaiting approval](https://github.com/hankscafe/omnibus/blob/main/docs/images/approvals.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/approvals.png?raw=true) |
-| [![Library diagnostics page](https://github.com/hankscafe/omnibus/blob/main/docs/images/diagnostics.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/diagnostics.png?raw=true) | [![Issue reports page](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_1.png?raw=true) | [![Issue reports admin response](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_2.png?raw=true) |
-| [![Issue reports resolution](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_3.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/issue_reports_3.png?raw=true) | [![My Requests page](https://github.com/hankscafe/omnibus/blob/main/docs/images/my_requests.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/my_requests.png?raw=true) | [![Smart Matcher page](https://github.com/hankscafe/omnibus/blob/main/docs/images/smart_matcher_NEW.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/smart_matcher_NEW.png?raw=true) |
-| [![Storage Deep Dive page](https://github.com/hankscafe/omnibus/blob/main/docs/images/storage_deep_dive.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/storage_deep_dive.png?raw=true) | [![System Logs live terminal](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_1.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_1.png?raw=true) | [![System Logs page](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_2.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/system_logs_2.png?raw=true) |
-| [![User Management page](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/users.png?raw=true) | [![Admin alert configuration](https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_alerts.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/admin_alerts.png?raw=true) | [![First-run setup wizard](https://github.com/hankscafe/omnibus/blob/main/docs/images/setup_page.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/setup_page.png?raw=true) |
-| [![Homepage overview](https://github.com/hankscafe/omnibus/blob/main/docs/images/home_page.png?raw=true)](https://github.com/hankscafe/omnibus/blob/main/docs/images/home_page.png?raw=true) | | |
+| [![Analytics page showing data cards](docs/images/analytics_1.png)](docs/images/analytics_1.png) | [![Analytics page showing purge option for unread series](docs/images/analytics_2.png)](docs/images/analytics_2.png) | [![Requests awaiting approval](docs/images/approvals.png)](docs/images/approvals.png) |
+| [![Library diagnostics page](docs/images/diagnostics.png)](docs/images/diagnostics.png) | [![Issue reports page](docs/images/issue_reports_1.png)](docs/images/issue_reports_1.png) | [![Issue reports admin response](docs/images/issue_reports_2.png)](docs/images/issue_reports_2.png) |
+| [![Issue reports resolution](docs/images/issue_reports_3.png)](docs/images/issue_reports_3.png) | [![My Requests page](docs/images/my_requests.png)](docs/images/my_requests.png) | [![Smart Matcher page](docs/images/smart_matcher_NEW.png)](docs/images/smart_matcher_NEW.png) |
+| [![Storage Deep Dive page](docs/images/storage_deep_dive.png)](docs/images/storage_deep_dive.png) | [![System Logs live terminal](docs/images/system_logs_1.png)](docs/images/system_logs_1.png) | [![System Logs page](docs/images/system_logs_2.png)](docs/images/system_logs_2.png) |
+| [![User Management page](docs/images/users.png)](docs/images/users.png) | [![Admin alert configuration](docs/images/admin_alerts.png)](docs/images/admin_alerts.png) | [![First-run setup wizard](docs/images/setup_page.png)](docs/images/setup_page.png) |
+| [![Homepage overview](docs/images/home_page.png)](docs/images/home_page.png) | | |
 
 ---
 

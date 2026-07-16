@@ -2,9 +2,9 @@ name: Build, Test & Notify
 
 on:
   push:
-    branches: [ "main", "rust-engine", "unified" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "rust-engine", "unified" ]
+    branches: [ "main" ]
 
 jobs:
   build-and-test:

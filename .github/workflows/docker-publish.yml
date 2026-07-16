@@ -1,8 +1,10 @@
 name: Build, Publish, and Release Docker Image
 
+# The unified branch was promoted to main (July 2026); legacy-main and legacy-rust-engine
+# are locked archives, so main is the only living branch this workflow serves.
 on:
   push:
-    branches: ['main', 'rust-engine', 'unified']
+    branches: ['main']
     tags: ['v*']
 
 env:
@@ -96,12 +98,6 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
             type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
-            # The rust-engine branch publishes side-by-side test images; it never touches :latest.
-            type=raw,value=rust-engine,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
-            type=raw,value=v${{ env.VERSION }}-rust,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
-            # The unified (dual-DB) test branch publishes under :unified; it never touches :latest.
-            type=raw,value=unified,enable=${{ github.ref == format('refs/heads/{0}', 'unified') }}
-            type=raw,value=v${{ env.VERSION }}-unified,enable=${{ github.ref == format('refs/heads/{0}', 'unified') }}
             type=ref,event=tag
             type=sha
 
@@ -301,13 +297,6 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
             type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
-            # The rust-engine branch is currently a source of engine builds; tagged per-branch
-            # so the eventual merge to main can own :latest cleanly.
-            type=raw,value=rust-engine,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
-            type=raw,value=v${{ env.VERSION }}-rust,enable=${{ github.ref == format('refs/heads/{0}', 'rust-engine') }}
-            # The unified (dual-DB) test branch publishes the engine under :unified.
-            type=raw,value=unified,enable=${{ github.ref == format('refs/heads/{0}', 'unified') }}
-            type=raw,value=v${{ env.VERSION }}-unified,enable=${{ github.ref == format('refs/heads/{0}', 'unified') }}
             type=ref,event=tag
             type=sha
 

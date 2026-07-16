@@ -162,8 +162,10 @@ jobs:
           curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
 
       # --- SPECIFIC RELEASE NOTIFICATION (PLAIN TEXT FORMAT, main only) ---
+      # Gated on EXISTS == 'false' so it only fires when this run actually created the release;
+      # otherwise every successful main build re-announces the current version.
       - name: Send Release Announcement to Discord
-        if: success() && github.ref == format('refs/heads/{0}', 'main')
+        if: success() && github.ref == format('refs/heads/{0}', 'main') && env.EXISTS == 'false'
         env:
           DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASES }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

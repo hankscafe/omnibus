@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Library, Image as ImageIcon, ArrowRight } from "lucide-react"; 
+import { Eye, Image as ImageIcon, ArrowRight } from "lucide-react"; 
 import { Button } from "@/components/ui/button";
 import Link from "next/link"; 
 
@@ -29,7 +29,7 @@ export function RecentlyAdded() {
         <h2 className="text-2xl font-bold tracking-tight text-foreground">Recently Added</h2>
         <Button asChild variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 group font-bold hidden sm:flex">
             <Link href="/library">
-                View Library <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                <span>Library</span> <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
             </Link>
         </Button>
       </div>
@@ -62,15 +62,15 @@ export function RecentlyAdded() {
                   <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md">{item.name}</h3>
                   <p className="text-white/80 text-xs mb-2 drop-shadow-md">{item.year || '????'}</p>
                   
-                  <Button 
-                      size="sm" 
-                      className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
+                  <Button
+                      size="sm"
+                      className="w-full min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
                       onClick={(e) => {
                           e.stopPropagation();
                           router.push(`/library/series?path=${encodeURIComponent(item.path)}`);
                       }}
                   >
-                      <Library className="w-3 h-3 mr-2" /> View Series
+                      <Eye className="w-3 h-3 shrink-0" /> <span>View</span>
                   </Button>
               </div>
             </div>
@@ -80,7 +80,7 @@ export function RecentlyAdded() {
       <div className="sm:hidden pt-2">
         <Button asChild variant="outline" className="w-full border-primary/50 text-primary hover:bg-primary/10 group font-bold">
             <Link href="/library">
-                View Library <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                <span>Library</span> <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
             </Link>
         </Button>
       </div>

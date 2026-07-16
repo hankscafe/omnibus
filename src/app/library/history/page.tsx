@@ -55,15 +55,15 @@ export default function HistoryPage() {
 
                         {/* Hover action overlay */}
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-4 z-20">
-                            <Button 
-                                size="sm" 
-                                className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg" 
-                                onClick={(e) => { 
-                                    e.stopPropagation(); 
-                                    router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`); 
+                            <Button
+                                size="sm"
+                                className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-md"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
                                 }}
                             >
-                                <BookOpen className="w-4 h-4 mr-2" /> {item.isCompleted ? "Re-read" : "Resume"}
+                                <BookOpen className="w-3 h-3 mr-2" /> {item.isCompleted ? "Re-read" : "Resume"}
                             </Button>
                         </div>
                         

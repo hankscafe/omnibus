@@ -1688,20 +1688,20 @@ function SeriesContent() {
                                     <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
                                       <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
                                       <div className="flex flex-wrap items-center gap-1.5 mt-3">
-                                        <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 h-9 text-[11px] font-black uppercase tracking-wider min-w-[70px]" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
+                                        <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 font-bold shadow-md min-w-[70px]" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                             <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
                                                 {getReadButtonLabel(issue)}
                                             </Link>
                                         </Button>
-                                        
+
                                         {!isSelectionMode && (
-                                            <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-muted-foreground hover:text-foreground hover:bg-muted shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
+                                            <Button size="icon-sm" variant="ghost" className="text-muted-foreground hover:text-foreground hover:bg-muted shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
                                                 {isRead ? <EyeOff className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
                                             </Button>
                                         )}
 
                                         {canDownload && !isSelectionMode && (
-                                            <Button size="sm" variant="secondary" className="h-9 w-9 p-0 flex items-center justify-center bg-muted hover:bg-muted/80 text-foreground border-border shrink-0" asChild onClick={(e) => e.stopPropagation()}>
+                                            <Button size="icon-sm" variant="secondary" className="shrink-0" asChild onClick={(e) => e.stopPropagation()}>
                                                 <a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download>
                                                     <Download className="w-4 h-4" />
                                                 </a>
@@ -1709,7 +1709,7 @@ function SeriesContent() {
                                         )}
 
                                         {isAdmin && !isSelectionMode && (
-                                            <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 border border-transparent hover:border-red-200 dark:hover:border-red-900/50" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
+                                            <Button size="icon-sm" variant="ghost" className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
                                                 <Trash2 className="w-4 h-4" />
                                             </Button>
                                         )}
@@ -1772,18 +1772,18 @@ function SeriesContent() {
                                                   <td className="px-4 py-3 text-right">
                                                       <div className="flex items-center justify-end gap-2">
                                                           {!isSelectionMode && (
-                                                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-muted shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
+                                                              <Button size="icon-sm" variant="ghost" className="text-muted-foreground hover:text-foreground hover:bg-muted shrink-0" onClick={(e) => { e.stopPropagation(); handleToggleRead(issue, !isRead); }} title={isRead ? "Mark Unread" : "Mark Read"}>
                                                                   {isRead ? <EyeOff className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
                                                               </Button>
                                                           )}
-                                                          <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="h-8 text-[11px] font-black uppercase tracking-wider" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
+                                                          <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="font-bold shadow-md" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                                               <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
                                                                   {getReadButtonLabel(issue)}
                                                               </Link>
                                                           </Button>
-                                                          {canDownload && !isSelectionMode && <Button size="sm" variant="secondary" className="h-8 px-3 bg-muted hover:bg-muted/80 text-foreground border-border hidden sm:flex" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
+                                                          {canDownload && !isSelectionMode && <Button size="icon-sm" variant="secondary" className="shrink-0 hidden sm:flex" asChild onClick={(e) => e.stopPropagation()}><a href={`/api/library/download?path=${encodeURIComponent(issue.fullPath)}`} download><Download className="w-4 h-4" /></a></Button>}
                                                           {isAdmin && !isSelectionMode && (
-                                                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 hidden sm:flex" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
+                                                              <Button size="icon-sm" variant="ghost" className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0 hidden sm:flex" onClick={(e) => { e.stopPropagation(); setIssueToDelete(issue); setDeleteIssueModalOpen(true); }}>
                                                                   <Trash2 className="w-4 h-4" />
                                                               </Button>
                                                           )}
@@ -2010,7 +2010,7 @@ function SeriesContent() {
                               <div className="aspect-[2/3] bg-muted rounded-lg overflow-hidden border border-border relative shadow-sm">
                                   {item.image && <img src={getImageUrl(item.image) || ""} className="object-cover w-full h-full" alt="" />}
                                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                      <Button size="sm" className="font-bold shadow-lg" disabled={isMatching}>
+                                      <Button size="sm" className="font-bold shadow-md" disabled={isMatching}>
                                           {isMatching ? <Loader2 className="animate-spin w-4 h-4" /> : "Select"}
                                       </Button>
                                   </div>

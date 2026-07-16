@@ -338,7 +338,7 @@ export function RequestSearch() {
                         {volStatus === 'PENDING_APPROVAL' && (<div className="absolute top-2 right-2 bg-yellow-500 text-white rounded-full p-1 z-10 shadow-md" title="Pending Admin Approval"><Clock className="w-4 h-4" /></div>)}
                         
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-20">
-                          <Button size="sm" className="font-bold shadow-lg bg-primary hover:bg-primary/90 text-primary-foreground">Details</Button>
+                          <Button size="sm" className="font-bold shadow-md">Details</Button>
                         </div>
                       </div>
                       

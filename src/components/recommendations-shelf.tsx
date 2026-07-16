@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, Image as ImageIcon, Library } from "lucide-react"; 
+import { Sparkles, Image as ImageIcon, Library, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function RecommendationsShelf() {
@@ -64,15 +64,15 @@ export function RecommendationsShelf() {
                   <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md">{item.name}</h3>
                   <p className="text-white/80 text-xs mb-2 drop-shadow-md">{item.year || '????'}</p>
                   
-                  <Button 
-                      size="sm" 
-                      className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
+                  <Button
+                      size="sm"
+                      className="w-full min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
                       onClick={(e) => {
                           e.stopPropagation();
                           router.push(`/library/series?path=${encodeURIComponent(item.path)}`);
                       }}
                   >
-                      <Library className="w-3 h-3 mr-2" /> View Series
+                      <Eye className="w-3 h-3 shrink-0" /> <span>View</span>
                   </Button>
               </div>
             </div>

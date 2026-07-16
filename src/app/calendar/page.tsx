@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
-import { Loader2, Calendar as CalendarIcon, Clock, ChevronLeft, ChevronRight, Image as ImageIcon, BookOpen, Download, Plus, Activity, Check, ExternalLink } from "lucide-react"
+import { Loader2, Calendar as CalendarIcon, Clock, ChevronLeft, ChevronRight, Image as ImageIcon, BookOpen, Download, Plus, Activity, Check, ExternalLink, Eye } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
@@ -318,8 +318,8 @@ export default function CalendarPage() {
                                                     
                                                     {/* Hidden on mobile to prevent overlay flash issues, visible on desktop hover */}
                                                     <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex items-center justify-center z-10 pointer-events-none">
-                                                        <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg pointer-events-auto" tabIndex={-1}>
-                                                            <BookOpen className="w-4 h-4 mr-2" /> View Series
+                                                        <Button size="sm" className="font-bold shadow-md pointer-events-auto" tabIndex={-1}>
+                                                            <Eye className="w-3 h-3 mr-2" /> View Series
                                                         </Button>
                                                     </div>
                                                 </div>
@@ -411,13 +411,13 @@ export default function CalendarPage() {
                                                 {/* Desktop Only Hover Overlay */}
                                                 <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex flex-col items-center justify-center z-10 p-2 gap-2">
                                                     {isMonitored ? (
-                                                        <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100">
-                                                            <Check className="w-4 h-4 mr-2"/> {inLibrary ? "Monitored" : "Subscribed"}
+                                                        <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100 shadow-md">
+                                                            <Check className="w-3 h-3 mr-2"/> {inLibrary ? "Monitored" : "Subscribed"}
                                                         </Button>
                                                     ) : (
-                                                        <Button 
-                                                            size="sm" 
-                                                            className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg"
+                                                        <Button
+                                                            size="sm"
+                                                            className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-md"
                                                             disabled={requestingTarget === `vol-${volIdKey}`}
                                                             onClick={(e) => {
                                                                 e.preventDefault();
@@ -425,19 +425,19 @@ export default function CalendarPage() {
                                                                 setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: (issue as any).metadataSource || 'METRON' })
                                                             }}
                                                         >
-                                                            {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Plus className="w-4 h-4 mr-2" />} Request Series
+                                                            {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : <Plus className="w-3 h-3 mr-2" />} Request
                                                         </Button>
                                                     )}
 
                                                     {isIssueRequested ? (
-                                                        <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100">
-                                                            <Check className="w-4 h-4 mr-2"/> Requested
+                                                        <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100 shadow-md">
+                                                            <Check className="w-3 h-3 mr-2"/> Requested
                                                         </Button>
                                                     ) : (
-                                                        <Button 
-                                                            size="sm" 
+                                                        <Button
+                                                            size="sm"
                                                             variant="outline"
-                                                            className="w-full font-bold text-white border-white/30 hover:bg-white/20"
+                                                            className="w-full font-bold text-white border-white/30 hover:bg-white/20 shadow-md"
                                                             disabled={requestingTarget === `iss-${issueTargetName}` || isMonitored}
                                                             onClick={(e) => {
                                                                 e.preventDefault();
@@ -445,7 +445,7 @@ export default function CalendarPage() {
                                                                 handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
                                                             }}
                                                         >
-                                                            {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />} Request Issue
+                                                            {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : <Download className="w-3 h-3 mr-2" />} Request Issue
                                                         </Button>
                                                     )}
 

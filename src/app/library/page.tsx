@@ -1020,53 +1020,50 @@ function LibraryContent() {
                       </div>
 
                         <div className={`absolute inset-0 bg-black/80 transition-opacity flex-col items-center justify-center gap-1.5 p-3 z-20 pointer-events-none group-hover:pointer-events-auto ${isSelectionMode ? 'hidden' : 'hidden md:flex opacity-0 group-hover:opacity-100'}`}>
-                        <Button 
-                            variant="default" 
-                            size="sm" 
-                            className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 min-w-0 px-2" 
+                        <Button
+                            variant="default"
+                            size="sm"
+                            className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
                             onClick={(e) => handleNavigate(e as any, item.path, navId)}
                             aria-label={`Open reader for ${item.name}`}
                         >
-                            {navigatingTo === navId ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 mr-1.5 shrink-0" />} 
-                            <span className="truncate">{navigatingTo === navId ? "Loading..." : "Read Series"}</span>
+                            {navigatingTo === navId ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 shrink-0" />}
+                            <span>{navigatingTo === navId ? "Loading..." : "Read"}</span>
                         </Button>
-                        <div className="flex gap-1.5 w-full">
-                          <Button 
-                            variant="secondary" 
-                            size="sm" 
-                            className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
+                        <div className="flex gap-1.5 w-full justify-center">
+                          <Button
+                            variant="secondary"
+                            size="icon-sm"
+                            className="shadow-md"
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}
                             title="Add to List"
                             aria-label={`Add ${item.name} to a reading list`}
                         >
-                            <ListPlus className="w-4 h-4 shrink-0" /> 
+                            <ListPlus className="w-4 h-4" />
                         </Button>
                         {isAdmin && (
-                            <Button 
-                                variant="secondary" 
-                                size="sm" 
-                                className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
+                            <Button
+                                variant="secondary"
+                                size="icon-sm"
+                                className="shadow-md"
                                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}
                                 title="Edit Metadata"
                                 aria-label={`Edit metadata for ${item.name}`}
                             >
-                                <Settings2 className="w-4 h-4 shrink-0" /> 
+                                <Settings2 className="w-4 h-4" />
                             </Button>
                             )}
-                        </div>
                         {isAdmin && (
-                            // --- NEW: Using the new explicit Metadata variables ---
-                            <Button aria-label={`Refresh cover art for ${item.name}`} variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold border-0 min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.metadataId || item.cvId?.toString(), item.metadataSource || 'COMICVINE', item.path); }}>
-                                <RefreshCw className="w-3 h-3 mr-1.5 shrink-0" /> 
-                                <span className="truncate">Fetch Cover</span>
+                            <Button aria-label={`Refresh cover art for ${item.name}`} variant="secondary" size="icon-sm" className="shadow-md" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.metadataId || item.cvId?.toString(), item.metadataSource || 'COMICVINE', item.path); }} title="Refresh Cover">
+                                <RefreshCw className="w-4 h-4" />
                             </Button>
                         )}
                         {activeCollection !== "ALL" && (
-                            <Button aria-label={`Remove ${item.name} from current list`} variant="destructive" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}>
-                                <Minus className="w-3 h-3 mr-1.5 shrink-0" /> 
-                                <span className="truncate">Remove</span>
+                            <Button aria-label={`Remove ${item.name} from current list`} variant="destructive" size="icon-sm" className="shadow-md" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }} title="Remove from List">
+                                <Minus className="w-4 h-4" />
                             </Button>
                         )}
+                        </div>
                       </div>
                   </Card>
                   <div 

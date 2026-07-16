@@ -322,7 +322,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                 </div>
                 
                 <div className="absolute inset-0 hidden sm:flex opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center z-40 pointer-events-none">
-                  <Button size="sm" className="font-bold shadow-lg bg-primary hover:bg-primary/90 text-primary-foreground pointer-events-auto transition-transform group-hover:scale-110" tabIndex={-1}>Details</Button>
+                  <Button size="sm" className="font-bold shadow-md pointer-events-auto transition-transform group-hover:scale-110" tabIndex={-1}>Details</Button>
                 </div>
             </div>
           )})}

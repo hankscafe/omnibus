@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, Image as ImageIcon, X, ArrowRight } from "lucide-react"; 
+import { BookOpen, Image as ImageIcon, RotateCcw, ArrowRight } from "lucide-react"; 
 import { Button } from "@/components/ui/button";
 import Link from "next/link"; 
 import { Logger } from "@/lib/logger";
@@ -90,7 +90,7 @@ export function ContinueReading() {
         <h2 className="text-2xl font-bold tracking-tight text-foreground">Jump Back In</h2>
         <Button asChild variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 group font-bold hidden sm:flex">
             <Link href="/library/history">
-                View History <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                <span>History</span> <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
             </Link>
         </Button>
       </div>
@@ -129,22 +129,22 @@ export function ContinueReading() {
                   
                   <Button 
                       size="sm" 
-                      className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
+                      className="w-full min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
                       onClick={(e) => {
                           e.stopPropagation();
                           router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
                       }}
                   >
-                      <BookOpen className="w-3 h-3 mr-2" /> Resume
+                      <BookOpen className="w-3 h-3 shrink-0" /> <span>Resume</span>
                   </Button>
 
-                  <Button 
-                      variant="secondary" 
-                      size="sm" 
-                      className="w-full font-bold shadow-md" 
+                  <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full min-w-0 font-bold shadow-md"
                       onClick={(e) => handleMarkUnread(e, item.id)}
                   >
-                      <X className="w-3 h-3 mr-1" /> Mark Unread
+                      <RotateCcw className="w-3 h-3 shrink-0" /> <span>Unread</span>
                   </Button>
               </div>
             </div>
@@ -154,7 +154,7 @@ export function ContinueReading() {
       <div className="sm:hidden pt-2">
         <Button asChild variant="outline" className="w-full border-primary/50 text-primary hover:bg-primary/10 group font-bold">
             <Link href="/library/history">
-                View History <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                <span>History</span> <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
             </Link>
         </Button>
       </div>

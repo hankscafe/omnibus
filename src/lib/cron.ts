@@ -1,5 +1,6 @@
 // src/lib/cron.ts
 import { prisma } from './db';
+import { healStuckJobs } from './job-heal';
 import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { Importer } from './importer';
@@ -65,6 +66,13 @@ export function initCronJobs() {
     try {
       const locked = await acquireLock('CRON_DOWNLOAD_CHECKER', 55000);
       if (!locked) return;
+
+      // Stuck-job auto-heal (moved off the 3s-polled job-logs GET — issue #183). Read-only when
+      // nothing is stuck; best-effort, never blocks the download checks below.
+      try {
+        const healed = await healStuckJobs();
+        if (healed > 0) Logger.log(`[Cron] Auto-healed ${healed} stuck job log(s) (server restart likely).`, 'warn');
+      } catch { /* next tick retries */ }
 
       const stalledRequests = await prisma.request.findMany({
         where: { status: 'STALLED', retryCount: { lt: 3 } }

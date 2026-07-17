@@ -14,23 +14,9 @@ export async function GET() {
     const session = await getServerSession(await getAuthOptions());
     if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
-    // --- AUTO-HEAL STUCK JOBS ---
-    // If a job has been "IN_PROGRESS" for more than 2 hours, it was likely killed by a server restart.
-    // We automatically mark it as FAILED so it stops spinning in the UI forever.
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    
-    await prisma.jobLog.updateMany({
-        where: {
-            status: 'IN_PROGRESS',
-            createdAt: { lt: twoHoursAgo }
-        },
-        data: {
-            status: 'FAILED',
-            message: 'Job timed out or the server restarted before completion.',
-            durationMs: 0 // Reset duration since it didn't finish
-        }
-    });
-
+    // Stuck-job auto-heal lives in the 60s cron tick now (lib/job-heal.ts) — this route is
+    // polled every 3 seconds by the admin UI, and a write here contended with the engine's
+    // scan-time write bursts for SQLite's single write lock (issue #183). Pure read path.
     const logs = await prisma.jobLog.findMany({
       orderBy: { createdAt: 'desc' },
       take: 200 // Limit to the last 200 logs to keep the UI fast

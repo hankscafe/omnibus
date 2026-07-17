@@ -4,6 +4,7 @@
 // placeholder SVG on any failure — never a 4xx/5xx that breaks a grid <img>.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GET } from '@/app/api/library/cover/route';
+import { resetLibraryRootsCache } from '@/lib/library-roots';
 import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
@@ -72,6 +73,7 @@ describe('API Route: issue first-page covers (?issueId=)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.stubGlobal('fetch', mocks.fetch);
+        resetLibraryRootsCache(); // roots are cached module-wide (issue #183); isolate each case
         mocks.libraryFindMany.mockResolvedValue([{ path: '/data/comics' }]);
         mocks.issueFindUnique.mockResolvedValue({ filePath: ARCHIVE, series: { folderPath: FOLDER } });
         // Archive stat succeeds; every readFile misses (no disk cache, no folder cover) by default.
@@ -122,6 +124,23 @@ describe('API Route: issue first-page covers (?issueId=)', () => {
 
         expect(res.status).toBe(200);
         expect(res.headers.get('Content-Type')).toBe('image/jpeg');
+    });
+
+    it('gives up on a slow engine render and falls back to the folder cover (issue #183)', async () => {
+        // The route arms a 5s abort watchdog so scan-pinned engines can't freeze the grid;
+        // simulate the watchdog firing as the AbortError the fetch would surface.
+        mocks.fetch.mockRejectedValue(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+        mocks.fsPromisesReadFile.mockImplementation(async (p: string) => {
+            if (String(p).toLowerCase().includes('cover.jpg')) return Buffer.from('folder_cover');
+            throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        });
+
+        const res = await GET(req('issueId=issue_1'));
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get('Content-Type')).toBe('image/jpeg');
+        // The render request actually carried the abort signal.
+        expect(mocks.fetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     });
 
     it('returns the placeholder for an unknown issue (never a 4xx that breaks <img>)', async () => {

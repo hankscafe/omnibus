@@ -31,9 +31,13 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ 
-    Logger: { log: mocks.log } 
+vi.mock('@/lib/logger', () => ({
+    Logger: { log: mocks.log }
 }));
+
+// The 60s tick now runs the stuck-job heal first (issue #183); stub it so these download-checker
+// suites stay deterministic (job-heal has its own unit suite).
+vi.mock('@/lib/job-heal', () => ({ healStuckJobs: vi.fn().mockResolvedValue(0) }));
 
 vi.mock('@/lib/download-clients', () => ({
     DownloadService: {

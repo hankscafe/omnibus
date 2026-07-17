@@ -1,4 +1,4 @@
-use crate::db::Db;
+use crate::db::{Db, Dialect};
 use jwalk::WalkDir;
 use sqlx::Row;
 use std::collections::{HashSet, HashMap};
@@ -845,6 +845,98 @@ fn any_year_re() -> &'static Regex {
 }
 
 // ============================================================================
+// Batched scan writes (issue #183)
+// ============================================================================
+// A 37k-issue scan used to issue every INSERT/UPDATE as its own autocommitting statement —
+// tens of thousands of separate commits, each grabbing the shared SQLite write lock that the
+// Node app also needs, which is what made the web UI unresponsive during big scans. All scan
+// phases now GATHER first (all file I/O — page counts, unrar spawns, image decodes — happens
+// outside any transaction) and then FLUSH in short chunked transactions.
+//
+// INVARIANT: never perform file I/O or network calls between begin() and commit(). A chunk
+// holds the write lock only for pure in-memory statement execution, so the Node app's own
+// writes interleave between chunks instead of starving for the whole scan.
+
+/// Rows per flush transaction. Small enough that the write lock is held for milliseconds,
+/// large enough to collapse ~48k autocommits into a few hundred commits on a big scan.
+const WRITE_CHUNK: usize = 250;
+
+/// One fully-prepared Issue INSERT — everything 5A/5B derive per file, including the
+/// page count, computed BEFORE the write transaction opens.
+struct NewIssueRow {
+    issue_id: String,
+    series_id: String,
+    meta_id: String,
+    source: String,
+    match_state: &'static str,
+    number: String,
+    file: String,
+    page_count: i32,
+    fm: IssueFileMeta,
+}
+
+/// A deferred 5B write: either a brand-new issue or a repoint of an existing row whose
+/// file was renamed/moved (same-number dedupe).
+enum PendingIssueWrite {
+    Insert(Box<NewIssueRow>),
+    Repoint { issue_id: String, file: String, page_count: i32 },
+}
+
+/// The shared 5A/5B Issue INSERT (identical statement, previously duplicated inline).
+/// Runs on a transaction connection — see the no-I/O-in-transaction invariant above.
+async fn exec_issue_insert(
+    conn: &mut sqlx::AnyConnection,
+    db: &Db,
+    row: &NewIssueRow,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(&format!(
+        r#"INSERT INTO "Issue"
+           (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
+            name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
+            "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, {now}, {now})"#,
+        now = db.now_expr()
+    ))
+    .bind(&row.issue_id)
+    .bind(&row.series_id)
+    .bind(&row.meta_id)
+    .bind(&row.source)
+    .bind(row.match_state)
+    .bind(&row.number)
+    .bind(&row.file)
+    .bind(row.page_count)
+    .bind(&row.fm.name)
+    .bind(&row.fm.description)
+    .bind(&row.fm.release_date)
+    .bind(&row.fm.genres)
+    .bind(&row.fm.writers)
+    .bind(&row.fm.artists)
+    .bind(&row.fm.cover_artists)
+    .bind(&row.fm.colorists)
+    .bind(&row.fm.letterers)
+    .bind(&row.fm.characters)
+    .bind(&row.fm.teams)
+    .bind(&row.fm.locations)
+    .bind(&row.fm.story_arcs)
+    .execute(&mut *conn)
+    .await
+    .map(|_| ())
+}
+
+/// Open a flush transaction, logging (not propagating) failure — scan phases skip a chunk that
+/// can't get a transaction rather than aborting the whole scan, matching the per-row error
+/// posture the autocommit code had.
+async fn begin_write_tx(db: &Db, phase: &str) -> Option<sqlx::Transaction<'static, sqlx::Any>> {
+    match db.pool.begin().await {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::error!("[Scan] Failed to open {} write transaction: {:?}", phase, e);
+            None
+        }
+    }
+}
+
+// ============================================================================
 // Main scan
 // ============================================================================
 
@@ -1306,6 +1398,54 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let sj_status = sj.as_ref().and_then(|j| j.status.clone());
         let sj_booktype = sj.as_ref().and_then(|j| j.booktype.clone());
 
+        // GATHER (file I/O): derive every issue row — including its page count, which may spawn
+        // unrar — BEFORE any transaction opens. See the no-I/O-in-transaction invariant above.
+        // Each issue carries its OWN provider identity + narrative metadata from its own ComicInfo
+        // (discussion #177). The old shape stamped the FIRST archive's issue id onto every issue in
+        // the folder — issue #2..#N all carried issue #1's provider id (marked MATCHED), so the
+        // view-time enrichment fetched issue #1's credits for all of them until a sync self-healed.
+        let mut issue_rows: Vec<NewIssueRow> = Vec::with_capacity(files.len());
+        for (idx, file) in files.iter().enumerate() {
+            let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
+            let file_info = infos.get(idx).and_then(|o| o.as_ref());
+            let issue_num = issue_number_for_file(file_info, &file_name);
+            let file_derived = file_info.map(derive_meta);
+            let fm = issue_file_meta(file_info);
+            let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
+                Some(d) if d.metadata_issue_id.is_some() => (
+                    d.metadata_issue_id.clone().unwrap(),
+                    d.metadata_source.clone(),
+                    scanned_issue_match_state(&fm),
+                ),
+                _ => (format!("unmatched_{}", Uuid::new_v4()), metadata_source.clone(), "UNMATCHED"),
+            };
+
+            // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
+            let page_count = count_pages_blocking(file).await;
+
+            issue_rows.push(NewIssueRow {
+                issue_id: Uuid::new_v4().to_string(),
+                series_id: series_id.clone(),
+                meta_id: issue_meta_id,
+                source: issue_source,
+                match_state: issue_match_state,
+                number: issue_num,
+                file: file.clone(),
+                page_count,
+                fm,
+            });
+        }
+
+        // FLUSH: one short transaction per folder — the Series row and all of its issues land
+        // atomically. A folder is a natural chunk (typically well under WRITE_CHUNK files).
+        let mut tx = match db.pool.begin().await {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("[Scanner Debug] Failed to open write transaction for {}: {:?}", folder_path, e);
+                continue;
+            }
+        };
+
         let insert_res = sqlx::query(&format!(
             r#"INSERT INTO "Series"
                (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "seriesGroup", "libraryId", description, status, "bookType", "createdAt", "updatedAt")
@@ -1329,7 +1469,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         .bind(&sj_description)
         .bind(&sj_status)
         .bind(&sj_booktype)
-        .execute(&db.pool)
+        .execute(&mut *tx)
         .await;
 
         match insert_res {
@@ -1338,80 +1478,36 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                     "[Scanner Debug] Skipping folder {} — a series already exists for ({}, {}).",
                     folder_path, metadata_source, series_meta_id
                 );
+                let _ = tx.rollback().await;
                 continue;
             }
             Err(e) => {
                 log::error!("[Scanner Debug] Failed to index folder {}: {:?}", folder_path, e);
+                let _ = tx.rollback().await;
                 continue;
             }
             Ok(_) => {}
         }
-        series_inserted += 1;
 
-        // Each issue carries its OWN provider identity + narrative metadata from its own ComicInfo
-        // (discussion #177). The old shape stamped the FIRST archive's issue id onto every issue in
-        // the folder — issue #2..#N all carried issue #1's provider id (marked MATCHED), so the
-        // view-time enrichment fetched issue #1's credits for all of them until a sync self-healed.
         let mut folder_issue_count = 0;
-        for (idx, file) in files.iter().enumerate() {
-            let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
-            let file_info = infos.get(idx).and_then(|o| o.as_ref());
-            let issue_num = issue_number_for_file(file_info, &file_name);
-            let file_derived = file_info.map(derive_meta);
-            let issue_id = Uuid::new_v4().to_string();
-            let fm = issue_file_meta(file_info);
-            let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
-                Some(d) if d.metadata_issue_id.is_some() => (
-                    d.metadata_issue_id.clone().unwrap(),
-                    d.metadata_source.clone(),
-                    scanned_issue_match_state(&fm),
-                ),
-                _ => (format!("unmatched_{}", Uuid::new_v4()), metadata_source.clone(), "UNMATCHED"),
-            };
-
-            // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
-            let page_count = count_pages_blocking(file).await;
-
-            if let Err(e) = sqlx::query(&format!(
-                r#"INSERT INTO "Issue"
-                   (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
-                    name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
-                    "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, {now}, {now})"#,
-                now = db.now_expr()
-            ))
-            .bind(&issue_id)
-            .bind(&series_id)
-            .bind(&issue_meta_id)
-            .bind(&issue_source)
-            .bind(issue_match_state)
-            .bind(&issue_num)
-            .bind(file)
-            .bind(page_count)
-            .bind(&fm.name)
-            .bind(&fm.description)
-            .bind(&fm.release_date)
-            .bind(&fm.genres)
-            .bind(&fm.writers)
-            .bind(&fm.artists)
-            .bind(&fm.cover_artists)
-            .bind(&fm.colorists)
-            .bind(&fm.letterers)
-            .bind(&fm.characters)
-            .bind(&fm.teams)
-            .bind(&fm.locations)
-            .bind(&fm.story_arcs)
-            .execute(&db.pool)
-            .await
-            {
-                log::error!("[Scanner Debug] Failed to insert issue for {}: {:?}", file, e);
+        for row in &issue_rows {
+            if let Err(e) = exec_issue_insert(&mut tx, &db, row).await {
+                log::error!("[Scanner Debug] Failed to insert issue for {}: {:?}", row.file, e);
                 continue;
             }
-            issues_inserted += 1;
             folder_issue_count += 1;
         }
 
-        log::info!("[Scan] Found and indexed new series: {} with {} issues.", clean_name, folder_issue_count);
+        match tx.commit().await {
+            Ok(()) => {
+                series_inserted += 1;
+                issues_inserted += folder_issue_count;
+                log::info!("[Scan] Found and indexed new series: {} with {} issues.", clean_name, folder_issue_count);
+            }
+            Err(e) => {
+                log::error!("[Scanner Debug] Commit failed for folder {} — its series/issues will index on the next scan: {:?}", folder_path, e);
+            }
+        }
     }
 
     // ---------------------------------------------------------
@@ -1456,6 +1552,11 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         }
     }
 
+    // GATHER (file I/O): decide repoint-vs-insert and compute page counts for every file BEFORE
+    // any transaction opens (invariant above). The dedupe fold-in stays order-dependent: a number
+    // gathered earlier in this batch parks in series_issue_nums so a later same-number file
+    // repoints against it instead of double-inserting, even though the INSERT itself flushes later.
+    let mut pending_writes: Vec<PendingIssueWrite> = Vec::new();
     for (series_id, file, info) in parsed_files {
         let file_name = Path::new(&file).file_name().unwrap_or_default().to_string_lossy().to_string();
         let issue_num = issue_number_for_file(info.as_ref(), &file_name);
@@ -1467,16 +1568,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         if let Some(eid) = dup_id {
             // Repointed file: refresh the page count too (a 0-count row may finally have a readable zip).
             let page_count = count_pages_blocking(&file).await;
-            if let Err(e) = sqlx::query(&format!(
-                r#"UPDATE "Issue" SET "filePath"=$1, status='DOWNLOADED',
-                       "pageCount"=CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END,
-                       "updatedAt"={now} WHERE id=$3"#,
-                now = db.now_expr()
-            ))
-            .bind(&file).bind(page_count).bind(&eid).execute(&db.pool).await
-            {
-                log::error!("[Scanner Debug] Failed to repoint existing issue {}: {:?}", file, e);
-            }
+            pending_writes.push(PendingIssueWrite::Repoint { issue_id: eid, file, page_count });
             continue;
         }
 
@@ -1493,45 +1585,59 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
         let issue_id = Uuid::new_v4().to_string();
         let page_count = count_pages_blocking(&file).await;
-        if let Err(e) = sqlx::query(&format!(
-            r#"INSERT INTO "Issue"
-               (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
-                name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
-                "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, {now}, {now})"#,
-            now = db.now_expr()
-        ))
-        .bind(&issue_id)
-        .bind(&series_id)
-        .bind(&issue_meta_id)
-        .bind(&issue_source)
-        .bind(issue_match_state)
-        .bind(&issue_num)
-        .bind(&file)
-        .bind(page_count)
-        .bind(&fm.name)
-        .bind(&fm.description)
-        .bind(&fm.release_date)
-        .bind(&fm.genres)
-        .bind(&fm.writers)
-        .bind(&fm.artists)
-        .bind(&fm.cover_artists)
-        .bind(&fm.colorists)
-        .bind(&fm.letterers)
-        .bind(&fm.characters)
-        .bind(&fm.teams)
-        .bind(&fm.locations)
-        .bind(&fm.story_arcs)
-        .execute(&db.pool)
-        .await
-        {
-            log::error!("[Scanner Debug] Failed to append issue {}: {:?}", file, e);
-            continue;
-        }
-        // Track the just-inserted number so another file with the same number later in this batch
-        // dedupes against it instead of inserting a second row.
+        // Track the number so another file with the same number later in this batch dedupes
+        // against it instead of inserting a second row.
         series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone()));
-        issues_inserted += 1;
+        pending_writes.push(PendingIssueWrite::Insert(Box::new(NewIssueRow {
+            issue_id,
+            series_id,
+            meta_id: issue_meta_id,
+            source: issue_source,
+            match_state: issue_match_state,
+            number: issue_num,
+            file,
+            page_count,
+            fm,
+        })));
+    }
+
+    // FLUSH in short chunked transactions (invariant above: no file I/O from here to commit).
+    for chunk in pending_writes.chunks(WRITE_CHUNK) {
+        let mut tx = match db.pool.begin().await {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("[Scanner Debug] Failed to open 5B write transaction: {:?}", e);
+                continue;
+            }
+        };
+        let mut chunk_inserted = 0;
+        for write in chunk {
+            match write {
+                PendingIssueWrite::Repoint { issue_id, file, page_count } => {
+                    if let Err(e) = sqlx::query(&format!(
+                        r#"UPDATE "Issue" SET "filePath"=$1, status='DOWNLOADED',
+                               "pageCount"=CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END,
+                               "updatedAt"={now} WHERE id=$3"#,
+                        now = db.now_expr()
+                    ))
+                    .bind(file).bind(*page_count).bind(issue_id).execute(&mut *tx).await
+                    {
+                        log::error!("[Scanner Debug] Failed to repoint existing issue {}: {:?}", file, e);
+                    }
+                }
+                PendingIssueWrite::Insert(row) => {
+                    if let Err(e) = exec_issue_insert(&mut tx, &db, row).await {
+                        log::error!("[Scanner Debug] Failed to append issue {}: {:?}", row.file, e);
+                    } else {
+                        chunk_inserted += 1;
+                    }
+                }
+            }
+        }
+        match tx.commit().await {
+            Ok(()) => issues_inserted += chunk_inserted,
+            Err(e) => log::error!("[Scanner Debug] 5B chunk commit failed — {} write(s) deferred to the next scan: {:?}", chunk.len(), e),
+        }
     }
 
     // ---------------------------------------------------------
@@ -1575,15 +1681,24 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                     .flatten()
                 });
             }
-            let mut covered = 0;
+            // GATHER the rendered covers, then FLUSH the URL updates in chunked transactions
+            // (the renders above are the file I/O — none of it happens inside a transaction).
+            let mut cover_updates: Vec<(String, String)> = Vec::new();
             while let Some(res) = cover_set.join_next().await {
-                if let Ok(Some((id, url))) = res {
+                if let Ok(Some(pair)) = res { cover_updates.push(pair); }
+            }
+            let mut covered = 0;
+            for chunk in cover_updates.chunks(WRITE_CHUNK) {
+                let Some(mut tx) = begin_write_tx(&db, "5C cover").await else { continue };
+                let mut n = 0;
+                for (id, url) in chunk {
                     if sqlx::query(r#"UPDATE "Series" SET "coverUrl" = $1 WHERE id = $2"#)
-                        .bind(&url).bind(&id).execute(&db.pool).await.is_ok()
+                        .bind(url).bind(id).execute(&mut *tx).await.is_ok()
                     {
-                        covered += 1;
+                        n += 1;
                     }
                 }
+                if tx.commit().await.is_ok() { covered += n; }
             }
             if covered > 0 { log::info!("[Cover] Backfilled {} archive cover(s).", covered); }
         }
@@ -1627,16 +1742,25 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                 (id, count)
             });
         }
-        let mut backfilled = 0;
+        // GATHER counts (the archive reads above), then FLUSH in chunked transactions.
+        let mut count_updates: Vec<(String, i32)> = Vec::new();
         while let Some(res) = count_set.join_next().await {
             if let Ok((id, Some(count))) = res {
-                if count > 0
-                    && sqlx::query(r#"UPDATE "Issue" SET "pageCount" = $1 WHERE id = $2"#)
-                        .bind(count).bind(&id).execute(&db.pool).await.is_ok()
+                if count > 0 { count_updates.push((id, count)); }
+            }
+        }
+        let mut backfilled = 0;
+        for chunk in count_updates.chunks(WRITE_CHUNK) {
+            let Some(mut tx) = begin_write_tx(&db, "5D page-count").await else { continue };
+            let mut n = 0;
+            for (id, count) in chunk {
+                if sqlx::query(r#"UPDATE "Issue" SET "pageCount" = $1 WHERE id = $2"#)
+                    .bind(count).bind(id).execute(&mut *tx).await.is_ok()
                 {
-                    backfilled += 1;
+                    n += 1;
                 }
             }
+            if tx.commit().await.is_ok() { backfilled += n; }
         }
         if backfilled > 0 { log::info!("[Scan] Backfilled page counts for {} issue(s).", backfilled); }
     }
@@ -1675,18 +1799,24 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                 }
             }
         }
+        let genre_updates: Vec<(String, String)> = per_series.into_iter()
+            .filter(|(_, genres)| !genres.is_empty())
+            .filter_map(|(sid, genres)| serde_json::to_string(&genres).ok().map(|json| (json, sid)))
+            .collect();
         let mut genre_filled = 0;
-        for (sid, genres) in per_series {
-            if genres.is_empty() { continue; }
-            if let Ok(json) = serde_json::to_string(&genres) {
+        for chunk in genre_updates.chunks(WRITE_CHUNK) {
+            let Some(mut tx) = begin_write_tx(&db, "5E genres").await else { continue };
+            let mut n = 0;
+            for (json, sid) in chunk {
                 // Blank-guard re-checked in the UPDATE — a concurrent sync writing real provider
                 // genres between our SELECT and now must not be clobbered.
                 if sqlx::query(r#"UPDATE "Series" SET genres = $1 WHERE id = $2 AND (genres IS NULL OR genres = '' OR genres = '[]')"#)
-                    .bind(&json).bind(&sid).execute(&db.pool).await.is_ok()
+                    .bind(json).bind(sid).execute(&mut *tx).await.is_ok()
                 {
-                    genre_filled += 1;
+                    n += 1;
                 }
             }
+            if tx.commit().await.is_ok() { genre_filled += n; }
         }
         if genre_filled > 0 { log::info!("[Scan] Filled series genres from file metadata for {} series.", genre_filled); }
     }
@@ -1729,7 +1859,8 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                     .flatten()
             });
         }
-        let mut sj_filled = 0;
+        // GATHER the series.json reads (network-mount I/O above), then FLUSH chunked.
+        let mut sj_updates: Vec<(String, SeriesJsonInfo)> = Vec::new();
         while let Some(res) = sj_set.join_next().await {
             let Ok(Some((sid, sj))) = res else { continue };
             if sj.description.is_none() && sj.status.is_none() && sj.booktype.is_none()
@@ -1737,22 +1868,31 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             {
                 continue;
             }
-            // Per-column blank guards live in the UPDATE itself (same reasoning as 5E), so a
-            // concurrent provider sync writing a real value between our SELECT and now can't be
-            // clobbered.
-            if sqlx::query(series_json_fill_blanks_sql())
-            .bind(&sj.description)
-            .bind(&sj.status)
-            .bind(&sj.booktype)
-            .bind(&sj.publisher)
-            .bind(sj.year)
-            .bind(&sid)
-            .execute(&db.pool)
-            .await
-            .is_ok()
-            {
-                sj_filled += 1;
+            sj_updates.push((sid, sj));
+        }
+        let mut sj_filled = 0;
+        for chunk in sj_updates.chunks(WRITE_CHUNK) {
+            let Some(mut tx) = begin_write_tx(&db, "5F series.json").await else { continue };
+            let mut n = 0;
+            for (sid, sj) in chunk {
+                // Per-column blank guards live in the UPDATE itself (same reasoning as 5E), so a
+                // concurrent provider sync writing a real value between our SELECT and now can't be
+                // clobbered.
+                if sqlx::query(series_json_fill_blanks_sql())
+                .bind(&sj.description)
+                .bind(&sj.status)
+                .bind(&sj.booktype)
+                .bind(&sj.publisher)
+                .bind(sj.year)
+                .bind(sid)
+                .execute(&mut *tx)
+                .await
+                .is_ok()
+                {
+                    n += 1;
+                }
             }
+            if tx.commit().await.is_ok() { sj_filled += n; }
         }
         if sj_filled > 0 { log::info!("[Scan] Re-flowed series.json fields into {} existing series (fill-blank only).", sj_filled); }
     }
@@ -1774,6 +1914,18 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         }
         Ok(_) => {}
         Err(e) => log::warn!("[Scan] Credit-complete re-stamp failed: {:?}", e),
+    }
+
+    // A big scan appends thousands of WAL frames; SQLite's passive auto-checkpoint often can't
+    // drain them while the Node app keeps read snapshots open, and every reader slows as the WAL
+    // grows (issue #183). Reclaim it now that the write burst is over. TRUNCATE waits on the
+    // busy_timeout for stragglers and simply reports SQLITE_BUSY if readers won't yield — purely
+    // opportunistic, so failure is logged and ignored.
+    if db.dialect == Dialect::Sqlite {
+        match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE);").execute(&db.pool).await {
+            Ok(_) => log::debug!("[Scan] WAL checkpoint (TRUNCATE) completed."),
+            Err(e) => log::debug!("[Scan] WAL checkpoint skipped (readers active?): {:?}", e),
+        }
     }
 
     let duration = start_time.elapsed();

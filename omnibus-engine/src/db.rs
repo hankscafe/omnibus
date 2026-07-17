@@ -52,9 +52,14 @@ impl Db {
             // readers proceed alongside a writer (and is sticky per database file); busy_timeout is
             // per-connection, so it must be set on every pooled connection, and makes lock
             // contention wait instead of failing immediately with SQLITE_BUSY.
+            // synchronous=NORMAL (also per-connection) skips the per-commit fsync that FULL forces —
+            // in WAL mode a power cut can lose the last commit(s) but never corrupts the file. A
+            // library scan commits thousands of times; at FULL each one is a physical disk flush,
+            // which is most of why a big scan starved the Node app's writes (issue #183).
             options = options.after_connect(|conn, _meta| {
                 Box::pin(async move {
                     sqlx::query("PRAGMA journal_mode = WAL;").execute(&mut *conn).await?;
+                    sqlx::query("PRAGMA synchronous = NORMAL;").execute(&mut *conn).await?;
                     sqlx::query("PRAGMA busy_timeout = 10000;").execute(&mut *conn).await?;
                     Ok(())
                 })

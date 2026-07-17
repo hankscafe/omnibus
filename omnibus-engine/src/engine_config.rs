@@ -103,7 +103,12 @@ impl EngineConfig {
         let max_workers = cores * 4; // generous ceiling so a typo can't spawn thousands of workers
 
         // 0 or unset => use the default (so the UI can present 0 as "auto").
-        let mut scan_workers = scan.filter(|&n| n > 0).map(|n| n as usize).unwrap_or(cores).clamp(1, max_workers);
+        // Scan default is HALF the cores (issue #183): a scan task is not a light file probe — it
+        // parses ComicInfo out of zip/RAR (spawning unrar subprocesses for CBR) and counts archive
+        // pages, so scan_workers=cores pinned every core for the whole scan and starved the web-
+        // serving threads (and the Node app sharing the host). Half keeps interactive headroom;
+        // users who want the old behavior can set the worker count explicitly.
+        let mut scan_workers = scan.filter(|&n| n > 0).map(|n| n as usize).unwrap_or((cores / 2).max(1)).clamp(1, max_workers);
         let mut convert_workers = convert.filter(|&n| n > 0).map(|n| n as usize).unwrap_or((cores / 2).max(1)).clamp(1, max_workers);
         let cpu_cap = cpu.filter(|&n| n > 0).map(|n| n as usize).unwrap_or(cores).clamp(1, max_workers);
         let blocking_threads = blocking.filter(|&n| n > 0).map(|n| n as usize).unwrap_or(64).clamp(4, 512);
@@ -112,10 +117,10 @@ impl EngineConfig {
         // Soft memory ceiling: the dominant transient allocations scale with concurrent workers, so
         // honor the ceiling by derating the worker counts rather than capping the heap directly.
         if memory_ceiling_mb > 0 {
-            // Scan tasks are light (file probes / dir walks). A convert task decodes page bitmaps AND
-            // fans the pages across the rayon pool (cpu_cap threads), so its transient peak is roughly
-            // cpu_cap * PER_TASK_MB — divide the convert budget by cpu_cap so the ceiling is actually
-            // respected rather than under-counting by a cpu_cap factor.
+            // Scan tasks parse archives and count pages (bounded transient buffers). A convert task
+            // decodes page bitmaps AND fans the pages across the rayon pool (cpu_cap threads), so its
+            // transient peak is roughly cpu_cap * PER_TASK_MB — divide the convert budget by cpu_cap
+            // so the ceiling is actually respected rather than under-counting by a cpu_cap factor.
             let scan_cap = (memory_ceiling_mb / PER_TASK_MB).max(1) as usize;
             let convert_cap = (memory_ceiling_mb / (PER_TASK_MB * cpu_cap as u64)).max(1) as usize;
             scan_workers = scan_workers.min(scan_cap);
@@ -142,24 +147,31 @@ mod tests {
     #[test]
     fn defaults_derive_from_cores() {
         let c = EngineConfig::resolve(None, None, None, None, None, None, 8);
-        assert_eq!(c.scan_workers, 8);
+        // Scan defaults to HALF the cores (issue #183): scan tasks spawn unrar / parse archives,
+        // so full-core scanning starved web serving during big library scans.
+        assert_eq!(c.scan_workers, 4);
         assert_eq!(c.convert_workers, 4);
         assert_eq!(c.cpu_cap, 8);
         assert_eq!(c.blocking_threads, 64);
         assert_eq!(c.memory_ceiling_mb, 0);
-        // Derived from max(scan, convert) * 2 + 4 = 8*2+4 = 20.
-        assert_eq!(c.db_connections, 20);
+        // Derived from max(scan, convert) * 2 + 4 = 4*2+4 = 12.
+        assert_eq!(c.db_connections, 12);
     }
 
     #[test]
     fn zero_and_unset_fall_back_to_defaults() {
         let c = EngineConfig::resolve(Some(0), Some(0), Some(0), Some(0), Some(0), Some(0), 4);
-        assert_eq!(c.scan_workers, 4);
+        assert_eq!(c.scan_workers, 2);
         assert_eq!(c.convert_workers, 2);
         assert_eq!(c.cpu_cap, 4);
         assert_eq!(c.blocking_threads, 64);
-        // 4*2+4 = 12.
-        assert_eq!(c.db_connections, 12);
+        // max(2,2)*2+4 = 8.
+        assert_eq!(c.db_connections, 8);
+
+        // A single-core box still gets one scan worker.
+        let c1 = EngineConfig::resolve(None, None, None, None, None, None, 1);
+        assert_eq!(c1.scan_workers, 1);
+        assert_eq!(c1.convert_workers, 1);
     }
 
     #[test]

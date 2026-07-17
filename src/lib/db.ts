@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 import { SECRET_SETTING_KEYS } from './secret-keys'
+import { tunedSqliteUrl } from './sqlite-url'
 
 // Transparently decrypt SystemSetting credential values on read, so every consumer across the app
 // (~35 call sites) gets plaintext without per-site changes. Values are encrypted at rest by the
@@ -24,7 +25,17 @@ export async function decryptSettingRow(row: any, keyHint?: string): Promise<any
 }
 
 function createPrismaClient() {
-  return new PrismaClient().$extends({
+  const sqliteUrl = tunedSqliteUrl()
+  const base = sqliteUrl
+    ? new PrismaClient({ datasources: { db: { url: sqliteUrl } } })
+    : new PrismaClient()
+  if (sqliteUrl) {
+    // busy_timeout isn't a Prisma URL param. With connection_limit=1 this PRAGMA lands on the
+    // single pooled connection and sticks for the process lifetime. Fire-and-forget: a failure
+    // (e.g. during build-time import) just leaves Prisma's default behavior.
+    base.$executeRawUnsafe('PRAGMA busy_timeout = 10000').catch(() => {})
+  }
+  return base.$extends({
     query: {
       systemSetting: {
         async findMany({ args, query }) {

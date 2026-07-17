@@ -7,6 +7,7 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { CACHE_DIR as BASE_CACHE_DIR, isPathWithinRoots } from '@/lib/utils/paths';
+import { getLibraryRoots } from '@/lib/library-roots';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 const ALLOWED_METADATA_HOSTS = ['comicvine.gamespot.com', 'mangadex.org', 'uploads.mangadex.org', 'metron.cloud', 'static.metron.cloud'];
@@ -49,12 +50,24 @@ async function renderIssueFirstPage(archivePath: string): Promise<Buffer | null>
     } catch { /* miss → render */ }
 
     try {
-        const engineRes = await fetch(ENGINE_URL + '/api/reader/page', {
-            method: 'POST',
-            headers: engineHeaders({ 'Content-Type': 'application/json' }),
-            // 640px covers the series-detail hero; grid thumbnails downscale client-side.
-            body: JSON.stringify({ path: archivePath, index: 0, width: 640, quality: 80 }),
-        });
+        // Bounded wait (issue #183): while a library scan has the engine's blocking pool pinned,
+        // a cold render can queue far longer than a grid card is worth — every card on the page
+        // then hangs on its cover and the library "freezes". Give up fast and let the caller fall
+        // back to the series folder cover; the render is retried on a later, calmer request.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        let engineRes;
+        try {
+            engineRes = await fetch(ENGINE_URL + '/api/reader/page', {
+                method: 'POST',
+                headers: engineHeaders({ 'Content-Type': 'application/json' }),
+                // 640px covers the series-detail hero; grid thumbnails downscale client-side.
+                body: JSON.stringify({ path: archivePath, index: 0, width: 640, quality: 80 }),
+                signal: controller.signal,
+            });
+        } finally {
+            clearTimeout(timeoutId);
+        }
         if (!engineRes.ok) return null;
         const buffer = Buffer.from(await engineRes.arrayBuffer());
         if (buffer.length === 0) return null;
@@ -116,8 +129,7 @@ export async function GET(request: NextRequest) {
       if (issue?.filePath) {
         // Containment re-checked even though the path came from our own DB — defense in depth,
         // same posture as the ?path= branch.
-        const libraries = await prisma.library.findMany();
-        if (isPathWithinRoots(path.normalize(issue.filePath), libraries.map(l => l.path))) {
+        if (isPathWithinRoots(path.normalize(issue.filePath), await getLibraryRoots())) {
           const buffer = await renderIssueFirstPage(issue.filePath);
           if (buffer) {
             return new NextResponse(buffer as unknown as BodyInit, {
@@ -186,11 +198,10 @@ export async function GET(request: NextRequest) {
     }
 
     const realTarget = path.normalize(filePath);
-    const libraries = await prisma.library.findMany();
 
     // Separator-aware containment (root === target, or under root + path.sep). A bare startsWith let a
     // sibling root like "/data/comics-private" satisfy the "/data/comics" check and leak arbitrary files.
-    if (!isPathWithinRoots(realTarget, libraries.map(l => l.path))) {
+    if (!isPathWithinRoots(realTarget, await getLibraryRoots())) {
       return getFallbackImage();
     }
 

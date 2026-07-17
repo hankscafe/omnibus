@@ -9,7 +9,7 @@ import AdmZip from 'adm-zip';
 // the whole point is proving the fast central-directory count agrees with what the reader serves.
 vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
-import { countArchivePages, isPageCountable } from '@/lib/utils/archive-pages';
+import { countArchivePages, isPageCountable, isEngineCountable } from '@/lib/utils/archive-pages';
 
 let root: string;
 
@@ -40,6 +40,20 @@ describe('isPageCountable', () => {
         expect(isPageCountable('/comics/a.cb7')).toBe(false);
         expect(isPageCountable(null)).toBe(false);
         expect(isPageCountable('')).toBe(false);
+    });
+});
+
+describe('isEngineCountable', () => {
+    it('accepts the engine-native formats (RAR + 7z/.cb7) and rejects zip-family and empty paths', () => {
+        // The engine reads these natively (unrar / sevenz-rust2); .cb7 joined here once native 7z
+        // reading shipped, so an unconverted cb7 is counted via the engine, not left at 0.
+        expect(isEngineCountable('/comics/a.cbr')).toBe(true);
+        expect(isEngineCountable('/comics/a.RAR')).toBe(true);
+        expect(isEngineCountable('/comics/a.cb7')).toBe(true);
+        expect(isEngineCountable('/comics/a.cbz')).toBe(false);
+        expect(isEngineCountable('/comics/a.epub')).toBe(false);
+        expect(isEngineCountable(null)).toBe(false);
+        expect(isEngineCountable('')).toBe(false);
     });
 });
 

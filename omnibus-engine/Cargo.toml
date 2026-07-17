@@ -61,6 +61,7 @@ pbkdf2 = "0.12"
 rand = "0.8"
 hex = "0.4"
 chrono = "0.4"
+sevenz-rust2 = "0.21.3"
 
 [dev-dependencies]
 # test-util enables tokio's paused-clock (`start_paused`) for the rate-limiter tests.

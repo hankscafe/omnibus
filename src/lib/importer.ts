@@ -773,10 +773,10 @@ export const Importer = {
           }
       }
 
-      // Late page count: the AdmZip count above only handles zip sources, so a CBR import lands
-      // here with 0 — count the final file now (converted .cbz locally, unconverted .cbr/.rar via
-      // the engine's unrar listing) so OPDS-PSE never advertises a fresh import as "0 pages".
-      if (pageCount === 0 && /\.(cbz|zip|cbr|rar)$/i.test(finalPath)) {
+      // Late page count: the AdmZip count above only handles zip sources, so a CBR/CB7 import lands
+      // here with 0 — count the final file now (converted .cbz locally, unconverted .cbr/.rar/.cb7
+      // via the engine's native listing) so OPDS-PSE never advertises a fresh import as "0 pages".
+      if (pageCount === 0 && /\.(cbz|zip|cbr|rar|cb7)$/i.test(finalPath)) {
           const { countArchivePages, countArchivePagesViaEngine, isEngineCountable } = await import('./utils/archive-pages');
           pageCount = isEngineCountable(finalPath)
               ? await countArchivePagesViaEngine(finalPath)

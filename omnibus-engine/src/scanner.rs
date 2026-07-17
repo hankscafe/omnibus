@@ -128,14 +128,14 @@ async fn count_pages_blocking(file: &str) -> i32 {
 /// #177) lists + prints the entry via unrar, so CBR-only tagged libraries contribute ComicInfo
 /// evidence at scan time too instead of relying solely on series.json.
 fn parse_comic_info(path: &Path) -> Option<ScanComicInfo> {
-    // Signature-dispatch (extensions lie): "Rar!" -> unrar; anything else tries zip.
-    let mut sig = [0u8; 4];
-    let is_rar = File::open(path)
-        .and_then(|mut f| f.read(&mut sig))
-        .map(|n| n >= 4 && sig[..4] == [0x52, 0x61, 0x72, 0x21])
-        .unwrap_or(false);
-    if is_rar {
+    // Signature-dispatch (extensions lie): "Rar!" -> unrar; 7z magic -> native 7z; else zip.
+    let mut sig = [0u8; 6];
+    let n = File::open(path).and_then(|mut f| f.read(&mut sig)).unwrap_or(0);
+    if n >= 4 && sig[..4] == [0x52, 0x61, 0x72, 0x21] {
         return parse_comic_info_rar(path);
+    }
+    if n >= 6 && sig[..6] == [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] {
+        return parse_comic_info_7z(path);
     }
 
     let file = File::open(path).ok()?;
@@ -180,6 +180,16 @@ fn parse_comic_info_rar(path: &Path) -> Option<ScanComicInfo> {
         return None;
     }
     let xml = String::from_utf8_lossy(&out.stdout).to_string();
+    let xml = sanitize_xml_ampersands(&xml);
+    quick_xml::de::from_str(xml.trim_start_matches('\u{feff}')).ok()
+}
+
+/// 7z (.cb7) branch: pull ComicInfo.xml straight out of the archive with the pure-Rust decoder
+/// (no CLI). Same sanitize + parse tail as the zip/RAR paths; any failure is a None so the scan
+/// falls back to the folder's other evidence.
+fn parse_comic_info_7z(path: &Path) -> Option<ScanComicInfo> {
+    let bytes = crate::converter::sevenz_read_by_basename(path, "comicinfo.xml")?;
+    let xml = String::from_utf8_lossy(&bytes).to_string();
     let xml = sanitize_xml_ampersands(&xml);
     quick_xml::de::from_str(xml.trim_start_matches('\u{feff}')).ok()
 }
@@ -2144,6 +2154,22 @@ mod tests {
 
         let d = derive_meta(&info);
         // The Web URL issue id (4000-1071543) resolves; Notes corroborates it.
+        assert_eq!(d.cv_issue_id, Some(1071543));
+        assert_eq!(d.metadata_source, "COMICVINE");
+    }
+
+    #[test]
+    fn parse_comic_info_reads_7z_archives() {
+        // ComicInfo.xml must read out of a native .cb7 too (no conversion). Fixture
+        // comicinfo_pack.cb7 carries the SAME ComicInfo.xml bytes as its .cbr twin, so the
+        // assertions match. NO skip guard: the 7z decoder is pure Rust (sevenz-rust2).
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/comicinfo_pack.cb7");
+        let info = parse_comic_info(&fixture).expect("ComicInfo should parse out of the 7z");
+        assert_eq!(info.series.as_deref(), Some("Wolverine"));
+        assert_eq!(info.title.as_deref(), Some("Trial by Fire"));
+        assert_eq!(info.characters.as_deref(), Some("Wolverine, Nightcrawler"));
+
+        let d = derive_meta(&info);
         assert_eq!(d.cv_issue_id, Some(1071543));
         assert_eq!(d.metadata_source, "COMICVINE");
     }

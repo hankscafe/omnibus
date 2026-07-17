@@ -17,26 +17,25 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
-// Zip-family archives the reader can open directly (matches the reader's isZip check). RAR can't be
-// counted here — the engine lists it via unrar (countArchivePagesViaEngine below); 7z stays 0 until
-// the auto-converter turns it into .cbz and refreshes the count.
+// Zip-family archives the reader can open directly (matches the reader's isZip check).
 const ZIP_PAGE_EXT_REGEX = /\.(cbz|zip|epub)$/i;
-// RAR-family archives Node can't open; the engine reads them natively (unrar).
-const RAR_PAGE_EXT_REGEX = /\.(cbr|rar)$/i;
+// Archives Node can't open but the engine reads natively: RAR via unrar, 7z (.cb7) via the pure-Rust
+// sevenz-rust2 decoder. Both are listed/counted through countArchivePagesViaEngine below.
+const ENGINE_PAGE_EXT_REGEX = /\.(cbr|rar|cb7)$/i;
 
 export function isPageCountable(filePath: string | null | undefined): boolean {
     return !!filePath && ZIP_PAGE_EXT_REGEX.test(filePath);
 }
 
 export function isEngineCountable(filePath: string | null | undefined): boolean {
-    return !!filePath && RAR_PAGE_EXT_REGEX.test(filePath);
+    return !!filePath && ENGINE_PAGE_EXT_REGEX.test(filePath);
 }
 
 /**
- * Page count for RAR-family archives via the engine's unrar-backed listing (native CBR reading —
- * the same entry filter + natural sort as the zip counter, so OPDS-PSE indexes line up). Returns 0
- * when the engine is unreachable or the archive is unreadable; never throws (same contract as
- * countArchivePages).
+ * Page count for engine-native archives (RAR via unrar, 7z via sevenz-rust2) through the engine's
+ * listing — the same entry filter + natural sort as the zip counter, so OPDS-PSE indexes line up.
+ * Returns 0 when the engine is unreachable or the archive is unreadable; never throws (same
+ * contract as countArchivePages).
  */
 export async function countArchivePagesViaEngine(filePath: string | null | undefined): Promise<number> {
     if (!filePath || !fs.existsSync(filePath)) return 0;
@@ -108,9 +107,10 @@ async function countViaCentralDirectory(filePath: string): Promise<number> {
 }
 
 /**
- * Count the readable image pages inside a zip-family comic archive. Returns 0 for formats that
- * can't be counted (.cbr/.rar/.cb7 — converted later), missing files, or unreadable archives;
- * it never throws, so callers can use it inline in scan/import/rename flows.
+ * Count the readable image pages inside a zip-family comic archive. Returns 0 for formats Node
+ * can't open directly (.cbr/.rar/.cb7 — count those via countArchivePagesViaEngine), missing
+ * files, or unreadable archives; it never throws, so callers can use it inline in scan/import/
+ * rename flows.
  */
 export async function countArchivePages(filePath: string | null | undefined): Promise<number> {
     if (!filePath || !isPageCountable(filePath) || !fs.existsSync(filePath)) return 0;

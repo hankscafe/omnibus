@@ -43,13 +43,13 @@ export async function GET(request: Request) {
     }
 
     const isZip = filePath.toLowerCase().match(/\.(cbz|epub|zip)$/);
-    const isRar = filePath.toLowerCase().match(/\.(cbr|rar)$/);
-    const needsConversion = filePath.toLowerCase().match(/\.cb7$/);
+    // RAR (via unrar) and 7z/.cb7 (via the pure-Rust decoder) both read natively in the engine.
+    const isEngineFormat = filePath.toLowerCase().match(/\.(cbr|rar|cb7)$/);
 
-    // Native RAR reading: Node has no RAR reader, so the engine lists the pages via unrar (same
-    // filter + natural sort as the zip path below, so reader/image entry names resolve 1:1).
-    // Conversion remains the recommended default; this makes unconverted .cbr readable meanwhile.
-    if (isRar) {
+    // Native non-zip reading: Node has no RAR/7z reader, so the engine lists the pages (same filter
+    // + natural sort as the zip path below, so reader/image entry names resolve 1:1). Conversion
+    // remains the recommended default; this makes an unconverted .cbr/.cb7 readable meanwhile.
+    if (isEngineFormat) {
         try {
             const engineRes = await fetch(ENGINE_URL + '/api/reader/entries', {
                 method: 'POST',
@@ -59,19 +59,14 @@ export async function GET(request: Request) {
             if (engineRes.ok) {
                 const data = await engineRes.json();
                 if (Array.isArray(data.pages) && data.pages.length > 0) {
-                    Logger.log(`[Reader Debug] Engine listed ${data.pages.length} pages from RAR archive.`, 'debug');
+                    Logger.log(`[Reader Debug] Engine listed ${data.pages.length} pages from native archive.`, 'debug');
                     return NextResponse.json({ pages: data.pages });
                 }
             }
         } catch (e) {
-            Logger.log(`[Reader Debug] Engine RAR listing unavailable: ${getErrorMessage(e)}`, 'debug');
+            Logger.log(`[Reader Debug] Engine native listing unavailable: ${getErrorMessage(e)}`, 'debug');
         }
-        return NextResponse.json({ error: "This .cbr couldn't be opened natively (engine unavailable or unreadable archive). It will be readable after automatic CBZ conversion, or run the CBR Auto-Converter job in Admin settings." }, { status: 400 });
-    }
-
-    if (needsConversion) {
-        Logger.log(`[Reader Debug] Extraction failed: Archive format requires conversion to CBZ.`, 'debug');
-        return NextResponse.json({ error: "This archive is waiting to be automatically converted to .cbz. Please check back in a few minutes or run the CBR Auto-Converter job in Admin settings." }, { status: 400 });
+        return NextResponse.json({ error: "This archive couldn't be opened natively (engine unavailable or unreadable archive). It will be readable after automatic CBZ conversion, or run the CBR Auto-Converter job in Admin settings." }, { status: 400 });
     }
 
     if (!isZip) {

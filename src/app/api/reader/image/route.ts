@@ -129,8 +129,9 @@ export async function GET(request: Request) {
     }
 
     const isZip = filePath.toLowerCase().match(/\.(cbz|epub|zip)$/);
-    const isRar = filePath.toLowerCase().match(/\.(cbr|rar)$/);
-    if (!isZip && !isRar) return new NextResponse("Format Not Supported (Likely awaiting CBZ conversion)", { status: 400 });
+    // RAR (via unrar) and 7z/.cb7 (via the pure-Rust decoder) both read natively in the engine.
+    const isEngineFormat = filePath.toLowerCase().match(/\.(cbr|rar|cb7)$/);
+    if (!isZip && !isEngineFormat) return new NextResponse("Format Not Supported (Likely awaiting CBZ conversion)", { status: 400 });
 
     // --- DISK CACHE CHECK ---
     // Grab the physical file's modified time to prevent serving stale cache if the file is replaced.
@@ -167,9 +168,9 @@ export async function GET(request: Request) {
     // sharp don't run on the Node event loop (which serves every request). The auto-crop path has no
     // clean engine equivalent, so for zips it stays local; a zip failure (engine down, older engine
     // without the route, unreadable page) falls through to the local sharp path below.
-    // RAR-family archives (native CBR reading): the engine is the ONLY extractor — Node has no RAR
-    // reader — so crop requests trim the engine's WebP output locally instead of skipping the offload.
-    if (!shouldCrop || isRar) {
+    // Engine-native archives (RAR, 7z/.cb7): the engine is the ONLY extractor — Node has no reader
+    // for them — so crop requests trim the engine's WebP output locally instead of skipping the offload.
+    if (!shouldCrop || isEngineFormat) {
         try {
             const engineRes = await fetch(ENGINE_URL + '/api/reader/page', {
                 method: 'POST',
@@ -179,7 +180,7 @@ export async function GET(request: Request) {
             if (engineRes.ok) {
                 let engineBuffer: Buffer = Buffer.from(await engineRes.arrayBuffer());
                 if (engineBuffer.length > 0) {
-                    if (isRar && shouldCrop) {
+                    if (isEngineFormat && shouldCrop) {
                         engineBuffer = await sharp(engineBuffer).trim().webp({ quality: 80 }).toBuffer();
                     }
                     writePageCacheAtomic(cacheFilePath, engineBuffer);
@@ -194,9 +195,9 @@ export async function GET(request: Request) {
         }
     }
 
-    // No local fallback exists for RAR — AdmZip below can't open it.
-    if (isRar) {
-        return new NextResponse("RAR page extraction requires the engine. Check that the engine container is running, or wait for the CBZ auto-conversion.", { status: 502 });
+    // No local fallback exists for RAR/7z — AdmZip below can't open them.
+    if (isEngineFormat) {
+        return new NextResponse("Native page extraction requires the engine. Check that the engine container is running, or wait for the CBZ auto-conversion.", { status: 502 });
     }
 
     const zipInstance = getZipInstance(filePath);

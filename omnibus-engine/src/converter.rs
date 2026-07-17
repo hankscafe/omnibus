@@ -67,9 +67,10 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 // (.cb7). ZIPs in disguise are routed by magic bytes and never reach either.
 // ============================================================================
 
-/// Reads the leading magic bytes of a file; returns an empty vec on any failure.
+/// Reads the leading magic bytes of a file; returns an empty vec on any failure. 8 bytes so the
+/// 6-byte 7z signature fits alongside the shorter zip/RAR ones.
 fn read_file_signature(path: &Path) -> Vec<u8> {
-    let mut buf = [0u8; 4];
+    let mut buf = [0u8; 8];
     match File::open(path).and_then(|mut f| f.read(&mut buf)) {
         Ok(n) => buf[..n].to_vec(),
         Err(_) => Vec::new(),
@@ -79,6 +80,11 @@ fn read_file_signature(path: &Path) -> Vec<u8> {
 /// "PK" ZIP local-file-header signature.
 fn is_zip_signature(sig: &[u8]) -> bool {
     sig.len() >= 2 && sig[0] == 0x50 && sig[1] == 0x4B
+}
+
+/// 7z signature (`7z\xBC\xAF\x27\x1C`) — a real .cb7, as opposed to a ZIP/RAR wearing a .cb7 name.
+fn is_7z_signature(sig: &[u8]) -> bool {
+    sig.len() >= 6 && sig[..6] == [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]
 }
 
 /// Image formats considered valid pages (parity with Node IMAGE_EXT_REGEX).
@@ -742,13 +748,23 @@ fn resolve_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, entry_nam
 pub fn extract_page_webp(archive_path: &Path, entry_name: &str, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
     // Native RAR reading (no conversion needed): resolve the entry against the unrar listing and
     // stream just that page's bytes. The signature (not the extension) decides, same as the zip path.
-    if is_rar_signature(&read_file_signature(archive_path)) {
+    let sig = read_file_signature(archive_path);
+    if is_rar_signature(&sig) {
         let pages = rar_image_entries(archive_path)?;
-        let name = match resolve_rar_entry(&pages, entry_name) {
+        let name = match resolve_listed_entry(&pages, entry_name) {
             Some(n) => n,
             None => return Ok(None),
         };
         return Ok(Some(webp_from_image_bytes(&rar_entry_bytes(archive_path, &name)?, max_width, quality)?));
+    }
+    // Native 7z reading: resolve against the metadata listing, then decompress just that entry.
+    if is_7z_signature(&sig) {
+        let pages = sevenz_image_entries(archive_path)?;
+        let name = match resolve_listed_entry(&pages, entry_name) {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+        return Ok(Some(webp_from_image_bytes(&sevenz_entry_bytes(archive_path, &name)?, max_width, quality)?));
     }
     let file = File::open(archive_path)?;
     extract_page_webp_from_reader(file, entry_name, max_width, quality)
@@ -801,13 +817,23 @@ pub fn count_zip_pages(path: &Path) -> Option<i32> {
 pub fn extract_page_index_webp(archive_path: &Path, index: usize, max_width: u32, quality: f32) -> Result<Option<Vec<u8>>> {
     // Native RAR reading: same natural-sort index addressing as the zip path, so pse:count and
     // page indexes line up whichever format the archive happens to be.
-    if is_rar_signature(&read_file_signature(archive_path)) {
+    let sig = read_file_signature(archive_path);
+    if is_rar_signature(&sig) {
         let pages = rar_image_entries(archive_path)?;
         let name = match pages.get(index) {
             Some(n) => n.clone(),
             None => return Ok(None),
         };
         return Ok(Some(webp_from_image_bytes(&rar_entry_bytes(archive_path, &name)?, max_width, quality)?));
+    }
+    // Native 7z reading: same natural-sort index addressing across formats.
+    if is_7z_signature(&sig) {
+        let pages = sevenz_image_entries(archive_path)?;
+        let name = match pages.get(index) {
+            Some(n) => n.clone(),
+            None => return Ok(None),
+        };
+        return Ok(Some(webp_from_image_bytes(&sevenz_entry_bytes(archive_path, &name)?, max_width, quality)?));
     }
     let file = File::open(archive_path)?;
     extract_page_index_webp_from_reader(file, index, max_width, quality)
@@ -893,9 +919,9 @@ fn rar_entry_bytes(archive_path: &Path, entry: &str) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-/// Reader page-name resolution against the RAR listing, mirroring `resolve_zip_entry`:
-/// exact match → slash-normalized → basename.
-fn resolve_rar_entry(pages: &[String], entry_name: &str) -> Option<String> {
+/// Reader page-name resolution against a pre-listed archive (RAR or 7z), mirroring
+/// `resolve_zip_entry`: exact match → slash-normalized → basename.
+fn resolve_listed_entry(pages: &[String], entry_name: &str) -> Option<String> {
     if pages.iter().any(|p| p == entry_name) {
         return Some(entry_name.to_string());
     }
@@ -907,6 +933,62 @@ fn resolve_rar_entry(pages: &[String], entry_name: &str) -> Option<String> {
     pages.iter().find(|p| p.rsplit(['/', '\\']).next().unwrap_or(p) == target_base).cloned()
 }
 
+// ============================================================================
+// Native 7z (.cb7) page reading — the reader/OPDS paths handled zip and RAR, so an
+// unconverted .cb7 was unreadable and advertised pse:count=0. Unlike RAR (proprietary,
+// shelled out to unrar), 7z has a pure-Rust decoder (sevenz-rust2) — so this is in-process,
+// needs no runtime binary, and its tests run everywhere. CBZ conversion is still the
+// recommended default (zip has real random access; 7z blocks decode serially), but a library
+// that skips or hasn't reached conversion is now readable.
+// ============================================================================
+
+/// The 7z's image pages with the SAME filter + order as `sorted_image_entries` (skip __MACOSX,
+/// image extensions, natural sort) so OPDS-PSE index addressing lines up across formats. Listing
+/// reads only the archive's metadata header — no block is decompressed. Err when the file can't be
+/// opened as 7z ("not natively readable").
+fn sevenz_image_entries(archive_path: &Path) -> Result<Vec<String>> {
+    let archive = sevenz_rust2::Archive::open(archive_path)
+        .map_err(|e| anyhow::anyhow!("7z listing unavailable for {:?}: {e}", archive_path.file_name().unwrap_or_default()))?;
+    let mut pages: Vec<String> = archive
+        .files
+        .iter()
+        .filter(|f| !f.is_directory() && f.has_stream())
+        .map(|f| f.name().to_string())
+        .filter(|n| !n.to_lowercase().contains("__macosx") && is_image_name(n))
+        .collect();
+    pages.sort_by(|a, b| natural_cmp(a, b));
+    Ok(pages)
+}
+
+/// Decompresses ONE entry's bytes out of a 7z by name (parity with `rar_entry_bytes`). `read_file`
+/// decodes only the block that entry lives in — for a solid archive that means decoding up to it,
+/// inherent to 7z. Empty password: encrypted .cb7 is an unsupported edge and fails gracefully here.
+fn sevenz_entry_bytes(archive_path: &Path, entry: &str) -> Result<Vec<u8>> {
+    let mut reader = sevenz_rust2::ArchiveReader::open(archive_path, sevenz_rust2::Password::empty())
+        .map_err(|e| anyhow::anyhow!("could not open 7z {:?}: {e}", archive_path.file_name().unwrap_or_default()))?;
+    let bytes = reader.read_file(entry)
+        .map_err(|e| anyhow::anyhow!("7z produced no bytes for entry {:?} of {:?}: {e}", entry, archive_path.file_name().unwrap_or_default()))?;
+    if bytes.is_empty() {
+        anyhow::bail!("7z entry {:?} of {:?} was empty", entry, archive_path.file_name().unwrap_or_default());
+    }
+    Ok(bytes)
+}
+
+/// Reads a single entry by BASENAME (case-insensitive) out of a 7z — the scanner's ComicInfo reader
+/// needs a non-image entry the image-only listing skips. Keeps all sevenz-rust2 use in this file.
+/// None when the archive can't be opened, has no matching entry, or the entry is empty.
+pub(crate) fn sevenz_read_by_basename(path: &Path, basename: &str) -> Option<Vec<u8>> {
+    let archive = sevenz_rust2::Archive::open(path).ok()?;
+    let name = archive
+        .files
+        .iter()
+        .filter(|f| !f.is_directory())
+        .map(|f| f.name().to_string())
+        .find(|n| n.rsplit(['/', '\\']).next().unwrap_or("").eq_ignore_ascii_case(basename))?;
+    let mut reader = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty()).ok()?;
+    reader.read_file(&name).ok().filter(|b| !b.is_empty())
+}
+
 /// Page count of ANY natively readable archive: zip-family directly, RAR-family via the unrar
 /// listing. None when the file is neither (e.g. a real 7z — its count becomes known after CBZ
 /// conversion). Same OPDS-PSE significance as [`count_zip_pages`].
@@ -914,8 +996,12 @@ pub fn count_archive_pages(path: &Path) -> Option<i32> {
     if let Some(n) = count_zip_pages(path) {
         return Some(n);
     }
-    if is_rar_signature(&read_file_signature(path)) {
+    let sig = read_file_signature(path);
+    if is_rar_signature(&sig) {
         return rar_image_entries(path).ok().map(|p| p.len() as i32);
+    }
+    if is_7z_signature(&sig) {
+        return sevenz_image_entries(path).ok().map(|p| p.len() as i32);
     }
     None
 }
@@ -931,6 +1017,9 @@ pub fn list_image_entries(path: &Path) -> Result<Vec<String>> {
     }
     if is_rar_signature(&sig) {
         return rar_image_entries(path);
+    }
+    if is_7z_signature(&sig) {
+        return sevenz_image_entries(path);
     }
     anyhow::bail!("unsupported archive format for page listing: {:?}", path.file_name().unwrap_or_default())
 }
@@ -1468,6 +1557,48 @@ mod tests {
         // Misses map to None (the Node routes turn that into a 404, not a 500).
         assert!(extract_page_index_webp(&reader_rar_fixture(), 99, 100, 80.0).unwrap().is_none());
         assert!(extract_page_webp(&reader_rar_fixture(), "nope.png", 100, 80.0).unwrap().is_none());
+    }
+
+    // ==== Native 7z (.cb7) page reading — the .cb7 twins of the RAR fixtures, same entry contents
+    // (built by tests/fixtures/make_cb7_fixtures.py). NO skip guard: sevenz-rust2 is pure Rust, so
+    // these run in CI and locally without any external binary — unlike the unrar-gated RAR tests.
+
+    fn reader_sevenz_fixture() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reader_pages.cb7")
+    }
+
+    #[test]
+    fn sevenz_pages_list_and_count_in_natural_order() {
+        let pages = list_image_entries(&reader_sevenz_fixture()).unwrap();
+        assert_eq!(pages, vec!["01.png", "02.png", "10.png"]);
+        assert_eq!(count_archive_pages(&reader_sevenz_fixture()), Some(3));
+
+        // Non-image entries (ComicInfo.xml) must not inflate pse:count.
+        let with_xml = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/comicinfo_pack.cb7");
+        assert_eq!(count_archive_pages(&with_xml), Some(1));
+    }
+
+    #[test]
+    fn sevenz_page_extraction_by_index_and_entry() {
+        // OPDS-PSE index addressing: natural-sort position 2 = "10.png".
+        let by_index = extract_page_index_webp(&reader_sevenz_fixture(), 2, 100, 80.0).unwrap();
+        let bytes = by_index.expect("page index 2 must resolve");
+        assert_eq!(&bytes[..4], b"RIFF", "reader pages are WebP-encoded");
+
+        // Web-reader entry addressing.
+        assert!(extract_page_webp(&reader_sevenz_fixture(), "02.png", 100, 80.0).unwrap().is_some());
+
+        // Misses map to None (the Node routes turn that into a 404, not a 500).
+        assert!(extract_page_index_webp(&reader_sevenz_fixture(), 99, 100, 80.0).unwrap().is_none());
+        assert!(extract_page_webp(&reader_sevenz_fixture(), "nope.png", 100, 80.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn sevenz_signature_is_distinct_from_zip_and_rar() {
+        assert!(is_7z_signature(&[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04]));
+        assert!(!is_7z_signature(&[0x50, 0x4B, 0x03, 0x04])); // PK (zip)
+        assert!(!is_7z_signature(&[0x52, 0x61, 0x72, 0x21])); // Rar!
+        assert!(!is_7z_signature(&[0x37, 0x7A])); // too short to decide
     }
 
     #[test]

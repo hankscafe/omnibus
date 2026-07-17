@@ -221,7 +221,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                         Auto-Convert CBR/RAR to CBZ
                                     </Label>
                                     <p className="text-[11px] text-muted-foreground">
-                                        Converts .cbr/.rar/.cb7 archives to .cbz on import, on match, and on the scheduled sweep (recommended — CBZ reads fastest and works everywhere). When off, CBR/RAR files stay untouched and are read natively through the engine; page loads can be slightly slower, .cb7 still needs conversion to be readable, and metadata embedding skips them (ComicInfo.xml can only be written into .cbz — RAR archives are read-only). The manual CBR Auto-Converter job keeps working either way.
+                                        Converts .cbr/.rar/.cb7 archives to .cbz on import, on match, and on the scheduled sweep (recommended — CBZ reads fastest and works everywhere). When off, CBR/RAR/CB7 files stay untouched and are read natively through the engine; page loads can be slightly slower, and metadata embedding skips them (ComicInfo.xml can only be written into .cbz — RAR and 7z archives are read-only here). The manual CBR Auto-Converter job keeps working either way.
                                     </p>
                                 </div>
                             </div>

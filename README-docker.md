@@ -37,7 +37,9 @@ Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omni
 
 ## Installation (Docker Compose)
 
-Omnibus is built to be deployed via Docker. Because it utilizes a serverless SQLite engine, **all necessary database files and dependencies are bundled directly into the image.** There are no external database containers required.
+Omnibus deploys as **three containers**: the web app, the **Rust engine** (the heavy-lifting sidecar that runs library scans, CBR/CBZ conversion, downloads, metadata sync, and search), and Redis (the job queue). The database is still serverless SQLite living on your `/config` volume — no database server required.
+
+> **⚠️ Upgrading from v1.1.x?** v1.2.0 split Omnibus into two application containers: the web app now **requires** the `omnibus-engine` sidecar. If you pull the new image into your old compose file, every scan/conversion/metadata/search job fails with `fetch failed` and the health panel reports "Engine unreachable." Update your `docker-compose.yml` to the layout below — add the `omnibus-engine` service and the `OMNIBUS_ENGINE_URL` variable, and give the engine the **same** `NEXTAUTH_SECRET` and volume mounts as the web app. Your database and config carry over untouched; the schema upgrades itself on first boot.
 
 1.  Save the following as `docker-compose.yml`:
 
@@ -55,6 +57,7 @@ services:
       - "3000:3000"
     depends_on:
       - omnibus-redis
+      - omnibus-engine
     environment:
       - TZ=America/New_York
       
@@ -66,6 +69,7 @@ services:
       
       # REQUIRED: Generate a random string for security
       # !!NOTE!! - NEXTAUTH_SECRET also works as master database encryption key. !!DO NOT LOSE THIS!!
+      # !!NOTE!! - Must be the SAME value as NEXTAUTH_SECRET in the omnibus-engine service below.
       - NEXTAUTH_SECRET=
 
       # --- ADVANCED SECURITY SETTINGS ---
@@ -77,6 +81,10 @@ services:
       
       # REQUIRED: Connection URL for the background job queue
       - OMNIBUS_REDIS_URL=redis://omnibus-redis:6379/0
+      
+      # REQUIRED: The Rust engine sidecar (service below). Scans, conversions, downloads,
+      # metadata sync, and search all run there — without it those jobs fail with "fetch failed".
+      - OMNIBUS_ENGINE_URL=http://omnibus-engine:8000
       
       # REQUIRED: Database connection string
       - DATABASE_URL=file:/config/omnibus.db
@@ -109,6 +117,41 @@ services:
       # - /path/to/your/nas/downloads:/downloads
       # - /path/to/your/nas/watched:/watched
       # - /path/to/your/nas/unmatched:/unmatched
+
+  # --- Rust engine: REQUIRED since v1.2.0 ---
+  # The heavy-lifting sidecar: library scans, CBR/CBZ conversion, downloads, metadata sync,
+  # search, and backups all run here. The web app forwards those jobs to it over the internal
+  # Docker network.
+  omnibus-engine:
+    image: ghcr.io/hankscafe/omnibus-engine:latest
+    container_name: omnibus-engine
+    restart: unless-stopped
+    environment:
+      - TZ=America/New_York
+      
+      # Same SQLite database file as the web app (via the shared /config volume).
+      - DATABASE_URL=file:/config/omnibus.db
+      - OMNIBUS_ENGINE_BIND=0.0.0.0:8000
+      
+      # The engine calls back to the web app to fire job-completion notifications.
+      - OMNIBUS_NODE_URL=http://omnibus:3000
+      
+      # REQUIRED: MUST be the exact same value as the web app's NEXTAUTH_SECRET above.
+      # The engine refuses to start network-exposed without a real secret.
+      - NEXTAUTH_SECRET=
+      
+      # Keep these identical to the web app so both containers resolve the same files.
+      - OMNIBUS_BACKUPS_DIR=/config/backups
+      - OMNIBUS_CACHE_DIR=/config/cache
+      - OMNIBUS_WATCHED_DIR=/data/watched
+      - OMNIBUS_AWAITING_MATCH_DIR=/data/unmatched
+    # No ports exposed to the host: only the web container reaches the engine internally.
+    # Publishing 8000 would expose the DB-/filesystem-mutating engine API to your LAN.
+    volumes:
+      # MUST be the SAME mounts as the web app (the engine reads/writes the same database
+      # and comic files at the same paths).
+      - /path/to/your/nas/config:/config
+      - /path/to/your/nas/data:/data
 
   omnibus-redis:
     image: redis:alpine

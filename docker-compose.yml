@@ -28,8 +28,9 @@ services:
 
   # --- Rust engine: heavy/parallel backend tasks (scan, convert, metadata, search, backup) ---
   omnibus-engine:
-    # Pull the published unified test image by default; `docker compose build` rebuilds from source.
-    image: ${OMNIBUS_ENGINE_IMAGE:-ghcr.io/hankscafe/omnibus-engine:unified}
+    # Pull the published stable image by default; `docker compose build` rebuilds from source.
+    # (Override via OMNIBUS_ENGINE_IMAGE, e.g. ...omnibus-engine:dev for the edge channel.)
+    image: ${OMNIBUS_ENGINE_IMAGE:-ghcr.io/hankscafe/omnibus-engine:latest}
     build: ./omnibus-engine
     container_name: omnibus_engine
     restart: always
@@ -58,8 +59,9 @@ services:
 
   # --- Node / Next.js web app: the UI + API; forwards heavy jobs to omnibus-engine ---
   web:
-    # Pull the published unified test image by default; `docker compose build` rebuilds from source.
-    image: ${OMNIBUS_IMAGE:-ghcr.io/hankscafe/omnibus:unified}
+    # Pull the published stable image by default; `docker compose build` rebuilds from source.
+    # (Override via OMNIBUS_IMAGE, e.g. ...omnibus:dev for the edge channel.)
+    image: ${OMNIBUS_IMAGE:-ghcr.io/hankscafe/omnibus:latest}
     build: .
     container_name: omnibus_web
     restart: always

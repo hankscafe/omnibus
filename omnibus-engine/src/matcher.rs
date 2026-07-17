@@ -27,6 +27,51 @@ pub struct SweepOutcome {
     pub matched: usize,
 }
 
+/// Tier-2 sweep history: one JobLog row per series the sweep actually ACTED on, so "what did the
+/// background sweep match, and to what?" is answerable from Job History months later. relatedItem
+/// carries the series name (the column reserved for exactly this). Only outcomes are recorded —
+/// applied matches and id-collisions that need an admin — never skipped/deferred series, so a
+/// 100-series pass writes at most 100 rows and a quiet pass writes none.
+struct SweepAudit {
+    related_item: String,
+    status: &'static str, // COMPLETED (match applied) | FAILED (needs admin attention)
+    message: String,
+}
+
+/// Flushes the audit rows in one short transaction per chunk (scan-write invariant from issue
+/// #183: no I/O between begin and commit; never let audit bookkeeping starve the Node app's
+/// writes). Best-effort — the sweep's real work is already committed by this point.
+async fn flush_sweep_audit(db: &Db, rows: &[SweepAudit]) {
+    for chunk in rows.chunks(100) {
+        let mut tx = match db.pool.begin().await {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("[Matcher] Could not open the sweep-audit transaction: {:?}", e);
+                return;
+            }
+        };
+        for r in chunk {
+            if let Err(e) = sqlx::query(&format!(
+                r#"INSERT INTO "JobLog" (id, "jobType", status, "durationMs", message, "relatedItem", "createdAt", attempts)
+                   VALUES ($1, 'SWEEP_MATCH', $2, 0, $3, $4, {now}, 1)"#,
+                now = db.now_expr()
+            ))
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(r.status)
+            .bind(&r.message)
+            .bind(&r.related_item)
+            .execute(&mut *tx)
+            .await
+            {
+                log::warn!("[Matcher] Could not write a sweep-audit row for \"{}\": {:?}", r.related_item, e);
+            }
+        }
+        if let Err(e) = tx.commit().await {
+            log::warn!("[Matcher] Sweep-audit commit failed ({} row(s) lost): {:?}", chunk.len(), e);
+        }
+    }
+}
+
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -109,6 +154,7 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
     let mut for_admin = 0usize;
     let mut deferred = 0usize; // budget hit — retried automatically next run
     let mut searches_this_run = 0usize;
+    let mut audit: Vec<SweepAudit> = Vec::new(); // Tier-2 history, flushed after the pass
     let search_allowed = matches!(mode.as_str(), "trust" | "auto") && cv_key.is_some();
 
     for row in &rows {
@@ -128,8 +174,21 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
             {
                 if apply_match(&db, &sid, &name, &source, &id, cv_id, metron_id).await {
                     by_file += 1;
+                    audit.push(SweepAudit {
+                        related_item: name.clone(),
+                        status: "COMPLETED",
+                        message: format!("Matched from embedded file metadata → {} id {} (zero API cost).", source, id),
+                    });
                 } else {
                     for_admin += 1; // id collision with another series — needs a human
+                    audit.push(SweepAudit {
+                        related_item: name.clone(),
+                        status: "FAILED",
+                        message: format!(
+                            "File metadata resolves to {} id {}, but it could not be applied (usually another series already holds that id) — left for the Smart Matcher.",
+                            source, id
+                        ),
+                    });
                 }
                 continue;
             }
@@ -153,8 +212,24 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
                     if apply_match(&db, &sid, &name, "COMICVINE", &vol_id.to_string(), Some(vol_id), None).await {
                         log::info!("[Matcher] Auto-matched \"{}\" -> CV volume {} (\"{}\" sim {:.2}, year ok: {}).", name, vol_id, vol_name, sim, year_matches);
                         by_search += 1;
+                        audit.push(SweepAudit {
+                            related_item: name.clone(),
+                            status: "COMPLETED",
+                            message: format!(
+                                "Auto-matched by search → ComicVine volume {} \"{}\" (similarity {:.2}, year {}, mode {}).",
+                                vol_id, vol_name, sim, if year_matches { "agrees" } else { "unconfirmed" }, mode
+                            ),
+                        });
                     } else {
                         for_admin += 1;
+                        audit.push(SweepAudit {
+                            related_item: name.clone(),
+                            status: "FAILED",
+                            message: format!(
+                                "Search found ComicVine volume {} \"{}\" (similarity {:.2}), but it could not be applied (usually another series already holds that id) — left for the Smart Matcher.",
+                                vol_id, vol_name, sim
+                            ),
+                        });
                     }
                 } else {
                     log::debug!("[Matcher Debug] Best CV candidate for \"{}\" was \"{}\" (sim {:.2}, year ok: {}) — below the {} bar; leaving for the Smart Matcher.", name, vol_name, sim, year_matches, mode);
@@ -177,6 +252,10 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
     }
+
+    // Tier-2 history lands before the summary so Job History shows the per-series rows the
+    // moment the run's own COMPLETED row appears.
+    flush_sweep_audit(&db, &audit).await;
 
     let processed = by_file + by_search + for_admin + deferred;
     let unprocessed = total.saturating_sub(processed);
@@ -359,5 +438,62 @@ mod tests {
         assert!(!budget_exhausted(169, 200, 30));
         assert!(budget_exhausted(170, 200, 30));
         assert!(budget_exhausted(200, 200, 30));
+    }
+
+    // ==== Tier-2 sweep history: per-series outcomes must land in JobLog with relatedItem. ====
+
+    #[tokio::test]
+    async fn sweep_audit_rows_land_in_joblog_with_related_item() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1) // each :memory: connection is its own DB — keep exactly one
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "JobLog" (id TEXT PRIMARY KEY, "jobType" TEXT, status TEXT, "durationMs" INTEGER, message TEXT, "relatedItem" TEXT, "createdAt" INTEGER, attempts INTEGER)"#)
+            .execute(&pool).await.unwrap();
+        let db = Db { pool, dialect: crate::db::Dialect::Sqlite };
+
+        flush_sweep_audit(&db, &[
+            SweepAudit {
+                related_item: "Saga (2012)".to_string(),
+                status: "COMPLETED",
+                message: "Matched from embedded file metadata → COMICVINE id 12345 (zero API cost).".to_string(),
+            },
+            SweepAudit {
+                related_item: "Hack/Slash".to_string(),
+                status: "FAILED",
+                message: "id collision — left for the Smart Matcher.".to_string(),
+            },
+        ]).await;
+
+        let rows = sqlx::query(r#"SELECT "jobType", status, "relatedItem", message FROM "JobLog" ORDER BY "relatedItem""#)
+            .fetch_all(&db.pool).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        // Alphabetical: "Hack/Slash" sorts before "Saga (2012)".
+        assert_eq!(rows[0].get::<String, _>("jobType"), "SWEEP_MATCH");
+        assert_eq!(rows[0].get::<String, _>("status"), "FAILED");
+        assert_eq!(rows[0].get::<String, _>("relatedItem"), "Hack/Slash");
+        assert_eq!(rows[1].get::<String, _>("jobType"), "SWEEP_MATCH");
+        assert_eq!(rows[1].get::<String, _>("status"), "COMPLETED");
+        assert_eq!(rows[1].get::<String, _>("relatedItem"), "Saga (2012)");
+        assert!(rows[1].get::<String, _>("message").contains("COMICVINE id 12345"));
+    }
+
+    #[tokio::test]
+    async fn sweep_audit_flush_with_no_rows_writes_nothing() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "JobLog" (id TEXT PRIMARY KEY, "jobType" TEXT, status TEXT, "durationMs" INTEGER, message TEXT, "relatedItem" TEXT, "createdAt" INTEGER, attempts INTEGER)"#)
+            .execute(&pool).await.unwrap();
+        let db = Db { pool, dialect: crate::db::Dialect::Sqlite };
+
+        flush_sweep_audit(&db, &[]).await;
+
+        let n: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "JobLog""#)
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(n, 0, "a quiet sweep must not write audit rows");
     }
 }

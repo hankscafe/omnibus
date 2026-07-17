@@ -11,9 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
 import { 
-    ArrowLeft, Trash2, Terminal, History, Loader2, Download, Eye, 
-    Clock, AlertTriangle, CheckCircle2, ShieldAlert, Database, 
-    RefreshCw, Activity, Search, CalendarMinus, Shield,
+    ArrowLeft, Trash2, Terminal, History, Loader2, Download, Eye,
+    Clock, AlertTriangle, CheckCircle2, ShieldAlert, Database,
+    RefreshCw, Activity, Search, CalendarMinus, Shield, Sparkles,
     ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileText
 } from "lucide-react"
 import Link from "next/link"
@@ -189,6 +189,7 @@ export default function LogsPage() {
           case 'METADATA_SYNC': return <RefreshCw className="w-4 h-4 text-green-500" />;
           case 'SERIES_MONITOR': return <Activity className="w-4 h-4 text-orange-500" />;
           case 'DOWNLOAD_RETRY': return <Clock className="w-4 h-4 text-primary" />;
+          case 'SWEEP_MATCH': return <Sparkles className="w-4 h-4 text-green-500" />;
           default: return <History className="w-4 h-4 text-muted-foreground" />;
       }
   }

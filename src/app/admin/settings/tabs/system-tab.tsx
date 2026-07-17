@@ -36,8 +36,8 @@ export function SystemTab({ s }: { s: SettingsBag }) {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div className="grid gap-1.5">
                                     <Label className="text-foreground font-semibold">Max scan workers</Label>
-                                    <Input type="number" min="0" placeholder="Auto (CPU cores)" value={config.engine_max_scan_workers ?? ""} onChange={e => setConfig({...config, engine_max_scan_workers: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
-                                    <p className="text-[10px] text-muted-foreground">Parallel file-probe / folder-walk tasks for library scans and diagnostics (ghost / storage / integrity).</p>
+                                    <Input type="number" min="0" placeholder="Auto (half cores)" value={config.engine_max_scan_workers ?? ""} onChange={e => setConfig({...config, engine_max_scan_workers: e.target.value})} className="h-10 bg-muted/50 border-border text-foreground" />
+                                    <p className="text-[10px] text-muted-foreground">Parallel archive-parse / page-count tasks for library scans and diagnostics. Auto uses half the cores so a big scan leaves the UI responsive; raise it to scan faster at the cost of contention.</p>
                                 </div>
                                 <div className="grid gap-1.5">
                                     <Label className="text-foreground font-semibold">Max convert workers</Label>

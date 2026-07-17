@@ -44,7 +44,7 @@ services:
 
   # --- Rust engine: heavy/parallel backend tasks (scan, convert, metadata, search, backup) ---
   omnibus-engine:
-    image: ${OMNIBUS_ENGINE_IMAGE:-ghcr.io/hankscafe/omnibus-engine:unified}
+    image: ${OMNIBUS_ENGINE_IMAGE:-ghcr.io/hankscafe/omnibus-engine:latest}
     build: ./omnibus-engine
     container_name: omnibus_engine
     restart: always
@@ -75,7 +75,7 @@ services:
 
   # --- Node / Next.js web app: the UI + API; forwards heavy jobs to omnibus-engine ---
   web:
-    image: ${OMNIBUS_IMAGE:-ghcr.io/hankscafe/omnibus:unified}
+    image: ${OMNIBUS_IMAGE:-ghcr.io/hankscafe/omnibus:latest}
     build: .
     container_name: omnibus_web
     restart: always

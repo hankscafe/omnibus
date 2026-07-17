@@ -116,6 +116,35 @@ describe('System Health & Diagnostics', () => {
         expect(permCheck?.message).toContain('read-only');
     });
 
+    it('reports an unreachable engine as ERROR with the compose-upgrade hint (issue #187)', async () => {
+        // Healthy disk so nothing else degrades the run.
+        vi.mocked(fs.promises.statfs).mockResolvedValue({
+            bsize: 1024,
+            bavail: 10 * 1024 * 1024 * 1024 / 1024
+        } as any);
+
+        // The engine /health fetch dies the way undici reports a missing container ("fetch
+        // failed") — the exact symptom of a v1.1.x compose file with no omnibus-engine service.
+        mocks.fetch.mockImplementation((url: string) => {
+            if (String(url).includes(':8000/health')) return Promise.reject(new TypeError('fetch failed'));
+            return Promise.resolve({
+                ok: true,
+                json: async () => ({ currentVersion: '1.0.0', latestVersion: '1.0.0', updateAvailable: false })
+            });
+        });
+
+        const result = await runSystemHealthCheck();
+
+        const engineCheck = result.checks.find(c => c.id === 'engine_version');
+        expect(engineCheck?.status).toBe('error');
+        // The message must be actionable: name the URL it tried and the v1.1.x compose cause.
+        expect(engineCheck?.message).toContain('http://127.0.0.1:8000');
+        expect(engineCheck?.message).toContain('omnibus-engine service');
+        expect(engineCheck?.message).toContain('v1.1.x');
+        // An unreachable engine degrades overall health — it is not a cosmetic warning.
+        expect(result.status).toBe('DEGRADED');
+    });
+
     it('should return HEALTHY status when all systems are green', async () => {
         // 15GB free
         vi.mocked(fs.promises.statfs).mockResolvedValue({ 

@@ -67,7 +67,17 @@ export async function runSystemHealthCheck() {
         }
     } catch(e) {
         Logger.log(`[Health Check Debug] Engine version check failed: ${getErrorMessage(e)}`, 'debug');
-        results.push({ id: 'engine_version', name: 'Engine Version', status: 'warning', message: 'Engine unreachable — could not verify its version.' });
+        // Unreachable is an ERROR, not a warning (issue #187): since v1.2.0 the engine sidecar is
+        // REQUIRED — without it scans, conversions, downloads, metadata sync, and search all fail
+        // with bare "fetch failed" job errors. The classic cause is a v1.1.x-era compose file with
+        // no omnibus-engine service at all, so name that instead of leaving admins to decode
+        // generic fetch failures.
+        results.push({
+            id: 'engine_version',
+            name: 'Engine Version',
+            status: 'error',
+            message: `Engine unreachable at ${ENGINE_URL}. Omnibus v1.2+ requires the omnibus-engine container — scans, conversions, downloads, metadata sync, and search all run there. If you upgraded from v1.1.x, your docker-compose.yml predates the engine: add the omnibus-engine service and OMNIBUS_ENGINE_URL from the current README, giving the engine the same NEXTAUTH_SECRET and volume mounts as the web app.`,
+        });
     }
 
     // 2. ComicVine API Key

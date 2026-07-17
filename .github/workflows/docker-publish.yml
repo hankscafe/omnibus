@@ -1,10 +1,11 @@
 name: Build, Publish, and Release Docker Image
 
-# The unified branch was promoted to main (July 2026); legacy-main and legacy-rust-engine
-# are locked archives, so main is the only living branch this workflow serves.
+# main = stable channel: :latest + version tags + GitHub Release + release announcement.
+# dev  = soak channel: every push publishes floating :dev edge images for both containers —
+#        images only, never releases or announcements. (legacy-* branches are locked archives.)
 on:
   push:
-    branches: ['main']
+    branches: ['main', 'dev']
     tags: ['v*']
 
 env:
@@ -53,10 +54,18 @@ jobs:
         if: github.ref == format('refs/heads/{0}', 'main')
         id: check-release
         run: |
-          if gh release view v${{ env.VERSION }} &>/dev/null; then
+          # Distinguish "release not found" from an API outage: an inconclusive check must NOT
+          # report EXISTS=false, or the run would try to re-create (and re-announce) an existing
+          # release. Failing safe as EXISTS=true just defers the release to the next green build.
+          RC=0
+          ERR=$(gh release view v${{ env.VERSION }} 2>&1 >/dev/null) || RC=$?
+          if [ $RC -eq 0 ]; then
             echo "EXISTS=true" >> $GITHUB_ENV
-          else
+          elif echo "$ERR" | grep -qi "not found"; then
             echo "EXISTS=false" >> $GITHUB_ENV
+          else
+            echo "::warning::Release check inconclusive (API error), skipping release this run: $ERR"
+            echo "EXISTS=true" >> $GITHUB_ENV
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,6 +107,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
             type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=dev,enable=${{ github.ref == format('refs/heads/{0}', 'dev') }}
             type=ref,event=tag
             type=sha
 
@@ -132,14 +142,15 @@ jobs:
           COMMIT_SHORT="${GITHUB_SHA:0:7}"
           TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           VERSION="v${{ env.VERSION }}"
-          
+          if [ "${{ github.ref_name }}" = "main" ]; then WEB_TAG="latest"; else WEB_TAG="${{ github.ref_name }}"; fi
+
           PAYLOAD=$(jq -n \
             --arg title "🐳 Docker Image Published" \
             --arg desc "Omnibus $VERSION has been built and published to GHCR and Docker Hub." \
             --arg version "$VERSION" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "\`$COMMIT_SHORT\`" \
-            --arg pull "\`\`\`docker pull ghcr.io/${{ env.IMAGE_NAME }}:latest\`\`\`" \
+            --arg pull "\`\`\`docker pull ghcr.io/${{ env.IMAGE_NAME }}:$WEB_TAG\`\`\`" \
             --arg footer "Omnibus $VERSION • Built with GitHub Actions" \
             --arg time "$TIMESTAMP" \
             '{
@@ -299,6 +310,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
             type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=dev,enable=${{ github.ref == format('refs/heads/{0}', 'dev') }}
             type=ref,event=tag
             type=sha
 

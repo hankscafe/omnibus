@@ -75,7 +75,16 @@ cargo clippy --all-targets -- -D warnings   # CI treats warnings as errors
 cargo test
 ```
 
-Please make sure the relevant checks pass before opening your PR, CI runs the test suites and builds for both apps, and a PR can't be merged until they're green. If you add new behavior, a test that covers it is very welcome.
+Please make sure the relevant checks pass before opening your PR. If you add new behavior, a test that covers it is very welcome.
+
+### Required CI checks
+
+Two status checks run automatically on every pull request, and **both must pass before it can be merged** (this is enforced on the `main` and `dev` branches, so the Merge button stays locked until they're green):
+
+- **`build-and-test`** runs the Node app's Vitest suite and the Next.js production build.
+- **`Rust Engine (build · clippy · test)`** runs the engine's `cargo build`, Clippy (warnings are treated as errors), and `cargo test`.
+
+Running the commands above locally before you push is the fastest way to a green PR. One note for your first contribution: GitHub holds the CI run until I approve it, so expect a short wait before the checks start on your very first PR.
 
 ## How pull requests are reviewed
 

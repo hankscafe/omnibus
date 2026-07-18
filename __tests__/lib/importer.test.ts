@@ -203,6 +203,26 @@ describe('File System: Importer Engine', () => {
         }));
     });
 
+    it('holds a flat collection for manual review instead of fabricating issue 1', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_flat_pack', status: 'DOWNLOADING',
+            activeDownloadName: 'Thorgal.Collection.73 Albums.FR.CBZ'
+        });
+
+        const result = await Importer.importRequest('req_flat_pack');
+
+        expect(result).toBe(false);
+        expect(fs.copy).toHaveBeenCalledWith(
+            expect.stringContaining('Thorgal.Collection.73 Albums.FR.CBZ'),
+            expect.stringContaining('/unmatched/'),
+            expect.any(Object)
+        );
+        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'STALLED' })
+        }));
+        expect(mocks.createIssue).not.toHaveBeenCalled();
+    });
+
     // ==== Issue #174: RAR packs (the dominant Usenet/scene container) must be batch-split too. ====
 
     it('routes a nested RAR batch pack to WATCHED via the engine (issue #174)', async () => {

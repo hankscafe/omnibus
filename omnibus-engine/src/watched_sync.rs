@@ -151,9 +151,13 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     for row in settings {
         let key: String = row.get("key");
         let val: String = row.get("value");
-        if key == "folder_naming_pattern" { folder_pattern = val.clone(); }
-        if key == "file_naming_pattern" { file_pattern = val.clone(); }
-        if key == "manga_file_naming_pattern" { manga_file_pattern = val.clone(); }
+        // Empty settings mean "use the built-in default". Accepting an empty file pattern makes
+        // every issue converge on `.cbz`, silently overwriting the previous issue in a batch.
+        if !val.trim().is_empty() {
+            if key == "folder_naming_pattern" { folder_pattern = val.clone(); }
+            if key == "file_naming_pattern" { file_pattern = val.clone(); }
+            if key == "manga_file_naming_pattern" { manga_file_pattern = val.clone(); }
+        }
     }
 
     // Bool columns are CAST for the Any driver — SQLite's BOOLEAN decltype has no mapping.
@@ -168,20 +172,45 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     let (manga_pubs, western_pubs) = crate::manga_detector::get_detector_settings(&db.pool).await;
     let manga_http = reqwest::Client::new();
 
+    // Scene packs frequently omit ComicInfo.xml entirely. Build a conservative list of existing
+    // series names and their configured localized aliases so a filename such as `Thorgal T01` or
+    // `Elfes.T1` can still be imported. The parser below requires an explicit T/Tome number directly
+    // after the series name; spin-offs (`XIII Mystery`, `Thorgal Saga`) and hors-series stay unmatched.
+    let series_rows = sqlx::query(r#"SELECT name FROM "Series""#).fetch_all(&db.pool).await?;
+    let acronym_rows = sqlx::query(r#"SELECT key, value FROM "SearchAcronym""#).fetch_all(&db.pool).await?;
+    let mut filename_series_candidates = Vec::new();
+    for row in series_rows {
+        let canonical: String = row.get("name");
+        filename_series_candidates.push((canonical.clone(), canonical.clone()));
+        for alias_row in &acronym_rows {
+            let key: String = alias_row.get("key");
+            let value: String = alias_row.get("value");
+            if key.eq_ignore_ascii_case(&canonical) {
+                filename_series_candidates.push((value, canonical.clone()));
+            } else if value.eq_ignore_ascii_case(&canonical) {
+                filename_series_candidates.push((key, canonical.clone()));
+            }
+        }
+    }
+    filename_series_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0.len()));
+
     let mut success_count = 0;
     let mut unmatched_count = 0;
     let mut synced_series_ids = std::collections::HashSet::new();
 
     for file_data in preprocessed_files {
         let path = file_data.working_path;
-        
-        if let Some(info) = file_data.meta {
+
+        let metadata = file_data.meta.or_else(|| {
+            infer_comicinfo_from_filename(&path, &filename_series_candidates)
+        });
+        if let Some(info) = metadata {
             if info.series.is_none() {
                 if move_to_unmatched(&path, &unmatched_dir).is_ok() { unmatched_count += 1; }
                 continue;
             }
 
-            let series_name = info.series.clone().unwrap_or_else(|| "Unknown".to_string());
+            let mut series_name = info.series.clone().unwrap_or_else(|| "Unknown".to_string());
             let publisher = info.publisher.clone().unwrap_or_else(|| "Other".to_string());
             // ComicInfo <Volume> usually holds the start year; fall back to <Year> (parity with
             // parseComicInfo / metadata-extractor.ts). 0 means "unknown" — rendered as "" in the
@@ -230,22 +259,52 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 ("LOCAL".to_string(), String::new())
             };
 
-            if meta_source == "LOCAL" || meta_id.is_empty() {
-                log::info!("[Watched Sync] '{}' has no ComicVine/Metron ID; routing to unmatched for review.", series_name);
+            // Prefer provider IDs. Scene packs often carry useful ComicInfo (Series + Number) but no
+            // ComicVine/Metron IDs; in that case accept only one unambiguous EXISTING local series,
+            // including a configured localized alias (for example ComicVine "Elves" ↔ "Elfes").
+            // Never create a new series from name alone, and never pick between duplicate names.
+            let existing_series = if meta_source == "LOCAL" || meta_id.is_empty() {
+                let alias = sqlx::query(
+                    r#"SELECT key, value FROM "SearchAcronym"
+                       WHERE lower(key) = lower($1) OR lower(value) = lower($1) LIMIT 1"#
+                )
+                .bind(&series_name)
+                .fetch_optional(&db.pool).await?;
+                let alternate_name = alias.map(|row| {
+                    let key: String = row.get("key");
+                    let value: String = row.get("value");
+                    if key.eq_ignore_ascii_case(&series_name) { value } else { key }
+                }).unwrap_or_else(|| series_name.clone());
+
+                let mut candidates = sqlx::query(
+                    r#"SELECT id, name, CAST("isManga" AS INTEGER) AS "isManga", "libraryId", "folderPath"
+                       FROM "Series"
+                       WHERE lower(name) = lower($1) OR lower(name) = lower($2)"#
+                )
+                .bind(&series_name).bind(&alternate_name)
+                .fetch_all(&db.pool).await?;
+
+                if candidates.len() == 1 {
+                    log::info!("[Watched Sync] Matched ID-less pack entry '{}' to the unique existing series '{}'.", series_name, alternate_name);
+                    candidates.pop()
+                } else {
+                    log::info!("[Watched Sync] '{}' has no provider ID and resolved to {} existing series; routing to unmatched.", series_name, candidates.len());
+                    None
+                }
+            } else {
+                // Provider-backed files remain strict by the (metadataSource, metadataId) unique key.
+                sqlx::query(
+                    r#"SELECT id, name, CAST("isManga" AS INTEGER) AS "isManga", "libraryId", "folderPath" FROM "Series"
+                       WHERE "metadataSource" = $1 AND "metadataId" = $2"#
+                )
+                .bind(&meta_source).bind(&meta_id)
+                .fetch_optional(&db.pool).await?
+            };
+
+            if (meta_source == "LOCAL" || meta_id.is_empty()) && existing_series.is_none() {
                 if move_to_unmatched(&path, &unmatched_dir).is_ok() { unmatched_count += 1; }
                 continue;
             }
-
-            // Match an existing series strictly by the (metadataSource, metadataId) unique key, like
-            // Node's findUnique. The earlier name+publisher OR clause could merge two distinct series
-            // or shadow a real ID match on a stale name collision.
-            let existing_series = sqlx::query(
-                // isManga is CAST for the Any driver (no SQLite BOOLEAN mapping).
-                r#"SELECT id, CAST("isManga" AS INTEGER) AS "isManga", "libraryId", "folderPath" FROM "Series"
-                   WHERE "metadataSource" = $1 AND "metadataId" = $2"#
-            )
-            .bind(&meta_source).bind(&meta_id)
-            .fetch_optional(&db.pool).await?;
 
             let series_id: String;
             let target_lib_id: String;
@@ -253,6 +312,9 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
 
             if let Some(series_row) = existing_series {
                 series_id = series_row.get("id");
+                // Use the canonical existing name for both DB and file naming. Otherwise a localized
+                // ComicInfo alias (`Elfes`) and filename inference (`Elves`) create two parallel sets.
+                series_name = series_row.get("name");
                 is_manga = series_row.get::<i64, _>("isManga") != 0;
                 target_lib_id = series_row.get("libraryId");
                 dest_folder = PathBuf::from(series_row.get::<String, _>("folderPath"));
@@ -495,6 +557,42 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     let _ = clean_empty_folders(Path::new(&watched_dir), Path::new(&watched_dir));
 
     if !synced_series_ids.is_empty() {
+        // A batch request is attached to the provider volume, not to an Issue relation. Once every
+        // known issue in that volume has a real file, reconcile the old per-issue requests so the UI
+        // does not keep showing AWAITING/STALLED after a pack fulfilled the complete series.
+        for series_id in &synced_series_ids {
+            let metadata_id: Option<String> = sqlx::query_scalar(
+                r#"SELECT "metadataId" FROM "Series" WHERE id = $1"#,
+            )
+            .bind(series_id)
+            .fetch_optional(&db.pool)
+            .await?
+            .flatten();
+            let Some(metadata_id) = metadata_id.filter(|id| !id.is_empty()) else { continue };
+            let total: i64 = sqlx::query_scalar(
+                r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#,
+            ).bind(series_id).fetch_one(&db.pool).await?;
+            let missing: i64 = sqlx::query_scalar(
+                r#"SELECT COUNT(*) FROM "Issue"
+                   WHERE "seriesId" = $1
+                     AND (status <> 'DOWNLOADED' OR "filePath" IS NULL OR "filePath" = '')"#,
+            ).bind(series_id).fetch_one(&db.pool).await?;
+            if total > 0 && missing == 0 {
+                let result = sqlx::query(&format!(
+                    r#"UPDATE "Request" SET status='COMPLETED', progress=100, "updatedAt"={now}
+                       WHERE "volumeId"=$1
+                         AND status IN ('PENDING', 'DOWNLOADING', 'AWAITING_RELEASE', 'STALLED', 'MANUAL_DDL', 'IMPORTED')"#,
+                    now = db.now_expr()
+                )).bind(&metadata_id).execute(&db.pool).await?;
+                if result.rows_affected() > 0 {
+                    log::info!(
+                        "[Watched Sync] Reconciled {} completed requests for provider volume {}.",
+                        result.rows_affected(), metadata_id
+                    );
+                }
+            }
+        }
+
         let series_list: Vec<String> = synced_series_ids.into_iter().collect();
         let db_clone = db.clone();
         tokio::spawn(async move {
@@ -503,6 +601,46 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     }
 
     Ok((success_count, unmatched_count, format!("Processed watched folder. Imported: {}. Moved to unmatched: {}.", success_count, unmatched_count)))
+}
+
+fn infer_comicinfo_from_filename(path: &Path, candidates: &[(String, String)]) -> Option<ComicInfo> {
+    let stem = path.file_stem()?.to_string_lossy();
+    let mut matches = Vec::new();
+
+    for (visible_name, canonical_name) in candidates {
+        // Prefer an explicit T/Tome marker, but also accept the common French scene form
+        // `Elfes - 01 - title`. The marker-less branch is capped at three digits so a collection
+        // year cannot be mistaken for an issue number.
+        let pattern = format!(
+            r"(?i)^{}[ ._-]+(?:T(?:ome)?[ ._-]*0*([0-9]+)|0*([0-9]{{1,3}}))(?:[ ._-]|$)",
+            regex::escape(visible_name)
+        );
+        let Ok(re) = Regex::new(&pattern) else { continue };
+        let Some(captures) = re.captures(&stem) else { continue };
+        let Some(number) = captures.get(1).or_else(|| captures.get(2)).map(|m| m.as_str().to_string()) else { continue };
+        if !matches.iter().any(|(series, issue): &(String, String)| {
+            series.eq_ignore_ascii_case(canonical_name) && issue == &number
+        }) {
+            matches.push((canonical_name.clone(), number));
+        }
+    }
+
+    if matches.len() != 1 {
+        return None;
+    }
+    let (series, number) = matches.pop()?;
+    log::info!(
+        "[Watched Sync] Inferred existing series '{}' issue {} from filename '{}'.",
+        series,
+        number,
+        stem
+    );
+    Some(ComicInfo {
+        title: Some(stem.to_string()),
+        series: Some(series),
+        number: Some(number),
+        ..ComicInfo::default()
+    })
 }
 
 fn extract_comicinfo(path: &Path) -> Option<ComicInfo> {
@@ -618,6 +756,43 @@ mod tests {
         assert_eq!(split_to_json(Some("Solo")), r#"["Solo"]"#);
         assert_eq!(split_to_json(Some(" , ,")), "[]"); // empty parts filtered
         assert_eq!(split_to_json(None), "[]");
+    }
+
+    #[test]
+    fn filename_metadata_accepts_main_series_and_localized_alias() {
+        let candidates = vec![
+            ("Thorgal".to_string(), "Thorgal".to_string()),
+            ("XIII".to_string(), "XIII".to_string()),
+            ("Elfes".to_string(), "Elves".to_string()),
+        ];
+        let thorgal = infer_comicinfo_from_filename(
+            Path::new("Thorgal T01 - La Magicienne trahie.cbz"),
+            &candidates,
+        ).unwrap();
+        assert_eq!(thorgal.series.as_deref(), Some("Thorgal"));
+        assert_eq!(thorgal.number.as_deref(), Some("1"));
+
+        let elves = infer_comicinfo_from_filename(Path::new("Elfes.T35.FR.cbz"), &candidates).unwrap();
+        assert_eq!(elves.series.as_deref(), Some("Elves"));
+        assert_eq!(elves.number.as_deref(), Some("35"));
+
+        let elves_dash = infer_comicinfo_from_filename(
+            Path::new("Elfes - 01 - Le crystal des Elfes bleus.cbz"),
+            &candidates,
+        ).unwrap();
+        assert_eq!(elves_dash.series.as_deref(), Some("Elves"));
+        assert_eq!(elves_dash.number.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn filename_metadata_rejects_spin_offs_integrales_and_hors_series() {
+        let candidates = vec![("XIII".to_string(), "XIII".to_string()), ("Thorgal".to_string(), "Thorgal".to_string())];
+        assert!(infer_comicinfo_from_filename(Path::new("XIII.Mystery.2008.T01.cbz"), &candidates).is_none());
+        assert!(infer_comicinfo_from_filename(Path::new("XIII.Intégrale.30.ans.T01.cbz"), &candidates).is_none());
+        assert!(infer_comicinfo_from_filename(Path::new("Thorgal Saga - T01.cbz"), &candidates).is_none());
+        assert!(infer_comicinfo_from_filename(Path::new("Thorgal THS1 - Bonus.cbz"), &candidates).is_none());
+        assert!(infer_comicinfo_from_filename(Path::new("XIII.T13Bis.Enquête.cbz"), &candidates).is_none());
+        assert!(infer_comicinfo_from_filename(Path::new("XIII - 2019 collection.cbz"), &candidates).is_none());
     }
 
     // These regexes decide whether a watched file imports MATCHED or routes to /unmatched —

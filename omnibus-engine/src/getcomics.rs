@@ -319,18 +319,7 @@ pub(crate) fn interactive_query_variants(queries: &[String]) -> Vec<String> {
 /// is read as a release-date range, not an issue range, and the end must exceed the start. Kept in
 /// lock-step with issue-parser.ts parseIssueRange.
 pub fn parse_issue_range(title: &str) -> Option<(u32, u32)> {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(r"(?i)(?:#|issues?\s*#?|vol(?:ume)?\.?\s*|v\.?\s*)?(\d{1,4})\s*(?:[-–—]|\bto\b)\s*#?(\d{1,4})").unwrap()
-    });
-    for cap in re.captures_iter(title) {
-        let start = match cap.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) { Some(v) => v, None => continue };
-        let end = match cap.get(2).and_then(|m| m.as_str().parse::<u32>().ok()) { Some(v) => v, None => continue };
-        let both_look_like_years = (1900..=2099).contains(&start) && (1900..=2099).contains(&end);
-        if both_look_like_years { continue; }
-        if end > start { return Some((start, end)); }
-    }
-    None
+    crate::search_engine::parse_issue_range(title)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -385,9 +374,9 @@ pub async fn search(
 
     let mut tpb_terms: Vec<&str> = vec!["omnibus", "tpb", "compendium", "collection", "hc", "hardcover", "trade paperback"];
     if !is_manga { tpb_terms.extend_from_slice(&["vol ", "volume ", "book "]); }
-    let pack_terms = ["story arc", "pack", "complete", "collection", "bundle", "run", "chronological"];
     let is_looking_for_omnibus = tpb_terms.iter().any(|t| clean_original.contains(t));
     let is_looking_for_annual = clean_original.contains("annual");
+    let search_aliases = crate::search_engine::get_custom_acronyms(db).await.unwrap_or_default();
 
     let original_query_words: Vec<String> = clean_original.chars()
         .map(|c| if c.is_alphanumeric() { c } else { ' ' })
@@ -479,6 +468,11 @@ pub async fn search(
 
             for (title, link, size) in posts_data {
                 let title_lower = title.to_lowercase();
+                let match_title_lower = crate::search_engine::canonicalize_title_aliases(
+                    &title_lower,
+                    &clean_original,
+                    &search_aliases,
+                );
                 let mut is_relevant = true;
 
                 // --- BASELINE FILTERS (both automated and interactive, beta.035) ---
@@ -500,7 +494,7 @@ pub async fn search(
                         }
                     }
                     for w in &words_to_enforce {
-                        if !w.chars().all(char::is_numeric) && !title_lower.contains(w) {
+                        if !w.chars().all(char::is_numeric) && !match_title_lower.contains(w) {
                             is_relevant = false;
                             break;
                         }
@@ -523,8 +517,7 @@ pub async fn search(
                     // A multi-issue/volume RANGE in the title ("#0 – 9", "Vol. 1 – 4") is the most reliable
                     // batch signal — GetComics bundles older runs as ranges with no pack KEYWORD. Treat those
                     // as packs too (when bulk is enabled) so volume-batches aren't rejected as unwanted TPBs.
-                    let is_pack = allow_bulk_packs
-                        && (pack_terms.iter().any(|t| title_lower.contains(t)) || parse_issue_range(&title_lower).is_some());
+                    let is_pack = allow_bulk_packs && crate::search_engine::is_pack_title(&title_lower);
 
                     // TPB guard: reject collected editions when a single issue was requested.
                     if req_num.is_some() && !is_looking_for_omnibus && !is_pack {
@@ -562,7 +555,7 @@ pub async fn search(
                     // exempt (they legitimately carry extra words); interactive search never reaches
                     // this block, so manual picks stay unrestricted.
                     if is_relevant && req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
-                        let extra = crate::search_engine::off_series_extra_words(&title_lower, &significant_query_words);
+                        let extra = crate::search_engine::off_series_extra_words(&match_title_lower, &significant_query_words);
                         if !extra.is_empty() {
                             log::debug!("[GetComics Debug] Discarding off-series post \"{}\" — extra series words {:?} not in requested \"{}\".", title, extra, clean_original);
                             is_relevant = false;
@@ -1007,6 +1000,8 @@ mod tests {
         assert_eq!(parse_issue_range("Crossed #0 - 9"), Some((0, 9)));
         assert_eq!(parse_issue_range("Saga Vol. 1 – 4 (2019)"), Some((1, 4)));
         assert_eq!(parse_issue_range("Hellboy 1 to 12"), Some((1, 12)));
+        assert_eq!(parse_issue_range("Thorgal T1 à T39 [CBZ]"), Some((1, 39)));
+        assert_eq!(parse_issue_range("Elfes.T1.T35.FR.[CBZ]"), Some((1, 35)));
         // A both-ends-years span is a date range, not an issue range.
         assert_eq!(parse_issue_range("The Boys (2008-2010)"), None);
         // A single issue has no range.

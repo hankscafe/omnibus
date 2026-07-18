@@ -110,16 +110,22 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     
     if (usePacks) {
         const seriesOnlyName = broadClean.replace(/\s\d+(?:\.\d+)?$/, '').trim();
-        if (seriesOnlyName !== broadClean && seriesOnlyName.length > 2) {
-            packQueries.add(seriesOnlyName);
-            packQueries.add(`${seriesOnlyName} collection`);
-            packQueries.add(`${seriesOnlyName} story arc`);
-            packQueries.add(`${seriesOnlyName} pack`);
-        } else if (seriesOnlyName.length > 2) {
-            packQueries.add(`${seriesOnlyName} collection`);
-            packQueries.add(`${seriesOnlyName} story arc`);
-            packQueries.add(`${seriesOnlyName} pack`);
+        const expandedSeriesOnly = expanded.replace(/\s\d+(?:\.\d+)?$/, '').trim();
+        const addPackQueries = (seriesName: string, strippedIssue: boolean) => {
+            if (seriesName.length <= 2) return;
+            if (strippedIssue) packQueries.add(seriesName);
+            packQueries.add(`${seriesName} collection`);
+            packQueries.add(`${seriesName} story arc`);
+            packQueries.add(`${seriesName} pack`);
+            packQueries.add(`${seriesName} integrale`);
+            packQueries.add(`${seriesName} albums`);
+            packQueries.add(`${seriesName} tomes`);
+        };
+
+        if (expandedSeriesOnly.toLowerCase() !== seriesOnlyName.toLowerCase()) {
+            addPackQueries(expandedSeriesOnly, expandedSeriesOnly !== expanded);
         }
+        addPackQueries(seriesOnlyName, seriesOnlyName !== broadClean);
     }
 
     // The bare main-title queries (e.g. "X Men" / "X Men 2026" from a colon-split "X-Men: Outback #1")

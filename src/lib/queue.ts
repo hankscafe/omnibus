@@ -253,7 +253,10 @@ export function initWorker() {
                     }
 
                     try {
-                        const rustResponse = await fetch(ENGINE_URL + '/api/automation/search', {
+                        // Prowlarr may legitimately take longer than undici's ~5 minute headers
+                        // timeout when several localized/pack variants hit slow indexers. Keep the
+                        // Node→engine connection open until the exhaustive search has completed.
+                        const rustResponse = await engineFetchLong(ENGINE_URL + '/api/automation/search', {
                             method: 'POST',
                             headers: engineHeaders({ 'Content-Type': 'application/json' }),
                             body: JSON.stringify({

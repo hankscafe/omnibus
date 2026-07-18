@@ -35,6 +35,58 @@ fn re_bounded_variant() -> &'static Regex {
     })
 }
 
+/// A multi-issue release marker must be a real token, not an arbitrary substring. In particular,
+/// scene tags such as `REPACK` are quality/version labels and must never bypass the issue-number
+/// guard merely because they contain the letters "pack".
+pub(crate) fn is_pack_title(title: &str) -> bool {
+    static RE_MARKER: OnceLock<Regex> = OnceLock::new();
+    static RE_COUNTED_FR: OnceLock<Regex> = OnceLock::new();
+    let marker = RE_MARKER.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+            (?:^|[^\p{L}\p{N}])
+            (?:
+                pack|story[\s._-]*arc|complete|complet(?:e|es)?|collection|bundle|run|
+                chronological|integrale|intégrale|mega[\s._-]*pack|méga[\s._-]*pack|
+                giga[\s._-]*pack
+            )
+            (?:$|[^\p{L}\p{N}])"
+        ).unwrap()
+    });
+    let counted_fr = RE_COUNTED_FR.get_or_init(|| {
+        Regex::new(r"(?i)(?:^|[^\p{L}\p{N}])\d+\s*(?:albums|tomes|hors[\s._-]*s[ée]rie(?:s)?|h\.?s\.?)\b").unwrap()
+    });
+
+    marker.is_match(title) || counted_fr.is_match(title) || parse_issue_range(title).is_some()
+}
+
+/// Detects a multi-issue / multi-volume range in both common scene syntax and French BD naming.
+/// Examples: `#1-39`, `Vol. 1 to 39`, `T1 à T39`, `T1.T35`, `tomes 1 au 39`.
+pub fn parse_issue_range(title: &str) -> Option<(u32, u32)> {
+    static RE_RANGE: OnceLock<Regex> = OnceLock::new();
+    static RE_COMPACT_T: OnceLock<Regex> = OnceLock::new();
+    let range = RE_RANGE.get_or_init(|| {
+        Regex::new(
+            r"(?ix)(?:\#|issues?\s*\#?|vol(?:ume)?\.?\s*|v\.?\s*|t(?:ome)?s?\.?\s*|albums?\.?\s*)?
+              (\d{1,4})\s*(?:[-–—]|\bto\b|\bau\b|à)\s*
+              (?:\#|vol(?:ume)?\.?\s*|v\.?\s*|t(?:ome)?\.?\s*)?(\d{1,4})"
+        ).unwrap()
+    });
+    let compact_t = RE_COMPACT_T.get_or_init(|| {
+        Regex::new(r"(?i)(?:^|[^\p{L}\p{N}])t(?:ome)?\.?\s*(\d{1,4})[\s._-]+t(?:ome)?\.?\s*(\d{1,4})(?:$|[^\p{L}\p{N}])").unwrap()
+    });
+
+    for re in [range, compact_t] {
+        for cap in re.captures_iter(title) {
+            let start = match cap.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) { Some(v) => v, None => continue };
+            let end = match cap.get(2).and_then(|m| m.as_str().parse::<u32>().ok()) { Some(v) => v, None => continue };
+            let both_look_like_years = (1900..=2099).contains(&start) && (1900..=2099).contains(&end);
+            if !both_look_like_years && end > start { return Some((start, end)); }
+        }
+    }
+    None
+}
+
 /// Normalizes a release title to a comparable "edition" key (parity with automation.ts normalizeTitle).
 /// Used to detect when GetComics returns multiple distinct editions for one request.
 pub fn normalize_edition_title(t: &str) -> String {
@@ -104,6 +156,31 @@ pub async fn get_custom_acronyms(db: &sqlx::AnyPool) -> anyhow::Result<HashMap<S
         if !key.is_empty() && !val.is_empty() { ac_map.insert(key.to_lowercase(), val.to_lowercase()); }
     }
     Ok(ac_map)
+}
+
+/// Treat configured acronym expansions as search aliases during relevance validation too. Query
+/// generation already expands `elves -> elfes`; without canonicalizing the returned title, the
+/// strict filter immediately rejects the French result for not containing the ComicVine word
+/// `elves`. Only aliases present in the current request are applied, so unrelated mappings cannot
+/// loosen another series' match.
+pub(crate) fn canonicalize_title_aliases(
+    title: &str,
+    request: &str,
+    aliases: &HashMap<String, String>,
+) -> String {
+    let mut canonical = title.to_lowercase();
+    let request_lower = request.to_lowercase();
+    for (key, value) in aliases {
+        if key.trim().is_empty() || value.trim().is_empty() { continue; }
+        let key_re = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(key))).ok();
+        let value_re = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(value))).ok();
+        if key_re.as_ref().is_some_and(|re| re.is_match(&request_lower)) {
+            if let Some(re) = value_re { canonical = re.replace_all(&canonical, key.as_str()).to_string(); }
+        } else if value_re.as_ref().is_some_and(|re| re.is_match(&request_lower)) {
+            if let Some(re) = key_re { canonical = re.replace_all(&canonical, value.as_str()).to_string(); }
+        }
+    }
+    canonical
 }
 
 /// Insertion-ordered de-dup push (replaces the old HashSet so query order is deterministic —
@@ -229,7 +306,7 @@ pub fn generate_search_queries(
     }
     if expanded.to_lowercase() != broad_clean.to_lowercase() {
         if !year.is_empty() { add_query(&mut secondary, &mut secondary_seen, format!("{} {}", expanded, year)); }
-        add_query(&mut secondary, &mut secondary_seen, expanded);
+        add_query(&mut secondary, &mut secondary_seen, expanded.clone());
     }
 
     // --- PACK GENERATOR (beta.035): a separate gated group, optionally ordered first. ---
@@ -238,14 +315,27 @@ pub fn generate_search_queries(
     if use_packs {
         let re_series_only = Regex::new(r"(?i)\s\d+(?:\.\d+)?$").unwrap();
         let series_only_name = re_series_only.replace(&broad_clean, "").trim().to_string();
-        if series_only_name.len() > 2 {
-            if series_only_name != broad_clean {
-                add_query(&mut packs, &mut packs_seen, series_only_name.clone());
+        let expanded_series_only = re_series_only.replace(&expanded, "").trim().to_string();
+        let mut add_pack_queries = |series_name: &str, stripped_issue: bool| {
+            if series_name.len() > 2 {
+                if stripped_issue {
+                    add_query(&mut packs, &mut packs_seen, series_name.to_string());
+                }
+                add_query(&mut packs, &mut packs_seen, format!("{} collection", series_name));
+                add_query(&mut packs, &mut packs_seen, format!("{} story arc", series_name));
+                add_query(&mut packs, &mut packs_seen, format!("{} pack", series_name));
+                add_query(&mut packs, &mut packs_seen, format!("{} integrale", series_name));
+                add_query(&mut packs, &mut packs_seen, format!("{} albums", series_name));
+                add_query(&mut packs, &mut packs_seen, format!("{} tomes", series_name));
             }
-            add_query(&mut packs, &mut packs_seen, format!("{} collection", series_only_name));
-            add_query(&mut packs, &mut packs_seen, format!("{} story arc", series_only_name));
-            add_query(&mut packs, &mut packs_seen, format!("{} pack", series_only_name));
+        };
+
+        // Prefer the configured localized alias for packs. With slow indexers, every preceding
+        // query is expensive (for example ComicVine "Elves" versus French releases "Elfes").
+        if expanded_series_only.to_lowercase() != series_only_name.to_lowercase() {
+            add_pack_queries(&expanded_series_only, expanded_series_only != expanded);
         }
+        add_pack_queries(&series_only_name, series_only_name != broad_clean);
     }
 
     // The bare main-title queries (e.g. "X Men" / "X Men 2026" from a colon-split "X-Men: Outback #1")
@@ -387,7 +477,12 @@ fn reverse_noise_set() -> &'static std::collections::HashSet<String> {
         let mut s: std::collections::HashSet<String> =
             ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"]
                 .iter().map(|w| w.to_string()).collect();
-        for w in ["eng", "cbz", "cbr", "cb7", "zip", "rar", "webrip", "digital", "vol", "volume", "ch", "chapter", "issue", "tpb", "rip", "the", "and", "of", "by", "gn"] { s.insert(w.to_string()); }
+        for w in [
+            "eng", "english", "fr", "fre", "french", "vf", "cbz", "cbr", "cb7", "zip", "rar", "pdf",
+            "epub", "webrip", "digital", "hybrid", "comic", "ebook", "vol", "volume", "ch", "chapter",
+            "issue", "tpb", "rip", "the", "and", "of", "by", "gn", "notag", "toner", "printer", "team",
+            "remasterisee", "remasterise", "repack",
+        ] { s.insert(w.to_string()); }
         for w in &BOUNDED_VARIANT_KEYWORDS { s.insert(w.to_string()); }
         for k in &OPEN_VARIANT_KEYWORDS { for w in k.split_whitespace() { s.insert(w.to_string()); } }
         for w in ["cover", "covers", "scan", "scans", "noads", "c2c", "empire", "mobile", "edition"] { s.insert(w.to_string()); }
@@ -451,7 +546,7 @@ pub async fn filter_and_score(
     target_query: &str,
     is_manga: bool,
     req_year: Option<String>,
-    series_year: Option<String>,
+    _series_year: Option<String>,
     skip_relevance: bool,
     allow_packs_override: Option<bool>,
 ) -> anyhow::Result<Option<ProwlarrResult>> {
@@ -467,6 +562,9 @@ pub async fn filter_and_score(
     if allow_packs_override == Some(false) {
         allow_bulk_packs = false;
     }
+    let prioritize_packs = allow_bulk_packs && sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'prioritize_packs'"#)
+        .fetch_optional(db).await?.unwrap_or_default() == "true";
+    let search_aliases = get_custom_acronyms(db).await.unwrap_or_default();
     let scoring_rules_str = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'release_scoring_rules'"#)
         .fetch_optional(db).await?.unwrap_or_default();
     let match_ratio_str = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'filter_match_ratio'"#)
@@ -513,7 +611,6 @@ pub async fn filter_and_score(
     let mut tpb_terms = vec!["omnibus", "tpb", "compendium", "collection", "hc", "hardcover", "trade paperback"];
     if !is_manga { tpb_terms.extend_from_slice(&["vol ", "volume ", "book "]); }
     let is_looking_for_omnibus = tpb_terms.iter().any(|term| clean_original.contains(term));
-    let pack_terms = ["story arc", "pack", "complete", "collection", "bundle", "run", "chronological"];
     let is_looking_for_annual = clean_original.contains("annual");
 
     let original_query_words: Vec<String> = clean_original.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' })
@@ -529,13 +626,14 @@ pub async fn filter_and_score(
 
     // The reverse-guard noise set now lives in reverse_noise_set() (shared with the GetComics filter).
 
-    // Evaluate each result: None = rejected; Some(year_unconfirmed) = kept, where `true` marks an
-    // undated release admitted only via the opt-in `prowlarr_accept_yearless` (issue #176 change B).
+    // Evaluate each result: None = rejected; Some((year_unconfirmed, is_pack)) = kept.
     // Unconfirmed survivors sort BELOW every dated candidate regardless of score, so an undated release
     // only ever auto-downloads when nothing dated exists.
-    let evaluate = |res: &ProwlarrResult| -> Option<bool> {
+    let evaluate = |res: &ProwlarrResult| -> Option<(bool, bool)> {
         let title_lower = res.title.to_lowercase();
+        let match_title_lower = canonicalize_title_aliases(&title_lower, &clean_original, &search_aliases);
         let is_ddl = res.protocol == "ddl";
+        let is_pack = allow_bulk_packs && is_pack_title(&title_lower);
 
         for junk in &junk_words { if title_lower.contains(junk) { return None; } }
         for group in &exclude_groups { if title_lower.contains(group) { return None; } }
@@ -544,9 +642,7 @@ pub async fn filter_and_score(
         // Pre-filtered sources (GetComics, already validated per-query in getcomics::search) only get
         // the operator's junk/exclude lists + scoring — not this relevance filter, which is keyed on the
         // merged target_query rather than the specific query that produced the result.
-        if skip_relevance { return Some(false); }
-
-        let is_pack = allow_bulk_packs && pack_terms.iter().any(|term| title_lower.contains(term));
+        if skip_relevance { return Some((false, is_pack)); }
 
         if req_num.is_some() && !is_looking_for_omnibus && !is_pack {
             let unexpected_tpb_terms: Vec<&&str> = tpb_terms.iter().filter(|t| !clean_original.contains(**t)).collect();
@@ -578,14 +674,11 @@ pub async fn filter_and_score(
         let tor_year: Option<String> = re_year_find().captures(&title_lower)
             .and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
 
-        // A pack/collection is dated by its SERIES start year, not the requested issue's release year
-        // (beta.069): "Wolverine Complete Collection (2024)" legitimately serves a 2026 issue. So packs
-        // anchor on series_year (falling back to req_year); single issues stay on the per-issue req_year.
-        let effective_year = if is_pack {
-            series_year.as_ref().or(req_year.as_ref())
-        } else {
-            req_year.as_ref()
-        };
+        // A pack/collection's visible year describes the edition more often than the series itself.
+        // A collection's visible year is commonly its edition/repack year (for example a 2025
+        // Thorgal collection for a series that began in 1977), so it cannot discriminate volumes.
+        // True packs are already protected by bounded pack markers plus the core-title check below.
+        let effective_year = if is_pack { None } else { req_year.as_ref() };
 
         let mut year_unconfirmed = false;
         if let Some(req_y) = effective_year {
@@ -614,7 +707,7 @@ pub async fn filter_and_score(
         // Collection"). Applies to Prowlarr (beta.068) AND Anna's Archive — GetComics results run
         // the same guard inside getcomics::search (they bypass this filter via skip_relevance).
         if req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
-            let extra = off_series_extra_words(&title_lower, &significant_query_words);
+            let extra = off_series_extra_words(&match_title_lower, &significant_query_words);
             if !extra.is_empty() {
                 log::debug!("[Automation Debug] Discarding off-series release \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
                 return None;
@@ -623,12 +716,12 @@ pub async fn filter_and_score(
 
         // Core-title match-ratio reverse-validation — Prowlarr only (H-12).
         if !is_ddl && !significant_query_words.is_empty() {
-            let stripped_title = re_brackets_parens_strip().replace_all(&title_lower, "").to_string();
+            let stripped_title = re_brackets_parens_strip().replace_all(&match_title_lower, "").to_string();
             let result_words: Vec<String> = stripped_title.chars()
                 .map(|c| if c.is_alphanumeric() { c } else { ' ' })
                 .collect::<String>()
                 .split_whitespace()
-                .filter(|w| !stop_words.contains(*w) && w.chars().count() > 2 && Some(*w) != tor_year.as_deref())
+                .filter(|w| !reverse_noise_set().contains(*w) && w.chars().count() > 2 && Some(*w) != tor_year.as_deref())
                 .map(|s| s.to_string())
                 .collect();
             if fails_match_ratio(&significant_query_words, &result_words, is_pack, ratio_config) {
@@ -643,26 +736,28 @@ pub async fn filter_and_score(
             }
         }
         for w in &words_to_enforce {
-            if !w.chars().all(char::is_numeric) && !title_lower.contains(w) { return None; }
+            if !w.chars().all(char::is_numeric) && !match_title_lower.contains(w) { return None; }
         }
 
-        Some(year_unconfirmed)
+        Some((year_unconfirmed, is_pack))
     };
 
-    let mut kept: Vec<(ProwlarrResult, bool)> = Vec::new();
+    let mut kept: Vec<(ProwlarrResult, bool, bool)> = Vec::new();
     for res in results {
-        if let Some(unconfirmed) = evaluate(&res) {
-            kept.push((res, unconfirmed));
+        if let Some((unconfirmed, is_pack)) = evaluate(&res) {
+            kept.push((res, unconfirmed, is_pack));
         }
     }
 
     if kept.is_empty() { return Ok(None); }
 
-    // Tiered sort: year-confirmed (false) before unconfirmed (true), then score within each tier.
-    // With prowlarr_accept_yearless off no survivor is ever flagged, so this reduces to the original
-    // pure score ordering — the default path is bit-for-bit the old behavior.
+    // When the operator explicitly prioritizes packs, real pack candidates form the first tier.
+    // Inside each tier, year-confirmed releases still outrank unconfirmed ones, then normal scoring
+    // applies. Without the setting this reduces to the previous year/score ordering.
     kept.sort_by(|a, b| {
-        a.1.cmp(&b.1).then_with(|| {
+        let pack_tier_a = prioritize_packs && !a.2;
+        let pack_tier_b = prioritize_packs && !b.2;
+        pack_tier_a.cmp(&pack_tier_b).then_with(|| a.1.cmp(&b.1)).then_with(|| {
             let score_a = calculate_score(&a.0, &scoring_rules);
             let score_b = calculate_score(&b.0, &scoring_rules);
             score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
@@ -891,6 +986,39 @@ mod tests {
         let no_number = generate_search_queries("Saga", "2014", &ac, false, true);
         assert!(no_number.iter().any(|q| q == "Saga collection"));
         assert!(no_number.iter().any(|q| q == "Saga pack"));
+
+        // A configured localized alias leads the prioritized pack group.
+        let localized = HashMap::from([("elves".to_string(), "elfes".to_string())]);
+        let localized_packs = generate_search_queries("Elves 3", "2016", &localized, true, true);
+        assert_eq!(localized_packs.first().map(String::as_str), Some("elfes"));
+        let localized_idx = localized_packs.iter().position(|q| q == "elfes collection").unwrap();
+        let metadata_idx = localized_packs.iter().position(|q| q == "Elves collection").unwrap();
+        assert!(localized_idx < metadata_idx);
+    }
+
+    #[test]
+    fn localized_pack_detection_is_bounded_and_understands_french_ranges() {
+        assert!(!is_pack_title("Thorgal.le.cycle.de.Qa.2012.FRENCH.REPACK.CBZ"));
+        assert!(is_pack_title("Thorgal.Collection.73 Albums.FR.CBZ"));
+        assert!(is_pack_title("Thorgal intégrale 38 albums + 3 hors-série"));
+        assert!(is_pack_title("Thorgal T1 à T39 [CBZ]"));
+        assert!(is_pack_title("Elfes.T1.T35.FR.[CBZ]"));
+        assert_eq!(parse_issue_range("Thorgal T1 à T39 [CBZ]"), Some((1, 39)));
+        assert_eq!(parse_issue_range("Elfes.T1.T35.FR.[CBZ]"), Some((1, 35)));
+        assert_eq!(parse_issue_range("Thorgal (2008-2010)"), None);
+    }
+
+    #[test]
+    fn configured_expansion_is_also_a_bidirectional_match_alias() {
+        let aliases = HashMap::from([("elves".to_string(), "elfes".to_string())]);
+        assert_eq!(
+            canonicalize_title_aliases("Elfes 003 FRENCH", "Elves #3", &aliases),
+            "elves 003 french"
+        );
+        assert_eq!(
+            canonicalize_title_aliases("Elves 003 English", "Elfes #3", &aliases),
+            "elfes 003 english"
+        );
     }
 
     // ---- Issue #176 characterization: query normalization ALREADY strips punctuation and the year is
@@ -977,6 +1105,8 @@ mod tests {
             .connect("sqlite::memory:").await.unwrap();
         sqlx::query(r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#)
             .execute(&pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "SearchAcronym" (key TEXT PRIMARY KEY, value TEXT)"#)
+            .execute(&pool).await.unwrap();
         for (k, v) in settings {
             sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2)"#)
                 .bind(*k).bind(*v).execute(&pool).await.unwrap();
@@ -1059,5 +1189,49 @@ mod tests {
             res_p(high, 50, 0, "torrent"),
         ]).await;
         assert_eq!(got.map(|r| r.title), Some(high.to_string()));
+    }
+
+
+    #[tokio::test]
+    async fn prioritize_packs_changes_final_exhaustive_result_ranking() {
+        let pool = mem_pool(&[
+            ("allow_bulk_packs", "true"),
+            ("prioritize_packs", "true"),
+            ("prowlarr_accept_yearless", "true"),
+        ]).await;
+        // 2025 is the collection edition year, not the 2011 metadata-series start year.
+        let pack = "Thorgal.Collection.73 Albums.2025.FR.CBZ";
+        let single = "Thorgal 001 (2011) (Digital).CBZ";
+        let got = filter_and_score(
+            &pool,
+            vec![res_p(single, 500, 100, "torrent"), res_p(pack, 1, 0, "torrent")],
+            "Thorgal #1: Die Rache der Zauberin",
+            false,
+            Some("2011".into()),
+            Some("2011".into()),
+            false,
+            Some(true),
+        ).await.unwrap();
+        assert_eq!(got.map(|r| r.title), Some(pack.to_string()));
+    }
+
+
+    #[tokio::test]
+    async fn configured_localized_alias_survives_the_strict_result_filter() {
+        let pool = mem_pool(&[]).await;
+        sqlx::query(r#"INSERT INTO "SearchAcronym" (key, value) VALUES ('elves', 'elfes')"#)
+            .execute(&pool).await.unwrap();
+        let localized = "Elfes 003 (2016) FRENCH CBZ";
+        let got = filter_and_score(
+            &pool,
+            vec![res_p(localized, 10, 0, "usenet")],
+            "Elves #3: White Elf, Black Heart",
+            false,
+            Some("2016".into()),
+            Some("2016".into()),
+            false,
+            Some(false),
+        ).await.unwrap();
+        assert_eq!(got.map(|r| r.title), Some(localized.to_string()));
     }
 }

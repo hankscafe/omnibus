@@ -10,11 +10,11 @@ import { SystemNotifier } from './notifications';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
-import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { isSameIssue, extractIssueNumber, isPackTitle } from '@/lib/utils/issue-parser';
 import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
-import { WATCHED_DIR } from '@/lib/utils/paths';
+import { WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
@@ -448,6 +448,34 @@ export const Importer = {
         }
 
         return true;
+    }
+
+    // A release advertised as a collection/range but delivered as one flat comic archive has no
+    // reliable per-issue boundary. Never fabricate issue #1 (or the last number in a range) from it.
+    // Proper packs containing nested CBZ/CBR files returned through the batch path above; only the
+    // ambiguous flat payload reaches this guard and is held for manual review.
+    const releaseLabel = req.activeDownloadName || path.basename(actualSourceFile);
+    if (isPackTitle(releaseLabel)) {
+        await fs.ensureDir(UNMATCHED_DIR);
+        let heldPath = path.join(UNMATCHED_DIR, path.basename(actualSourceFile));
+        if (fs.existsSync(heldPath)) {
+            heldPath = path.join(UNMATCHED_DIR, `${Date.now()}_${path.basename(actualSourceFile)}`);
+        }
+        if (isFromClient || trackingHash) {
+            await fs.copy(actualSourceFile, heldPath, { overwrite: false });
+        } else {
+            await fs.move(actualSourceFile, heldPath, { overwrite: false });
+        }
+        await prisma.request.update({ where: { id: req.id }, data: { status: 'STALLED' } });
+        Logger.log(`[Importer] Flat collection held for manual review instead of importing it as one issue: ${heldPath}`, 'warn');
+        await Promise.resolve(SystemNotifier.sendAlert('download_failed', {
+            title: releaseLabel,
+            imageUrl: req.imageUrl ?? undefined,
+            user: req.user?.username,
+            email: req.user?.email,
+            description: `The downloaded collection did not contain separate comic archives, so Omnibus held it in Unmatched instead of assigning the whole file to one issue.`
+        })).catch(() => {});
+        return false;
     }
 
     // --- DUAL PROVIDER METADATA FETCHING ---

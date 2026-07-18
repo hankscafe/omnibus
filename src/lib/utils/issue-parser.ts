@@ -85,15 +85,28 @@ export function extractIssueNumber(filename: string): string {
 // Kept in lock-step with the Rust engine's getcomics.rs parse_issue_range.
 export function parseIssueRange(title: string): { start: number; end: number } | null {
     if (!title) return null;
-    const rangeRegex = /(?:#|issues?\s*#?|vol(?:ume)?\.?\s*|v\.?\s*)?(\d{1,4})\s*(?:[-–—]|\bto\b)\s*#?(\d{1,4})/gi;
-    let m: RegExpExecArray | null;
-    while ((m = rangeRegex.exec(title)) !== null) {
-        const start = parseInt(m[1], 10);
-        const end = parseInt(m[2], 10);
-        if (isNaN(start) || isNaN(end)) continue;
-        const bothLookLikeYears = start >= 1900 && start <= 2099 && end >= 1900 && end <= 2099;
-        if (bothLookLikeYears) continue;
-        if (end > start) return { start, end };
+    const patterns = [
+        /(?:#|issues?\s*#?|vol(?:ume)?\.?\s*|v\.?\s*|t(?:ome)?s?\.?\s*|albums?\.?\s*)?(\d{1,4})\s*(?:[-–—]|\bto\b|\bau\b|à)\s*(?:#|vol(?:ume)?\.?\s*|v\.?\s*|t(?:ome)?\.?\s*)?(\d{1,4})/gi,
+        /(?:^|[^\p{L}\p{N}])t(?:ome)?\.?\s*(\d{1,4})[\s._-]+t(?:ome)?\.?\s*(\d{1,4})(?:$|[^\p{L}\p{N}])/giu,
+    ];
+    for (const rangeRegex of patterns) {
+        let m: RegExpExecArray | null;
+        while ((m = rangeRegex.exec(title)) !== null) {
+            const start = parseInt(m[1], 10);
+            const end = parseInt(m[2], 10);
+            if (isNaN(start) || isNaN(end)) continue;
+            const bothLookLikeYears = start >= 1900 && start <= 2099 && end >= 1900 && end <= 2099;
+            if (bothLookLikeYears) continue;
+            if (end > start) return { start, end };
+        }
     }
     return null;
+}
+
+/** True only for real multi-issue markers. `REPACK` is deliberately not a pack. */
+export function isPackTitle(title: string): boolean {
+    if (!title) return false;
+    const marker = /(?:^|[^\p{L}\p{N}])(?:pack|story[\s._-]*arc|complete|complet(?:e|es)?|collection|bundle|run|chronological|integrale|intégrale|m[ée]ga[\s._-]*pack|giga[\s._-]*pack)(?:$|[^\p{L}\p{N}])/iu;
+    const countedFrench = /(?:^|[^\p{L}\p{N}])\d+\s*(?:albums|tomes|hors[\s._-]*s[ée]rie(?:s)?|h\.?s\.?)\b/iu;
+    return marker.test(title) || countedFrench.test(title) || parseIssueRange(title) !== null;
 }

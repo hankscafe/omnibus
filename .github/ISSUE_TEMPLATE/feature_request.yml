@@ -1,0 +1,50 @@
+name: ✨ Feature Request
+description: Suggest a new feature or an improvement to an existing one.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! One important heads-up on how contributions work here:
+
+        **Omnibus is a small project — please open this request and wait for a maintainer's go-ahead before building anything.** It's the best way to make sure your effort ends in a merged PR rather than a declined one. See [CONTRIBUTING.md](https://github.com/hankscafe/omnibus/blob/main/CONTRIBUTING.md).
+
+        Please also search the [existing issues](https://github.com/hankscafe/omnibus/issues) and [discussions](https://github.com/hankscafe/omnibus/discussions) first.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched existing issues and discussions and didn't find this already proposed.
+          required: true
+        - label: I understand I should wait for maintainer buy-in before writing code for this.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The use case or pain point behind the request — "As a user I want … so that …".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: How you imagine the feature working.
+    validations:
+      required: true
+  - type: textarea
+    id: mockups
+    attributes:
+      label: Mockups or screenshots
+      description: For anything visual, a sketch, mockup, or a screenshot of a similar feature elsewhere really helps. Paste images directly into this field.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Any other approaches or workarounds you've thought about.
+    validations:
+      required: false

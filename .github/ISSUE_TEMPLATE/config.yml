@@ -1,0 +1,10 @@
+# Steer people who don't have a bug/feature toward the right channel instead of a blank issue.
+# Set blank_issues_enabled to true if you'd rather allow freeform issues alongside the templates.
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Omnibus Discord
+    url: https://discord.gg/FBnzdBZP
+    about: Questions, help getting set up, status updates, or a quick chat with the team.
+  - name: 💡 GitHub Discussions
+    url: https://github.com/hankscafe/omnibus/discussions
+    about: Design conversations, open-ended ideas, and questions before a formal issue.

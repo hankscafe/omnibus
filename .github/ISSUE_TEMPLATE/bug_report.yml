@@ -1,0 +1,72 @@
+name: 🐛 Bug Report
+description: Report something in Omnibus that isn't working the way it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug — a clear report with a screenshot gets fixed much faster.
+
+        **Please search the [existing issues](https://github.com/hankscafe/omnibus/issues) first.** If it's already reported, add your details to that thread instead of opening a duplicate.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched existing issues and pull requests and didn't find a duplicate.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Omnibus version
+      description: Shown in the app under Admin → System Diagnostics.
+      placeholder: v1.2.2
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Omnibus?
+      options:
+        - Docker (standard / SQLite)
+        - Docker (Postgres profile)
+        - Built from source
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect to happen instead?
+      placeholder: When I …, I expected …, but instead …
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact steps someone else can follow to see the same thing.
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. See …
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots and logs
+      description: |
+        Please include a screenshot of the problem. For errors, a screenshot or copy of the relevant **System Logs** entry (Admin → System Logs) is extremely helpful. Drag-and-drop or paste images directly into this field.
+      placeholder: Paste screenshots here, plus any relevant log output.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Library size, browser/OS, or anything else that might be relevant.
+    validations:
+      required: false

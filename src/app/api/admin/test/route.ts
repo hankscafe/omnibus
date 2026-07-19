@@ -201,31 +201,69 @@ export async function POST(request: Request) {
         if (!cleanUrl) return NextResponse.json({ success: false, message: 'Missing Client URL' });
 
         if (clientType === 'qbit') {
+            // API key first (qBittorrent >= 5.2): stateless Bearer auth that never touches the
+            // login endpoint, so it can't trigger qBittorrent's failed-login IP ban (issue #193).
+            // '********' means "unchanged" — re-read the stored key, same pattern as SAB below.
+            const realApiKey = (apiKey === '********')
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey ?? null) || ""
+                : (apiKey || "");
+
+            if (realApiKey.trim()) {
+                try {
+                    const verRes = await axios.get(`${cleanUrl}/api/v2/app/version`, {
+                        headers: { ...headers, Authorization: `Bearer ${realApiKey.trim()}` },
+                        timeout: 5000
+                    });
+                    return NextResponse.json({ success: true, message: `qBittorrent Connected via API key! (${verRes.data})` });
+                } catch (e: any) {
+                    const status = e?.response?.status;
+                    if (status === 401 || status === 403) {
+                        throw new Error("qBittorrent rejected the API key. Re-copy it from qBittorrent → Preferences → WebUI → API Key (generating a new key invalidates the old one), and confirm qBittorrent is v5.2 or newer.");
+                    }
+                    throw e;
+                }
+            }
+
             const loginParams = new URLSearchParams();
             loginParams.append('username', user || '');
-            
-            const realPass = (pass === '********') 
+
+            const realPass = (pass === '********')
                 ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ""
                 : pass;
 
             loginParams.append('password', realPass || '');
 
-            const qbitHeaders = { 
-                ...headers, 
-                'Content-Type': 'application/x-www-form-urlencoded' 
+            const qbitHeaders = {
+                ...headers,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                // Strict qBittorrent CSRF configs return 403 on login without these.
+                Referer: cleanUrl,
+                Origin: cleanUrl
             };
 
-            const authRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, loginParams, {
-                headers: qbitHeaders,
-                timeout: 5000 
-            });
+            let authRes;
+            try {
+                authRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, loginParams, {
+                    headers: qbitHeaders,
+                    timeout: 5000
+                });
+            } catch (e: any) {
+                // A hard 403 on the LOGIN endpoint is qBittorrent's failed-login IP ban — after a
+                // few bad attempts every request 403s regardless of credentials (issue #193's
+                // "Request failed with status code 403"). Name it instead of leaking the bare code.
+                if (e?.response?.status === 403) {
+                    throw new Error("qBittorrent refused the login (HTTP 403). It has likely banned this IP after failed login attempts — restart qBittorrent (or wait ~1 hour), verify the username/password, then test ONCE. Tip: with qBittorrent 5.2+ use an API key instead (Preferences → WebUI → API Key); API keys never trigger login bans.");
+                }
+                throw e;
+            }
 
             if (authRes.data === 'Ok.') {
                 return NextResponse.json({ success: true, message: 'qBittorrent Connected Successfully!' });
             } else {
-                throw new Error("Authentication failed. Check username/password.");
+                // Wrong credentials: qbit answers HTTP 200 with body "Fails." — not an HTTP error.
+                throw new Error("Authentication failed. Check username/password. (Careful: several failed attempts in a row will get this IP temporarily banned by qBittorrent.)");
             }
-        } 
+        }
         else if (clientType === 'sab') {
             const realApiKey = (apiKey === '********')
                 ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.apiKey ?? null) || ""

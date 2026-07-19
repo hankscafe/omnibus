@@ -67,13 +67,17 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
         expect(result.success).toBe(true);
         expect(mocks.axiosPost).toHaveBeenCalledTimes(2);
 
-        const [loginUrl, loginBody] = mocks.axiosPost.mock.calls[0];
+        const [loginUrl, loginBody, loginConfig] = mocks.axiosPost.mock.calls[0];
         expect(loginUrl).toBe('http://192.168.1.100:8080/api/v2/auth/login');
         expect(loginBody.toString()).toContain('username=admin');
+        // Strict qBittorrent CSRF configs 403 the login without a matching Referer/Origin (issue #193).
+        expect(loginConfig.headers['Referer']).toBe('http://192.168.1.100:8080');
+        expect(loginConfig.headers['Origin']).toBe('http://192.168.1.100:8080');
 
         const [addUrl, _, requestConfig] = mocks.axiosPost.mock.calls[1];
         expect(addUrl).toBe('http://192.168.1.100:8080/api/v2/torrents/add');
-        expect(requestConfig.headers['Cookie']).toEqual(['SID=fake_auth_cookie_123; HttpOnly;']);
+        // The SID is extracted cleanly — attributes like HttpOnly no longer leak into the Cookie header.
+        expect(requestConfig.headers['Cookie']).toBe('SID=fake_auth_cookie_123');
         
         // FIX: Assert against our Spy to ensure the correct data was appended to the form!
         expect(appendSpy).toHaveBeenCalledWith('category', 'comics');
@@ -99,17 +103,46 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
         appendSpy.mockRestore();
     });
 
-    it('should gracefully handle a 403 Forbidden error (bad password)', async () => {
+    it('translates a login 403 into the IP-ban explanation (issue #193 — a 403 is the ban, not bad credentials)', async () => {
         const mockError = new Error('Request failed with status code 403');
         (mockError as any).response = { status: 403 };
-        
+
         mocks.axiosPost.mockRejectedValueOnce(mockError);
 
         await expect(
             DownloadService.addDownload(mockClient, 'magnet:?xt=123', 'Batman', 0, 0)
-        ).rejects.toThrow('Request failed with status code 403');
+        ).rejects.toThrow(/banned this IP after failed login attempts/);
 
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Failed: Request failed'), 'error');
+        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('banned this IP'), 'error');
+    });
+
+    it('rejects a "Fails." login body (wrong credentials come back as HTTP 200) instead of a misleading later 403', async () => {
+        // qBittorrent answers wrong credentials with HTTP 200 + "Fails." and NO cookie — the old
+        // code sailed past this and the torrents/add call then failed with an opaque 403.
+        mocks.axiosPost.mockResolvedValueOnce({ headers: {}, data: 'Fails.' });
+
+        await expect(
+            DownloadService.addDownload(mockClient, 'magnet:?xt=123', 'Batman', 0, 0)
+        ).rejects.toThrow(/rejected the username\/password/);
+
+        // No second call — the failure is caught AT login, not after it.
+        expect(mocks.axiosPost).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses stateless Bearer auth when an API key is configured (qBittorrent 5.2+) — no login call at all', async () => {
+        const keyClient = { ...mockClient, apiKey: 'qbt_abcdefghijklmnopqrstuvwxyz12' };
+        mocks.axiosPost.mockResolvedValueOnce({ data: 'Ok.' }); // torrents/add only
+
+        const result = await DownloadService.addDownload(keyClient, 'magnet:?xt=urn:btih:9', 'Saga #1', 0, 0);
+
+        expect(result.success).toBe(true);
+        // Exactly ONE post — torrents/add. The login endpoint is never touched, so an API-key
+        // client can never trigger qBittorrent's failed-login IP ban.
+        expect(mocks.axiosPost).toHaveBeenCalledTimes(1);
+        const [addUrl, _, requestConfig] = mocks.axiosPost.mock.calls[0];
+        expect(addUrl).toBe('http://192.168.1.100:8080/api/v2/torrents/add');
+        expect(requestConfig.headers['Authorization']).toBe('Bearer qbt_abcdefghijklmnopqrstuvwxyz12');
+        expect(requestConfig.headers['Cookie']).toBeUndefined();
     });
 
     it('should gracefully handle the client being completely offline (Network Error)', async () => {

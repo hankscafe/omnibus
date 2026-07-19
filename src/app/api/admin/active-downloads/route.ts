@@ -5,6 +5,7 @@ import axios from 'axios';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { decryptSecret } from '@/lib/encryption';
+import { qbitAuthHeaders } from '@/lib/download-clients';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
@@ -46,22 +47,13 @@ export async function GET() {
 
         try {
             if (client.type === 'qbit') {
-                const loginParams = new URLSearchParams();
-                loginParams.append('username', client.user || '');
-                loginParams.append('password', client.pass || '');
-
-                const authRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, loginParams, {
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
-                    timeout: 15000 
-                });
-
-                if (authRes.data !== 'Ok.') throw new Error("qBittorrent Authentication Failed");
-
-                const cookie = authRes.headers['set-cookie'];
+                // API key (Bearer, qBittorrent >= 5.2) or username/password login — shared helper
+                // handles both, checks the "Fails." body, and names a login-ban 403 (issue #193).
+                const authHeaders = await qbitAuthHeaders(client, cleanUrl, headers, 15000);
 
                 const { data: torrents } = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
-                    params: { filter: 'all' }, 
-                    headers: { ...headers, Cookie: cookie },
+                    params: { filter: 'all' },
+                    headers: authHeaders,
                     timeout: 15000
                 });
 

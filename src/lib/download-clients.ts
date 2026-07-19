@@ -22,6 +22,61 @@ async function getNetworkHeaders() {
     return headers;
 }
 
+// ---------------------------------------------------------------------------
+// qBittorrent auth (issue #193) — ONE helper for every qbit call site.
+//
+// Two modes, decided by whether an API key is configured:
+//  - API key (qBittorrent >= 5.2): stateless `Authorization: Bearer qbt_...`. No login call is
+//    made at all, so it can never trip qBittorrent's failed-login IP ban (the opaque 403 that
+//    made #193 undiagnosable).
+//  - Username/password (older qBittorrent): POST /auth/login for a SID cookie. Three fixes over
+//    the old inline copies of this flow:
+//      1. The login carries Referer+Origin — strict qBittorrent CSRF configs 403 without them.
+//      2. The response BODY is checked: qbit answers WRONG credentials with HTTP 200 "Fails."
+//         and no cookie, which previously sailed through and surfaced later as a misleading 403
+//         on the next API call.
+//      3. A hard 403 on the login itself is translated into the real story — qBittorrent bans
+//         the caller's IP after consecutive failed logins, and every attempt during the ban
+//         returns 403 regardless of credentials.
+//    The SID is extracted cleanly instead of forwarding the raw set-cookie array (attributes
+//    and all) as the Cookie header.
+// ---------------------------------------------------------------------------
+export async function qbitAuthHeaders(
+    client: { user?: string | null; pass?: string | null; apiKey?: string | null },
+    cleanUrl: string,
+    baseHeaders: Record<string, string>,
+    timeoutMs: number,
+): Promise<Record<string, string>> {
+    const apiKey = (client.apiKey || '').trim();
+    if (apiKey) {
+        return { ...baseHeaders, Authorization: `Bearer ${apiKey}` };
+    }
+
+    let loginRes;
+    try {
+        loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`,
+            new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
+            { headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded', Referer: cleanUrl, Origin: cleanUrl }, timeout: timeoutMs }
+        );
+    } catch (e: any) {
+        if (e?.response?.status === 403) {
+            throw new Error('qBittorrent refused the login (HTTP 403) — it has likely banned this IP after failed login attempts. Restart qBittorrent (or wait ~1 hour), verify the credentials, then try again. Tip: with qBittorrent 5.2+ an API key (Preferences → WebUI → API Key) avoids login bans entirely.');
+        }
+        throw e;
+    }
+
+    if (String(loginRes.data).trim() !== 'Ok.') {
+        throw new Error('qBittorrent rejected the username/password (login returned "Fails."). Check the WebUI credentials in qBittorrent under Tools → Options → Web UI. Repeated failed attempts will get this IP temporarily banned.');
+    }
+
+    const setCookies: string[] = ([] as string[]).concat(loginRes.headers['set-cookie'] || []);
+    const sid = setCookies.map(c => c.split(';')[0].trim()).find(c => c.startsWith('SID='));
+    if (!sid) {
+        throw new Error('qBittorrent accepted the login but returned no session cookie — a reverse proxy in front of qBittorrent may be stripping cookies.');
+    }
+    return { ...baseHeaders, Cookie: sid };
+}
+
 export const DownloadService = {
   async addDownload(rawClient: any, downloadUrl: string, title: string, seedTimeLimit: number, seedRatio: number = 0, isManga: boolean = false) {
     // Credentials are encrypted at rest; decrypt into a local copy before use.
@@ -60,20 +115,17 @@ export const DownloadService = {
       }
 
       if (client.type === 'qbit') {
-        const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
-          new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
-          { ...baseConfig, headers: { ...baseConfig.headers, 'Content-Type': 'application/x-www-form-urlencoded' } }
-        );
-        const cookie = loginRes.headers['set-cookie'];
+        // API key (Bearer) or username/password (SID cookie) — see qbitAuthHeaders.
+        const authHeaders = await qbitAuthHeaders(client, cleanUrl, baseConfig.headers, baseConfig.timeout);
         const form = new FormData();
         if (fileBuffer) form.append('torrents', fileBuffer, 'comic.torrent');
         else form.append('urls', downloadUrl);
         form.append('category', primaryCategory);
         if (seedTimeLimit > 0) form.append('seeding_time_limit', seedTimeLimit.toString());
-        if (seedRatio > 0) form.append('ratio_limit', seedRatio.toString()); 
-        
+        if (seedRatio > 0) form.append('ratio_limit', seedRatio.toString());
+
         await axios.post(`${cleanUrl}/api/v2/torrents/add`, form, {
-          ...baseConfig, headers: { ...baseConfig.headers, Cookie: cookie, ...form.getHeaders() }
+          ...baseConfig, headers: { ...authHeaders, ...form.getHeaders() }
         });
       }
       else if (client.type === 'deluge') {
@@ -161,14 +213,10 @@ export const DownloadService = {
 
       try {
           if (client.type === 'qbit') {
-              const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
-                  new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
-                  { ...baseConfig, headers: { ...baseConfig.headers, 'Content-Type': 'application/x-www-form-urlencoded' } }
-              );
-              const cookie = loginRes.headers['set-cookie'];
+              const authHeaders = await qbitAuthHeaders(client, cleanUrl, baseConfig.headers, baseConfig.timeout);
               await axios.get(`${cleanUrl}/api/v2/torrents/delete`, {
                   params: { hashes: downloadId, deleteFiles: true },
-                  headers: { ...baseConfig.headers, Cookie: cookie }
+                  headers: authHeaders
               });
           }
           else if (client.type === 'sab') {
@@ -446,15 +494,14 @@ export const DownloadService = {
         };
 
         if (client.type === 'qbit') {
-          const loginRes = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
-            new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
-            { headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
-          );
-          const cookie = loginRes.headers['set-cookie'];
-          
+          // This poll runs every 15s from the dashboard — during a qbit login ban the old inline
+          // login turned every tick into an opaque 403; qbitAuthHeaders names the cause (and the
+          // Bearer path never logs in at all).
+          const authHeaders = await qbitAuthHeaders(client, cleanUrl, baseHeaders, 15000);
+
           const listRes = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
             params: { filter: 'all' },
-            headers: { Cookie: cookie, ...baseHeaders },
+            headers: authHeaders,
             timeout: 15000
           });
 

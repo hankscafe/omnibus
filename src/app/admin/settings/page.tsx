@@ -1075,6 +1075,13 @@ export default function SettingsPage() {
                     {['sab'].includes(editingClient.type) && (
                         <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => updateEditingClient('apiKey', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                     )}
+                    {editingClient.type === 'qbit' && (
+                        <div className="grid gap-2 mt-2 border-t border-border pt-4">
+                            <Label className="text-foreground font-semibold">API Key <span className="text-muted-foreground font-normal">(qBittorrent 5.2+, recommended)</span></Label>
+                            <Input type="password" value={editingClient.apiKey || ""} onChange={e => updateEditingClient('apiKey', e.target.value)} placeholder="qbt_..." className="h-12 sm:h-10 bg-muted/20 border-border text-foreground font-mono" />
+                            <p className="text-[11px] text-muted-foreground">Generate it in qBittorrent under <span className="font-semibold">Preferences → WebUI → API Key</span>. When set, the username/password above are ignored — and API keys can never trigger qBittorrent&apos;s failed-login IP ban. Leave blank to keep using username/password (required for qBittorrent older than 5.2).</p>
+                        </div>
+                    )}
                     <div className="border-t border-border pt-4">
                         <Button 
                           variant="outline" 

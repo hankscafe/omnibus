@@ -27,7 +27,9 @@ RUN find .next/standalone/node_modules -type d -name "brace-expansion" -exec rm 
 RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {} + || true
 RUN find .next/standalone/node_modules -type d -name "uuid" -exec rm -rf {} + || true
 
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nodemailer@latest uuid@11.1.1 --no-save --legacy-peer-deps --force
+# nodemailer pinned to match package-lock (was @latest, which is how the image drifted from the
+# lockfile and carried untested versions — the CVE-2026-39244 scan surfaced that gap).
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nodemailer@9.0.3 uuid@11.1.1 --no-save --legacy-peer-deps --force
 
 # --- Stage 2: Final Production Image ---
 FROM node:26-slim AS runner

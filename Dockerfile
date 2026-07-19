@@ -2,8 +2,10 @@
 # 1. Update to the newer slim base image
 FROM node:26-slim AS builder
 
-# Safely update npm to the latest version for the BUILD stage only
-RUN npm install -g npm@latest
+# Pin the BUILD-stage npm instead of @latest: an unpinned resolve at image-build time is how
+# builds drift from what was tested locally (npm 12 shipped days ago — @latest would have silently
+# jumped majors). Bump this deliberately, together with local/CI environments.
+RUN npm install -g npm@11.18.0
 
 ARG CACHEBUST=2
 

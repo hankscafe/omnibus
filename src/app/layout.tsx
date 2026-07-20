@@ -15,7 +15,10 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 
-const inter = Inter({ subsets: ["latin"] });
+// `variable` exposes Inter as --font-inter so the Tailwind theme (globals.css @theme) can bind
+// font-sans to it — the theme previously pointed at Geist variables nothing ever defined
+// (create-next-app leftovers), which silently broke every font-mono usage in the app.
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 // --- ADDED VIEWPORT EXPORT FOR NATIVE APP FEEL ---
 export const viewport: Viewport = {
@@ -119,7 +122,7 @@ export default async function RootLayout({
       </head>
       
       {/* Set body to bg-transparent so the fixed layer below can be seen */}
-      <body className={`${inter.className} text-foreground antialiased overflow-x-hidden bg-transparent`}>
+      <body className={`${inter.className} ${inter.variable} text-foreground antialiased overflow-x-hidden bg-transparent`}>
         
         {/* --- INJECT PWA REGISTRY --- */}
         <PwaRegistry />

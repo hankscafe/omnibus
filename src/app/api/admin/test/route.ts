@@ -248,21 +248,31 @@ export async function POST(request: Request) {
                     timeout: 5000
                 });
             } catch (e: any) {
-                // A hard 403 on the LOGIN endpoint is qBittorrent's failed-login IP ban — after a
-                // few bad attempts every request 403s regardless of credentials (issue #193's
-                // "Request failed with status code 403"). Name it instead of leaking the bare code.
+                // qBittorrent 5.2 rewrote the login responses (measured against 5.2.3):
+                // wrong credentials are now HTTP 401 (older versions: 200 + "Fails."), and the
+                // failed-login IP ban stays 403. Name each instead of leaking the bare code.
+                if (e?.response?.status === 401) {
+                    throw new Error("qBittorrent rejected that username/password (HTTP 401). Verify the WebUI credentials (qBittorrent → Tools → Options → Web UI) — and note: until a permanent password is set there, qBittorrent generates a TEMPORARY password on every restart (printed in its startup log), so yesterday's password stops working. (Several failed attempts in a row will get this IP temporarily banned.)");
+                }
                 if (e?.response?.status === 403) {
-                    throw new Error("qBittorrent refused the login (HTTP 403). It has likely banned this IP after failed login attempts — restart qBittorrent (or wait ~1 hour), verify the username/password, then test ONCE. Tip: with qBittorrent 5.2+ use an API key instead (Preferences → WebUI → API Key); API keys never trigger login bans.");
+                    throw new Error("qBittorrent refused the login (HTTP 403). It has banned this IP after failed login attempts — restart qBittorrent (or wait ~1 hour), verify the username/password, then test ONCE. Tip: with qBittorrent 5.2+ use an API key instead (Preferences → WebUI → API Key); API keys never trigger login bans.");
                 }
                 throw e;
             }
 
-            if (authRes.data === 'Ok.') {
+            // Cookie-first success detection: ≤5.1 answers 200 + "Ok." + an SID cookie; 5.2+
+            // answers 204 + EMPTY body + a renamed QBT_SID_<port> cookie. The old body === 'Ok.'
+            // check read 5.2's empty body as bad credentials (issue #193).
+            const setCookies: string[] = ([] as string[]).concat(authRes.headers['set-cookie'] || []);
+            const hasSession = setCookies.some(c => /^(SID|QBT_SID[^=]*)=/.test(c.split(';')[0].trim()));
+            if (hasSession || String(authRes.data).trim() === 'Ok.') {
                 return NextResponse.json({ success: true, message: 'qBittorrent Connected Successfully!' });
-            } else {
-                // Wrong credentials: qbit answers HTTP 200 with body "Fails." — not an HTTP error.
+            }
+            if (String(authRes.data).trim() === 'Fails.') {
+                // Pre-5.2 wrong-credentials shape: HTTP 200, body "Fails.".
                 throw new Error("Authentication failed. Check username/password. (Careful: several failed attempts in a row will get this IP temporarily banned by qBittorrent.)");
             }
+            throw new Error("qBittorrent answered the login but returned no session cookie — a reverse proxy in front of qBittorrent may be stripping cookies.");
         }
         else if (clientType === 'sab') {
             const realApiKey = (apiKey === '********')

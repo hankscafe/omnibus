@@ -129,6 +129,36 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
         expect(mocks.axiosPost).toHaveBeenCalledTimes(1);
     });
 
+    it('accepts qBittorrent 5.2\'s login shape: 204, EMPTY body, renamed QBT_SID_<port> cookie (issue #193)', async () => {
+        // Shapes recorded from a live qBittorrent 5.2.3 (also covered end-to-end by the opt-in
+        // __tests__/integration/qbit-live.test.ts): success is NO LONGER 200 + "Ok." + SID.
+        mocks.axiosPost.mockResolvedValueOnce({
+            status: 204,
+            data: '',
+            headers: { 'set-cookie': ['QBT_SID_8084=UOSXKevJgxmEEVMVMItfcFHDSoz9UYam; HttpOnly; SameSite=Lax; path=/'] }
+        });
+        mocks.axiosPost.mockResolvedValueOnce({ data: 'Ok.' }); // torrents/add
+
+        const result = await DownloadService.addDownload(mockClient, 'magnet:?xt=urn:btih:52', 'Batman #52', 0, 0);
+
+        expect(result.success).toBe(true);
+        const [, , requestConfig] = mocks.axiosPost.mock.calls[1];
+        expect(requestConfig.headers['Cookie']).toBe('QBT_SID_8084=UOSXKevJgxmEEVMVMItfcFHDSoz9UYam');
+    });
+
+    it('maps qBittorrent 5.2\'s wrong-credentials shape (HTTP 401) to the credential message, not the ban', async () => {
+        const mockError = new Error('Request failed with status code 401');
+        (mockError as any).response = { status: 401 };
+        mocks.axiosPost.mockRejectedValueOnce(mockError);
+
+        await expect(
+            DownloadService.addDownload(mockClient, 'magnet:?xt=123', 'Batman', 0, 0)
+        ).rejects.toThrow(/rejected the username\/password \(HTTP 401\)/);
+
+        // One attempt only — hammering a 401 walks straight into the IP ban.
+        expect(mocks.axiosPost).toHaveBeenCalledTimes(1);
+    });
+
     it('uses stateless Bearer auth when an API key is configured (qBittorrent 5.2+) — no login call at all', async () => {
         const keyClient = { ...mockClient, apiKey: 'qbt_abcdefghijklmnopqrstuvwxyz12' };
         mocks.axiosPost.mockResolvedValueOnce({ data: 'Ok.' }); // torrents/add only

@@ -59,22 +59,34 @@ export async function qbitAuthHeaders(
             { headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded', Referer: cleanUrl, Origin: cleanUrl }, timeout: timeoutMs }
         );
     } catch (e: any) {
+        // qBittorrent 5.2 rewrote the login responses (measured against 5.2.3): wrong credentials
+        // are now HTTP 401 (older versions answered 200 + "Fails."), and the failed-login IP ban
+        // stays 403 (now with an explicit body). Both are axios throws — name each.
+        if (e?.response?.status === 401) {
+            throw new Error('qBittorrent rejected the username/password (HTTP 401). Check the WebUI credentials in qBittorrent under Tools → Options → Web UI — and note qBittorrent uses a TEMPORARY password (printed in its startup log) that changes on every restart until a permanent one is set. Repeated failed attempts will get this IP temporarily banned.');
+        }
         if (e?.response?.status === 403) {
-            throw new Error('qBittorrent refused the login (HTTP 403) — it has likely banned this IP after failed login attempts. Restart qBittorrent (or wait ~1 hour), verify the credentials, then try again. Tip: with qBittorrent 5.2+ an API key (Preferences → WebUI → API Key) avoids login bans entirely.');
+            throw new Error('qBittorrent refused the login (HTTP 403) — it has banned this IP after failed login attempts. Restart qBittorrent (or wait ~1 hour), verify the credentials, then try again. Tip: with qBittorrent 5.2+ an API key (Preferences → WebUI → API Key) avoids login bans entirely.');
         }
         throw e;
     }
 
-    if (String(loginRes.data).trim() !== 'Ok.') {
-        throw new Error('qBittorrent rejected the username/password (login returned "Fails."). Check the WebUI credentials in qBittorrent under Tools → Options → Web UI. Repeated failed attempts will get this IP temporarily banned.');
+    // Success detection must be COOKIE-FIRST, not body-first: qBittorrent ≤5.1 answers a login
+    // with 200 + "Ok." + an `SID` cookie, while 5.2+ answers 204 + EMPTY body + a renamed
+    // `QBT_SID_<port>` cookie. Matching the body against "Ok." (the old check) reads 5.2's empty
+    // body as a credential failure — the issue #193 "Authentication failed" with correct
+    // credentials. A session cookie of either shape IS the success signal.
+    const setCookies: string[] = ([] as string[]).concat(loginRes.headers['set-cookie'] || []);
+    const sid = setCookies.map(c => c.split(';')[0].trim()).find(c => /^(SID|QBT_SID[^=]*)=/.test(c));
+    if (sid) {
+        return { ...baseHeaders, Cookie: sid };
     }
 
-    const setCookies: string[] = ([] as string[]).concat(loginRes.headers['set-cookie'] || []);
-    const sid = setCookies.map(c => c.split(';')[0].trim()).find(c => c.startsWith('SID='));
-    if (!sid) {
-        throw new Error('qBittorrent accepted the login but returned no session cookie — a reverse proxy in front of qBittorrent may be stripping cookies.');
+    if (String(loginRes.data).trim() === 'Fails.') {
+        // Pre-5.2 wrong-credentials shape: HTTP 200, body "Fails.", no cookie.
+        throw new Error('qBittorrent rejected the username/password (login returned "Fails."). Check the WebUI credentials in qBittorrent under Tools → Options → Web UI. Repeated failed attempts will get this IP temporarily banned.');
     }
-    return { ...baseHeaders, Cookie: sid };
+    throw new Error('qBittorrent answered the login but returned no session cookie — a reverse proxy in front of qBittorrent may be stripping cookies.');
 }
 
 export const DownloadService = {

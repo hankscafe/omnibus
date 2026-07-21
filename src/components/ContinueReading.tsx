@@ -99,7 +99,7 @@ export function ContinueReading() {
         {items.map((item) => (
             <div 
               key={item.id} 
-              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-all cursor-pointer border border-border snap-start"
+              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-[transform,box-shadow] duration-200 cursor-pointer border border-border snap-start"
               onClick={() => router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`)}
             >
               <DynamicCover 
@@ -110,20 +110,20 @@ export function ContinueReading() {
                   altName={item.seriesName}
               />
 
-              <div className="absolute bottom-0 left-0 w-full p-3 bg-gradient-to-t from-black/90 via-black/60 to-transparent z-10 group-hover:opacity-0 transition-opacity duration-300 pointer-events-none">
+              <div className="absolute bottom-0 left-0 w-full p-3 bg-linear-to-t from-black/90 via-black/60 to-transparent z-10 group-hover:opacity-0 transition-opacity duration-200 pointer-events-none">
                   <div className="flex justify-between items-end mb-1.5">
                       <p className="text-white font-bold text-xs truncate max-w-[70%] drop-shadow-md">{item.seriesName}</p>
                       <p className="text-white/90 text-[10px] font-mono drop-shadow-md">{item.percentage}%</p>
                   </div>
-                  <div className="w-full bg-white/30 h-1.5 rounded-full overflow-hidden backdrop-blur-sm">
+                  <div className="w-full bg-white/30 h-1.5 rounded-full overflow-hidden backdrop-blur-xs">
                       <div 
-                          className="bg-primary h-full rounded-full transition-all duration-500 shadow-sm shadow-primary/50" 
+                          className="bg-primary h-full rounded-full transition-[width] duration-300 ease-out shadow-sm shadow-primary/50" 
                           style={{ width: `${item.percentage}%` }}
                       />
                   </div>
               </div>
 
-              <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 hidden sm:flex flex-col justify-end p-4 text-center gap-2 z-20">
+              <div className="absolute inset-0 bg-linear-to-t from-black/95 via-black/60 to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 hidden sm:flex flex-col justify-end p-4 text-center gap-2 z-20">
                   <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md">{item.seriesName}</h3>
                   <p className="text-white/80 text-xs mb-1 drop-shadow-md">Issue #{item.issueNumber}</p>
                   

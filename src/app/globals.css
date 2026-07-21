@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
 
 /* --- PLUGINS --- */
 @plugin "@tailwindcss/typography"; /* Loads the prose classes for sanitized HTML styling */
@@ -281,84 +280,11 @@
   }
 }
 
-/* ===== TORN PAPER RIBBON NAV ===== */
-@layer components {
-  .ribbon-nav {
-    display: flex;
-    align-items: flex-start;
-    gap: 4px;
-    height: 100%;
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
-
-  .ribbon-link {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 14px;
-    letter-spacing: 0.04em;
-    color: hsl(var(--muted-foreground));
-    padding: 8px 12px;
-    border-radius: var(--radius) var(--radius) 0 0;
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    position: relative;
-    --ribbon-color: hsl(var(--primary));
-  }
-
-  @media (min-width: 1280px) {
-    .ribbon-link {
-      font-size: 15px;
-      letter-spacing: 0.05em;
-      padding: 10px 16px;
-    }
-  }
-
-  .ribbon-link:hover {
-    color: hsl(var(--foreground));
-    background: hsl(var(--muted));
-  }
-
-  .ribbon-link.active {
-    color: hsl(var(--background));
-    background: var(--ribbon-color);
-    margin-top: -4px;
-    padding-top: 14px;
-    box-shadow: 0 -4px 24px color-mix(in oklch, var(--ribbon-color) 45%, transparent);
-    clip-path: polygon(
-      0 0, 100% 0,
-      100% calc(100% - 2px), 95% 100%, 90% calc(100% - 3px),
-      85% 100%, 80% calc(100% - 2px), 75% 100%,
-      70% calc(100% - 3px), 65% 100%, 60% calc(100% - 2px),
-      55% 100%, 50% calc(100% - 3px), 45% 100%,
-      40% calc(100% - 2px), 35% 100%, 30% calc(100% - 3px),
-      25% 100%, 20% calc(100% - 2px), 15% 100%,
-      10% calc(100% - 3px), 5% 100%, 0 calc(100% - 2px)
-    );
-  }
-
-  .ribbon-link.active::after {
-    content: '';
-    position: absolute;
-    bottom: -12px;
-    left: 0;
-    right: 0;
-    height: 12px;
-    background: var(--ribbon-color);
-    clip-path: polygon(
-      0 0, 100% 0,
-      100% 30%, 90% 60%, 80% 30%, 70% 70%,
-      60% 40%, 50% 100%, 40% 50%, 30% 70%,
-      20% 30%, 10% 60%, 0 30%
-    );
-    filter: drop-shadow(0 4px 8px color-mix(in oklch, var(--ribbon-color) 50%, transparent));
-  }
-
-  /* Color variants */
-  .ribbon-red { --ribbon-color: oklch(0.62 0.22 25); }
-  .ribbon-blue { --ribbon-color: oklch(0.55 0.20 240); }
-  .ribbon-green { --ribbon-color: oklch(0.6 0.2 145); }
-  .ribbon-purple { --ribbon-color: oklch(0.55 0.25 290); }
-  .ribbon-yellow { --ribbon-color: oklch(0.80 0.18 85); }
 }

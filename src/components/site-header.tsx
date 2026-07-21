@@ -21,6 +21,7 @@ import { OmnibusLogo } from "@/components/omnibus-logo"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { TierBadge } from "@/components/tier-badge"
+import { cn } from "@/lib/utils"
 
 // --- INTERNAL NOTIFICATION COMPONENT ---
 function NotificationBell() {
@@ -273,19 +274,19 @@ export function SiteHeader() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-64 mt-2 p-2 bg-popover border-border shadow-xl rounded-xl z-50">
-                  <DropdownMenuItem asChild className={`p-3 text-base font-medium cursor-pointer rounded-lg transition-colors ${pathname === "/" ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary"}`}>
+                  <DropdownMenuItem asChild className={cn("p-3 text-base font-medium cursor-pointer rounded-lg transition-colors", pathname === "/" ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary")}>
                     <Link href="/">Home</Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild className={`p-3 text-base font-medium cursor-pointer rounded-lg transition-colors ${pathname?.startsWith("/library") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary"}`}>
+                  <DropdownMenuItem asChild className={cn("p-3 text-base font-medium cursor-pointer rounded-lg transition-colors", pathname?.startsWith("/library") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary")}>
                     <Link href="/library">Library</Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild className={`p-3 text-base font-medium cursor-pointer rounded-lg transition-colors ${pathname?.startsWith("/reading-lists") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary"}`}>
+                  <DropdownMenuItem asChild className={cn("p-3 text-base font-medium cursor-pointer rounded-lg transition-colors", pathname?.startsWith("/reading-lists") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary")}>
                     <Link href="/reading-lists">Reading Lists</Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild className={`p-3 text-base font-medium cursor-pointer rounded-lg transition-colors ${pathname?.startsWith("/requests") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary"}`}>
+                  <DropdownMenuItem asChild className={cn("p-3 text-base font-medium cursor-pointer rounded-lg transition-colors", pathname?.startsWith("/requests") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary")}>
                     <Link href="/requests">My Requests</Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild className={`p-3 text-base font-medium cursor-pointer rounded-lg transition-colors ${pathname?.startsWith("/calendar") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary"}`}>
+                  <DropdownMenuItem asChild className={cn("p-3 text-base font-medium cursor-pointer rounded-lg transition-colors", pathname?.startsWith("/calendar") ? "bg-primary/10 text-primary" : "hover:bg-muted focus:bg-primary/10 focus:text-primary")}>
                     <Link href="/calendar">Release Calendar</Link>
                   </DropdownMenuItem>
                   {session?.user?.role === "ADMIN" && (
@@ -302,16 +303,16 @@ export function SiteHeader() {
           ) : null}
 
           <Link href="/" className="flex items-center transition-transform hover:scale-[1.02] text-foreground shrink-0">
-            <OmnibusLogo className="w-28 sm:w-44 lg:w-56 h-auto" />
+            <OmnibusLogo className="w-28 sm:w-40 lg:w-48 h-auto" />
           </Link>
 
-          {/* DESKTOP NAV — TORN PAPER RIBBON (lg+) */}
-          <nav className="ribbon-nav hidden lg:flex items-center">
-            <Link href="/" className={`ribbon-link ribbon-red ${pathname === "/" ? "active" : ""}`}>Home</Link>
-            <Link href="/library" className={`ribbon-link ribbon-blue ${pathname?.startsWith("/library") ? "active" : ""}`}>Library</Link>
-            <Link href="/reading-lists" className={`ribbon-link ribbon-green ${pathname?.startsWith("/reading-lists") ? "active" : ""}`}>Reading Lists</Link>
-            <Link href="/requests" className={`ribbon-link ribbon-purple ${pathname?.startsWith("/requests") ? "active" : ""}`}>My Requests</Link>
-            <Link href="/calendar" className={`ribbon-link ribbon-yellow ${pathname?.startsWith("/calendar") ? "active" : ""}`}>Calendar</Link>
+          {/* DESKTOP NAV — COMIC PANEL FRAME (lg+) */}
+          <nav className="hidden lg:flex items-center gap-2">
+            <Link href="/" className={cn("uppercase tracking-[0.08em] font-extrabold text-sm px-3 py-1.5 whitespace-nowrap transition-colors duration-200 ease-out motion-reduce:transition-none active:scale-95", pathname === "/" ? "bg-card border-2 border-primary shadow-[3px_3px_0_rgb(0_0_0/0.45)] dark:shadow-[3px_3px_0_rgb(255_255_255/0.2)] text-primary transition-all" : "text-muted-foreground hover:text-foreground")}>Home</Link>
+            <Link href="/library" className={cn("uppercase tracking-[0.08em] font-extrabold text-sm px-3 py-1.5 whitespace-nowrap transition-colors duration-200 ease-out motion-reduce:transition-none active:scale-95", pathname?.startsWith("/library") ? "bg-card border-2 border-primary shadow-[3px_3px_0_rgb(0_0_0/0.45)] dark:shadow-[3px_3px_0_rgb(255_255_255/0.2)] text-primary transition-all" : "text-muted-foreground hover:text-foreground")}>Library</Link>
+            <Link href="/reading-lists" className={cn("uppercase tracking-[0.08em] font-extrabold text-sm px-3 py-1.5 whitespace-nowrap transition-colors duration-200 ease-out motion-reduce:transition-none active:scale-95", pathname?.startsWith("/reading-lists") ? "bg-card border-2 border-primary shadow-[3px_3px_0_rgb(0_0_0/0.45)] dark:shadow-[3px_3px_0_rgb(255_255_255/0.2)] text-primary transition-all" : "text-muted-foreground hover:text-foreground")}>Reading Lists</Link>
+            <Link href="/requests" className={cn("uppercase tracking-[0.08em] font-extrabold text-sm px-3 py-1.5 whitespace-nowrap transition-colors duration-200 ease-out motion-reduce:transition-none active:scale-95", pathname?.startsWith("/requests") ? "bg-card border-2 border-primary shadow-[3px_3px_0_rgb(0_0_0/0.45)] dark:shadow-[3px_3px_0_rgb(255_255_255/0.2)] text-primary transition-all" : "text-muted-foreground hover:text-foreground")}>My Requests</Link>
+            <Link href="/calendar" className={cn("uppercase tracking-[0.08em] font-extrabold text-sm px-3 py-1.5 whitespace-nowrap transition-colors duration-200 ease-out motion-reduce:transition-none active:scale-95", pathname?.startsWith("/calendar") ? "bg-card border-2 border-primary shadow-[3px_3px_0_rgb(0_0_0/0.45)] dark:shadow-[3px_3px_0_rgb(255_255_255/0.2)] text-primary transition-all" : "text-muted-foreground hover:text-foreground")}>Calendar</Link>
           </nav>
         </div>
 
@@ -319,7 +320,7 @@ export function SiteHeader() {
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {!mounted ? (
             <div className="flex items-center gap-2 sm:gap-3">
-              <div className="hidden sm:block w-14 h-7 rounded-full bg-muted animate-pulse" />
+              <div className="hidden lg:block w-14 h-7 rounded-full bg-muted animate-pulse" />
               <div className="w-10 h-10 rounded-full bg-muted animate-pulse" />
             </div>
           ) : (
@@ -340,17 +341,15 @@ export function SiteHeader() {
 
               <button
                 onClick={() => setTheme(isDark ? "light" : "dark")}
-                className={`relative flex items-center w-14 h-7 rounded-full p-1 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 shadow-inner hidden sm:flex bg-muted border border-border hover:border-primary/50`}
+                className={`relative flex items-center w-14 h-7 rounded-full p-1 cursor-pointer transition-colors duration-200 ease-out motion-reduce:transition-none active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 shadow-inner hidden lg:flex bg-muted border border-border hover:border-primary/50`}
                 aria-label="Toggle Dark Mode"
               >
                 <div 
-                  className={`absolute w-5 h-5 rounded-full shadow-md transition-transform duration-300 ease-in-out ${
-                    isDark ? "translate-x-7 bg-background" : "translate-x-0 bg-background"
-                  }`} 
+                  className={cn("absolute w-5 h-5 rounded-full shadow-md transition-transform duration-200 ease-out motion-reduce:transition-none", isDark ? "translate-x-7 bg-background" : "translate-x-0 bg-background")} 
                 />
                 <div className="relative z-10 flex justify-between w-full px-0.5 pointer-events-none">
-                  <Sun className={`w-3.5 h-3.5 transition-colors ${isDark ? "text-muted-foreground" : "text-primary"}`} />
-                  <Moon className={`w-3.5 h-3.5 transition-colors ${isDark ? "text-primary" : "text-muted-foreground"}`} />
+                  <Sun className={cn("w-3.5 h-3.5 transition-colors duration-200 ease-out", isDark ? "text-muted-foreground" : "text-primary")} />
+                  <Moon className={cn("w-3.5 h-3.5 transition-colors duration-200 ease-out", isDark ? "text-primary" : "text-muted-foreground")} />
                 </div>
               </button>
 
@@ -359,7 +358,7 @@ export function SiteHeader() {
               ) : session ? (
                  <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                        <Button variant="outline" className="relative h-10 w-10 rounded-full bg-muted border-2 border-border hover:border-primary/50 overflow-hidden p-0 transition-colors">
+                        <Button variant="outline" className="relative h-10 w-10 rounded-full bg-muted border-2 border-border hover:border-primary/50 overflow-hidden p-0 transition-colors duration-200 ease-out motion-reduce:transition-none active:scale-95 active:border-primary">
                             {session.user?.image ? (
                               <img 
                                 src={session.user.image.startsWith('/') || session.user.image.startsWith('http') ? session.user.image : `/${session.user.image}`} 
@@ -371,8 +370,8 @@ export function SiteHeader() {
                             )}
                         </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-56 p-1 bg-popover border-border rounded-md shadow-xl">
-                        <DropdownMenuLabel className="font-normal p-2">
+                    <DropdownMenuContent align="end" className="w-64 sm:w-56 p-2 sm:p-1 bg-popover border-border rounded-xl sm:rounded-md shadow-xl">
+                        <DropdownMenuLabel className="font-normal p-3 sm:p-2">
                             <div className="flex flex-col space-y-1.5">
                                 <p className="text-sm font-bold leading-none">{session.user?.name}</p>
                                 <div className="flex items-center gap-2">
@@ -383,27 +382,27 @@ export function SiteHeader() {
                         </DropdownMenuLabel>
                         <DropdownMenuSeparator className="bg-border" />
                         
-                        <div className="lg:hidden p-2 flex items-center justify-between">
-                          <span className="text-sm font-medium">Dark Mode</span>
+                        <div className="lg:hidden p-3 sm:p-2 flex items-center justify-between">
+                          <span className="text-base sm:text-sm font-medium">Dark Mode</span>
                           <Switch checked={isDark} onCheckedChange={(c) => setTheme(c ? "dark" : "light")} />
                         </div>
                         <DropdownMenuSeparator className="bg-border lg:hidden" />
 
-                        <DropdownMenuItem asChild className="p-2 text-sm cursor-pointer rounded-sm hover:bg-muted focus:bg-primary/10 focus:text-primary transition-colors">
-                            <Link href="/profile"><UserIcon className="w-4 h-4 mr-2" /> Profile</Link>
+                        <DropdownMenuItem asChild className="p-3 sm:p-2 text-base sm:text-sm cursor-pointer rounded-lg sm:rounded-sm hover:bg-muted focus:bg-primary/10 focus:text-primary transition-colors duration-150 ease-out motion-reduce:transition-none active:scale-[0.98]">
+                            <Link href="/profile"><UserIcon className="w-5 h-5 sm:w-4 sm:h-4 mr-3 sm:mr-2" /> Profile</Link>
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="p-2 text-sm cursor-pointer rounded-sm hover:bg-muted focus:bg-primary/10 focus:text-primary transition-colors" onClick={() => setPassModalOpen(true)}>
-                            <Key className="w-4 h-4 mr-2" /> Change Password
+                        <DropdownMenuItem className="p-3 sm:p-2 text-base sm:text-sm cursor-pointer rounded-lg sm:rounded-sm hover:bg-muted focus:bg-primary/10 focus:text-primary transition-colors duration-150 ease-out motion-reduce:transition-none active:scale-[0.98]" onClick={() => setPassModalOpen(true)}>
+                            <Key className="w-5 h-5 sm:w-4 sm:h-4 mr-3 sm:mr-2" /> Change Password
                         </DropdownMenuItem>
                         {session?.user?.role === "ADMIN" && (
-                          <DropdownMenuItem asChild className="p-2 text-sm cursor-pointer rounded-sm text-primary hover:bg-primary/10 focus:bg-primary/20 focus:text-primary transition-colors">
-                            <Link href="/admin"><ShieldAlert className="w-4 h-4 mr-2" /> Admin Dashboard</Link>
+                          <DropdownMenuItem asChild className="p-3 sm:p-2 text-base sm:text-sm cursor-pointer rounded-lg sm:rounded-sm text-primary hover:bg-primary/10 focus:bg-primary/20 focus:text-primary transition-colors duration-150 ease-out motion-reduce:transition-none active:scale-[0.98]">
+                            <Link href="/admin"><ShieldAlert className="w-5 h-5 sm:w-4 sm:h-4 mr-3 sm:mr-2" /> Admin Dashboard</Link>
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator className="bg-border my-1" />
 
                         <DropdownMenuItem
-                          className="p-2 text-sm cursor-pointer rounded-sm text-red-600 focus:text-red-700 focus:bg-red-50 dark:text-red-400 dark:focus:bg-red-900/20 transition-colors"
+                          className="p-3 sm:p-2 text-base sm:text-sm cursor-pointer rounded-lg sm:rounded-sm text-red-600 focus:text-red-700 focus:bg-red-50 dark:text-red-400 dark:focus:bg-red-900/20 transition-colors duration-150 ease-out motion-reduce:transition-none active:scale-[0.98]"
                           onClick={(e) => {
                             e.preventDefault();
                             signOut({ redirect: false }).then(() => {
@@ -411,7 +410,7 @@ export function SiteHeader() {
                             });
                           }}
                         >
-                            <LogOut className="w-4 h-4 mr-2" /> Log Out
+                            <LogOut className="w-5 h-5 sm:w-4 sm:h-4 mr-3 sm:mr-2" /> Log Out
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                  </DropdownMenu>

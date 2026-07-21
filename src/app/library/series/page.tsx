@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
+import { cn } from "@/lib/utils"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import MetadataEditorModal from "@/components/metadata-editor-modal"
 
@@ -1162,7 +1163,7 @@ function SeriesContent() {
                           <div className="absolute bottom-2 right-2 z-30 flex items-center gap-1.5">
                               {activeIssue?.id ? (
                                   <>
-                                      <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover for this issue">
+                                      <label className={cn("flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg", coverUploading && "pointer-events-none opacity-70")} title="Upload a custom cover for this issue">
                                           <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleIssueCoverFile} disabled={coverUploading} />
                                           {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
                                           <span>Cover</span>
@@ -1173,7 +1174,7 @@ function SeriesContent() {
                                   </>
                               ) : (
                                   <>
-                                      <label className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg ${coverUploading ? 'pointer-events-none opacity-70' : ''}`} title="Upload a custom cover">
+                                      <label className={cn("flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer transition-colors shadow-lg", coverUploading && "pointer-events-none opacity-70")} title="Upload a custom cover">
                                           <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleCoverFile} disabled={coverUploading} />
                                           {coverUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
                                           <span>Cover</span>
@@ -1199,7 +1200,7 @@ function SeriesContent() {
                       {(seriesInfo.status || (seriesInfo.bookType && seriesInfo.bookType !== 'Print')) && (
                           <div className="flex gap-2">
                               {seriesInfo.status && (
-                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={`w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border'}`}>
+                                  <Badge variant={seriesInfo.status === 'Ongoing' ? 'default' : 'secondary'} className={cn("w-full flex-1 justify-center uppercase tracking-wider text-[10px] h-7 font-black", seriesInfo.status === 'Ongoing' ? 'bg-green-600 hover:bg-green-700 text-white border-0' : 'bg-muted text-foreground border-border')}>
                                       {seriesInfo.status}
                                   </Badge>
                               )}
@@ -1211,7 +1212,7 @@ function SeriesContent() {
                           </div>
                       )}
                       {seriesInfo.id && (
-                          <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={`w-full justify-center uppercase tracking-wider text-[10px] h-7 font-black ${seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border'}`}>
+                          <Badge variant={seriesInfo.monitored ? 'default' : 'outline'} className={cn("w-full justify-center uppercase tracking-wider text-[10px] h-7 font-black", seriesInfo.monitored ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'text-muted-foreground border-border')}>
                               {seriesInfo.monitored ? 'Monitored' : 'Not Monitored'}
                           </Badge>
                       )}
@@ -1236,7 +1237,7 @@ function SeriesContent() {
                       </Button>
                   ) : (
                       <Button 
-                        className={`w-full font-black shadow-md ${activeIssue?.readProgress > 0 && !(activeIssue?.isRead || activeIssue?.readProgress >= 100) ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : ''}`} 
+                        className={cn("w-full font-black shadow-md", activeIssue?.readProgress > 0 && !(activeIssue?.isRead || activeIssue?.readProgress >= 100) && "bg-primary hover:bg-primary/90 text-primary-foreground border-0")} 
                         size="lg" 
                         disabled={!activeIssue || !activeIssue.fullPath} 
                         onClick={() => router.push(`/reader?path=${encodeURIComponent(activeIssue?.fullPath || '')}&series=${encodeURIComponent(folderPath || '')}`)}>
@@ -1245,8 +1246,8 @@ function SeriesContent() {
                       </Button>
                   )}
                   
-                  <Button variant={seriesInfo.isFavorite ? "default" : "outline"} className={`w-full font-bold transition-all ${seriesInfo.isFavorite ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'border-border hover:bg-muted'}`} onClick={toggleFavorite} disabled={!seriesInfo.id}>
-                      <Heart className={`w-4 h-4 mr-2 ${seriesInfo.isFavorite ? 'fill-current' : ''}`} /> Favorite
+                  <Button variant={seriesInfo.isFavorite ? "default" : "outline"} className={cn("w-full font-bold transition-all", seriesInfo.isFavorite ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'border-border hover:bg-muted')} onClick={toggleFavorite} disabled={!seriesInfo.id}>
+                      <Heart className={cn("w-4 h-4 mr-2", seriesInfo.isFavorite && "fill-current")} /> Favorite
                   </Button>
                   
                   {isAdmin && (
@@ -1263,7 +1264,7 @@ function SeriesContent() {
                   )}
 
                   {isAdmin && (
-                      <Button variant={seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? "outline" : "default"} className={`w-full font-bold ${seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? 'border-border hover:bg-muted text-foreground' : ''}`} onClick={() => { setSearchQuery(seriesInfo.name); setMatchModalOpen(true); }}>
+                      <Button variant={seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? "outline" : "default"} className={cn("w-full font-bold", seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' && 'border-border hover:bg-muted text-foreground')} onClick={() => { setSearchQuery(seriesInfo.name); setMatchModalOpen(true); }}>
                           <Search className="w-4 h-4 mr-2" /> {seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? "Fix Match" : "Match Series"}
                       </Button>
                   )}
@@ -1320,7 +1321,7 @@ function SeriesContent() {
                         {isAdmin && (
                             <Button 
                                 variant="outline" 
-                                className={`w-full transition-all shadow-sm active:scale-95 ${missingIssues.length > 0 ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'opacity-50 grayscale cursor-not-allowed font-bold'}`}
+                                className={cn("w-full transition-all shadow-sm active:scale-95", missingIssues.length > 0 ? 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20' : 'opacity-50 grayscale cursor-not-allowed font-bold')}
                                 disabled={missingIssues.length === 0 || isBulkDownloading}
                                 onClick={handleDownloadAllMissing}
                             >
@@ -1495,7 +1496,7 @@ function SeriesContent() {
                           {[1, 2, 3, 4, 5].map(star => (
                               <Star 
                                   key={star} 
-                                  className={`w-6 h-6 cursor-pointer transition-colors ${userReview.rating >= star ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground'}`}
+                                  className={cn("w-6 h-6 cursor-pointer transition-colors", userReview.rating >= star ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground')}
                                   onClick={() => setUserReview({ ...userReview, rating: star })}
                               />
                           ))}
@@ -1673,7 +1674,7 @@ function SeriesContent() {
                                             setActiveIssue(issue);
                                         }
                                     }}
-                                    className={`flex gap-4 p-4 bg-background border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer ${isSelected ? (isSelectionMode ? 'border-primary ring-2 ring-primary/20 scale-[0.98]' : 'border-primary ring-4 ring-primary/10') : 'border-border hover:border-primary/50'}`}
+                                    className={cn("flex gap-4 p-4 bg-background border-2 rounded-xl shadow-sm relative overflow-hidden transition-all cursor-pointer", isSelected ? (isSelectionMode ? 'border-primary ring-2 ring-primary/20 scale-[0.98]' : 'border-primary ring-4 ring-primary/10') : 'border-border hover:border-primary/50')}
                                   >
                                     {isSelectionMode && (
                                        <div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">
@@ -1681,12 +1682,12 @@ function SeriesContent() {
                                        </div>
                                     )}
                                     <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border relative">
-                                      {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}
+                                      {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}
                                       <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-primary border-0 text-primary-foreground text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
                                       {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-primary" style={{ width: `${issue.readProgress}%` }} /></div>}
                                     </div>
                                     <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
-                                      <div><h5 className={`font-bold text-base line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
+                                      <div><h5 className={cn("font-bold text-base line-clamp-2 leading-tight", isRead ? 'text-muted-foreground' : 'text-foreground')}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
                                       <div className="flex flex-wrap items-center gap-1.5 mt-3">
                                         <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 font-bold shadow-md min-w-[70px]" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                             <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
@@ -1749,7 +1750,7 @@ function SeriesContent() {
                                                         setActiveIssue(issue);
                                                     }
                                                 }} 
-                                                className={`cursor-pointer transition-colors ${isSelected ? (isSelectionMode ? 'bg-primary/10' : 'bg-muted/50') : 'hover:bg-muted/50'}`}
+                                                className={cn("cursor-pointer transition-colors", isSelected ? (isSelectionMode ? 'bg-primary/10' : 'bg-muted/50') : 'hover:bg-muted/50')}
                                               >
                                                   {isSelectionMode && (
                                                       <td className="px-4 py-3 text-center">
@@ -1758,12 +1759,12 @@ function SeriesContent() {
                                                   )}
                                                   <td className="px-4 py-2">
                                                       <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative">
-                                                          {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={`w-full h-full object-cover ${isRead ? 'opacity-60' : ''}`} alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
+                                                          {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
                                                           {isRead && <div className="absolute inset-0 flex items-center justify-center bg-green-500/20 z-20"><Check className="w-4 h-4 text-green-500 font-bold"/></div>}
                                                       </div>
                                                   </td>
                                                   <td className="px-4 py-3 font-bold">
-                                                      <div className={`line-clamp-2 leading-tight ${isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{issue.name}</div>
+                                                      <div className={cn("line-clamp-2 leading-tight", isRead ? 'text-muted-foreground' : 'text-foreground')}>{issue.name}</div>
                                                       {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</div>}
                                                   </td>
                                                   <td className="px-4 py-3 text-center">
@@ -1811,15 +1812,15 @@ function SeriesContent() {
                           <span className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedIssues.size} Selected</span>
                           
                           <div className="flex gap-2 shrink-0">
-                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(true)}>
+                              <Button size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border')} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(true)}>
                                   {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Mark Read</span>
                               </Button>
-                              <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(false)}>
+                              <Button size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border')} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress(false)}>
                                   {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <EyeOff className="w-4 h-4 sm:mr-2" />} <span className="hidden sm:inline">Mark Unread</span>
                               </Button>
                               
                               {isAdmin && (
-                                  <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => {
+                                  <Button size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border')} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => {
                                       // Populate local state with the exact objects selected
                                       const itemsToEdit = downloadedIssues.filter(i => selectedIssues.has(i.id)).map(i => ({
                                           id: i.id, number: i.parsedNum?.toString() || "", name: i.name || "", releaseDate: i.releaseDate || ""
@@ -1832,7 +1833,7 @@ function SeriesContent() {
                               )}
 
                               {isAdmin && (
-                                  <Button size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => { setMoveTargetId(null); setMoveNewName(""); setMoveSearch(""); setMoveResults([]); setMoveDialogOpen(true); }} title="Move the selected issues to another series">
+                                  <Button size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedIssues.size > 0 ? 'text-foreground hover:bg-muted' : 'bg-muted text-muted-foreground cursor-not-allowed border-border')} disabled={selectedIssues.size === 0 || isBulkProcessing} onClick={() => { setMoveTargetId(null); setMoveNewName(""); setMoveSearch(""); setMoveResults([]); setMoveDialogOpen(true); }} title="Move the selected issues to another series">
                                       <FolderInput className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Move</span>
                                   </Button>
                               )}
@@ -1884,7 +1885,7 @@ function SeriesContent() {
                                               const isRequesting = requestingIds.has(issue.id);
                                               const isAlreadyRequested = requestedIds.has(issue.id);
                                               return (
-                                                  <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={`cursor-pointer transition-colors ${requestingIds.has(issue.id) ? 'opacity-50' : 'hover:bg-muted/50'}`}>
+                                                  <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={cn("cursor-pointer transition-colors", requestingIds.has(issue.id) ? 'opacity-50' : 'hover:bg-muted/50')}>
                                                       <td className="px-4 py-2">
                                                           <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border grayscale relative">
                                                               {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
@@ -1939,7 +1940,7 @@ function SeriesContent() {
                       {moveResults.length > 0 && (
                           <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-border divide-y divide-border">
                               {moveResults.map((s) => (
-                                  <button key={s.id} type="button" onClick={() => { setMoveTargetId(s.id); setMoveNewName(""); }} className={`w-full text-left px-3 py-2 text-sm transition-colors ${moveTargetId === s.id ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-muted'}`}>
+                                  <button key={s.id} type="button" onClick={() => { setMoveTargetId(s.id); setMoveNewName(""); }} className={cn("w-full text-left px-3 py-2 text-sm transition-colors", moveTargetId === s.id ? 'bg-primary/10 text-primary font-bold' : 'hover:bg-muted')}>
                                       {s.name}{s.year ? <span className="text-muted-foreground"> ({s.year})</span> : null}
                                   </button>
                               ))}

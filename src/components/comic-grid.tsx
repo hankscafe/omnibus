@@ -14,6 +14,7 @@ import Link from "next/link"
 import { Search as SearchIcon } from "lucide-react"
 import { InteractiveSearchModal } from "./interactive-search-modal"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { cn } from "@/lib/utils"
 
 interface Comic {
   id: number;
@@ -285,7 +286,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                 key={comic.id}
                 role="button"
                 tabIndex={0}
-                className="text-left w-full group relative aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-105 transition-all cursor-pointer border border-border focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none" 
+                className="text-left w-full group relative aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-105 transition-[transform,box-shadow] duration-200 ease-out cursor-pointer border border-border focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none" 
                 onClick={() => setSelectedComic(comic)}
                 onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -314,15 +315,15 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                 {issueStatus === 'UNRELEASED' && (<div className="absolute top-2 left-2 bg-purple-500 text-white rounded-full p-1 shadow-lg z-30" title="Unreleased"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
                 {(!issueStatus && comic.issueNumber && comic.isReleased === false) && (<div className="absolute top-2 left-2 bg-purple-500/80 text-white rounded-full p-1 shadow-lg z-30" title="Unreleased"><Clock className="w-4 h-4 sm:w-3 sm:h-3" /></div>)}
 
-                <div className="absolute inset-0 bg-black/40 hidden sm:block opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none" />
+                <div className="absolute inset-0 bg-black/40 hidden sm:block opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10 pointer-events-none" />
 
-                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2 pb-3 text-center gap-0.5 z-30 pointer-events-none">
+                <div className="absolute inset-0 bg-linear-to-t from-black/95 via-black/40 to-transparent opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-2 pb-3 text-center gap-0.5 z-30 pointer-events-none">
                     <h3 className="text-white font-bold text-xs sm:text-sm line-clamp-2 leading-tight drop-shadow-md">{comic.name}</h3>
                     <p className="text-primary font-bold text-[10px] sm:text-[11px] drop-shadow-md uppercase tracking-wider">{comic.year}</p>
                 </div>
                 
-                <div className="absolute inset-0 hidden sm:flex opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center z-40 pointer-events-none">
-                  <Button size="sm" className="font-bold shadow-md pointer-events-auto transition-transform group-hover:scale-110" tabIndex={-1}>Details</Button>
+                <div className="absolute inset-0 hidden sm:flex opacity-0 group-hover:opacity-100 transition-opacity duration-200 items-center justify-center z-40 pointer-events-none">
+                  <Button size="sm" className="font-bold shadow-md pointer-events-auto transition-transform duration-150 group-hover:scale-110" tabIndex={-1}>Details</Button>
                 </div>
             </div>
           )})}
@@ -344,11 +345,11 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 mb-8">
                         <div className="space-y-5 flex flex-col items-center md:items-stretch">
-                            <div className="relative aspect-[2/3] w-[200px] md:w-[240px] mx-auto rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
+                            <div className="relative aspect-[2/3] w-[200px] md:w-60 mx-auto rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
                                 {selectedComic.image ? (
                                     <img src={selectedComic.image} alt={selectedComic.name} className="absolute inset-0 w-full h-full object-contain" />
                                 ) : (
-                                    <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30 transition-transform duration-300">
+                                    <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30">
                                         <ImageIcon className="w-12 h-12 mb-2" />
                                     </div>
                                 )}
@@ -375,21 +376,21 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                 <div className="flex flex-col gap-2.5 sm:gap-3 w-full max-w-[300px] mx-auto md:max-w-none mt-2">
                                     {/* VOLUME BUTTONS */}
                                     {loadingRelated ? (
-                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal" variant="outline" disabled>
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold whitespace-normal" variant="outline" disabled>
                                             <Loader2 className="w-4 h-4 animate-spin shrink-0" /> <span className="leading-tight">Checking Library...</span>
                                         </Button>
                                     ) : volStatus === 'PENDING_APPROVAL' || volStatus === 'REQUESTED' ? (
-                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal" variant="default" disabled>
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold whitespace-normal" variant="default" disabled>
                                             {volStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>}
                                             {volStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
                                         </Button>
                                     ) : (isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') ? (
-                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" variant="outline" disabled>
+                                        <Button className="w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" variant="outline" disabled>
                                             <FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">Up to Date</span>
                                         </Button>
                                     ) : (isAllAvailableOwned && volStatus === 'LIBRARY_UNMONITORED') ? (
                                         <Button 
-                                            className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white whitespace-normal" 
+                                            className="w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white whitespace-normal" 
                                             variant="default" 
                                             onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'volume', selectedComic.publisher || 'Unknown', true, undefined, undefined, true, (selectedComic as any).metadataSource || 'COMICVINE')} 
                                             disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
@@ -400,7 +401,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                         </Button>
                                     ) : (
                                         <Button 
-                                            className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold whitespace-normal ${isVolOwned ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`} 
+                                            className={cn("w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold whitespace-normal", isVolOwned && "bg-green-600 hover:bg-green-700 text-white")} 
                                             variant="default" 
                                             onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined, metadataSource: (selectedComic as any).metadataSource || 'COMICVINE' })} 
                                             disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
@@ -413,11 +414,11 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                       
                                       {/* ISSUE BUTTONS */}
                                       {(isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') ? (
-                                          <Button className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal`} variant="outline" disabled>
+                                          <Button className={`w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal`} variant="outline" disabled>
                                               <FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">Up to Date</span>
                                           </Button>
                                       ) : issueStatus === 'PENDING_APPROVAL' || issueStatus === 'REQUESTED' || issueStatus === 'UNRELEASED' || isIssueOwned ? (
-                                          <Button className={`w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal`} variant="outline" disabled>
+                                          <Button className={`w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal`} variant="outline" disabled>
                                               {isIssueOwned && <><FileCheck className="w-4 h-4 text-emerald-500 shrink-0" /> <span className="leading-tight">In Library</span></>}
                                               {issueStatus === 'PENDING_APPROVAL' && <><Clock className="w-4 h-4 text-yellow-500 shrink-0" /> <span className="leading-tight">Pending Approval</span></>}
                                               {issueStatus === 'REQUESTED' && <><Clock className="w-4 h-4 text-orange-500 shrink-0" /> <span className="leading-tight">Requested</span></>}
@@ -425,7 +426,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                           </Button>
                                       ) : (
                                           <Button 
-                                             className="w-full gap-1.5 shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
+                                             className="w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
                                              variant="outline" 
                                              onClick={() => handleRequest(selectedComic.volumeId, selectedComic.isVolume ? seriesBaseName : selectedComic.name, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber, false, (selectedComic as any).metadataSource || 'COMICVINE')} 
                                              disabled={requestingTarget === `iss-${issueTargetName}`}
@@ -436,7 +437,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                       
                                       <Button 
                                         variant="outline" 
-                                        className="w-full gap-1.5 border-dashed shadow-sm h-auto min-h-[2.5rem] py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" 
+                                        className="w-full gap-1.5 border-dashed shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold border-border hover:bg-muted text-foreground whitespace-normal" 
                                         onClick={() => setInteractiveQuery({ query: selectedComic.isVolume ? seriesBaseName : selectedComic.name, type: selectedComic.isVolume ? 'issue' : 'volume' })}
                                         disabled={(isAllAvailableOwned && volStatus === 'LIBRARY_MONITORED') || (!selectedComic.isVolume && isIssueOwned) || overallStatus === 'PENDING_APPROVAL' || overallStatus === 'REQUESTED'}
                                       >
@@ -586,7 +587,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                             <ImageIcon className="w-6 h-6" />
                                                         </div>
                                                     )}
-                                                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none" />
+                                                    <div className="absolute inset-0 bg-linear-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none" />
                                                     
                                                     <div className="absolute bottom-1 left-2 z-20 text-white text-[11px] font-black truncate drop-shadow-md">#{issue.issueNumber}</div>
 

@@ -355,38 +355,6 @@ function SeriesContent() {
     return () => { isMounted = false; };
   }, [activeIssue?.id]);
 
-  const runAutoDeepScan = async (cvId: string, currentPath: string, source: string = 'COMICVINE') => {
-      setIsRefreshingMetadata(true);
-      setTimeout(() => { toast({ title: "Task Queued", description: "Fetching writers, artists, and synopsis in the background..." }); }, 100);
-
-      try {
-          const res = await fetch('/api/library/refresh-metadata', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ metadataId: cvId, metadataSource: source, folderPath: currentPath })
-          });
-          if (res.ok) {
-              toast({ title: "Metadata Queued!", description: "You will be notified when the background sync finishes." });
-          }
-      } catch (e) {
-          Logger.log(getErrorMessage(e), 'error');
-      } finally {
-          setIsRefreshingMetadata(false);
-      }
-  };
-
-  useEffect(() => {
-    const autoSync = searchParams.get('autoSync');
-    const provider = searchParams.get('provider') || 'COMICVINE';
-    if (autoSync && folderPath && !loading) {
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.delete('autoSync');
-        newUrl.searchParams.delete('provider');
-        window.history.replaceState({}, '', newUrl.toString());
-        runAutoDeepScan(autoSync, folderPath, provider);
-    }
-  }, [searchParams, folderPath, loading]);
-
   const writers = activeIssue?.writers || [];
   const artists = activeIssue?.artists || [];
   const coverArtists = activeIssue?.coverArtists || [];
@@ -809,7 +777,10 @@ function SeriesContent() {
           const data = await res.json();
           if (data.success) {
               toast({ title: "Series Matched!" });
-              window.location.href = `/library/series?path=${encodeURIComponent(data.newPath)}&autoSync=${data.cvId || data.metadataId}&provider=${searchProvider}`;
+              // No autoSync param: match-series already queued the METADATA_SYNC server-side, and a
+              // second queue from this page raced it — two concurrent syncs interleaving on the same
+              // issue rows was the corruption vector of issue #194.
+              window.location.href = `/library/series?path=${encodeURIComponent(data.newPath)}`;
           } else throw new Error(data.error);
       } catch (e: any) {
           toast({ title: "Match Failed", description: e.message, variant: "destructive" });

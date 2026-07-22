@@ -1,7 +1,8 @@
 use crate::db::Db;
 use sqlx::Row;
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use regex::Regex;
 use reqwest::Client;
@@ -19,6 +20,36 @@ pub(crate) fn file_complete_predicate() -> &'static str {
             SELECT 1 FROM "Issue" fi WHERE fi."seriesId" = "Series".id AND fi."filePath" IS NOT NULL
               AND (fi."matchState" IS NULL OR fi."matchState" <> 'DEEP_SYNCED')
         ))"#
+}
+
+/// Series ids with a metadata sync currently in flight, shared across every spawned sync task.
+/// Two concurrent syncs of the same series interleave non-idempotent issue upserts and can
+/// cross-pair rows (issue #194) — the later trigger is always redundant, so it skips the series.
+fn in_flight_syncs() -> &'static Mutex<HashSet<String>> {
+    static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// RAII claim on a series id in [`in_flight_syncs`]; released when the claim drops, including
+/// on error/early-continue paths.
+pub(crate) struct SyncClaim(String);
+
+impl SyncClaim {
+    /// Claims the series for syncing, or None when a sync for it is already in flight.
+    pub(crate) fn try_acquire(series_id: &str) -> Option<SyncClaim> {
+        let mut set = in_flight_syncs().lock().unwrap_or_else(|p| p.into_inner());
+        if set.insert(series_id.to_string()) {
+            Some(SyncClaim(series_id.to_string()))
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for SyncClaim {
+    fn drop(&mut self) {
+        in_flight_syncs().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.0);
+    }
 }
 
 pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::Result<()> {
@@ -104,6 +135,18 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
     for series in series_list {
         let series_id: String = series.get("id");
         let series_name: String = series.get("name");
+
+        // Issue #194: a second trigger for a series mid-sync (double-queue, sweep overlap,
+        // double-click) must not race the first — interleaved upserts cross-pair issue rows.
+        // `_claim` (not `_`, which would drop immediately) holds until the end of this iteration.
+        let _claim = match SyncClaim::try_acquire(&series_id) {
+            Some(claim) => claim,
+            None => {
+                log::warn!("[Metadata] Sync already in flight for {} — skipping duplicate trigger.", series_name);
+                continue;
+            }
+        };
+
         let metadata_id: String = series.get("metadataId");
         let metadata_source: String = series.try_get("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string());
         let folder_path: String = series.try_get("folderPath").unwrap_or_default();
@@ -1564,6 +1607,22 @@ pub(crate) fn is_same_issue(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==== Issue #194: two concurrent syncs of the same series interleave non-idempotent issue
+    // upserts and can cross-pair rows — the in-flight claim makes the later trigger skip. ====
+
+    #[test]
+    fn sync_claim_blocks_second_acquire_until_dropped() {
+        let claim = SyncClaim::try_acquire("claim-test-194");
+        assert!(claim.is_some());
+        // A second trigger while the first is in flight is refused…
+        assert!(SyncClaim::try_acquire("claim-test-194").is_none());
+        // …an unrelated series is unaffected…
+        assert!(SyncClaim::try_acquire("claim-test-other").is_some());
+        // …and dropping the claim frees the series for the next legitimate sync.
+        drop(claim);
+        assert!(SyncClaim::try_acquire("claim-test-194").is_some());
+    }
 
     // ==== Discussion #182: the scheduled sync must skip series whose FILES already supplied
     // everything (description + every owned issue DEEP_SYNCED) — zero recurring API cost for a

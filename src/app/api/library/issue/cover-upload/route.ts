@@ -16,6 +16,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { CONFIG_DIR } from '@/lib/utils/paths';
+import { issueIdentityMismatch } from '@/lib/metadata/issue-identity';
 
 const MAX_BYTES = 15 * 1024 * 1024; // 15MB
 
@@ -92,18 +93,46 @@ export async function DELETE(request: Request) {
                 if (issue.metadataSource === 'METRON') {
                     const { MetronProvider } = await import('@/lib/metadata/providers/metron');
                     const details = await new MetronProvider().getIssueDetails(metadataId);
-                    newCoverUrl = details.coverUrl || null;
+                    // #194 guard: the stored metadataId can be another issue's (sync race) — restoring
+                    // by it would "restore" the wrong cover. On mismatch keep null → series-cover fallback.
+                    const mismatch = issueIdentityMismatch({
+                        rowNumber: issue.number,
+                        seriesMetadataId: issue.series?.metadataId,
+                        seriesMetadataSource: issue.series?.metadataSource,
+                        expectedSource: 'METRON',
+                        fetchedParentId: details.seriesId != null ? details.seriesId.toString() : null,
+                        fetchedIssueNumber: details.issueNumber
+                    });
+                    if (mismatch) {
+                        Logger.log(`[Issue Cover Reset] Not restoring provider cover for ${issue.id} (#${issue.number}): stored metadataId ${metadataId} ${mismatch}.`, 'warn');
+                    } else {
+                        newCoverUrl = details.coverUrl || null;
+                    }
                 } else {
                     const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
                     if (setting?.value) {
                         const { cachedCvGet } = await import('@/lib/metadata/metadata-cache');
                         const res = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4000-${metadataId}/`, {
-                            params: { api_key: setting.value, format: 'json', field_list: 'image' },
+                            // volume + issue_number feed the #194 identity guard below.
+                            params: { api_key: setting.value, format: 'json', field_list: 'image,volume,issue_number' },
                             headers: { 'User-Agent': 'Omnibus/1.0' },
                             timeout: 8000
                         });
-                        const image = res.data?.results?.image;
-                        newCoverUrl = image?.medium_url || image?.small_url || null;
+                        const results = res.data?.results;
+                        const mismatch = results ? issueIdentityMismatch({
+                            rowNumber: issue.number,
+                            seriesMetadataId: issue.series?.metadataId,
+                            seriesMetadataSource: issue.series?.metadataSource,
+                            expectedSource: 'COMICVINE',
+                            fetchedParentId: results.volume?.id != null ? results.volume.id.toString() : null,
+                            fetchedIssueNumber: results.issue_number
+                        }) : null;
+                        if (mismatch) {
+                            Logger.log(`[Issue Cover Reset] Not restoring provider cover for ${issue.id} (#${issue.number}): stored metadataId ${metadataId} ${mismatch}.`, 'warn');
+                        } else {
+                            const image = results?.image;
+                            newCoverUrl = image?.medium_url || image?.small_url || null;
+                        }
                     }
                 }
             } catch (e) {

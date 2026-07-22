@@ -15,6 +15,7 @@ import { safeParse } from '@/lib/utils/safe-parse';
 import { omnibusQueue } from '@/lib/queue';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
+import { issueIdentityMismatch } from '@/lib/metadata/issue-identity';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -25,7 +26,8 @@ export async function GET(request: Request) {
   try {
     const issue = await prisma.issue.findUnique({
         where: { id },
-        include: { series: { select: { libraryId: true } } }
+        // metadataId/metadataSource feed the #194 identity guard on the deep-fetch below.
+        include: { series: { select: { libraryId: true, metadataId: true, metadataSource: true } } }
     });
 
     if (!issue) return NextResponse.json({ error: "Issue not found" }, { status: 404 });
@@ -75,54 +77,69 @@ export async function GET(request: Request) {
                 const metron = new MetronProvider();
                 const deepData = await metron.getIssueDetails(issue.metadataId); // Guaranteed string
 
-                const newDescription = fillOnly && issue.description ? issue.description : (deepData.description || issue.description);
-                const finalWriters = mergeList(deepData.writers, parsedWriters);
-                const finalArtists = mergeList(deepData.artists, parsedArtists);
-                const finalCoverArtists = mergeList(deepData.coverArtists, parsedCoverArtists);
-                const finalColorists = mergeList(deepData.colorists, parsedColorists);
-                const finalLetterers = mergeList(deepData.letterers, parsedLetterers);
-                const finalCharacters = mergeList(deepData.characters, parsedCharacters);
-                // ["NONE"] only when BOTH sides are empty — the old shape dropped file-derived arcs
-                // to the sentinel whenever the provider returned none (the #179 wipe class).
-                const mergedArcs = mergeList(deepData.storyArcs, parsedStoryArcs);
-                const finalStoryArcs = mergedArcs.length > 0 ? mergedArcs : ["NONE"];
-                const finalTeams = mergeList(deepData.teams, parsedTeams);
-
-                await prisma.issue.update({
-                    where: { id: issue.id },
-                    data: {
-                        writers: JSON.stringify(finalWriters),
-                        artists: JSON.stringify(finalArtists),
-                        coverArtists: JSON.stringify(finalCoverArtists),
-                        colorists: JSON.stringify(finalColorists),
-                        letterers: JSON.stringify(finalLetterers),
-                        characters: JSON.stringify(finalCharacters),
-                        storyArcs: JSON.stringify(finalStoryArcs), 
-                        teams: JSON.stringify(finalTeams),
-                        description: newDescription,
-                        matchState: 'DEEP_SYNCED'
-                    } as any
-                }).catch(err => {
-                    Logger.log(`[Issue API] Failed to save lazy-loaded Metron metadata: ${getErrorMessage(err)}`, 'error');
+                // #194 guard: never trust the stored metadataId blindly — a sync race can leave a
+                // row holding another issue's id, and writing that payload (then stamping
+                // DEEP_SYNCED) locks the wrong data in. On mismatch, serve DB data untouched.
+                const mismatch = issueIdentityMismatch({
+                    rowNumber: issue.number,
+                    seriesMetadataId: issue.series?.metadataId,
+                    seriesMetadataSource: issue.series?.metadataSource,
+                    expectedSource: 'METRON',
+                    fetchedParentId: deepData.seriesId != null ? deepData.seriesId.toString() : null,
+                    fetchedIssueNumber: deepData.issueNumber
                 });
+                if (mismatch) {
+                    Logger.log(`[Issue API] Skipping Metron deep-fetch for issue ${issue.id} (#${issue.number}): stored metadataId ${issue.metadataId} ${mismatch}.`, 'warn');
+                } else {
+                    const newDescription = fillOnly && issue.description ? issue.description : (deepData.description || issue.description);
+                    const finalWriters = mergeList(deepData.writers, parsedWriters);
+                    const finalArtists = mergeList(deepData.artists, parsedArtists);
+                    const finalCoverArtists = mergeList(deepData.coverArtists, parsedCoverArtists);
+                    const finalColorists = mergeList(deepData.colorists, parsedColorists);
+                    const finalLetterers = mergeList(deepData.letterers, parsedLetterers);
+                    const finalCharacters = mergeList(deepData.characters, parsedCharacters);
+                    // ["NONE"] only when BOTH sides are empty — the old shape dropped file-derived arcs
+                    // to the sentinel whenever the provider returned none (the #179 wipe class).
+                    const mergedArcs = mergeList(deepData.storyArcs, parsedStoryArcs);
+                    const finalStoryArcs = mergedArcs.length > 0 ? mergedArcs : ["NONE"];
+                    const finalTeams = mergeList(deepData.teams, parsedTeams);
 
-                return NextResponse.json({
-                    number: issue.number,
-                    name: issue.name,
-                    releaseDate: issue.releaseDate,
-                    universe: issue.universe,
-                    writers: finalWriters,
-                    artists: finalArtists,
-                    coverArtists: finalCoverArtists,
-                    colorists: finalColorists,
-                    letterers: finalLetterers,
-                    characters: finalCharacters,
-                    genres: parsedGenres,
-                    storyArcs: finalStoryArcs,
-                    teams: finalTeams,
-                    locations: parsedLocations,
-                    description: newDescription
-                });
+                    await prisma.issue.update({
+                        where: { id: issue.id },
+                        data: {
+                            writers: JSON.stringify(finalWriters),
+                            artists: JSON.stringify(finalArtists),
+                            coverArtists: JSON.stringify(finalCoverArtists),
+                            colorists: JSON.stringify(finalColorists),
+                            letterers: JSON.stringify(finalLetterers),
+                            characters: JSON.stringify(finalCharacters),
+                            storyArcs: JSON.stringify(finalStoryArcs),
+                            teams: JSON.stringify(finalTeams),
+                            description: newDescription,
+                            matchState: 'DEEP_SYNCED'
+                        } as any
+                    }).catch(err => {
+                        Logger.log(`[Issue API] Failed to save lazy-loaded Metron metadata: ${getErrorMessage(err)}`, 'error');
+                    });
+
+                    return NextResponse.json({
+                        number: issue.number,
+                        name: issue.name,
+                        releaseDate: issue.releaseDate,
+                        universe: issue.universe,
+                        writers: finalWriters,
+                        artists: finalArtists,
+                        coverArtists: finalCoverArtists,
+                        colorists: finalColorists,
+                        letterers: finalLetterers,
+                        characters: finalCharacters,
+                        genres: parsedGenres,
+                        storyArcs: finalStoryArcs,
+                        teams: finalTeams,
+                        locations: parsedLocations,
+                        description: newDescription
+                    });
+                }
 
             } catch (e) {
                 Logger.log(`Metron deep fetch failed, falling back to DB data: ${getErrorMessage(e)}`, 'error');
@@ -135,14 +152,29 @@ export async function GET(request: Request) {
                         params: {
                             api_key: setting.value,
                             format: 'json',
-                            field_list: 'person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,description,deck'
+                            // volume + issue_number feed the #194 identity guard below.
+                            field_list: 'person_credits,character_credits,concepts,story_arc_credits,team_credits,location_credits,description,deck,volume,issue_number'
                         },
                         headers: { 'User-Agent': 'Omnibus/1.0' },
                         timeout: 5000
                     });
 
                     const deepData = deepRes.data.results;
-                    if (deepData) {
+                    // #194 guard: never trust the stored metadataId blindly — a sync race can leave a
+                    // row holding another issue's id, and writing that payload (then stamping
+                    // DEEP_SYNCED) locks the wrong data in. On mismatch, serve DB data untouched.
+                    const mismatch = deepData ? issueIdentityMismatch({
+                        rowNumber: issue.number,
+                        seriesMetadataId: issue.series?.metadataId,
+                        seriesMetadataSource: issue.series?.metadataSource,
+                        expectedSource: 'COMICVINE',
+                        fetchedParentId: deepData.volume?.id != null ? deepData.volume.id.toString() : null,
+                        fetchedIssueNumber: deepData.issue_number
+                    }) : null;
+                    if (mismatch) {
+                        Logger.log(`[Issue API] Skipping CV deep-fetch for issue ${issue.id} (#${issue.number}): stored metadataId ${issue.metadataId} ${mismatch}.`, 'warn');
+                    }
+                    if (deepData && !mismatch) {
                         const { writers, artists, coverArtists, colorists, letterers, characters, genres, storyArcs, teams, locations } = parseComicVineCredits(
                             deepData.person_credits, 
                             deepData.character_credits, 

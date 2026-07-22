@@ -319,6 +319,79 @@ fn apply_issue_padding(queries: Vec<String>, name: &str) -> Vec<String> {
     out
 }
 
+/// Interactive Prowlarr query ladder (specific → broad), walked in first-hit mode. The modal sends
+/// "<title> <issue> <year>" with an UNPADDED issue, but scene/Usenet release names zero-pad to 3
+/// digits and newznab free-text search AND-matches every token — so the raw term alone misses
+/// "…049 (2026)…" releases entirely (field report: "Something is Killing the Children 49 2026"
+/// returned nothing on indexers that had the book). Rungs, deduped in order:
+///   1. "<title> 049 <year>"  (padded, most specific)
+///   2. the raw query as sent
+///   3. "<title> 049"         (padded, year dropped)
+///   4. "<title> 49"          (bare, year dropped)
+///   5. "<title>"             (broad fallback — interactive results are human-reviewed)
+///
+/// The trailing year is split off only when it equals the request's known year (never guessed, so a
+/// title number like "2000 AD" can't be mistaken for one), and the trailing issue token must leave a
+/// non-empty title ("300" stays a title). When nothing parses, the ladder degrades to the raw query
+/// (plus the year-stripped base when the year was recognized) — never worse than today's behavior.
+pub(crate) fn interactive_search_ladder(raw_query: &str, year: Option<&str>) -> Vec<String> {
+    let raw = raw_query.split_whitespace().collect::<Vec<_>>().join(" ");
+    if raw.is_empty() {
+        return Vec::new();
+    }
+
+    fn push(ladder: &mut Vec<String>, s: String) {
+        if !s.is_empty() && !ladder.contains(&s) {
+            ladder.push(s);
+        }
+    }
+    let mut ladder: Vec<String> = Vec::new();
+
+    // Split a trailing " <year>" only when it matches the known request year.
+    let (base, had_year) = match year {
+        Some(y) if !y.is_empty() && raw.ends_with(&format!(" {}", y)) => {
+            (raw[..raw.len() - y.len() - 1].trim_end().to_string(), true)
+        }
+        _ => (raw.clone(), false),
+    };
+
+    // Trailing issue token: optional '#' prefix / zero-padding, 1–3 digits, non-empty title before it.
+    static RE_TAIL: OnceLock<Regex> = OnceLock::new();
+    let re = RE_TAIL.get_or_init(|| Regex::new(r"^(.+?)\s+#?0*(\d{1,3})$").unwrap());
+    let parsed = re.captures(&base).and_then(|c| {
+        let n: u32 = c.get(2)?.as_str().parse().ok()?;
+        let title = c.get(1)?.as_str().trim().to_string();
+        if n == 0 || title.is_empty() { None } else { Some((title, n)) }
+    });
+
+    match parsed {
+        Some((title, n)) => {
+            let bare = n.to_string();
+            let padded = format!("{:03}", n);
+            if padded != bare {
+                if had_year {
+                    push(&mut ladder, format!("{} {} {}", title, padded, year.unwrap_or_default()));
+                } else {
+                    push(&mut ladder, format!("{} {}", title, padded));
+                }
+            }
+            push(&mut ladder, raw.clone());
+            if padded != bare {
+                push(&mut ladder, format!("{} {}", title, padded));
+            }
+            push(&mut ladder, format!("{} {}", title, bare));
+            push(&mut ladder, title);
+        }
+        None => {
+            push(&mut ladder, raw.clone());
+            if had_year {
+                push(&mut ladder, base);
+            }
+        }
+    }
+    ladder
+}
+
 // Extract number faithfully porting Node.js regex fallbacks without using lookarounds.
 pub(crate) fn extract_number(title: &str, is_manga: bool, strip_vol: bool) -> Option<f32> {
     static RE_VOL_STRIP: OnceLock<Regex> = OnceLock::new();
@@ -696,6 +769,7 @@ mod tests {
             guid: "g".into(), title: title.into(), size: 0, indexer: "idx".into(),
             seeders, peers, info_url: String::new(), download_url: String::new(),
             protocol: "torrent".into(), publish_date: String::new(), info_hash: None,
+            matched_query: None, query_rung: None,
         }
     }
 
@@ -707,6 +781,63 @@ mod tests {
     }
 
     fn sv(items: &[&str]) -> Vec<String> { items.iter().map(|s| s.to_string()).collect() }
+
+    // ==== Interactive Prowlarr query ladder (the "…49 2026 returns nothing" field report) ====
+
+    #[test]
+    fn interactive_ladder_pads_and_broadens() {
+        assert_eq!(
+            interactive_search_ladder("Something is Killing the Children 49 2026", Some("2026")),
+            vec![
+                "Something is Killing the Children 049 2026",
+                "Something is Killing the Children 49 2026",
+                "Something is Killing the Children 049",
+                "Something is Killing the Children 49",
+                "Something is Killing the Children",
+            ]
+        );
+    }
+
+    #[test]
+    fn interactive_ladder_without_year_is_three_rungs() {
+        assert_eq!(interactive_search_ladder("Saga 49", None), vec!["Saga 049", "Saga 49", "Saga"]);
+    }
+
+    #[test]
+    fn interactive_ladder_three_digit_issue_skips_padding() {
+        assert_eq!(
+            interactive_search_ladder("Saga 103 2026", Some("2026")),
+            vec!["Saga 103 2026", "Saga 103", "Saga"]
+        );
+    }
+
+    #[test]
+    fn interactive_ladder_title_numbers_are_not_issues() {
+        // A 4-digit tail is never an issue; a lone number is a title, not an issue.
+        assert_eq!(interactive_search_ladder("Spider-Man 2099", None), vec!["Spider-Man 2099"]);
+        assert_eq!(interactive_search_ladder("300", None), vec!["300"]);
+        // A leading title number survives tail parsing intact.
+        assert_eq!(interactive_search_ladder("2000 AD 49 2026", Some("2026"))[0], "2000 AD 049 2026");
+    }
+
+    #[test]
+    fn interactive_ladder_year_split_requires_exact_match() {
+        // Known year 2026 but the query carries 2020: no strip, and "2020" is no issue → raw only.
+        assert_eq!(interactive_search_ladder("Saga 49 2020", Some("2026")), vec!["Saga 49 2020"]);
+    }
+
+    #[test]
+    fn interactive_ladder_handles_hash_and_prepadded_input() {
+        // '#' is consumed for generated rungs but the raw form is preserved as sent.
+        let l = interactive_search_ladder("SIKTC #49 2026", Some("2026"));
+        assert_eq!(l[0], "SIKTC 049 2026");
+        assert!(l.contains(&"SIKTC #49 2026".to_string()));
+        // Already-padded input: the padded rung equals the raw form and dedups cleanly.
+        assert_eq!(
+            interactive_search_ladder("Wolverine 003 2024", Some("2024")),
+            vec!["Wolverine 003 2024", "Wolverine 003", "Wolverine 3", "Wolverine"]
+        );
+    }
 
     #[test]
     fn search_source_order_defaults_and_parses() {
@@ -966,6 +1097,7 @@ mod tests {
             guid: format!("g-{}", title), title: title.into(), size: 0, indexer: "idx".into(),
             seeders, peers, info_url: String::new(), download_url: format!("u-{}", title),
             protocol: protocol.into(), publish_date: String::new(), info_hash: None,
+            matched_query: None, query_rung: None,
         }
     }
 

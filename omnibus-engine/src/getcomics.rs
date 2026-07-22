@@ -580,6 +580,7 @@ pub async fn search(
                         guid: link.clone(), title, size, indexer: "GetComics".to_string(),
                         seeders: 100, peers: 0, info_url: link.clone(), download_url: link,
                         protocol: "ddl".to_string(), publish_date: "N/A".to_string(), info_hash: None,
+                        matched_query: None, query_rung: None,
                     });
                 }
             }

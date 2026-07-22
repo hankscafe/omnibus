@@ -297,6 +297,8 @@ pub async fn search(
                     protocol: "ddl".to_string(),
                     publish_date: "N/A".to_string(),
                     info_hash: None,
+                    matched_query: None,
+                    query_rung: None,
                 });
             }
 

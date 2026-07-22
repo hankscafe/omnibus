@@ -26,6 +26,12 @@ interface Props {
   requestId?: string;
 }
 
+// Rung-aware ordering: the engine tags Prowlarr results with the query-ladder rung that found them
+// (0 = the exact term). Exact-term hits — and untagged sources like GetComics/Anna's — stay above
+// broadened-fallback hits; the sort is stable, so each source's own order is preserved within a rung.
+export const sortByQueryRung = <T extends { queryRung?: number }>(rows: T[]): T[] =>
+    [...rows].sort((a, b) => (a.queryRung || 0) - (b.queryRung || 0));
+
 // Aggressive formatter that forces 3-digit padding and strips subtitles
 const getOptimizedSearchQuery = (rawQuery: string, year?: string) => {
     if (!rawQuery) return "";
@@ -99,7 +105,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
       if (data.prowlarr) combined.push(...data.prowlarr);
       if (data.getcomics) combined.push(...data.getcomics);
       if (data.annas_archive) combined.push(...data.annas_archive);
-      setResults(combined);
+      setResults(sortByQueryRung(combined));
     } catch (e) {
       toast({ title: "Error", description: "Search failed.", variant: "destructive" });
     } finally {
@@ -247,12 +253,17 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                         </td>
                                         <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.age : getAge(res.publishDate)}</td>
                                         <td className="px-4 py-3">
-                                            <div 
+                                            <div
                                                 className="font-medium text-foreground break-words whitespace-normal line-clamp-3 leading-tight"
                                                 title={res.title}
                                             >
                                                 {res.title}
                                             </div>
+                                            {(res.queryRung || 0) > 0 && (
+                                                <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800" title={`Found via broadened query: ${res.matchedQuery || ''}`}>
+                                                    via broadened search
+                                                </Badge>
+                                            )}
                                         </td>
                                         
                                         <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{res.indexer}</td>
@@ -296,6 +307,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                 <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{isDdl ? res.age : getAge(res.publishDate)}</Badge>
                                 <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{formatSize(res.size)}</Badge>
                                 {isTorrent && <Badge variant="outline" className="text-xs px-2 py-0.5 border-green-200 text-green-600 bg-green-50 dark:bg-green-900/20 dark:text-green-400">S: {res.seeders}</Badge>}
+                                {(res.queryRung || 0) > 0 && <Badge variant="outline" className="text-[10px] px-2 py-0.5 text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800" title={`Found via broadened query: ${res.matchedQuery || ''}`}>via broadened search</Badge>}
                             </div>
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-border mt-2">
                                 <span className="text-sm text-muted-foreground font-medium truncate">{res.indexer}</span>

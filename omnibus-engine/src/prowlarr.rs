@@ -33,6 +33,13 @@ pub struct ProwlarrResult {
     pub protocol: String,
     pub publish_date: String,
     pub info_hash: Option<String>,
+    // Which query produced this hit and its position in the caller's ladder (0 = most specific).
+    // Set only on Prowlarr results; the interactive UI badges query_rung > 0 as "via broadened
+    // search". Absent (skipped) for GetComics/Anna's results, which share this struct.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_rung: Option<u8>,
 }
 
 /// Parse the comma-separated Prowlarr category list, dropping the manga category (8030) for comic
@@ -75,6 +82,7 @@ fn map_raw_result(item: RawProwlarrResult) -> ProwlarrResult {
         info_url: item.info_url.unwrap_or_default(), download_url,
         protocol: final_protocol.to_string(), publish_date: item.publish_date.unwrap_or_default(),
         info_hash,
+        matched_query: None, query_rung: None,
     }
 }
 
@@ -117,7 +125,7 @@ pub async fn search(db: &sqlx::AnyPool, limiter: &crate::rate_limiter::RateLimit
     // pool; otherwise we return the first query that yields any results.
     let mut combined: Vec<ProwlarrResult> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for q in queries {
+    for (rung, q) in queries.iter().enumerate() {
         log::info!("[Prowlarr] Searching for: \"{}\"", q);
         let mut req_url = format!("{}/api/v1/search?query={}&type=search&limit=100&offset=0", clean_url, urlencoding::encode(q));
 
@@ -165,12 +173,19 @@ pub async fn search(db: &sqlx::AnyPool, limiter: &crate::rate_limiter::RateLimit
             }
         };
 
-        let mapped_results: Vec<ProwlarrResult> = raw_results.into_iter().map(map_raw_result).collect();
+        let mut mapped_results: Vec<ProwlarrResult> = raw_results.into_iter().map(map_raw_result).collect();
 
         if mapped_results.is_empty() {
             continue;
         }
         log::info!("[Prowlarr] Found {} mapped results for \"{}\"", mapped_results.len(), q);
+
+        // Stamp which ladder rung found these — the interactive UI badges rung > 0 as a
+        // broadened-query match and sorts exact-term hits first.
+        for r in &mut mapped_results {
+            r.matched_query = Some(q.clone());
+            r.query_rung = Some(rung.min(u8::MAX as usize) as u8);
+        }
 
         // Interactive: first non-empty query wins (fast response).
         if !exhaustive {

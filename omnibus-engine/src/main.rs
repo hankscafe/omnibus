@@ -1251,9 +1251,14 @@ async fn handle_interactive_search(
 ) -> Json<InteractiveResponse> {
     log::info!("Received Interactive Search request for: {}", payload.query);
     
-    // Parity with the upstream interactive route (beta.035): both services receive the single raw
-    // query; getcomics::search fans it out into the upstream variant set internally (raw,
-    // symbol-cleaned, year-stripped, issue-stripped) and aggregates across all pages with URL dedup.
+    // Prowlarr gets a specific→broad query ladder walked in first-hit mode: the raw modal term
+    // alone ("…49 2026") misses zero-padded scene names ("…049…") and year-less tracker names
+    // entirely, because newznab free-text search AND-matches every token (field report on
+    // SIKTC #49). GetComics and Anna's keep the single raw query — both fan out / paginate
+    // internally (getcomics::interactive_query_variants incl. de-pad; Anna's aggregates every
+    // page per query), so handing them the ladder would multiply their anti-ban throttles.
+    let ladder = search_engine::interactive_search_ladder(&payload.query, payload.year.as_deref());
+    log::info!("[Interactive] Prowlarr query ladder ({} rung(s)): {:?}", ladder.len(), ladder);
     let queries = vec![payload.query.clone()];
     let is_manga = payload.is_manga.unwrap_or(false);
 
@@ -1262,7 +1267,7 @@ async fn handle_interactive_search(
     let annas_enabled = annas_archive::is_interactive_enabled(&state.db.pool).await;
 
     let (prow_res, get_res, annas_res) = tokio::join!(
-        prowlarr::search(&state.db.pool, &state.limiter, &queries, is_manga, false),
+        prowlarr::search(&state.db.pool, &state.limiter, &ladder, is_manga, false),
         getcomics::search(&state.db.pool, &state.limiter, &queries, true, &payload.query, payload.year.as_deref(), payload.year.as_deref(), is_manga, None),
         async {
             if annas_enabled {

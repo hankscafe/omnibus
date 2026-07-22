@@ -11,6 +11,7 @@ import { omnibusQueue } from './queue';
 import { markSystemFlag, countApiUsage } from './utils/system-flags';
 import { cachedCvGet } from './metadata/metadata-cache';
 import { isSameIssue } from '@/lib/utils/issue-parser';
+import { findLocalCoverBasename, providerCoverBlocked } from '@/lib/utils/cover-plan';
 
 // Providers rarely report when a series ends, so Omnibus guesses: no new issue
 // within the admin-configured window (months) = Ended. Returns null when the
@@ -32,6 +33,11 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     // Update this line:
     Logger.log(`[Metadata] Fetching data for: "${series.name}" (ID: ${metadataId} via ${metadataSource})`, 'info');
 
+    // cover_source policy, parity with the engine's resolve_cover (issue #194 follow-up): a custom
+    // cover is never overwritten; in 'archive' mode an existing local/extracted cover file wins.
+    // This Node fallback path used to download provider art unconditionally.
+    const coverSource = (await prisma.systemSetting.findUnique({ where: { key: 'cover_source' } }))?.value || 'metadata';
+
     if (metadataSource === 'METRON') {
         try {
             const metron = new MetronProvider();
@@ -43,24 +49,23 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             }
 
             let metronFallbackCover = details.coverUrl || series.coverUrl;
-            
+
             // --- FIX: Ensure folder exists so we can save the series cover locally ---
-            if (folderPath && folderPath.trim() !== '') {
-                if (!fs.existsSync(folderPath)) {
-                    fs.mkdirSync(folderPath, { recursive: true });
-                }
-                const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
-                for (const pc of possibleCovers) {
-                    if (fs.existsSync(path.join(folderPath, pc))) {
-                        metronFallbackCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
-                        break;
-                    }
-                }
+            if (folderPath && folderPath.trim() !== '' && !fs.existsSync(folderPath)) {
+                fs.mkdirSync(folderPath, { recursive: true });
+            }
+            const metronLocalCover = findLocalCoverBasename(folderPath);
+            if (metronLocalCover) {
+                metronFallbackCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, metronLocalCover))}`;
             }
 
             let metronFinalCover = metronFallbackCover;
 
-            if (details.coverUrl && folderPath && fs.existsSync(folderPath)) {
+            const metronCoverBlocked = providerCoverBlocked({
+                hasCustomCover: !!series.hasCustomCover, coverSource, localCoverExists: !!metronLocalCover
+            });
+
+            if (!metronCoverBlocked && details.coverUrl && folderPath && fs.existsSync(folderPath)) {
                 try {
                     const imgRes = await axios.get<ArrayBuffer>(details.coverUrl, { responseType: 'arraybuffer' });
                     const contentType = String(imgRes.headers['content-type'] || '').toLowerCase();
@@ -91,7 +96,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     year: details.year || series.year,
                     universe: details.universe,
                     description: details.description,
-                    coverUrl: metronFinalCover,
+                    // A custom cover's stored URL is preserved verbatim — recomputing it here could
+                    // repoint it, regardless of where the custom file lives.
+                    coverUrl: series.hasCustomCover ? series.coverUrl : metronFinalCover,
                     // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
                     ...(details.coverUrl ? { remoteCoverUrl: details.coverUrl } : {}),
                     // Metron's series_type is authoritative, but never clobber a manual categorization
@@ -296,24 +303,23 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     const { genres: volGenres } = parseComicVineCredits(undefined, undefined, volData.concepts || undefined);
     
     let cvFallbackCover = imageUrl || series.coverUrl;
-    
+
     // --- FIX: Ensure folder exists so we can save the series cover locally ---
-    if (folderPath && folderPath.trim() !== '') {
-        if (!fs.existsSync(folderPath)) {
-            fs.mkdirSync(folderPath, { recursive: true });
-        }
-        const possibleCovers = ['cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'Cover.jpg', 'Cover.png', 'folder.png'];
-        for (const pc of possibleCovers) {
-            if (fs.existsSync(path.join(folderPath, pc))) {
-                cvFallbackCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, pc))}`;
-                break;
-            }
-        }
+    if (folderPath && folderPath.trim() !== '' && !fs.existsSync(folderPath)) {
+        fs.mkdirSync(folderPath, { recursive: true });
+    }
+    const cvLocalCover = findLocalCoverBasename(folderPath);
+    if (cvLocalCover) {
+        cvFallbackCover = `/api/library/cover?path=${encodeURIComponent(path.join(folderPath, cvLocalCover))}`;
     }
 
     let cvFinalCover = cvFallbackCover;
 
-    if (imageUrl && folderPath && fs.existsSync(folderPath)) {
+    const cvCoverBlocked = providerCoverBlocked({
+        hasCustomCover: !!series.hasCustomCover, coverSource, localCoverExists: !!cvLocalCover
+    });
+
+    if (!cvCoverBlocked && imageUrl && folderPath && fs.existsSync(folderPath)) {
         try {
             const imgRes = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer' });
             const contentType = String(imgRes.headers['content-type'] || '').toLowerCase();
@@ -351,7 +357,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             publisher: volData.publisher?.name || 'Other',
             year: parseInt(volData.start_year || "0") || series.year,
             description: volData.description || volData.deck || null,
-            coverUrl: cvFinalCover,
+            // A custom cover's stored URL is preserved verbatim — recomputing it here could
+            // repoint it, regardless of where the custom file lives.
+            coverUrl: series.hasCustomCover ? series.coverUrl : cvFinalCover,
             // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
             ...(imageUrl ? { remoteCoverUrl: imageUrl } : {}),
             // Heuristic only fills a blank — never clobber a manual categorization

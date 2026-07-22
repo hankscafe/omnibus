@@ -38,8 +38,15 @@ vi.mock('@/lib/queue', () => ({
 vi.mock('fs-extra', () => ({
     default: {
         existsSync: mocks.existsSync,
+        mkdirSync: vi.fn(),
         writeFile: mocks.writeFile
     }
+}));
+
+// The shared cover-plan helper probes via plain 'fs' — wire it to the same existsSync mock so a
+// single switch controls both the fetcher's folder checks and the helper's cover-file probes.
+vi.mock('fs', () => ({
+    default: { existsSync: mocks.existsSync }
 }));
 
 vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
@@ -166,5 +173,58 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
                 coverUrl: `/api/library/cover?path=${encodeURIComponent(path.join('/comics/Indie', 'cover.jpg'))}`
             })
         }));
+    });
+
+    it("keeps an existing local cover in 'archive' mode instead of downloading provider art (#194 d)", async () => {
+        mocks.systemSettingFindUnique.mockImplementation(async ({ where }: any) =>
+            where.key === 'cover_source' ? { value: 'archive' } : { value: 'mock_api_key' });
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) {
+                return { data: { results: { name: 'Batman', start_year: '2016', publisher: { name: 'DC Comics' }, image: { medium_url: 'http://cv.com/batman.jpg' } } } };
+            }
+            if (url.includes('/issues/')) {
+                return { data: { number_of_total_results: 0, results: [] } };
+            }
+            return { data: Buffer.from('fake_image_data') };
+        });
+        mocks.existsSync.mockReturnValue(true); // folder + local cover.jpg both "exist"
+
+        const result = await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect(result.success).toBe(true);
+
+        // The provider image was neither downloaded nor written over the local cover...
+        expect(mocks.axiosGet).not.toHaveBeenCalledWith('http://cv.com/batman.jpg', expect.anything());
+        expect(mocks.writeFile).not.toHaveBeenCalled();
+        // ...and the series points at the local cover file.
+        expect(mocks.seriesUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({
+                coverUrl: `/api/library/cover?path=${encodeURIComponent(path.join('/comics/Batman', 'cover.jpg'))}`
+            })
+        }));
+    });
+
+    it('preserves a custom cover URL verbatim and never downloads provider art over it (#194 d)', async () => {
+        // Custom cover with NO folder cover file — the stored URL must survive the sync untouched.
+        mocks.seriesFindFirst.mockResolvedValue({
+            id: 'series_1', metadataId: '4050-123', folderPath: '/comics/Batman',
+            metadataSource: 'COMICVINE', year: 2016,
+            hasCustomCover: true, coverUrl: '/api/uploads/series-covers/custom.jpg'
+        });
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) {
+                return { data: { results: { name: 'Batman', start_year: '2016', publisher: { name: 'DC Comics' }, image: { medium_url: 'http://cv.com/batman.jpg' } } } };
+            }
+            if (url.includes('/issues/')) {
+                return { data: { number_of_total_results: 0, results: [] } };
+            }
+            return { data: Buffer.from('fake_image_data') };
+        });
+        mocks.existsSync.mockReturnValue(false);
+
+        const result = await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect(result.success).toBe(true);
+
+        expect(mocks.writeFile).not.toHaveBeenCalled();
+        expect(mocks.seriesUpdate.mock.calls[0][0].data.coverUrl).toBe('/api/uploads/series-covers/custom.jpg');
     });
 });

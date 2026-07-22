@@ -21,6 +21,7 @@ import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths'
 import { safeRelocateFolder, moveFileSafe } from '@/lib/utils/safe-fs';
 import { countArchivePages } from '@/lib/utils/archive-pages';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
+import { findLocalCoverBasename } from '@/lib/utils/cover-plan';
 
 export async function POST(request: Request) {
   try {
@@ -161,12 +162,24 @@ export async function POST(request: Request) {
     const hasNewCustomCover = typeof coverImageBase64 === 'string' && coverImageBase64.length > 0;
     const keepExistingCustomCover = !hasNewCustomCover && !!(existingRecord?.hasCustomCover || unmatchedRecord?.hasCustomCover);
 
+    // cover_source policy (issue #194 follow-up): in 'archive' mode an existing local/extracted
+    // cover file wins over provider art — the same gate the engine's resolve_cover applies, which
+    // this route used to bypass by always stamping the provider image over cover.jpg. Probe the
+    // target folder first (a merge keeps its files), then the source (its cover travels with the
+    // move; a loose-file source path simply never matches).
+    const coverSource = config.cover_source || 'metadata';
+    const localCoverBasename = coverSource === 'archive' ? findLocalCoverBasename(newFolderPath, oldFolderPath) : null;
+    const archiveKeepsLocalCover = !hasNewCustomCover && !!localCoverBasename;
+
     const updateData = {
         cvId: targetSource === 'COMICVINE' ? parseInt(targetMetaId) : null,
         metadataId: targetMetaId,
         metadataSource: targetSource,
         matchState: 'MATCHED',
-        name: safeName,
+        // DB keeps the RAW provider/admin name — sanitizeFilename is for path building only.
+        // Writing the sanitized copy here stripped characters like ':' that the next provider
+        // sync restored, so the series name flip-flopped between forms (issue #194).
+        name: realName,
         year: realYear,
         publisher: realPublisher,
         folderPath: newFolderPath,
@@ -177,7 +190,9 @@ export async function POST(request: Request) {
             ? { coverUrl: `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}&v=${Date.now()}`, hasCustomCover: true }
             : keepExistingCustomCover
                 ? {}
-                : { coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null }),
+                : archiveKeepsLocalCover
+                    ? { coverUrl: `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, localCoverBasename!))}` }
+                    : { coverUrl: imageUrl ? `/api/library/cover?path=${encodeURIComponent(path.join(newFolderPath, 'cover.jpg'))}` : null }),
         // Admin-supplied descriptive metadata from the Smart Matcher editor. Stored raw (paths use the
         // sanitized copies above). lockMetadata sets hasCustomMetadata so the post-match provider sync
         // can't revert the admin's entries — same contract as the rich metadata editor (library/update).
@@ -209,8 +224,8 @@ export async function POST(request: Request) {
         existingRecord = await prisma.series.create({ data: updateData });
     }
 
-    DiscordNotifier.sendAlert('metadata_match', { 
-        title: safeName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin" 
+    DiscordNotifier.sendAlert('metadata_match', {
+        title: realName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin"
     }).catch(() => {});
 
     const oldStat = await fs.promises.stat(oldFolderPath);
@@ -431,7 +446,7 @@ export async function POST(request: Request) {
                 const b64 = coverImageBase64.replace(/^data:image\/\w+;base64,/, '');
                 await fs.promises.writeFile(path.join(activeFolderPath, 'cover.jpg'), Buffer.from(b64, 'base64'));
             } catch(e) {}
-        } else if (imageUrl && !keepExistingCustomCover) {
+        } else if (imageUrl && !keepExistingCustomCover && !archiveKeepsLocalCover) {
             try {
                 const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 3000, headers: { 'User-Agent': 'Omnibus/1.0' } });
                 await fs.promises.writeFile(path.join(activeFolderPath, 'cover.jpg'), Buffer.from(imgRes.data));

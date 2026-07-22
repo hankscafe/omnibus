@@ -344,4 +344,49 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         expect(mocks.moveFileSafe).not.toHaveBeenCalled();
         expect(vi.mocked(fs.promises.rename)).not.toHaveBeenCalled();
     });
+
+    it('should store the raw provider name in the DB while paths use the sanitized form (#194 e)', async () => {
+        mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'cv_api_key' });
+        vi.mocked(axios.get).mockResolvedValueOnce({
+            data: { results: { name: 'Batman: White Knight', start_year: '2017', publisher: { name: 'DC Comics' } } }
+        } as any);
+
+        const res = await POST(createReq({ oldFolderPath: '/unmatched/Batman White Knight', metadataId: '4050-9999' }));
+        expect(res.status).toBe(200);
+
+        const data = mocks.createSeries.mock.calls[0][0].data;
+        // The DB keeps the colon the provider returned (no more name flip-flop with the sync)...
+        expect(data.name).toBe('Batman: White Knight');
+        // ...while the folder path uses the sanitized, colon-free form.
+        expect(data.folderPath).toContain('Batman White Knight (2017)');
+        expect(data.folderPath).not.toContain(':');
+    });
+
+    it("should keep an existing local cover in 'archive' mode (no provider download or overwrite) (#194 d)", async () => {
+        mocks.findManySettings.mockResolvedValue([{ key: 'cover_source', value: 'archive' }]);
+        mocks.getSeriesDetails.mockResolvedValueOnce({ name: 'Batman', year: 2020, publisher: 'DC Comics', coverUrl: 'http://cover/img.jpg', status: 'Ongoing' });
+
+        const res = await POST(createReq({ oldFolderPath: '/unmatched/Batman', metadataId: '987', metadataSource: 'METRON' }));
+        expect(res.status).toBe(200);
+
+        // existsSync defaults to true → a local cover.jpg "exists": the provider image is neither
+        // downloaded nor written over it (this route used to stamp it unconditionally).
+        expect(vi.mocked(axios.get)).not.toHaveBeenCalled();
+        expect(vi.mocked(fs.promises.writeFile)).not.toHaveBeenCalled();
+        // The series still points at the local folder cover.
+        const data = mocks.createSeries.mock.calls[0][0].data;
+        expect(decodeURIComponent(String(data.coverUrl))).toContain('cover.jpg');
+    });
+
+    it('should still stamp provider art over cover.jpg in the default cover mode', async () => {
+        mocks.getSeriesDetails.mockResolvedValueOnce({ name: 'Batman', year: 2020, publisher: 'DC Comics', coverUrl: 'http://cover/img.jpg', status: 'Ongoing' });
+        vi.mocked(axios.get).mockResolvedValueOnce({ data: Buffer.from('provider-art') } as any);
+
+        const res = await POST(createReq({ oldFolderPath: '/unmatched/Batman', metadataId: '987', metadataSource: 'METRON' }));
+        expect(res.status).toBe(200);
+
+        expect(vi.mocked(axios.get)).toHaveBeenCalledWith('http://cover/img.jpg', expect.any(Object));
+        const coverWrite = vi.mocked(fs.promises.writeFile).mock.calls.find(c => String(c[0]).includes('cover.jpg'));
+        expect(coverWrite).toBeTruthy();
+    });
 });

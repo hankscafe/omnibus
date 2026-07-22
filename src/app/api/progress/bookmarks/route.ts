@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { ciContains } from '@/lib/utils/db-search';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
@@ -13,12 +14,11 @@ async function getIssueFromPath(filePath: string) {
     const normalizedTarget = path.normalize(filePath).replace(/\\/g, '/').toLowerCase();
     const fileName = path.basename(filePath);
     
-    // FIX: Standard contains query for SQLite (remove mode: 'insensitive' if present)
+    // ciContains: provider-aware — plain contains on SQLite (whose client rejects `mode`),
+    // mode:'insensitive' on Postgres so this casing-drift prefilter actually tolerates casing.
     const possibleIssues = await prisma.issue.findMany({
-        where: { 
-            filePath: { 
-                contains: fileName 
-            } 
+        where: {
+            filePath: ciContains(fileName)
         }
     });
     

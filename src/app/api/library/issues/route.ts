@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { ciContains } from '@/lib/utils/db-search';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
@@ -62,9 +63,11 @@ export async function GET(request: Request) {
         if (Object.keys(seriesWhere).length > 0) where.series = seriesWhere;
         if (status === 'DOWNLOADED') where.filePath = { not: null };
         else if (status === 'WANTED') where.filePath = null;
-        // Case-insensitive title search. `mode: 'insensitive'` → Postgres ILIKE (the app runs on Postgres);
-        // node main relies on SQLite's LIKE being case-insensitive by default, so it omits the mode.
-        if (q) where.OR = [{ name: { contains: q, mode: 'insensitive' } }, { series: { name: { contains: q, mode: 'insensitive' } } }];
+        // Case-insensitive title search. ciContains is provider-aware: Postgres needs
+        // `mode: 'insensitive'` (ILIKE), while the sqlite-generated Prisma client REJECTS the
+        // `mode` argument at runtime — the hardcoded mode here 500'd every search on the
+        // default SQLite deployment (legacy-main leftover; the app no longer "runs on Postgres").
+        if (q) where.OR = [{ name: ciContains(q) }, { series: { name: ciContains(q) } }];
 
         const rows = await prisma.issue.findMany({
             where,

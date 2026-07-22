@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { ciContains } from '@/lib/utils/db-search';
 import fs from 'fs-extra'; 
 import path from 'path';
 import { getServerSession } from 'next-auth/next';
@@ -143,32 +144,32 @@ export async function GET(request: Request) {
         parsedQuery = parsedQuery.replace(/^["']|["']$/g, '');
 
         if (targetField === 'CHARACTER') {
-            where.AND.push({ issues: { some: { characters: { contains: parsedQuery } } } });
+            where.AND.push({ issues: { some: { characters: ciContains(parsedQuery) } } });
         } else if (targetField === 'TEAM') {
-            where.AND.push({ issues: { some: { teams: { contains: parsedQuery } } } });
+            where.AND.push({ issues: { some: { teams: ciContains(parsedQuery) } } });
         } else if (targetField === 'ARC') {
-            where.AND.push({ issues: { some: { storyArcs: { contains: parsedQuery } } } });
+            where.AND.push({ issues: { some: { storyArcs: ciContains(parsedQuery) } } });
         } else if (targetField === 'LOCATION') {
-            where.AND.push({ issues: { some: { locations: { contains: parsedQuery } } } });
+            where.AND.push({ issues: { some: { locations: ciContains(parsedQuery) } } });
         } else if (targetField === 'WRITER') {
-            where.AND.push({ issues: { some: { writers: { contains: parsedQuery } } } });
+            where.AND.push({ issues: { some: { writers: ciContains(parsedQuery) } } });
         } else if (targetField === 'ARTIST') {
-            where.AND.push({ issues: { some: { artists: { contains: parsedQuery } } } });
+            where.AND.push({ issues: { some: { artists: ciContains(parsedQuery) } } });
         } else if (targetField === 'GENRE') {
-            where.AND.push({ issues: { some: { genres: { contains: parsedQuery } } } });
+            where.AND.push({ issues: { some: { genres: ciContains(parsedQuery) } } });
         } else if (targetField === 'TITLE') {
-            where.AND.push({ OR: [{ name: { contains: parsedQuery } }, { publisher: { contains: parsedQuery } }] });
+            where.AND.push({ OR: [{ name: ciContains(parsedQuery) }, { publisher: ciContains(parsedQuery) }] });
         } else {
             where.AND.push({
                 OR: [
-                    { name: { contains: parsedQuery } }, 
-                    { publisher: { contains: parsedQuery } }, 
+                    { name: ciContains(parsedQuery) }, 
+                    { publisher: ciContains(parsedQuery) }, 
                     { issues: { some: { OR: [ 
-                        { writers: { contains: parsedQuery } }, 
-                        { artists: { contains: parsedQuery } },
-                        { characters: { contains: parsedQuery } },
-                        { teams: { contains: parsedQuery } },
-                        { storyArcs: { contains: parsedQuery } }
+                        { writers: ciContains(parsedQuery) }, 
+                        { artists: ciContains(parsedQuery) },
+                        { characters: ciContains(parsedQuery) },
+                        { teams: ciContains(parsedQuery) },
+                        { storyArcs: ciContains(parsedQuery) }
                     ] } } }
                 ]
             });

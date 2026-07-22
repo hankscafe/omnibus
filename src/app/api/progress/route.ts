@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { ciContains } from '@/lib/utils/db-search';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
@@ -20,8 +21,10 @@ async function resolveIssueByPath(filePath: string): Promise<{ id: string } | nu
 
     const normalizedTarget = path.normalize(filePath).replace(/\\/g, '/').toLowerCase();
     const fileName = path.basename(filePath);
+    // ciContains: this prefilter exists to survive casing drift, so it must be case-insensitive
+    // on Postgres too (SQLite LIKE already is) — the strict check below stays in memory.
     const possibleIssues = await prisma.issue.findMany({
-        where: { filePath: { contains: fileName } },
+        where: { filePath: ciContains(fileName) },
         select: { id: true, filePath: true },
     });
     const match = possibleIssues.find(i =>

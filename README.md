@@ -568,6 +568,15 @@ services:
 2. Run `docker-compose up -d`.
 3. Open your browser and navigate to your `NEXTAUTH_URL` to access the Setup Wizard!
 
+### Behind a reverse proxy or Cloudflare Tunnel?
+
+Manual comic uploads are large requests, and proxies commonly cap request bodies:
+
+- **Cloudflare (including Tunnels):** free and pro plans cap each request at ~100MB, and this cannot be raised. Omnibus v1.3+ automatically slices manual uploads into ~48MB chunks, so uploads of any size work through a tunnel. On older versions, upload from your LAN address instead.
+- **nginx / Nginx Proxy Manager:** `client_max_body_size` defaults to just **1MB**. Add `client_max_body_size 2048m;` (NPM: Edit Proxy Host → Advanced) so single-request uploads and other large calls aren't rejected with HTTP 413.
+
+Omnibus' own upload limit is 2GB per file, adjustable with the `OMNIBUS_MAX_UPLOAD_MB` environment variable on the web container.
+
 ## Acknowledgements
 
 Omnibus stands on the shoulders of giants. This project was heavily inspired by and built with immense respect for the developers of the following incredible self-hosted applications:

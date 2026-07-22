@@ -35,34 +35,85 @@ interface UploadItem {
 
 const ACCEPT = COMIC_EXTENSIONS.join(",")
 
-// Upload one file as the raw request body, reporting progress via the resolver's callback.
-function uploadOne(
-  file: File,
-  destination: Destination,
-  requestId: string | undefined,
-  onProgress: (pct: number) => void,
-): Promise<{ ok: boolean; error?: string; filename?: string }> {
+// Chunk size: safely under Cloudflare's ~100MB free-plan edge cap (tunnel traffic goes through
+// that edge and CANNOT be raised on free plans), with headroom for other proxies. Files at or
+// below this size upload in one request, exactly as before.
+const CHUNK_SIZE = 48 * 1024 * 1024
+
+// Map an upload failure to an actionable message (a bare proxy status has no JSON body from us).
+// Exported for tests.
+export function uploadFailureMessage(status: number, serverError?: string): string {
+  if (serverError) return serverError
+  if (status === 413) {
+    return "Rejected before reaching Omnibus (HTTP 413): a proxy in front of the server capped this upload — Cloudflare allows ~100MB per request on free plans, nginx defaults to 1MB (client_max_body_size). If this persists, upload via the server's local address."
+  }
+  if (status === 409) return "Upload session got out of sync — please retry the file."
+  if (status === 0) return "Network error during upload."
+  return `Upload failed (HTTP ${status}).`
+}
+
+// POST one raw body (a whole file or a single chunk), reporting absolute bytes progressed.
+function sendBody(
+  qs: URLSearchParams,
+  body: Blob,
+  onProgress: (loaded: number) => void,
+): Promise<{ ok: boolean; status: number; error?: string; filename?: string }> {
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest()
-    const qs = new URLSearchParams({ destination, filename: file.name })
-    if (requestId) qs.set("requestId", requestId)
     xhr.open("POST", `/api/admin/upload?${qs.toString()}`)
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))
+      if (e.lengthComputable) onProgress(e.loaded)
     }
     xhr.onload = () => {
       let res: { success?: boolean; filename?: string; error?: string } = {}
       try {
         res = JSON.parse(xhr.responseText || "{}")
       } catch {
-        /* non-JSON response */
+        /* non-JSON response (proxy error page) — uploadFailureMessage supplies the guidance */
       }
-      if (xhr.status >= 200 && xhr.status < 300 && res.success) resolve({ ok: true, filename: res.filename })
-      else resolve({ ok: false, error: res.error || `Upload failed (HTTP ${xhr.status})` })
+      if (xhr.status >= 200 && xhr.status < 300 && res.success) resolve({ ok: true, status: xhr.status, filename: res.filename })
+      else resolve({ ok: false, status: xhr.status, error: res.error })
     }
-    xhr.onerror = () => resolve({ ok: false, error: "Network error during upload." })
-    xhr.send(file)
+    xhr.onerror = () => resolve({ ok: false, status: 0 })
+    xhr.send(body)
   })
+}
+
+// Upload one file. Files above CHUNK_SIZE are sliced and sent sequentially under a shared
+// uploadId; the server verifies each chunk's byte offset before appending and reassembles
+// (Cloudflare-tunnel safe). The last chunk's response carries the final filename.
+async function uploadOne(
+  file: File,
+  destination: Destination,
+  requestId: string | undefined,
+  onProgress: (pct: number) => void,
+): Promise<{ ok: boolean; error?: string; filename?: string }> {
+  const baseQs = () => {
+    const qs = new URLSearchParams({ destination, filename: file.name })
+    if (requestId) qs.set("requestId", requestId)
+    return qs
+  }
+
+  if (file.size <= CHUNK_SIZE) {
+    const res = await sendBody(baseQs(), file, (loaded) => onProgress(Math.round((loaded / Math.max(1, file.size)) * 100)))
+    return res.ok ? { ok: true, filename: res.filename } : { ok: false, error: uploadFailureMessage(res.status, res.error) }
+  }
+
+  const uploadId = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`).replace(/[^a-zA-Z0-9-]/g, "")
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+  for (let i = 0; i < totalChunks; i++) {
+    const offset = i * CHUNK_SIZE
+    const slice = file.slice(offset, Math.min(offset + CHUNK_SIZE, file.size))
+    const qs = baseQs()
+    qs.set("uploadId", uploadId)
+    qs.set("chunkIndex", String(i))
+    qs.set("totalChunks", String(totalChunks))
+    qs.set("chunkOffset", String(offset))
+    const res = await sendBody(qs, slice, (loaded) => onProgress(Math.round(((offset + loaded) / file.size) * 100)))
+    if (!res.ok) return { ok: false, error: uploadFailureMessage(res.status, res.error) }
+    if (i === totalChunks - 1) return { ok: true, filename: res.filename }
+  }
+  return { ok: false, error: "Upload ended unexpectedly." }
 }
 
 export function ManualUploadPanel({
@@ -247,14 +298,17 @@ export function ManualUploadPanel({
             <div key={item.id} className="flex items-center gap-3 rounded-md border border-border bg-background p-2.5">
               <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
               <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-foreground truncate" title={item.file.name}>
+                {/* min-w-0 on the flex row AND the name span: flex items default to min-width:auto,
+                    so a long unbreakable filename otherwise refuses to shrink and pushes the whole
+                    panel (dropzone included) wider than the dialog. */}
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className="text-xs font-medium text-foreground truncate min-w-0" title={item.file.name}>
                     {item.finalName && item.finalName !== item.file.name ? item.finalName : item.file.name}
                   </span>
                   <span className="text-[10px] text-muted-foreground shrink-0">{formatBytes(item.file.size)}</span>
                 </div>
                 {item.status === "uploading" && <Progress value={item.progress} className="mt-1.5 h-1.5" />}
-                {item.status === "error" && <p className="text-[10px] text-destructive mt-1">{item.error}</p>}
+                {item.status === "error" && <p className="text-[10px] text-destructive mt-1 break-words">{item.error}</p>}
               </div>
               <div className="shrink-0">
                 {item.status === "queued" && (
@@ -318,7 +372,7 @@ export function ManualUploadDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="w-[95vw] sm:max-w-xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Upload Comic File</DialogTitle>
           <DialogDescription>

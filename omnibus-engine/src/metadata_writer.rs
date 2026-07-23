@@ -57,7 +57,9 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
                s.universe as series_universe, s."seriesGroup" as series_group, CAST(s."isManga" AS INTEGER) AS "isManga", s."metadataId" as series_meta_id, s."metadataSource" as series_meta_source
         FROM "Issue" i
         JOIN "Series" s ON i."seriesId" = s.id
-        WHERE i."filePath" LIKE '%.cbz'"#;
+        WHERE LOWER(i."filePath") LIKE '%.cbz'"#;
+    // LOWER(): SQLite LIKE is case-insensitive but Postgres LIKE is not — without it, files with
+    // an uppercase .CBZ extension were silently skipped on the Postgres profile.
 
     // User-controlled ids are bound (NOT interpolated); only the fixed WHERE clause is appended.
     let rows = if let Some(s_id) = payload.series_id {
@@ -78,6 +80,33 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
         sqlx::query(&format!("{} AND s.\"metadataSource\" IN ('COMICVINE', 'METRON')", base)).fetch_all(&db.pool).await?
     };
 
+    // Embed guard (issue #194 (c3)): an issue id shared by rows with DIFFERENT numbers in the same
+    // series is provably wrong for at least one of them — never write such an id into a file, where
+    // it would outlive the DB and re-poison future scans. Detected offline from the series' rows.
+    let involved_series: Vec<String> = rows.iter()
+        .map(|r| r.get::<String, _>("series_id"))
+        .collect::<std::collections::HashSet<_>>().into_iter().collect();
+    let mut conflicted_ids: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    if !involved_series.is_empty() {
+        let sql = format!(
+            r#"SELECT "seriesId", "metadataId", number FROM "Issue" WHERE "seriesId" IN ({}) AND "metadataId" IS NOT NULL AND "metadataId" <> '' AND "metadataId" NOT LIKE 'unmatched%'"#,
+            Db::in_placeholders(1, involved_series.len())
+        );
+        let mut q = sqlx::query(&sql);
+        for sid in &involved_series { q = q.bind(sid); }
+        let id_rows = q.fetch_all(&db.pool).await.unwrap_or_default();
+        let mut first_num: std::collections::HashMap<(String, String), String> = std::collections::HashMap::new();
+        for r in id_rows {
+            let key = (r.get::<String, _>("seriesId"), r.get::<String, _>("metadataId"));
+            let num = r.get::<String, _>("number");
+            match first_num.get(&key) {
+                Some(seen) if !crate::metadata::is_same_issue(seen, &num) => { conflicted_ids.insert(key); }
+                Some(_) => {}
+                None => { first_num.insert(key, num); }
+            }
+        }
+    }
+
     // 1. Build the full ComicInfo XML for each issue (in the async context, where we have the data).
     let mut tasks = Vec::new();
     for row in &rows {
@@ -86,7 +115,15 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
         let series_name: String = row.try_get("series_name").unwrap_or_default();
         let number: String = row.try_get("number").unwrap_or_default();
 
-        let xml_content = build_comic_info_xml(row);
+        let issue_meta_id: Option<String> = row.try_get("issue_meta_id").unwrap_or(None);
+        let omit_issue_id = issue_meta_id
+            .as_ref()
+            .is_some_and(|mid| conflicted_ids.contains(&(series_id.clone(), mid.clone())));
+        if omit_issue_id {
+            log::warn!("[Writer] Issue id on {} #{} is duplicated across different numbers in the series — omitting it from ComicInfo.xml (issue #194 guard).", series_name, number);
+        }
+
+        let xml_content = build_comic_info_xml(row, omit_issue_id);
         log::debug!("[Metadata Writer Debug] Generated XML content for: {} #{}", series_name, number);
 
         tasks.push(EmbedTask { file_path, xml_content, series_id });
@@ -131,7 +168,9 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
 }
 
 /// Builds the full ComicInfo.xml (parity with metadata-writer.ts writeComicInfo — all ~21 tags).
-fn build_comic_info_xml(row: &sqlx::any::AnyRow) -> String {
+/// `omit_issue_id` blanks the issue-level provider id (issue #194 (c3)): a suspect id must never
+/// be embedded into a file, where it would outlive the DB and re-poison future scans.
+fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String {
     let g = |c: &str| -> Option<String> { row.try_get::<Option<String>, _>(c).unwrap_or(None) };
 
     let series_name = g("series_name").unwrap_or_default();
@@ -199,7 +238,10 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow) -> String {
     let series_meta_id = g("series_meta_id");
     let series_meta_source = g("series_meta_source").unwrap_or_default();
 
-    let issue_id_ok = issue_meta_id.as_deref().filter(|s| !s.is_empty());
+    // Never emit placeholder unmatched_* ids, and never emit a suspect (omitted) id — an id baked
+    // into a file outlives the DB and would re-poison future scans (issue #194 (c3)).
+    let issue_id_ok = issue_meta_id.as_deref()
+        .filter(|s| !s.is_empty() && !s.starts_with("unmatched") && !omit_issue_id);
     let series_id_ok = series_meta_id.as_deref().filter(|s| !s.is_empty());
 
     let is_cv_series = series_meta_source == "COMICVINE";

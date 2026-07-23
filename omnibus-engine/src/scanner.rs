@@ -562,6 +562,29 @@ fn derive_meta(info: &ScanComicInfo) -> DerivedMeta {
     DerivedMeta { cv_id, metron_id, cv_issue_id, metron_issue_id, metadata_id, metadata_issue_id, metadata_source, is_manga, parsed_year }
 }
 
+/// Offline sanity for embedded issue ids (issue #194 (c2)): within one folder, the same provider
+/// issue id claimed by files with DIFFERENT issue numbers is provably wrong for at least one of
+/// them (an earlier Omnibus bug wrote crossed ids into ComicInfo.xml — a poisoned file must not
+/// take a fresh library hostage). An id's TRUE number can't be verified without an API call (the
+/// zero-API scan invariant), but this collision is detectable for free. Conflicted ids are ignored
+/// at import (rows land as unmatched_*) and the first sync's number-anchored pairing links them
+/// correctly by number.
+pub(crate) fn folder_conflicted_issue_ids(
+    id_nums: &[(Option<String>, String)],
+) -> std::collections::HashSet<String> {
+    let mut first_num: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut conflicted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (id, num) in id_nums {
+        let Some(id) = id.as_deref() else { continue };
+        match first_num.get(id) {
+            Some(seen) if !crate::metadata::is_same_issue(seen, num) => { conflicted.insert(id.to_string()); }
+            Some(_) => {}
+            None => { first_num.insert(id, num); }
+        }
+    }
+    conflicted
+}
+
 // ============================================================================
 // Dynamic issue→volume/series ID resolution (parity with parseComicInfo step 3)
 //
@@ -1414,6 +1437,15 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         // (discussion #177). The old shape stamped the FIRST archive's issue id onto every issue in
         // the folder — issue #2..#N all carried issue #1's provider id (marked MATCHED), so the
         // view-time enrichment fetched issue #1's credits for all of them until a sync self-healed.
+        // Folder-level embedded-id collision check (issue #194 (c2)): the same issue id under two
+        // different numbers means at least one file is mistagged — trust neither.
+        let folder_id_nums: Vec<(Option<String>, String)> = files.iter().enumerate().map(|(idx, file)| {
+            let fname = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
+            let finfo = infos.get(idx).and_then(|o| o.as_ref());
+            (finfo.map(derive_meta).and_then(|d| d.metadata_issue_id), issue_number_for_file(finfo, &fname))
+        }).collect();
+        let conflicted_ids = folder_conflicted_issue_ids(&folder_id_nums);
+
         let mut issue_rows: Vec<NewIssueRow> = Vec::with_capacity(files.len());
         for (idx, file) in files.iter().enumerate() {
             let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -1422,6 +1454,10 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             let file_derived = file_info.map(derive_meta);
             let fm = issue_file_meta(file_info);
             let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
+                Some(d) if d.metadata_issue_id.as_deref().is_some_and(|id| conflicted_ids.contains(id)) => {
+                    log::warn!("[Scanner] Embedded issue id {} appears under multiple issue numbers in this folder — ignoring it for \"{}\" (issue #194 guard); the next sync links by number.", d.metadata_issue_id.as_deref().unwrap_or(""), file_name);
+                    (format!("unmatched_{}", Uuid::new_v4()), metadata_source.clone(), "UNMATCHED")
+                }
                 Some(d) if d.metadata_issue_id.is_some() => (
                     d.metadata_issue_id.clone().unwrap(),
                     d.metadata_source.clone(),
@@ -1547,18 +1583,26 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     let involved_series: Vec<String> = parsed_files.iter().map(|(sid, _, _)| sid.clone())
         .collect::<std::collections::HashSet<_>>().into_iter().collect();
     let mut series_issue_nums: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
+    let mut series_meta_nums: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
     if !involved_series.is_empty() {
         // Portable IN (...) list — see the ghost-purge note above on `= ANY($1)`.
         let ph = Db::in_placeholders(1, involved_series.len());
-        let sql = format!(r#"SELECT "seriesId", id, number FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
+        let sql = format!(r#"SELECT "seriesId", id, number, "metadataId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
         let mut q = sqlx::query(&sql);
         for sid in &involved_series {
             q = q.bind(sid);
         }
         let rows = q.fetch_all(&db.pool).await.unwrap_or_default();
         for r in rows {
-            series_issue_nums.entry(r.get::<String, _>("seriesId")).or_default()
+            let sid = r.get::<String, _>("seriesId");
+            series_issue_nums.entry(sid.clone()).or_default()
                 .push((r.get::<String, _>("id"), r.get::<String, _>("number")));
+            // (metadataId, number) per series for the embedded-id conflict check below (#194 (c2)).
+            if let Ok(Some(mid)) = r.try_get::<Option<String>, _>("metadataId") {
+                if !mid.is_empty() && !mid.starts_with("unmatched") {
+                    series_meta_nums.entry(sid).or_default().push((mid, r.get::<String, _>("number")));
+                }
+            }
         }
     }
 
@@ -1587,6 +1631,15 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let derived = info.as_ref().map(derive_meta);
         let (issue_meta_id, issue_source, issue_match_state) = match &derived {
             Some(d) => match &d.metadata_issue_id {
+                // #194 (c2): an embedded id already held by a same-series row with a DIFFERENT
+                // number is provably mistagged for one of the two — don't import it; the next
+                // sync's number-anchored pairing links this row correctly.
+                Some(id) if series_meta_nums.get(&series_id).is_some_and(|v|
+                    v.iter().any(|(mid, num)| mid == id && !crate::metadata::is_same_issue(num, &issue_num))
+                ) => {
+                    log::warn!("[Scanner] Embedded issue id {} on \"{}\" conflicts with an existing issue of a different number — ignoring it (issue #194 guard).", id, file_name);
+                    (format!("unmatched_{}", Uuid::new_v4()), d.metadata_source.clone(), "UNMATCHED")
+                }
                 Some(id) => (id.clone(), d.metadata_source.clone(), scanned_issue_match_state(&fm)),
                 None => (format!("unmatched_{}", Uuid::new_v4()), d.metadata_source.clone(), "UNMATCHED"),
             },
@@ -2254,6 +2307,23 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(derive_meta(&info).cv_issue_id, Some(1));
+    }
+
+    // ==== Issue #194 (c2): folder-level embedded-id collision guard ====
+
+    #[test]
+    fn folder_conflicted_ids_detect_cross_numbered_dupes() {
+        let pairs = vec![
+            (Some("821401".to_string()), "1".to_string()),
+            (Some("821401".to_string()), "4".to_string()),   // same id under a different number → conflicted
+            (Some("819000".to_string()), "2".to_string()),
+            (Some("819000".to_string()), "002".to_string()), // padding-equivalent numbers → NOT a conflict
+            (None, "3".to_string()),
+        ];
+        let c = folder_conflicted_issue_ids(&pairs);
+        assert!(c.contains("821401"));
+        assert!(!c.contains("819000"));
+        assert_eq!(c.len(), 1);
     }
 
     #[test]

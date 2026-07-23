@@ -408,6 +408,11 @@ async fn fetch_comicvine(
     let mut loop_count = 0;
     let mut synced_count = 0;
     let mut latest_date_ms: i64 = 0;
+    // One write per row per SYNC (not per page): a duplicate provider number on a later page must
+    // not overwrite a pairing made on an earlier one (issue #194 (c1) claim set). inserted_nums
+    // guards the same-page dup case, where the fresh row isn't in the snapshot yet.
+    let mut claimed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut inserted_nums: Vec<String> = Vec::new();
 
     while offset < total_results && loop_count < 20 {
         log::debug!("[Metadata Fetcher Debug] Fetching issues for volume {} (Offset: {}, Limit: 100)", metadata_id, offset);
@@ -466,26 +471,35 @@ async fn fetch_comicvine(
 
         // Re-fetch the series' issues each page so issues created on earlier pages are visible to
         // isSameIssue. Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
+        // metadataId rides along for the number-anchored pairing (issue #194 (c1)).
         let existing_issues = sqlx::query(
-            r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "seriesId" = $1"#,
+            r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(series_id)
         .fetch_all(&db.pool)
         .await?;
 
-        // Batch the GLOBAL existing-by-cvId lookups for the whole page into ONE query (was 1 query per
-        // issue — a 100x N+1). Still a global match (an issue can live under a different series), just
-        // resolved in-memory from a per-page HashMap keyed by metadataId.
+        // Pairing snapshot for resolve_pair_target: (row id, number, stored metadataId).
+        let pair_snapshot: Vec<(String, String, Option<String>)> = existing_issues.iter().map(|r| (
+            r.get::<String, _>("id"),
+            r.get::<String, _>("number"),
+            r.try_get::<Option<String>, _>("metadataId").unwrap_or(None),
+        )).collect();
+
+        // Cross-series id matches only (rows in THIS series pair via the number-anchored snapshot).
+        // Kept for the legit adoption case — a request-created skeleton that predates this series —
+        // and only honored by the resolver when the row's number ALSO agrees (issue #194: a global
+        // id match with a disagreeing number is a mispair, never a steal target).
         let page_cv_ids: Vec<String> = cv_issues.iter()
             .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
             .collect();
         let mut by_cv: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
         if !page_cv_ids.is_empty() {
             let sql = format!(
-                r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE'"#,
-                Db::in_placeholders(1, page_cv_ids.len())
+                r#"SELECT id, number, "seriesId", name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE' AND "seriesId" <> $1"#,
+                Db::in_placeholders(2, page_cv_ids.len())
             );
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(&sql).bind(series_id);
             for id in &page_cv_ids {
                 q = q.bind(id);
             }
@@ -519,39 +533,50 @@ async fn fetch_comicvine(
             let cv_desc = cv_issue["description"].as_str().or_else(|| cv_issue["deck"].as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
             let cv_cover = cv_issue["image"]["medium_url"].as_str().or_else(|| cv_issue["image"]["small_url"].as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
 
-            // existing-by-cvId is a GLOBAL lookup (matches Node findFirst; can move an issue across
-            // series), now resolved from the per-page batch instead of a per-issue query.
-            let existing_by_cv = by_cv.get(&cv_id_str);
+            // Number-anchored pairing (issue #194 (c1)): the resolver honors a stored id only when
+            // the row's number agrees; otherwise the number wins and the id gets healed below.
+            let cross = by_cv.get(&cv_id_str).map(|r| (r.get::<String, _>("id"), r.get::<String, _>("number")));
+            let target = resolve_pair_target(
+                &cv_id_str, &issue_num, &pair_snapshot,
+                cross.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
+                &claimed,
+            );
 
-            // existing-by-number is scoped to this series.
-            let existing_by_num = existing_issues.iter().find(|r| {
-                let n: String = r.get("number");
-                is_same_issue(&n, &issue_num)
-            });
+            let (target_row, heal_id) = match &target {
+                PairTarget::Update { row_id, heal_id, cross_series } => {
+                    if *cross_series {
+                        (by_cv.get(&cv_id_str), *heal_id)
+                    } else {
+                        (existing_issues.iter().find(|r| &r.get::<String, _>("id") == row_id), *heal_id)
+                    }
+                }
+                PairTarget::Skip => {
+                    log::info!("[Metadata] Duplicate provider number #{} ({}) for {} — first listing wins, skipping.", issue_num, cv_id_str, series_name);
+                    continue;
+                }
+                PairTarget::Insert => (None, false),
+            };
 
-            // Determine the lock + existing fields from whichever record we'll target.
-            let (is_locked, existing_name, existing_release, existing_genres, existing_desc, has_custom_cover, existing_cover) = if let Some(r) = existing_by_cv {
+            // Lock + existing fields from the resolved target. On a heal (id changed) the row's
+            // enrichment-era fields belonged to the WRONG issue — treat them as absent so the
+            // provider payload replaces them instead of merging with wrong-issue leftovers.
+            // EXCEPTION: a locked (hasCustomMetadata) row heals its id but keeps its curated
+            // content — the lock outranks the reset.
+            let is_locked = target_row
+                .map(|r| r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false))
+                .unwrap_or(false);
+            let reset_stale = heal_id && !is_locked;
+            let (existing_name, existing_release, existing_genres, existing_desc, has_custom_cover, existing_cover) = if let Some(r) = target_row {
                 (
-                    r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
-                    r.try_get::<Option<String>, _>("name").unwrap_or(None),
-                    r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
-                    r.try_get::<Option<String>, _>("genres").unwrap_or(None),
-                    r.try_get::<Option<String>, _>("description").unwrap_or(None),
-                    r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
-                    r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
-                )
-            } else if let Some(r) = existing_by_num {
-                (
-                    r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
-                    r.try_get::<Option<String>, _>("name").unwrap_or(None),
-                    r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
-                    r.try_get::<Option<String>, _>("genres").unwrap_or(None),
-                    r.try_get::<Option<String>, _>("description").unwrap_or(None),
+                    if reset_stale { None } else { r.try_get::<Option<String>, _>("name").unwrap_or(None) },
+                    if reset_stale { None } else { r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None) },
+                    if reset_stale { None } else { r.try_get::<Option<String>, _>("genres").unwrap_or(None) },
+                    if reset_stale { None } else { r.try_get::<Option<String>, _>("description").unwrap_or(None) },
                     r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
                     r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
                 )
             } else {
-                (false, None, None, None, None, false, None)
+                (None, None, None, None, false, None)
             };
 
             let name_val = prefer_existing(existing_name, cv_name, is_locked, file_priority);
@@ -572,13 +597,16 @@ async fn fetch_comicvine(
 
             // Per-issue credits/appearances from the list item (issue #179). merge_credit_json keeps
             // the existing column whenever the provider supplied nothing — a re-sync can never wipe
-            // ComicInfo.xml-derived or manually added credits with '[]'.
+            // ComicInfo.xml-derived or manually added credits with '[]'. On a heal the existing
+            // credits belonged to the wrong issue, so they read as absent (reset_stale) and the
+            // guarded view-time enrichment refills them for the CORRECT id.
             let credits = cv_issue_credits(cv_issue);
-            let existing_row = existing_by_cv.or(existing_by_num);
             let existing_col = |col: &str| -> Option<String> {
-                existing_row.and_then(|r| r.try_get::<Option<String>, _>(col).unwrap_or(None))
+                if reset_stale { return None; }
+                target_row.and_then(|r| r.try_get::<Option<String>, _>(col).unwrap_or(None))
             };
-            let match_state_val = next_match_state(existing_col("matchState"));
+            // A healed row drops DEEP_SYNCED — its deep data belonged to the old id.
+            let match_state_val = if heal_id { "MATCHED" } else { next_match_state(existing_col("matchState")) };
             let writers_val = merge_credit_json(existing_col("writers"), &credits.writers, is_locked, file_priority);
             let artists_val = merge_credit_json(existing_col("artists"), &credits.artists, is_locked, file_priority);
             let cover_artists_val = merge_credit_json(existing_col("coverArtists"), &credits.cover_artists, is_locked, file_priority);
@@ -588,33 +616,40 @@ async fn fetch_comicvine(
             let teams_val = merge_credit_json(existing_col("teams"), &credits.teams, is_locked, file_priority);
             let locations_val = merge_credit_json(existing_col("locations"), &credits.locations, is_locked, file_priority);
 
-            let res = if let Some(r) = existing_by_cv {
-                let id: String = r.get("id");
-                sqlx::query(
-                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$16, genres=$7,
+            let res = if let PairTarget::Update { row_id, cross_series, .. } = &target {
+                if heal_id {
+                    log::info!("[Metadata] Healing issue #{} of {} — stored id disagreed with its number, re-linking to {} (issue #194).", issue_num, series_name, cv_id_str);
+                }
+                // ONE update shape for in-series and adoption: seriesId+metadataId always written
+                // (agreeing values are no-ops), the row's NUMBER is never touched — number is the
+                // identity anchor and only ever set at insert (issue #194: the old id-match branch
+                // rewrote number and could turn row "1" into a second "4").
+                let q = sqlx::query(
+                    r#"UPDATE "Issue" SET "seriesId"=$1, "metadataId"=$2, "metadataSource"='COMICVINE', name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$16, genres=$7,
                        writers=$8, artists=$9, "coverArtists"=$10, colorists=$11, letterers=$12, characters=$13, teams=$14, locations=$15 WHERE id=$17"#,
                 )
-                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val)
+                .bind(series_id).bind(&cv_id_str).bind(&name_val).bind(&release_val)
                 .bind(&desc_val).bind(&cover_val).bind(&genres_val)
                 .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
                 .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
-                .bind(match_state_val).bind(&id)
-                .execute(&db.pool).await
-            } else if let Some(r) = existing_by_num {
-                let id: String = r.get("id");
-                sqlx::query(
-                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='COMICVINE', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"=$15, genres=$6,
-                       writers=$7, artists=$8, "coverArtists"=$9, colorists=$10, letterers=$11, characters=$12, teams=$13, locations=$14 WHERE id=$16"#,
-                )
-                .bind(&cv_id_str).bind(&name_val).bind(&release_val)
-                .bind(&desc_val).bind(&cover_val).bind(&genres_val)
-                .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
-                .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
-                .bind(match_state_val).bind(&id)
-                .execute(&db.pool).await
+                .bind(match_state_val).bind(row_id)
+                .execute(&db.pool).await;
+                if q.is_ok() {
+                    claimed.insert(row_id.clone());
+                    if *cross_series {
+                        log::info!("[Metadata] Adopted issue #{} ({}) into {} from another series (id+number agree).", issue_num, cv_id_str, series_name);
+                    }
+                }
+                q
             } else {
+                // Insert — also guarded against a same-page duplicate provider number (the fresh
+                // row isn't in the snapshot yet, so the resolver can't see it).
+                if inserted_nums.iter().any(|n| is_same_issue(n, &issue_num)) {
+                    log::info!("[Metadata] Duplicate provider number #{} ({}) for {} — first listing wins, skipping.", issue_num, cv_id_str, series_name);
+                    continue;
+                }
                 let new_id = uuid::Uuid::new_v4().to_string();
-                sqlx::query(&format!(
+                let q = sqlx::query(&format!(
                     r#"INSERT INTO "Issue"
                        (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", "matchState", genres,
                         writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "createdAt", "updatedAt")
@@ -625,7 +660,9 @@ async fn fetch_comicvine(
                 .bind(&name_val).bind(&release_val).bind(&cv_desc).bind(&cv_cover).bind(&genres_val)
                 .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
                 .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
-                .execute(&db.pool).await
+                .execute(&db.pool).await;
+                if q.is_ok() { inserted_nums.push(issue_num.clone()); }
+                q
             };
 
             if let Err(e) = res {
@@ -1014,26 +1051,34 @@ async fn fetch_metron(
     }
     log::debug!("[Metron Debug] Issue walk for {} returned {} issue(s){}.", series_name, all_issues.len(), if incremental { " (incremental)" } else { "" });
 
-    // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
+    // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping). metadataId rides
+    // along for the number-anchored pairing (issue #194 (c1)).
     let existing_issues = sqlx::query(
-        r#"SELECT id, number, CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres FROM "Issue" WHERE "seriesId" = $1"#,
+        r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres FROM "Issue" WHERE "seriesId" = $1"#,
     )
     .bind(series_id)
     .fetch_all(&db.pool)
     .await?;
 
-    // Batch the GLOBAL existing-by-metadataId lookups for every issue into ONE query (was 1 query per
-    // issue — an N+1 across the full issue list). Still a global match, resolved from a HashMap.
+    // Pairing snapshot for resolve_pair_target: (row id, number, stored metadataId).
+    let pair_snapshot: Vec<(String, String, Option<String>)> = existing_issues.iter().map(|r| (
+        r.get::<String, _>("id"),
+        r.get::<String, _>("number"),
+        r.try_get::<Option<String>, _>("metadataId").unwrap_or(None),
+    )).collect();
+
+    // Cross-series id matches only — the resolver honors them solely when the number also agrees
+    // (issue #194: a global id match with a disagreeing number is a mispair, never a steal target).
     let all_meta_ids: Vec<String> = all_issues.iter()
         .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
         .collect();
     let mut by_meta: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
     if !all_meta_ids.is_empty() {
         let sql = format!(
-            r#"SELECT id, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState", genres FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON'"#,
-            Db::in_placeholders(1, all_meta_ids.len())
+            r#"SELECT id, number, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState", genres FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON' AND "seriesId" <> $1"#,
+            Db::in_placeholders(2, all_meta_ids.len())
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(&sql).bind(series_id);
         for id in &all_meta_ids {
             q = q.bind(id);
         }
@@ -1049,6 +1094,9 @@ async fn fetch_metron(
 
     let mut synced_count = 0;
     let mut latest_date_ms: i64 = 0;
+    // Claim set + same-batch insert-number guard (issue #194 (c1)) — one write per row per sync.
+    let mut claimed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut inserted_nums: Vec<String> = Vec::new();
 
     for issue in &all_issues {
         let source_id = match issue["id"].as_i64() {
@@ -1069,42 +1117,56 @@ async fn fetch_metron(
         let issue_desc = issue["desc"].as_str().or_else(|| issue["description"].as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
         let issue_cover = issue["image"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
 
-        let existing_by_meta = by_meta.get(&source_id);
+        // Number-anchored pairing (issue #194 (c1)) — same contract as the CV branch.
+        let cross = by_meta.get(&source_id).map(|r| (r.get::<String, _>("id"), r.get::<String, _>("number")));
+        let target = resolve_pair_target(
+            &source_id, &issue_num, &pair_snapshot,
+            cross.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
+            &claimed,
+        );
 
-        let existing_by_num = existing_issues.iter().find(|r| {
-            let n: String = r.get("number");
-            is_same_issue(&n, &issue_num)
-        });
+        let (target_row, heal_id) = match &target {
+            PairTarget::Update { row_id, heal_id, cross_series } => {
+                if *cross_series {
+                    (by_meta.get(&source_id), *heal_id)
+                } else {
+                    (existing_issues.iter().find(|r| &r.get::<String, _>("id") == row_id), *heal_id)
+                }
+            }
+            PairTarget::Skip => {
+                log::info!("[Metadata] Duplicate provider number #{} ({}) for {} — first listing wins, skipping.", issue_num, source_id, series_name);
+                continue;
+            }
+            PairTarget::Insert => (None, false),
+        };
 
-        let (is_locked, existing_name, existing_release, has_custom_cover, existing_cover) = if let Some(r) = existing_by_meta {
+        let is_locked = target_row
+            .map(|r| r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false))
+            .unwrap_or(false);
+        // Healed rows treat wrong-issue fields as absent; a locked row keeps curated content.
+        let reset_stale = heal_id && !is_locked;
+        let (existing_name, existing_release, has_custom_cover, existing_cover) = if let Some(r) = target_row {
             (
-                r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
-                r.try_get::<Option<String>, _>("name").unwrap_or(None),
-                r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
-                r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
-                r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
-            )
-        } else if let Some(r) = existing_by_num {
-            (
-                r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false),
-                r.try_get::<Option<String>, _>("name").unwrap_or(None),
-                r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None),
+                if reset_stale { None } else { r.try_get::<Option<String>, _>("name").unwrap_or(None) },
+                if reset_stale { None } else { r.try_get::<Option<String>, _>("releaseDate").unwrap_or(None) },
                 r.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
                 r.try_get::<Option<String>, _>("coverUrl").unwrap_or(None),
             )
         } else {
-            (false, None, None, false, None)
+            (None, None, false, None)
         };
 
-        let metron_existing_state: Option<String> = existing_by_meta.or(existing_by_num)
-            .and_then(|r| r.try_get::<Option<String>, _>("matchState").unwrap_or(None));
-        let match_state_val = next_match_state(metron_existing_state);
+        let metron_existing_state: Option<String> = if reset_stale { None } else {
+            target_row.and_then(|r| r.try_get::<Option<String>, _>("matchState").unwrap_or(None))
+        };
+        let match_state_val = if heal_id { "MATCHED" } else { next_match_state(metron_existing_state) };
 
         // Issue genres from the series-level Metron genres, fill-blank only (parity with the CV
         // volume-concepts -> issue-genres flow): locked keeps its value; an issue that already has
         // genres keeps them; only a blank column takes the series value.
-        let existing_genres: Option<String> = existing_by_meta.or(existing_by_num)
-            .and_then(|r| r.try_get::<Option<String>, _>("genres").unwrap_or(None));
+        let existing_genres: Option<String> = if reset_stale { None } else {
+            target_row.and_then(|r| r.try_get::<Option<String>, _>("genres").unwrap_or(None))
+        };
         let genres_val: Option<String> = if is_locked {
             existing_genres
         } else if series_genres_json.is_some() && existing_genres.is_none() {
@@ -1118,54 +1180,51 @@ async fn fetch_metron(
         // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
         let cover_val: Option<String> = if has_custom_cover { existing_cover } else { issue_cover.clone() };
 
-        let res = if let Some(r) = existing_by_meta {
-            let id: String = r.get("id");
-            if is_locked {
-                // Manually edited (hasCustomMetadata): keep name/releaseDate/description and the
-                // creator credits — only re-affirm the cover + match state.
-                sqlx::query(
-                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, "coverUrl"=$3, "matchState"=$4 WHERE id=$5"#,
-                )
-                .bind(series_id).bind(&issue_num).bind(&cover_val).bind(match_state_val).bind(&id)
-                .execute(&db.pool).await
-            } else {
-                // Metron's issue_list carries no per-issue credits (they're lazy-loaded on the issue
-                // detail endpoint), so the credit columns are LEFT UNTOUCHED — the old literal-'[]'
-                // writes wiped ComicInfo.xml-derived credits on every re-sync (issue #179).
-                sqlx::query(
-                    r#"UPDATE "Issue" SET "seriesId"=$1, number=$2, name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$7, genres=$8 WHERE id=$9"#,
-                )
-                .bind(series_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&genres_val).bind(&id)
-                .execute(&db.pool).await
+        let res = if let PairTarget::Update { row_id, cross_series, .. } = &target {
+            if heal_id {
+                log::info!("[Metadata] Healing issue #{} of {} — stored id disagreed with its number, re-linking to {} (issue #194).", issue_num, series_name, source_id);
             }
-        } else if let Some(r) = existing_by_num {
-            let id: String = r.get("id");
-            if is_locked {
-                // Link the Metron id but preserve the manually entered name/description/credits.
+            let q = if is_locked {
+                // Manually edited (hasCustomMetadata): heal the linkage but keep name/releaseDate/
+                // description and the creator credits — only re-affirm cover + match state.
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', "coverUrl"=$2, "matchState"=$3 WHERE id=$4"#,
+                    r#"UPDATE "Issue" SET "seriesId"=$1, "metadataId"=$2, "metadataSource"='METRON', "coverUrl"=$3, "matchState"=$4 WHERE id=$5"#,
                 )
-                .bind(&source_id).bind(&cover_val).bind(match_state_val).bind(&id)
+                .bind(series_id).bind(&source_id).bind(&cover_val).bind(match_state_val).bind(row_id)
                 .execute(&db.pool).await
             } else {
                 // Credit columns left untouched — Metron's issue_list has no per-issue credits and a
-                // literal-'[]' write would wipe ComicInfo-derived data (issue #179, same as above).
+                // literal-'[]' write would wipe ComicInfo-derived data (issue #179). The row's NUMBER
+                // is never touched — it's the identity anchor, set only at insert (issue #194).
                 sqlx::query(
-                    r#"UPDATE "Issue" SET "metadataId"=$1, "metadataSource"='METRON', name=$2, "releaseDate"=$3, description=$4, "coverUrl"=$5, "matchState"=$6, genres=$7 WHERE id=$8"#,
+                    r#"UPDATE "Issue" SET "seriesId"=$1, "metadataId"=$2, "metadataSource"='METRON', name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$7, genres=$8 WHERE id=$9"#,
                 )
-                .bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&genres_val).bind(&id)
+                .bind(series_id).bind(&source_id).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&cover_val).bind(match_state_val).bind(&genres_val).bind(row_id)
                 .execute(&db.pool).await
+            };
+            if q.is_ok() {
+                claimed.insert(row_id.clone());
+                if *cross_series {
+                    log::info!("[Metadata] Adopted issue #{} ({}) into {} from another series (id+number agree).", issue_num, source_id, series_name);
+                }
             }
+            q
         } else {
+            if inserted_nums.iter().any(|n| is_same_issue(n, &issue_num)) {
+                log::info!("[Metadata] Duplicate provider number #{} ({}) for {} — first listing wins, skipping.", issue_num, source_id, series_name);
+                continue;
+            }
             let new_id = uuid::Uuid::new_v4().to_string();
-            sqlx::query(&format!(
+            let q = sqlx::query(&format!(
                 r#"INSERT INTO "Issue"
                    (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", genres, writers, artists, characters, "matchState", "createdAt", "updatedAt")
                    VALUES ($1,$2,$3,'METRON',$4,'WANTED',$5,$6,$7,$8,$9,'[]','[]','[]','MATCHED', {now}, {now})"#,
                 now = db.now_expr()
             ))
             .bind(&new_id).bind(series_id).bind(&source_id).bind(&issue_num).bind(&name_val).bind(&release_val).bind(&issue_desc).bind(&issue_cover).bind(&genres_val)
-            .execute(&db.pool).await
+            .execute(&db.pool).await;
+            if q.is_ok() { inserted_nums.push(issue_num.clone()); }
+            q
         };
 
         if let Err(e) = res {
@@ -1507,6 +1566,65 @@ pub(crate) fn metron_issue_credits(item: &serde_json::Value) -> CvIssueCredits {
     c
 }
 
+/// Which DB row a provider issue should land on (issue #194 (c1) pairing rewrite).
+#[derive(Debug, PartialEq)]
+pub(crate) enum PairTarget {
+    /// Update this row. `heal_id` = the row's stored metadataId was absent or WRONG and must be
+    /// (re)written — the caller then also drops DEEP_SYNCED (its deep data belonged to the old id)
+    /// and resets provider-refreshable fields instead of merging with wrong-issue leftovers.
+    Update { row_id: String, heal_id: bool, cross_series: bool },
+    /// No consistent candidate — insert a fresh row.
+    Insert,
+    /// Every consistent candidate is already claimed by an earlier provider issue this pass
+    /// (e.g. a duplicate issue number in the provider listing) — skip, first listing wins.
+    Skip,
+}
+
+/// Number-anchored pairing (issue #194): within a series, the row's `number` is the identity
+/// anchor and the stored provider id is a cache that must AGREE with it. Resolution order:
+///   1. in-series row whose stored id matches AND whose number agrees  (already correct)
+///   2. in-series row whose number agrees                              (heals a missing/wrong id)
+///   3. cross-series row whose stored id matches AND number agrees     (legit adoption: e.g. a
+///      request-created skeleton that predates this series)
+///   4. Insert
+///
+/// An id-match with a DISAGREEING number is never honored — that row is mispaired and its own
+/// number pairs it correctly later in the pass. This is what lets a crossed library (issue 1
+/// wearing issue 4's id) self-heal on the next sync, order-independently. `claimed` guarantees
+/// at most one write per row per pass.
+pub(crate) fn resolve_pair_target(
+    provider_id: &str,
+    provider_num: &str,
+    in_series: &[(String, String, Option<String>)], // (row id, number, stored metadataId)
+    cross_series: Option<(&str, &str)>,             // (row id, number) for a global id match OUTSIDE the series
+    claimed: &std::collections::HashSet<String>,
+) -> PairTarget {
+    // 1. Consistent in-series id match.
+    if let Some((rid, _, _)) = in_series.iter().find(|(rid, num, mid)| {
+        mid.as_deref() == Some(provider_id) && is_same_issue(num, provider_num) && !claimed.contains(rid)
+    }) {
+        return PairTarget::Update { row_id: rid.clone(), heal_id: false, cross_series: false };
+    }
+    // 2. Number match — the heal path. heal_id when the stored id differs (or is absent/unmatched).
+    if let Some((rid, _, mid)) = in_series.iter().find(|(rid, num, _)| {
+        is_same_issue(num, provider_num) && !claimed.contains(rid)
+    }) {
+        let heal = mid.as_deref() != Some(provider_id);
+        return PairTarget::Update { row_id: rid.clone(), heal_id: heal, cross_series: false };
+    }
+    // A number match existed but was claimed → duplicate provider number, first listing wins.
+    if in_series.iter().any(|(_, num, _)| is_same_issue(num, provider_num)) {
+        return PairTarget::Skip;
+    }
+    // 3. Cross-series adoption, only when id AND number agree.
+    if let Some((rid, num)) = cross_series {
+        if is_same_issue(num, provider_num) && !claimed.contains(rid) {
+            return PairTarget::Update { row_id: rid.to_string(), heal_id: false, cross_series: true };
+        }
+    }
+    PairTarget::Insert
+}
+
 /// Match-state a sync upsert should write: an issue the view-time lazy enrichment already deep-
 /// fetched keeps DEEP_SYNCED (so it is never redundantly re-fetched); everything else lands on
 /// MATCHED as before (issue #179).
@@ -1687,6 +1805,78 @@ mod tests {
         assert!(is_same_issue("-2.5", "-2.50"));
         assert!(!is_same_issue("-1", "1"));
         assert!(is_same_issue("-1A", "-001a"));
+    }
+
+    // ==== Issue #194 (c1): number-anchored pairing resolver ====
+
+    fn snap(rows: &[(&str, &str, Option<&str>)]) -> Vec<(String, String, Option<String>)> {
+        rows.iter().map(|(a, b, c)| (a.to_string(), b.to_string(), c.map(|s| s.to_string()))).collect()
+    }
+
+    #[test]
+    fn pairing_heals_crossed_ids_in_both_orders() {
+        // The field case: row "1" wears issue 4's id (821401); row "4" has none.
+        let rows = snap(&[("r1", "1", Some("821401")), ("r4", "4", None)]);
+        let none: std::collections::HashSet<String> = Default::default();
+
+        // cv#1 (819000) pairs to r1 by NUMBER, healing the wrong id…
+        assert_eq!(
+            resolve_pair_target("819000", "1", &rows, None, &none),
+            PairTarget::Update { row_id: "r1".into(), heal_id: true, cross_series: false }
+        );
+        // …and cv#4 (821401) must NOT honor r1's wrong id — r4 wins by number.
+        assert_eq!(
+            resolve_pair_target("821401", "4", &rows, None, &none),
+            PairTarget::Update { row_id: "r4".into(), heal_id: true, cross_series: false }
+        );
+        // Order independence: with r1 already claimed by cv#1, cv#4 still lands on r4.
+        let mut claimed = std::collections::HashSet::new();
+        claimed.insert("r1".to_string());
+        assert_eq!(
+            resolve_pair_target("821401", "4", &rows, None, &claimed),
+            PairTarget::Update { row_id: "r4".into(), heal_id: true, cross_series: false }
+        );
+    }
+
+    #[test]
+    fn pairing_prefers_consistent_id_and_pads_are_equal() {
+        let rows = snap(&[("r1", "1", Some("819000"))]);
+        assert_eq!(
+            resolve_pair_target("819000", "001", &rows, None, &Default::default()),
+            PairTarget::Update { row_id: "r1".into(), heal_id: false, cross_series: false }
+        );
+    }
+
+    #[test]
+    fn pairing_unlinked_row_heals_by_number() {
+        let rows = snap(&[("r2", "2", None)]);
+        assert_eq!(
+            resolve_pair_target("555", "2", &rows, None, &Default::default()),
+            PairTarget::Update { row_id: "r2".into(), heal_id: true, cross_series: false }
+        );
+    }
+
+    #[test]
+    fn pairing_duplicate_provider_number_skips_after_claim() {
+        let rows = snap(&[("r1", "1", None)]);
+        let mut claimed = std::collections::HashSet::new();
+        claimed.insert("r1".to_string());
+        assert_eq!(resolve_pair_target("900", "1", &rows, None, &claimed), PairTarget::Skip);
+    }
+
+    #[test]
+    fn pairing_cross_series_requires_number_agreement() {
+        let rows = snap(&[]);
+        // id AND number agree → legit adoption (request skeleton predating the series).
+        assert_eq!(
+            resolve_pair_target("819000", "1", &rows, Some(("other", "1")), &Default::default()),
+            PairTarget::Update { row_id: "other".into(), heal_id: false, cross_series: true }
+        );
+        // Disagreeing number → that row is mispaired garbage, never stolen: insert fresh.
+        assert_eq!(
+            resolve_pair_target("819000", "1", &rows, Some(("other", "4")), &Default::default()),
+            PairTarget::Insert
+        );
     }
 
     // ==== Issue #179: per-issue credits/appearances from the ComicVine ISSUE LIST response. ====

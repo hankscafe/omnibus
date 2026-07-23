@@ -115,7 +115,11 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             });
 
             let latestDateMs = 0;
-            
+            // Number-anchored pairing (issue #194, engine resolve_pair_target parity — see the CV
+            // branch below for the full contract).
+            const claimedIds = new Set<string>();
+            const insertedNums: string[] = [];
+
             for (const issue of issues) {
                 const issueNumStr = issue.issueNumber;
 
@@ -124,14 +128,25 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     const ts = new Date(issueDate).getTime();
                     if (!isNaN(ts) && ts > latestDateMs) latestDateMs = ts;
                 }
-                
-                const existingByMetaId = await prisma.issue.findFirst({ 
-                    where: { metadataId: issue.sourceId, metadataSource: 'METRON' } 
-                });
 
-                const existingByNum = allSeriesIssues.find(i => isSameIssue(i.number, issueNumStr));
-
-                const targetRecord = existingByMetaId || existingByNum;
+                const inSeriesById = allSeriesIssues.find(i =>
+                    i.metadataId === issue.sourceId && isSameIssue(i.number, issueNumStr) && !claimedIds.has(i.id));
+                const inSeriesByNum = inSeriesById || allSeriesIssues.find(i =>
+                    isSameIssue(i.number, issueNumStr) && !claimedIds.has(i.id));
+                let targetRecord = inSeriesByNum;
+                let crossSeries = false;
+                if (!targetRecord) {
+                    if (allSeriesIssues.some(i => isSameIssue(i.number, issueNumStr)) ||
+                        insertedNums.some(n => isSameIssue(n, issueNumStr))) {
+                        Logger.log(`[Metadata] Duplicate provider number #${issueNumStr} (${issue.sourceId}) for "${series.name}" — first listing wins, skipping.`, 'info');
+                        continue;
+                    }
+                    const global = await prisma.issue.findFirst({
+                        where: { metadataId: issue.sourceId, metadataSource: 'METRON', seriesId: { not: series.id } }
+                    });
+                    if (global && isSameIssue(global.number, issueNumStr)) { targetRecord = global; crossSeries = true; }
+                }
+                const healId = !!targetRecord && targetRecord.metadataId !== issue.sourceId;
                 const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
 
                 const issueDataPayload = {
@@ -145,32 +160,37 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     ...(issue.writers?.length ? { writers: JSON.stringify(issue.writers) } : {}),
                     ...(issue.artists?.length ? { artists: JSON.stringify(issue.artists) } : {}),
                     ...(issue.characters?.length ? { characters: JSON.stringify(issue.characters) } : {}),
-                    // An issue the view-time lazy enrichment already deep-fetched keeps DEEP_SYNCED
-                    // so it is never redundantly re-fetched (engine parity: next_match_state).
-                    matchState: targetRecord?.matchState === 'DEEP_SYNCED' ? 'DEEP_SYNCED' : 'MATCHED'
+                    // A healed row drops DEEP_SYNCED (its deep data belonged to the old id); otherwise
+                    // enrichment-completed issues keep DEEP_SYNCED (engine parity: next_match_state).
+                    matchState: !healId && targetRecord?.matchState === 'DEEP_SYNCED' ? 'DEEP_SYNCED' : 'MATCHED'
                 };
+                if (healId && !isLocked) {
+                    Logger.log(`[Metadata] Healing issue #${issueNumStr} of "${series.name}" — stored id disagreed with its number, re-linking to ${issue.sourceId} (issue #194).`, 'info');
+                    Object.assign(issueDataPayload, {
+                        writers: null, artists: null, coverArtists: null, colorists: null,
+                        letterers: null, characters: null, teams: null, locations: null, storyArcs: null
+                    });
+                }
 
-                if (existingByMetaId) {
+                if (targetRecord) {
                     await prisma.issue.update({
-                        where: { id: existingByMetaId.id },
-                        data: { seriesId: series.id, number: issueNumStr, ...issueDataPayload }
+                        where: { id: targetRecord.id },
+                        data: { seriesId: series.id, metadataId: issue.sourceId, metadataSource: 'METRON', ...issueDataPayload }
                     });
-                } else if (existingByNum) {
-                    await prisma.issue.update({
-                        where: { id: existingByNum.id },
-                        data: { metadataId: issue.sourceId, metadataSource: 'METRON', ...issueDataPayload }
-                    });
+                    claimedIds.add(targetRecord.id);
+                    if (crossSeries) Logger.log(`[Metadata] Adopted issue #${issueNumStr} (${issue.sourceId}) into "${series.name}" from another series (id+number agree).`, 'info');
                 } else {
                     await prisma.issue.create({
                         data: {
-                            seriesId: series.id, 
-                            metadataId: issue.sourceId, 
-                            metadataSource: 'METRON', 
-                            number: issueNumStr, 
-                            status: 'WANTED', 
+                            seriesId: series.id,
+                            metadataId: issue.sourceId,
+                            metadataSource: 'METRON',
+                            number: issueNumStr,
+                            status: 'WANTED',
                             ...issueDataPayload
                         }
                     });
+                    insertedNums.push(issueNumStr);
                 }
                 syncedCount++;
             }
@@ -378,6 +398,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
     Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
     let latestDateMs = 0;
+    // Claim set + same-batch insert-number guard (issue #194): one write per row per sync, and a
+    // duplicate provider number can't insert a second row or overwrite an earlier pairing.
+    const claimedIds = new Set<string>();
+    const insertedNums: string[] = [];
     while (offset < totalResults && loopCount < 20) {
         Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
         let issueRes;
@@ -409,6 +433,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
         for (const cvIssue of cvIssues) {
             const issueNumStr = cvIssue.issue_number?.toString() || "0";
+            const cvIdStr = cvIssue.id.toString();
 
             const issueDate = cvIssue.store_date || cvIssue.cover_date || null;
             if (issueDate) {
@@ -416,13 +441,30 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 if (!isNaN(ts) && ts > latestDateMs) latestDateMs = ts;
             }
 
-            const existingByCvId = await prisma.issue.findFirst({ 
-                where: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE' } 
-            });
-
-            const existingByNum = allSeriesIssuesForCv.find(i => isSameIssue(i.number, issueNumStr));
-
-            const targetRecord = existingByCvId || existingByNum;
+            // Number-anchored pairing (issue #194, parity with the engine's resolve_pair_target):
+            // within the series the row's number is the identity anchor; a stored id is honored only
+            // when the number agrees, otherwise the number wins and the id is HEALED. The claimed
+            // set gives one write per row per sync, and number is never rewritten by an id match.
+            const inSeriesById = allSeriesIssuesForCv.find(i =>
+                i.metadataId === cvIdStr && isSameIssue(i.number, issueNumStr) && !claimedIds.has(i.id));
+            const inSeriesByNum = inSeriesById || allSeriesIssuesForCv.find(i =>
+                isSameIssue(i.number, issueNumStr) && !claimedIds.has(i.id));
+            let targetRecord = inSeriesByNum;
+            let crossSeries = false;
+            if (!targetRecord) {
+                if (allSeriesIssuesForCv.some(i => isSameIssue(i.number, issueNumStr)) ||
+                    insertedNums.some(n => isSameIssue(n, issueNumStr))) {
+                    Logger.log(`[Metadata] Duplicate provider number #${issueNumStr} (${cvIdStr}) for "${series.name}" — first listing wins, skipping.`, 'info');
+                    continue;
+                }
+                // Cross-series adoption only when id AND number agree (a mispaired global id match
+                // is never a steal target).
+                const global = await prisma.issue.findFirst({
+                    where: { metadataId: cvIdStr, metadataSource: 'COMICVINE', seriesId: { not: series.id } }
+                });
+                if (global && isSameIssue(global.number, issueNumStr)) { targetRecord = global; crossSeries = true; }
+            }
+            const healId = !!targetRecord && targetRecord.metadataId !== cvIdStr;
             const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
 
             const issueDataPayload = {
@@ -434,31 +476,44 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             };
 
             const dynamicPayload: any = { ...issueDataPayload };
-            if (volGenres.length > 0 && (!existingByCvId || !(existingByCvId as any).genres)) {
+            if (volGenres.length > 0 && (!targetRecord || !(targetRecord as any).genres || healId)) {
                 dynamicPayload.genres = JSON.stringify(volGenres);
             }
+            // A healed row's enrichment-era fields belonged to the WRONG issue — reset the credit
+            // columns (the guarded view-time enrichment refills them for the correct id) and drop
+            // DEEP_SYNCED via the MATCHED matchState above. A locked row keeps curated content.
+            if (healId && !isLocked) {
+                Logger.log(`[Metadata] Healing issue #${issueNumStr} of "${series.name}" — stored id disagreed with its number, re-linking to ${cvIdStr} (issue #194).`, 'info');
+                Object.assign(dynamicPayload, {
+                    writers: null, artists: null, coverArtists: null, colorists: null,
+                    letterers: null, characters: null, teams: null, locations: null, storyArcs: null
+                });
+            }
 
-            if (existingByCvId) {
+            if (targetRecord) {
                 await prisma.issue.update({
-                    where: { id: existingByCvId.id },
-                    data: { seriesId: series.id, number: issueNumStr, ...dynamicPayload }
-                });
-            } else if (existingByNum) {
-                await prisma.issue.update({
-                    where: { id: existingByNum.id },
-                    data: { metadataId: cvIssue.id.toString(), metadataSource: 'COMICVINE', ...dynamicPayload }
-                });
-            } else {
-                await prisma.issue.create({
+                    where: { id: targetRecord.id },
                     data: {
-                        seriesId: series.id, 
-                        metadataId: cvIssue.id.toString(), 
-                        metadataSource: 'COMICVINE', 
-                        number: issueNumStr, 
-                        status: 'WANTED', 
+                        seriesId: series.id,
+                        metadataId: cvIdStr,
+                        metadataSource: 'COMICVINE',
                         ...dynamicPayload
                     }
                 });
+                claimedIds.add(targetRecord.id);
+                if (crossSeries) Logger.log(`[Metadata] Adopted issue #${issueNumStr} (${cvIdStr}) into "${series.name}" from another series (id+number agree).`, 'info');
+            } else {
+                await prisma.issue.create({
+                    data: {
+                        seriesId: series.id,
+                        metadataId: cvIdStr,
+                        metadataSource: 'COMICVINE',
+                        number: issueNumStr,
+                        status: 'WANTED',
+                        ...dynamicPayload
+                    }
+                });
+                insertedNums.push(issueNumStr);
             }
             syncedCount++;
         }

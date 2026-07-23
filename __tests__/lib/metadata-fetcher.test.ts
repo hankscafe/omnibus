@@ -227,4 +227,49 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         expect(mocks.writeFile).not.toHaveBeenCalled();
         expect(mocks.seriesUpdate.mock.calls[0][0].data.coverUrl).toBe('/api/uploads/series-covers/custom.jpg');
     });
+
+    it('heals crossed issue ids by number instead of trusting the stored id (#194 c1)', async () => {
+        // The field case: row "1" wears issue 4's id (821401, DEEP_SYNCED from the old corruption);
+        // row "4" is unlinked. The sync must re-key BOTH by number and drop the stale DEEP_SYNCED.
+        mocks.issueFindMany.mockResolvedValue([
+            { id: 'r1', number: '1', metadataId: '821401', matchState: 'DEEP_SYNCED', hasCustomMetadata: false },
+            { id: 'r4', number: '4', metadataId: null, matchState: 'MATCHED', hasCustomMetadata: false },
+        ]);
+        mocks.issueFindFirst.mockResolvedValue(null); // no cross-series candidates
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) {
+                return { data: { results: { name: 'Trauma Team', start_year: '2020', publisher: { name: 'Dark Horse' }, image: null } } };
+            }
+            if (url.includes('/issues/')) {
+                return {
+                    data: {
+                        number_of_total_results: 2,
+                        results: [
+                            { id: 819000, issue_number: '1', name: 'One', store_date: '2020-09-01' },
+                            { id: 821401, issue_number: '4', name: 'Four', store_date: '2021-02-01' },
+                        ]
+                    }
+                };
+            }
+            return { data: Buffer.from('img') };
+        });
+        mocks.existsSync.mockReturnValue(false);
+
+        const result = await syncSeriesMetadata('123', '/comics/Trauma Team', 'COMICVINE');
+        expect(result.success).toBe(true);
+
+        const updates = mocks.issueUpdate.mock.calls.map(c => c[0]);
+        expect(updates).toHaveLength(2);
+        const r1 = updates.find(u => u.where.id === 'r1');
+        const r4 = updates.find(u => u.where.id === 'r4');
+        // r1 re-linked to the CORRECT id for number 1 — not issue 4's — and unlocked for re-enrichment.
+        expect(r1.data.metadataId).toBe('819000');
+        expect(r1.data.matchState).toBe('MATCHED');
+        // The identity anchor is never rewritten by the sync.
+        expect('number' in r1.data).toBe(false);
+        // r4 adopts its own id.
+        expect(r4.data.metadataId).toBe('821401');
+        // Nothing inserted — both provider issues landed on existing rows.
+        expect(mocks.issueCreate).not.toHaveBeenCalled();
+    });
 });

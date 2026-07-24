@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Loader2, ShieldAlert, Ghost, FileQuestion, FileWarning, Trash2, CheckCircle2, Search, ArrowLeft, EyeOff, Files, Star } from "lucide-react"
+import { Loader2, ShieldAlert, Ghost, FileQuestion, FileWarning, Trash2, CheckCircle2, Search, ArrowLeft, EyeOff, Files, Star, AlertTriangle, RefreshCw } from "lucide-react"
 import Link from "next/link"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
@@ -14,6 +14,10 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 // unique even in the impossible event of a collision.
 const groupKey = (g: any, idx: number) => `${g.seriesId}_${g.issueNumber}_${idx}`;
 const DELETE_ALL = '__DELETE_ALL__';
+// "Keep every copy" selection state — nothing in the group is deleted. The default for groups the
+// detector flags as suspected metadata mispairs (issue #196: files 001 and 004 sharing one DB
+// number are different comics, not duplicates — deleting either would remove a real issue).
+const KEEP_ALL = '__KEEP_ALL__';
 
 export default function DiagnosticsPage() {
     // PROPER REACT WAY TO SET DOCUMENT TITLE
@@ -60,8 +64,14 @@ export default function DiagnosticsPage() {
                 const groups: any[] = data.duplicates || [];
                 setDuplicates(groups);
                 // Default keeper for each group is the largest file (usually the most complete copy).
+                // Suspected mispairs default to keeping EVERY copy — the files are probably different
+                // issues, so no copy may be pre-marked for deletion (issue #196).
                 const km: Record<string, string> = {};
                 groups.forEach((g, idx) => {
+                    if (g.suspectedMispair) {
+                        km[groupKey(g, idx)] = KEEP_ALL;
+                        return;
+                    }
                     const largest = [...g.files].sort((a: any, b: any) => (b.size || 0) - (a.size || 0))[0];
                     km[groupKey(g, idx)] = largest?.id ?? DELETE_ALL;
                 });
@@ -88,12 +98,35 @@ export default function DiagnosticsPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Delete every copy the admin didn't mark "keep" for this group. DELETE_ALL removes them all.
+    // Delete every copy the admin didn't mark "keep" for this group. DELETE_ALL removes them all;
+    // KEEP_ALL deletes none (so "Resolve All" naturally skips suspected-mispair groups).
     const idsToDeleteFor = (group: any, key: string): string[] => {
         const keepId = keepMap[key];
+        if (keepId === KEEP_ALL) return [];
         return group.files
             .filter((f: any) => keepId === DELETE_ALL || f.id !== keepId)
             .map((f: any) => f.id);
+    };
+
+    // One-click steer for suspected mispairs: queue a metadata re-sync for the series — the
+    // number-anchored pairing re-links crossed records in place, which is the actual fix (the
+    // resolver's delete would remove a real comic). Only offered when the series is provider-matched.
+    const [refreshingKey, setRefreshingKey] = useState<string | null>(null);
+    const queueMetadataRefresh = async (group: any, key: string) => {
+        setRefreshingKey(key);
+        try {
+            const res = await fetch('/api/library/refresh-metadata', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ metadataId: group.seriesMetadataId, metadataSource: group.seriesMetadataSource })
+            });
+            if (!res.ok) throw new Error();
+            toast({ title: "Metadata refresh queued", description: `${group.seriesName} will re-pair in the background — run Find Duplicates again in a minute.` });
+        } catch (e) {
+            toast({ title: "Refresh failed to queue", variant: "destructive" });
+        } finally {
+            setRefreshingKey(null);
+        }
     };
 
     const runDelete = async (ids: string[]) => {
@@ -364,7 +397,7 @@ export default function DiagnosticsPage() {
                     <div className="flex justify-between items-center bg-primary/10 border border-primary/20 p-4 rounded-xl">
                         <div>
                             <h3 className="font-bold text-primary">Duplicate Resolver</h3>
-                            <p className="text-sm text-primary/80">Finds issues in the same series that share the exact same issue number (e.g. multiple versions of Issue #1). Pick the copy to <strong>keep</strong> in each group — the rest are deleted from disk.</p>
+                            <p className="text-sm text-primary/80">Finds issues in the same series that share the exact same issue number (e.g. multiple versions of Issue #1). Pick the copy to <strong>keep</strong> in each group — the rest are deleted from disk. Groups whose filenames disagree about the issue number are flagged as likely metadata mispairs — those want a metadata refresh, not a deletion.</p>
                         </div>
                         <Button onClick={() => runScan('scan-duplicates')} disabled={isScanning} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold shrink-0">
                             {isScanning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Search className="w-4 h-4 mr-2" />} Find Duplicates
@@ -395,25 +428,55 @@ export default function DiagnosticsPage() {
                                 const key = groupKey(group, idx);
                                 const keepId = keepMap[key];
                                 const deleteCount = idsToDeleteFor(group, key).length;
+                                const mispair = !!group.suspectedMispair;
                                 return (
-                                    <div key={key} className="bg-muted/30 border border-border rounded-lg p-4">
+                                    <div key={key} className={`bg-muted/30 border rounded-lg p-4 ${mispair ? 'border-amber-500/40' : 'border-border'}`}>
                                         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                                            <h4 className="font-bold text-foreground">{group.seriesName} <Badge variant="secondary">Issue #{group.issueNumber}</Badge></h4>
-                                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name={`keep-${key}`}
-                                                    checked={keepId === DELETE_ALL}
-                                                    onChange={() => setKeepMap(m => ({ ...m, [key]: DELETE_ALL }))}
-                                                    className="accent-red-600"
-                                                />
-                                                Delete all copies
-                                            </label>
+                                            <h4 className="font-bold text-foreground">{group.seriesName} <Badge variant="secondary">Issue #{group.issueNumber}</Badge>
+                                                {mispair && <Badge variant="outline" className="ml-1 border-amber-500/60 text-amber-500"><AlertTriangle className="w-3 h-3 mr-1" /> Suspected mispair</Badge>}
+                                            </h4>
+                                            <div className="flex items-center gap-3">
+                                                <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                                    <input
+                                                        type="radio"
+                                                        name={`keep-${key}`}
+                                                        checked={keepId === KEEP_ALL}
+                                                        onChange={() => setKeepMap(m => ({ ...m, [key]: KEEP_ALL }))}
+                                                        className="accent-green-600"
+                                                    />
+                                                    Keep all copies
+                                                </label>
+                                                <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                                    <input
+                                                        type="radio"
+                                                        name={`keep-${key}`}
+                                                        checked={keepId === DELETE_ALL}
+                                                        onChange={() => setKeepMap(m => ({ ...m, [key]: DELETE_ALL }))}
+                                                        className="accent-red-600"
+                                                    />
+                                                    Delete all copies
+                                                </label>
+                                            </div>
                                         </div>
+                                        {mispair && (
+                                            <div className="flex flex-wrap items-center justify-between gap-2 mb-3 p-3 rounded border border-amber-500/40 bg-amber-500/10">
+                                                <p className="text-xs text-amber-600 dark:text-amber-400 flex-1 min-w-[16rem]">
+                                                    <AlertTriangle className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+                                                    These files disagree about which issue they are ({group.files.map((f: any) => `#${f.parsedNumber}`).join(' vs ')}), so they are probably <strong>different comics</strong> mislabeled with the same number by an earlier metadata mix-up — not real duplicates. Deleting a copy would remove a real issue. Refresh Metadata re-pairs the records instead; nothing here is pre-selected for deletion.
+                                                </p>
+                                                {group.seriesMetadataId && (
+                                                    <Button size="sm" variant="outline" className="border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0"
+                                                        disabled={refreshingKey === key}
+                                                        onClick={() => queueMetadataRefresh(group, key)}>
+                                                        {refreshingKey === key ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />} Refresh Metadata
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        )}
                                         <div className="space-y-2">
                                             {group.files.map((file: any) => {
                                                 const isKeep = keepId === file.id;
-                                                const willDelete = keepId === DELETE_ALL || !isKeep;
+                                                const willDelete = keepId === DELETE_ALL || (keepId !== KEEP_ALL && !isKeep);
                                                 return (
                                                     <label
                                                         key={file.id}
@@ -429,11 +492,13 @@ export default function DiagnosticsPage() {
                                                         <div className="min-w-0 flex-1">
                                                             <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
                                                             <p className="text-xs text-muted-foreground font-mono truncate" title={file.path}>{file.path}</p>
-                                                            <p className="text-xs text-muted-foreground">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                                                            <p className="text-xs text-muted-foreground">{(file.size / 1024 / 1024).toFixed(2)} MB{mispair && <span className="text-amber-600 dark:text-amber-400"> · filename says #{file.parsedNumber}</span>}</p>
                                                         </div>
                                                         {isKeep
                                                             ? <Badge className="shrink-0 bg-green-600 text-white hover:bg-green-600"><Star className="w-3 h-3 mr-1" /> Keep</Badge>
-                                                            : <Badge variant="outline" className="shrink-0 border-red-500/40 text-red-500"><Trash2 className="w-3 h-3 mr-1" /> Delete</Badge>}
+                                                            : willDelete
+                                                                ? <Badge variant="outline" className="shrink-0 border-red-500/40 text-red-500"><Trash2 className="w-3 h-3 mr-1" /> Delete</Badge>
+                                                                : null}
                                                     </label>
                                                 );
                                             })}

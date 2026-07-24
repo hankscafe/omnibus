@@ -17,10 +17,10 @@ vi.mock('fs-extra', () => ({
     default: { existsSync: mocks.existsSync, statSync: mocks.statSync },
 }));
 
-import { findDuplicateGroups } from '@/lib/duplicate-detector';
+import { findDuplicateGroups, filenamesDisagree } from '@/lib/duplicate-detector';
 
-const issue = (id: string, seriesId: string, number: string, filePath: string, seriesName = 'Batman') =>
-    ({ id, seriesId, number, filePath, series: { name: seriesName } });
+const issue = (id: string, seriesId: string, number: string, filePath: string, seriesName = 'Batman', metadataId: string | null = null, metadataSource: string | null = null) =>
+    ({ id, seriesId, number, filePath, series: { name: seriesName, metadataId, metadataSource } });
 
 // Drive both prisma calls from one dataset: groupBy returns the (seriesId, number) pairs the DB would
 // report with count > 1, and findMany returns the issues in those candidate series (as the real
@@ -78,5 +78,66 @@ describe('findDuplicateGroups', () => {
     it('returns an empty array when there are no issues', async () => {
         setIssues([]);
         expect(await findDuplicateGroups()).toEqual([]);
+    });
+});
+
+// Issue #196: the resolver grouped files 001 and 004 of a mini-series as "duplicates of Issue #4" —
+// crossed records from the corruption-era sync, not real duplicates. Deleting a copy would have
+// removed a real comic. These pin the guard: filename disagreement → suspectedMispair, per-file
+// parsed numbers surface the disagreement, provider linkage rides along for one-click refresh.
+describe('filenamesDisagree', () => {
+    it('flags genuinely different parsed numbers', () => {
+        expect(filenamesDisagree(['1', '4'])).toBe(true);
+        expect(filenamesDisagree(['3', '3', '4'])).toBe(true);
+        expect(filenamesDisagree(['1.5', '1'])).toBe(true);
+    });
+
+    it('never flags padding/suffix-equivalent, single, or empty entries', () => {
+        expect(filenamesDisagree(['001', '1'])).toBe(false);
+        expect(filenamesDisagree(['2', '2'])).toBe(false);
+        expect(filenamesDisagree(['1A', '1a'])).toBe(false);
+        expect(filenamesDisagree(['3'])).toBe(false);
+        expect(filenamesDisagree([])).toBe(false);
+    });
+});
+
+describe('suspected-mispair detection (issue #196)', () => {
+    it('flags the anacronismo case: files 001 and 004 sharing DB number "4"', async () => {
+        setIssues([
+            issue('i1', 's1', '4', '/comics/DH/Cyberpunk 2077 Blackout (2022)/Cyberpunk 2077 Blackout 001 (2022).cbz', 'Cyberpunk 2077: Blackout', '143306', 'COMICVINE'),
+            issue('i4', 's1', '4', '/comics/DH/Cyberpunk 2077 Blackout (2022)/Cyberpunk 2077 Blackout 004 (2022).cbz', 'Cyberpunk 2077: Blackout', '143306', 'COMICVINE'),
+        ]);
+        const groups = await findDuplicateGroups();
+        expect(groups).toHaveLength(1);
+        const g = groups[0];
+        expect(g.suspectedMispair).toBe(true);
+        // The year-like "2077" in the title must never be read as the issue number.
+        expect(g.files.map(f => f.parsedNumber)).toEqual(['1', '4']);
+        // Provider linkage for the UI's one-click Refresh Metadata steer.
+        expect(g.seriesMetadataId).toBe('143306');
+        expect(g.seriesMetadataSource).toBe('COMICVINE');
+    });
+
+    it('does not flag a true duplicate (padding/edition variants of the same number)', async () => {
+        setIssues([
+            issue('a', 's1', '1', '/comics/Image/Saga (2012)/Saga 001 (2012).cbz', 'Saga'),
+            issue('b', 's1', '1', '/comics/Image/Saga (2012)/Saga 01 (2012) (digital).cbz', 'Saga'),
+        ]);
+        const groups = await findDuplicateGroups();
+        expect(groups).toHaveLength(1);
+        expect(groups[0].suspectedMispair).toBe(false);
+        expect(groups[0].files.map(f => f.parsedNumber)).toEqual(['1', '1']);
+    });
+
+    it('carries null provider linkage for an unmatched series (UI hides the refresh steer)', async () => {
+        setIssues([
+            issue('x', 's2', '2', '/comics/X/Thing 001.cbz', 'Thing'),
+            issue('y', 's2', '2', '/comics/X/Thing 002.cbz', 'Thing'),
+        ]);
+        const groups = await findDuplicateGroups();
+        expect(groups).toHaveLength(1);
+        expect(groups[0].suspectedMispair).toBe(true);
+        expect(groups[0].seriesMetadataId).toBeNull();
+        expect(groups[0].seriesMetadataSource).toBeNull();
     });
 });

@@ -361,11 +361,17 @@ export async function runSystemHealthCheck() {
             const details = Array.from(perSeries.entries())
                 .sort((a, b) => a[0].localeCompare(b[0]))
                 .map(([seriesName, count]) => `${seriesName} — ${count} duplicated issue${count > 1 ? 's' : ''}`);
+            // Suspected mispairs (issue #196) get a steer toward Refresh Metadata — for those groups
+            // the "duplicates" are different comics sharing one DB number, and deletion loses data.
+            const mispairs = dupeGroups.filter(g => g.suspectedMispair).length;
+            const mispairHint = mispairs > 0
+                ? ` ${mispairs} group${mispairs > 1 ? 's' : ''} look${mispairs > 1 ? '' : 's'} like a metadata mispair (different issues sharing one number) — use Refresh Metadata on that series instead of deleting.`
+                : '';
             results.push({
                 id: 'duplicate_files',
                 name: 'Duplicate Files',
                 status: 'warning',
-                message: `${perSeries.size} series contain duplicate files (${dupeGroups.length} duplicated issue${dupeGroups.length > 1 ? 's' : ''}). Review and clean them up in Diagnostics.`,
+                message: `${perSeries.size} series contain duplicate files (${dupeGroups.length} duplicated issue${dupeGroups.length > 1 ? 's' : ''}). Review and clean them up in Diagnostics.${mispairHint}`,
                 actionLink: '/admin/diagnostics?tab=duplicates',
                 details,
             });
@@ -387,7 +393,7 @@ export async function runSystemHealthCheck() {
                 Logger.log(`[Health Check] ${newKeys.length} new duplicate(s) detected — sending notification.`, 'info');
                 await SystemNotifier.sendAlert('duplicate_files', {
                     title: 'Duplicate Files Found',
-                    description: `${perSeries.size} series contain duplicate files (${dupeGroups.length} duplicated issue${dupeGroups.length > 1 ? 's' : ''}). Newly flagged: ${shown}${more}. Review them in Diagnostics → Duplicates.`,
+                    description: `${perSeries.size} series contain duplicate files (${dupeGroups.length} duplicated issue${dupeGroups.length > 1 ? 's' : ''}). Newly flagged: ${shown}${more}. Review them in Diagnostics → Duplicates.${mispairHint}`,
                 }).catch(() => {});
             }
 

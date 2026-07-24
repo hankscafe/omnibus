@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
-import { Loader2, FileText, FileX, AlertTriangle } from "lucide-react"
+import { Loader2, FileText, FileX, AlertTriangle, Lock, Unlock } from "lucide-react"
 
 export interface MetadataEditorSeries {
   currentPath: string
@@ -59,6 +59,10 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
   // True when the current values couldn't be loaded — saving is then blocked so a blank
   // form can't wipe real metadata (e.g. the series folder is missing, or the API errored).
   const [loadFailed, setLoadFailed] = useState(false)
+  // Manual-edits lock (issue.hasCustomMetadata): provider syncs preserve locked fields. The
+  // editor surfaces it and offers the unlock so a wrongly-locked row can heal (issue #194 (f)).
+  const [locked, setLocked] = useState(false)
+  const [unlocking, setUnlocking] = useState(false)
 
   // Load current values + the global write-to-file default whenever the dialog opens.
   useEffect(() => {
@@ -68,6 +72,7 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
     const load = async () => {
       setLoading(true)
       setLoadFailed(false)
+      setLocked(false)
       // Global default for the write-to-file toggle.
       try {
         const cfg = await fetch("/api/admin/config").then(r => (r.ok ? r.json() : null)).catch(() => null)
@@ -114,6 +119,7 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
         // A successful issue load always returns the credit arrays. If it didn't, the form would
         // show blanks and a save could wipe the real writers/artists/characters/etc.
         if (!Array.isArray(detail.writers)) { setLoadFailed(true); setLoading(false); return }
+        setLocked(!!detail.hasCustomMetadata)
         setForm({
           number: detail.number ?? issue.number ?? "",
           name: detail.name ?? issue.name ?? "",
@@ -194,16 +200,50 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
         throw new Error(result.error || `Save failed (${res.status})`)
       }
 
-      toast({
-        title: "Metadata saved",
-        description: writeToFile ? "Changes saved and queued to write into ComicInfo.xml." : "Changes saved in Omnibus (files left untouched).",
-      })
+      // A zero-change save is a server-side no-op: nothing written, locked, or embedded.
+      if (result?.changed === false) {
+        toast({
+          title: "No changes to save",
+          description: "Nothing was modified, so the issue was left untouched (no lock, no file write).",
+        })
+      } else {
+        toast({
+          title: "Metadata saved",
+          description: writeToFile ? "Changes saved and queued to write into ComicInfo.xml." : "Changes saved in Omnibus (files left untouched).",
+        })
+      }
       onOpenChange(false)
       onSaved?.(result)
     } catch (e: any) {
       toast({ title: "Save failed", description: e?.message || "Unknown error", variant: "destructive" })
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Clears hasCustomMetadata (and the DEEP_SYNCED stamp) so provider syncs and the lazy
+  // enrichment may refill this issue again. The modal stays open so the notice visibly clears.
+  const handleUnlock = async () => {
+    if (!issue) return
+    setUnlocking(true)
+    try {
+      const res = await fetch("/api/library/issue", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issueId: issue.id, clearCustomMetadata: true }),
+      })
+      const result = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(result.error || `Unlock failed (${res.status})`)
+      setLocked(false)
+      toast({
+        title: "Lock removed",
+        description: "Run Refresh Metadata on the series to pull provider data back into this issue.",
+      })
+      onSaved?.(result)
+    } catch (e: any) {
+      toast({ title: "Unlock failed", description: e?.message || "Unknown error", variant: "destructive" })
+    } finally {
+      setUnlocking(false)
     }
   }
 
@@ -298,6 +338,23 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
               <Label className="text-xs">Universe / Imprint</Label>
               <Input value={form.universe || ""} onChange={e => set("universe", e.target.value)} className="bg-background border-border h-9" />
             </div>
+
+            {mode === "issue" && locked && (
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/40 p-3 rounded-lg">
+                <div className="grid gap-0.5 flex-1 min-w-[14rem]">
+                  <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5" /> Manual-edits lock is on
+                  </span>
+                  <p className="text-[11px] text-muted-foreground">
+                    Provider syncs and auto-enrichment preserve these fields. Remove the lock to let Refresh Metadata refill them from the provider.
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" disabled={unlocking} onClick={handleUnlock}
+                  className="border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0">
+                  {unlocking ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Unlock className="w-4 h-4 mr-2" />} Remove Lock
+                </Button>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 bg-muted/40 p-3 rounded-lg border border-border mt-1">
               <Switch id="meta-write-file" checked={writeToFile} onCheckedChange={setWriteToFile} />

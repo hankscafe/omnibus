@@ -233,7 +233,8 @@ export async function GET(request: Request) {
                             storyArcs: finalStoryArcs,
                             teams: finalTeams,
                             locations: finalLocations,
-                            description: newDescription
+                            description: newDescription,
+                            hasCustomMetadata: !!issue.hasCustomMetadata
                         });
                     }
                 } catch (e) {
@@ -259,7 +260,9 @@ export async function GET(request: Request) {
         teams: parsedTeams,
         locations: parsedLocations,
         // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored XSS).
-        description: sanitizeDescription(issue.description)
+        description: sanitizeDescription(issue.description),
+        // Manual-edits lock state — the metadata editor shows it and offers the unlock (issue #194 (f)).
+        hasCustomMetadata: !!issue.hasCustomMetadata
     });
   } catch (error: unknown) {
     Logger.log(`[Library Issue API] Error: ${getErrorMessage(error)}`, 'error');
@@ -267,8 +270,11 @@ export async function GET(request: Request) {
   }
 }
 
-// Save manually edited issue metadata (the per-issue ComicInfo editor). Marks the issue as
-// custom (locks it from auto-sync + the lazy deep-fetch) and optionally embeds to ComicInfo.xml.
+// Save manually edited issue metadata (the per-issue ComicInfo editor). Only genuinely CHANGED
+// fields are written — a zero-change save is a no-op that never locks or touches files (issue
+// #194 (f): a blank/no-op save used to stamp hasCustomMetadata + DEEP_SYNCED and embed a minimal
+// ComicInfo.xml, permanently locking blanks in and destroying the archive's original XML).
+// Also accepts { clearCustomMetadata: true } to remove the manual-edits lock.
 export async function PATCH(request: Request) {
     try {
         const authOptions = await getAuthOptions();
@@ -282,20 +288,72 @@ export async function PATCH(request: Request) {
         const existing = await prisma.issue.findUnique({ where: { id: issueId }, include: { series: true } });
         if (!existing) return NextResponse.json({ error: "Issue not found" }, { status: 404 });
 
+        const issueName = `${existing.series?.name || ''} #${existing.number}`;
+
+        // Unlock (issue #194 (f)): clears the manual-edits lock so provider syncs and the
+        // view-time enrichment may refill this row again. DEEP_SYNCED is demoted with it — it
+        // vouched for data the admin no longer stands behind. Mirrors the bulk 'restore' action.
+        if (body.clearCustomMetadata === true) {
+            await prisma.issue.update({
+                where: { id: issueId },
+                data: { hasCustomMetadata: false, matchState: 'MATCHED' },
+            });
+            await AuditLogger.log('RESTORE_ISSUE_DEFAULTS', { issueId, issueName, scope: 'single' }, (session.user as any).id);
+            return NextResponse.json({ success: true, unlocked: true });
+        }
+
         // Multi-value fields arrive from the editor as arrays; persisted as JSON strings.
         const ARRAY_FIELDS = ['writers', 'artists', 'coverArtists', 'colorists', 'letterers', 'characters', 'genres', 'storyArcs', 'teams', 'locations'];
         const SCALAR_FIELDS = ['number', 'name', 'description', 'releaseDate', 'universe'];
 
+        // number is the identity anchor (issue #194): it may be corrected, never blanked.
+        // (Previously a blank number reached Prisma as null and died as an opaque 500.)
+        if (body.number !== undefined && String(body.number ?? '').trim() === '') {
+            return NextResponse.json({ error: "Issue number can't be blank." }, { status: 400 });
+        }
+
+        const parseStored = (v: unknown): string[] => {
+            if (typeof v !== 'string' || !v) return [];
+            try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch { return []; }
+        };
+
+        // Diff the payload against the row and keep ONLY real changes.
         const data: any = {};
+        const changedFields: string[] = [];
         for (const f of SCALAR_FIELDS) {
-            if (body[f] !== undefined) data[f] = body[f] === '' ? null : body[f];
+            if (body[f] === undefined) continue;
+            const incoming = body[f] === '' ? null : body[f];
+            const current = (existing as any)[f] ?? null;
+            if (incoming !== (current === '' ? null : current)) { data[f] = incoming; changedFields.push(f); }
         }
         for (const f of ARRAY_FIELDS) {
-            if (body[f] !== undefined) {
-                const arr = Array.isArray(body[f]) ? body[f].map((s: any) => String(s).trim()).filter(Boolean) : [];
+            if (body[f] === undefined) continue;
+            const arr = Array.isArray(body[f]) ? body[f].map((s: any) => String(s).trim()).filter(Boolean) : [];
+            if (JSON.stringify(arr) !== JSON.stringify(parseStored((existing as any)[f]))) {
                 data[f] = JSON.stringify(arr);
+                changedFields.push(f);
             }
         }
+
+        // Zero changes → zero writes: no lock, no DEEP_SYNCED stamp, no ComicInfo embed. The
+        // #194 terminal state was exactly a no-op blank save locking an already-blank row forever.
+        if (changedFields.length === 0) {
+            await AuditLogger.log('UPDATE_ISSUE_METADATA', { issueId, issueName, changed: false, wroteToFile: false }, (session.user as any).id);
+            return NextResponse.json({ success: true, changed: false, wroteToFile: false });
+        }
+
+        // Refuse a save that would blank EVERY populated field at once — that is the shape of a
+        // client bug (an unpopulated form posted back), not of an edit. Clearing fields one at a
+        // time, or alongside other edits, stays possible.
+        const narrative = [...SCALAR_FIELDS.filter(f => f !== 'number'), ...ARRAY_FIELDS];
+        const populated = narrative.filter(f => ARRAY_FIELDS.includes(f)
+            ? parseStored((existing as any)[f]).length > 0
+            : ((existing as any)[f] ?? null) !== null && String((existing as any)[f]).trim() !== '');
+        const blanksField = (f: string) => changedFields.includes(f) && (ARRAY_FIELDS.includes(f) ? data[f] === '[]' : data[f] === null);
+        if (populated.length >= 2 && populated.every(blanksField)) {
+            return NextResponse.json({ error: "Refusing to blank every field of this issue in one save — that usually means the editor form failed to load. If it's really intended, clear fields in smaller steps." }, { status: 400 });
+        }
+
         // Lock against auto-sync overwrite, and stop the GET lazy deep-fetch from clobbering the edit.
         data.hasCustomMetadata = true;
         data.matchState = 'DEEP_SYNCED';
@@ -314,17 +372,18 @@ export async function PATCH(request: Request) {
                 await omnibusQueue.add('EMBED_METADATA', { type: 'EMBED_METADATA', issueIds: [issueId] }, {
                     jobId: `EMBED_META_ISSUE_${issueId}_${Date.now()}`
                 });
-                Logger.log(`[Metadata] Queued ComicInfo.xml embed for edited issue: ${existing.series?.name || ''} #${existing.number}`, 'info');
+                Logger.log(`[Metadata] Queued ComicInfo.xml embed for edited issue: ${issueName}`, 'info');
             } catch (e) {}
         }
 
         await AuditLogger.log('UPDATE_ISSUE_METADATA', {
             issueId,
-            issueName: `${existing.series?.name || ''} #${existing.number}`,
+            issueName,
+            changedFields,
             wroteToFile: !!writeToFile
         }, (session.user as any).id);
 
-        return NextResponse.json({ success: true, wroteToFile: !!writeToFile });
+        return NextResponse.json({ success: true, changed: true, changedFields, wroteToFile: !!writeToFile });
     } catch (error: unknown) {
         Logger.log(`[Library Issue API] PATCH Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

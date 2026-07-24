@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw, Layers } from "lucide-react"
+import PageManagerModal, { PageManagerTarget } from "@/components/page-manager-modal"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
@@ -121,6 +122,53 @@ export default function SmartMatchPage() {
     // Bulk Custom-ID: a shared Series Group / Universe applied to every selected item.
     const [bulkSeriesGroup, setBulkSeriesGroup] = useState("");
     const [bulkUniverse, setBulkUniverse] = useState("");
+
+    // --- Page Manager (issue #189): exploded page view + removal, single card or multi-select ---
+    const [pageManagerOpen, setPageManagerOpen] = useState(false);
+    const [pageManagerQueue, setPageManagerQueue] = useState<PageManagerTarget[]>([]);
+    const [pageManagerLoading, setPageManagerLoading] = useState(false);
+    // Large multi-selections get a count warning before opening the sequential walker.
+    const [pendingPageQueue, setPendingPageQueue] = useState<PageManagerTarget[] | null>(null);
+
+    // Resolves matcher cards (series folders or loose files) to their FILE-BACKED issue rows —
+    // the Page Manager needs issue ids for the progress/bookmark fixups, so pre-import loose
+    // files (no DB row yet) are skipped with a note.
+    const expandCardsToPageTargets = async (cards: any[]): Promise<PageManagerTarget[]> => {
+        const targets: PageManagerTarget[] = [];
+        for (const card of cards) {
+            try {
+                const res = await fetch(`/api/library/series?path=${encodeURIComponent(card.folderPath)}`);
+                if (!res.ok) continue;
+                const data = await res.json();
+                const issues = Array.isArray(data.downloadedIssues) ? data.downloadedIssues : [];
+                for (const iss of issues) {
+                    if (!iss.id || !iss.fullPath) continue;
+                    const num = iss.parsedNum != null ? iss.parsedNum : (iss.number || '?');
+                    targets.push({ issueId: iss.id, filePath: iss.fullPath, label: `${data.seriesName || card.name} #${num}` });
+                }
+            } catch { /* card resolves to nothing — skipped */ }
+        }
+        return targets;
+    };
+
+    const openPageManager = async (cards: any[]) => {
+        setPageManagerLoading(true);
+        try {
+            const targets = await expandCardsToPageTargets(cards);
+            if (targets.length === 0) {
+                toast({ title: "No manageable files", description: "These items have no imported issues yet — page management is available once a file is in the library.", variant: "destructive" });
+                return;
+            }
+            if (targets.length > 12) {
+                setPendingPageQueue(targets); // confirm the walk first
+                return;
+            }
+            setPageManagerQueue(targets);
+            setPageManagerOpen(true);
+        } finally {
+            setPageManagerLoading(false);
+        }
+    };
 
     // --- Page preview: flip through an unmatched file's pages to identify it before matching ---
     const [previewOpen, setPreviewOpen] = useState(false);
@@ -897,6 +945,16 @@ export default function SmartMatchPage() {
                                     >
                                         <Pencil className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">{metadataOverrides[series.id] ? 'Edit Details' : 'Edit Metadata'}</span>
                                     </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={isSelectionMode || pageManagerLoading}
+                                        className="flex-1 md:flex-none font-bold border-primary/30 text-primary hover:bg-primary/10"
+                                        onClick={(e) => { e.stopPropagation(); openPageManager([series]); }}
+                                        title="Review and remove junk pages (scan credits) from this item's file(s)"
+                                    >
+                                        <Layers className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Pages</span>
+                                    </Button>
                                     <Button size="sm" variant="outline" disabled={isSelectionMode} className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={(e) => { e.stopPropagation(); handleDismiss(series.id); }} title="Hide from Matcher">
                                         <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Dismiss</span>
                                     </Button>
@@ -938,18 +996,51 @@ export default function SmartMatchPage() {
                         >
                             <Search className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Set Custom ID</span>
                         </Button>
-                        <Button 
-                            size="sm" 
-                            className="h-10 sm:h-8 shadow-sm font-bold transition-all bg-green-600 hover:bg-green-700 text-white" 
-                            disabled={selectedItems.size === 0 || isBulkProcessing || Array.from(selectedItems).every(id => !suggestions[id] || suggestions[id] === 'NOT_FOUND' || suggestions[id] === 'ERROR')} 
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-10 sm:h-8 shadow-sm font-bold transition-all border-primary/50 text-primary hover:bg-muted"
+                            disabled={selectedItems.size === 0 || isBulkProcessing || pageManagerLoading}
+                            onClick={() => openPageManager(unmatched.filter(s => selectedItems.has(s.id)))}
+                            title="Review and remove junk pages (scan credits) from the selected items' files"
+                        >
+                            {pageManagerLoading ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <Layers className="w-4 h-4 sm:mr-2" />}
+                            <span className="hidden sm:inline">Manage Pages</span>
+                        </Button>
+                        <Button
+                            size="sm"
+                            className="h-10 sm:h-8 shadow-sm font-bold transition-all bg-green-600 hover:bg-green-700 text-white"
+                            disabled={selectedItems.size === 0 || isBulkProcessing || Array.from(selectedItems).every(id => !suggestions[id] || suggestions[id] === 'NOT_FOUND' || suggestions[id] === 'ERROR')}
                             onClick={handleBulkAccept}
                         >
-                            {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <Check className="w-4 h-4 sm:mr-2" />} 
+                            {isBulkProcessing ? <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" /> : <Check className="w-4 h-4 sm:mr-2" />}
                             <span className="hidden sm:inline">Accept Selected</span>
                         </Button>
                     </div>
                 </div>
             )}
+
+            {/* PAGE MANAGER (issue #189): exploded page view for matcher items */}
+            <PageManagerModal
+                open={pageManagerOpen}
+                onOpenChange={setPageManagerOpen}
+                queue={pageManagerQueue}
+                onApplied={() => { /* page counts changed; the matcher list itself is unaffected */ }}
+            />
+            <ConfirmationDialog
+                isOpen={!!pendingPageQueue}
+                onClose={() => setPendingPageQueue(null)}
+                onConfirm={() => {
+                    if (pendingPageQueue) {
+                        setPageManagerQueue(pendingPageQueue);
+                        setPageManagerOpen(true);
+                    }
+                    setPendingPageQueue(null);
+                }}
+                title="Review pages for a large selection?"
+                description={`This opens a page review for ${pendingPageQueue?.length ?? 0} issues, one at a time. You can skip any issue and close at any point — deletions only happen per issue when you confirm them.`}
+                confirmText="Start Review"
+            />
 
             {/* MANUAL MATCH DIALOG */}
             <Dialog open={manualMatchOpen} onOpenChange={setManualMatchOpen}>

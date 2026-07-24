@@ -26,6 +26,7 @@ import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import MetadataEditorModal from "@/components/metadata-editor-modal"
+import PageManagerModal from "@/components/page-manager-modal"
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
 // hide the element rather than show the browser's broken-image glyph. (The issue grid had no onError, so
@@ -116,6 +117,8 @@ function SeriesContent() {
   const [seriesDownloadProgress, setSeriesDownloadProgress] = useState<number | null>(null);
 
   const [deleteIssueModalOpen, setDeleteIssueModalOpen] = useState(false);
+  // Page Manager (issue #189): exploded page view for the selected issue, admin-only.
+  const [pageManagerOpen, setPageManagerOpen] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<any>(null);
   const [deleteIssueFile, setDeleteIssueFile] = useState(true);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
@@ -1233,6 +1236,13 @@ function SeriesContent() {
                       </Button>
                   )}
 
+                  {isAdmin && activeIssue?.id && activeIssue?.fullPath && (
+                      <Button variant="outline" className="w-full border-border hover:bg-muted text-foreground font-bold" onClick={() => setPageManagerOpen(true)}>
+                          <Layers className="w-4 h-4 mr-2" /> Manage Pages
+                          {activeIssue?.parsedNum != null ? <span className="ml-1 opacity-70">#{activeIssue.parsedNum}</span> : null}
+                      </Button>
+                  )}
+
                   {isAdmin && (
                       <Button variant={seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? "outline" : "default"} className={`w-full font-bold ${seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? 'border-border hover:bg-muted text-foreground' : ''}`} onClick={() => { setSearchQuery(seriesInfo.name); setMatchModalOpen(true); }}>
                           <Search className="w-4 h-4 mr-2" /> {seriesInfo.metadataId && seriesInfo.matchState !== 'UNMATCHED' ? "Fix Match" : "Match Series"}
@@ -2199,6 +2209,20 @@ function SeriesContent() {
               }
           }}
       />
+
+      {/* PAGE MANAGER (issue #189): exploded page view of the selected issue */}
+      {activeIssue?.id && activeIssue?.fullPath && (
+          <PageManagerModal
+              open={pageManagerOpen}
+              onOpenChange={setPageManagerOpen}
+              queue={[{
+                  issueId: activeIssue.id,
+                  filePath: activeIssue.fullPath,
+                  label: `${seriesInfo.name} #${activeIssue.parsedNum != null ? activeIssue.parsedNum : (activeIssue.number || '?')}`,
+              }]}
+              onApplied={() => window.location.reload()}
+          />
+      )}
 
       {/* SPREADSHEET BULK EDITOR MODAL */}
       <Dialog open={bulkEditModalOpen} onOpenChange={setBulkEditModalOpen}>

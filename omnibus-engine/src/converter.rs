@@ -1024,6 +1024,137 @@ pub fn list_image_entries(path: &Path) -> Result<Vec<String>> {
     anyhow::bail!("unsupported archive format for page listing: {:?}", path.file_name().unwrap_or_default())
 }
 
+/// ComicInfo.xml adjustments for a page-removal rewrite (issue #189): the `<Pages>` block indexes
+/// pages by position and is stale the moment pages shift, so it is dropped wholesale; a numeric
+/// `<PageCount>` is rewritten to the new count. Plain string surgery on purpose — ComicInfo files
+/// are machine-written, and a quick-xml round-trip would reformat the rest of a foreign file.
+/// Anything unrecognized passes through untouched (the next metadata embed rewrites it fully).
+pub(crate) fn strip_comic_info_pages(xml: &str, new_page_count: usize) -> String {
+    let mut out = xml.to_string();
+
+    // Drop `<Pages ...>...</Pages>` or a self-closing `<Pages/>` (first occurrence).
+    if let Some(start) = out.find("<Pages") {
+        let close_tag = "</Pages>";
+        if let Some(close_rel) = out[start..].find(close_tag) {
+            out.replace_range(start..start + close_rel + close_tag.len(), "");
+        } else if let Some(self_close_rel) = out[start..].find("/>") {
+            out.replace_range(start..start + self_close_rel + 2, "");
+        }
+    }
+
+    // Rewrite `<PageCount>N</PageCount>` in place when present (never inserted when absent).
+    if let (Some(open), Some(close)) = (out.find("<PageCount>"), out.find("</PageCount>")) {
+        let val_start = open + "<PageCount>".len();
+        if close >= val_start && out[val_start..close].trim().chars().all(|c| c.is_ascii_digit()) {
+            out.replace_range(val_start..close, &new_page_count.to_string());
+        }
+    }
+
+    out
+}
+
+/// Rewrites a CBZ in place without the named page entries (issue #189, Phase 1: zip-only — RAR/7z
+/// cannot be written back and go through conversion instead). Safety posture for a destructive op
+/// on a user's library file:
+/// * removals are keyed by exact ENTRY NAME (the reader's page list), never by index — a stale
+///   list from a since-changed archive aborts instead of deleting the wrong page;
+/// * at least one image page must remain (removing every page = deleting the comic — refused);
+/// * the new zip is written to a temp file IN THE SAME DIRECTORY, re-opened and its page count
+///   verified, and only then atomically renamed over the original — the archive on disk is always
+///   either the old file or the fully-verified new one;
+/// * untouched entries are raw-copied (no recompression); ComicInfo.xml gets its stale `<Pages>`
+///   block dropped and `<PageCount>` corrected.
+///
+/// Returns the new image-page count.
+pub fn remove_pages_from_cbz(path: &Path, entry_names: &[String]) -> Result<usize> {
+    if entry_names.is_empty() {
+        anyhow::bail!("No pages given to remove.");
+    }
+    let sig = read_file_signature(path);
+    if !is_zip_signature(&sig) {
+        anyhow::bail!("Only CBZ archives can be rewritten in place. Convert this file to CBZ first.");
+    }
+
+    let file = File::open(path).with_context(|| format!("Failed to open archive: {:?}", path))?;
+    let mut archive = zip::ZipArchive::new(file).context("Failed to read archive")?;
+
+    // Verify every requested name against the archive's CURRENT page list — a mismatch means the
+    // caller marked pages against an outdated listing (file changed since), which must abort.
+    let images = sorted_image_entries(&mut archive);
+    let image_set: std::collections::HashSet<&str> = images.iter().map(|s| s.as_str()).collect();
+    let missing: Vec<&String> = entry_names.iter().filter(|n| !image_set.contains(n.as_str())).collect();
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "{} of the selected pages no longer exist in this archive (it changed since the pages were listed). Re-open the page view and try again.",
+            missing.len()
+        );
+    }
+    let remove_set: std::collections::HashSet<&str> = entry_names.iter().map(|s| s.as_str()).collect();
+    let expected_remaining = images.len() - remove_set.len();
+    if expected_remaining < 1 {
+        anyhow::bail!("Refusing to remove every page — at least one page must remain. Delete the issue instead if that's the intent.");
+    }
+
+    // Write the surviving entries to a sibling temp file (same directory ⇒ same filesystem ⇒ the
+    // final rename is atomic). Cleaned up on every failure path below.
+    let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp_path = path.with_file_name(format!(".{}.pages_tmp_{}", file_name, uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let tmp_file = File::create(&tmp_path).context("Failed to create temp archive")?;
+        let mut writer = ZipWriter::new(tmp_file);
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        for i in 0..archive.len() {
+            let name = archive.by_index_raw(i).map(|f| f.name().to_string())?;
+            if remove_set.contains(name.as_str()) {
+                continue;
+            }
+            let base = name.rsplit('/').next().unwrap_or(&name).to_ascii_lowercase();
+            if base == "comicinfo.xml" {
+                // Decompress + adjust + re-store: the page table inside must not survive the shift.
+                let mut entry = archive.by_index(i)?;
+                let mut xml = String::new();
+                use std::io::Read;
+                entry.read_to_string(&mut xml).context("Failed to read ComicInfo.xml")?;
+                drop(entry);
+                let adjusted = strip_comic_info_pages(&xml, expected_remaining);
+                writer.start_file(name, options)?;
+                use std::io::Write;
+                writer.write_all(adjusted.as_bytes())?;
+            } else {
+                let entry = archive.by_index_raw(i)?;
+                writer.raw_copy_file(entry)?;
+            }
+        }
+        writer.finish()?;
+
+        // Trust nothing until the rewritten archive proves itself: it must open and hold exactly
+        // the expected number of image pages.
+        let check_file = File::open(&tmp_path).context("Failed to re-open rewritten archive")?;
+        let mut check = zip::ZipArchive::new(check_file).context("Rewritten archive is unreadable")?;
+        let new_count = sorted_image_entries(&mut check).len();
+        if new_count != expected_remaining {
+            anyhow::bail!(
+                "Rewritten archive verification failed (expected {} pages, found {}) — original left untouched.",
+                expected_remaining, new_count
+            );
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        anyhow::anyhow!("Failed to swap the rewritten archive into place: {}", e)
+    })?;
+
+    Ok(expected_remaining)
+}
+
 /// Ensures `<folder>` has a usable cover. If one already exists (custom upload, a packed cover, or a
 /// prior extraction) its path is returned untouched; otherwise the first page of `archive_path` is
 /// written to `<folder>/cover.<ext>`. Best-effort — returns None on any failure. Only writes formats
@@ -1281,6 +1412,115 @@ fn collect_comic_files(dir: &Path, out: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    // ==== Issue #189: page removal (rewrite-minus-entries) ====
+
+    /// Writes a real CBZ on disk: pages 1..4 (dummy bytes — the remover keys on names), a
+    /// ComicInfo.xml with a stale <Pages> table + PageCount, and a non-page passenger entry.
+    fn make_pages_cbz(dir: &Path) -> PathBuf {
+        use std::io::Write;
+        let path = dir.join("pages_fixture.cbz");
+        let f = File::create(&path).unwrap();
+        let mut zw = ZipWriter::new(f);
+        let opts: FileOptions = FileOptions::default();
+        zw.start_file("ComicInfo.xml", opts).unwrap();
+        zw.write_all(b"<?xml version=\"1.0\"?><ComicInfo><Series>Test</Series><PageCount>4</PageCount><Pages><Page Image=\"0\" Type=\"FrontCover\" /><Page Image=\"1\" /></Pages><Notes>keep me</Notes></ComicInfo>").unwrap();
+        zw.start_file("notes.txt", opts).unwrap();
+        zw.write_all(b"passenger entry").unwrap();
+        for n in 1..=4 {
+            zw.start_file(format!("page{}.jpg", n), opts).unwrap();
+            zw.write_all(format!("fake image bytes {}", n).as_bytes()).unwrap();
+        }
+        zw.finish().unwrap();
+        path
+    }
+
+    fn scratch_dir() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("omnibus_pages_test_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn strip_comic_info_pages_drops_pages_table_and_fixes_count() {
+        let xml = "<ComicInfo><PageCount>4</PageCount><Pages><Page Image=\"0\" /></Pages><Notes>x</Notes></ComicInfo>";
+        let out = strip_comic_info_pages(xml, 2);
+        assert!(!out.contains("<Pages"), "Pages table must be dropped: {}", out);
+        assert!(out.contains("<PageCount>2</PageCount>"), "PageCount must be rewritten: {}", out);
+        assert!(out.contains("<Notes>x</Notes>"), "unrelated content preserved: {}", out);
+
+        // Self-closing Pages, and no PageCount tag at all — nothing invented.
+        let out2 = strip_comic_info_pages("<ComicInfo><Pages/><Series>S</Series></ComicInfo>", 3);
+        assert!(!out2.contains("<Pages"));
+        assert!(!out2.contains("PageCount"));
+
+        // A non-numeric PageCount is left alone rather than corrupted.
+        let out3 = strip_comic_info_pages("<ComicInfo><PageCount>abc</PageCount></ComicInfo>", 3);
+        assert!(out3.contains("<PageCount>abc</PageCount>"));
+    }
+
+    #[test]
+    fn remove_pages_rewrites_cbz_and_adjusts_comicinfo() {
+        use std::io::Read;
+        let dir = scratch_dir();
+        let cbz = make_pages_cbz(&dir);
+
+        let removed = remove_pages_from_cbz(&cbz, &["page1.jpg".to_string(), "page3.jpg".to_string()]).unwrap();
+        assert_eq!(removed, 2, "returns the new page count");
+
+        let mut archive = zip::ZipArchive::new(File::open(&cbz).unwrap()).unwrap();
+        let names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+        assert!(names.contains(&"page2.jpg".to_string()) && names.contains(&"page4.jpg".to_string()));
+        assert!(!names.contains(&"page1.jpg".to_string()) && !names.contains(&"page3.jpg".to_string()));
+        assert!(names.contains(&"notes.txt".to_string()), "non-page passengers survive");
+
+        let mut xml = String::new();
+        archive.by_name("ComicInfo.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(!xml.contains("<Pages"), "stale page table dropped: {}", xml);
+        assert!(xml.contains("<PageCount>2</PageCount>"), "PageCount corrected: {}", xml);
+        assert!(xml.contains("<Notes>keep me</Notes>"));
+
+        // No temp litter left behind.
+        let litter: Vec<_> = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("pages_tmp")).collect();
+        assert!(litter.is_empty(), "temp file must not remain");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_pages_aborts_on_stale_entry_names_leaving_original_untouched() {
+        let dir = scratch_dir();
+        let cbz = make_pages_cbz(&dir);
+        let before = fs::read(&cbz).unwrap();
+
+        let err = remove_pages_from_cbz(&cbz, &["page1.jpg".to_string(), "ghost.jpg".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("no longer exist"), "stale-list abort: {}", err);
+        assert_eq!(fs::read(&cbz).unwrap(), before, "original archive byte-identical after abort");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_pages_refuses_removing_every_page() {
+        let dir = scratch_dir();
+        let cbz = make_pages_cbz(&dir);
+        let all: Vec<String> = (1..=4).map(|n| format!("page{}.jpg", n)).collect();
+        let err = remove_pages_from_cbz(&cbz, &all).unwrap_err();
+        assert!(err.to_string().contains("at least one page"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_pages_rejects_non_zip_archives() {
+        use std::io::Write;
+        let dir = scratch_dir();
+        let fake_rar = dir.join("not_a_zip.cbr");
+        let mut f = File::create(&fake_rar).unwrap();
+        f.write_all(b"Rar!\x1a\x07\x00 definitely not a zip").unwrap();
+        drop(f);
+        let err = remove_pages_from_cbz(&fake_rar, &["page1.jpg".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("CBZ"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn first_image_in_listing_picks_first_natural_page_and_skips_junk() {

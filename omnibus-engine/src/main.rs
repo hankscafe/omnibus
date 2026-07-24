@@ -403,6 +403,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/library/rename", post(handle_bulk_rename))
         .route("/api/reader/page", post(handle_reader_page))
         .route("/api/reader/entries", post(handle_reader_entries))
+        .route("/api/archive/remove-pages", post(handle_remove_pages))
         .route("/api/watched-sync", post(handle_watched_sync))
         .route("/api/matcher/sweep", post(handle_matcher_sweep))
         .route("/api/backup", post(handle_backup))
@@ -643,6 +644,49 @@ async fn handle_reader_entries(
         .map_err(|e| { log::error!("[Reader Entries] join error: {:?}", e); StatusCode::INTERNAL_SERVER_ERROR })?
         .map_err(|e| { log::warn!("[Reader Entries] listing failed for {}: {:?}", req.path, e); StatusCode::INTERNAL_SERVER_ERROR })?;
     Ok(Json(serde_json::json!({ "pages": pages })))
+}
+
+#[derive(serde::Deserialize)]
+struct RemovePagesRequest {
+    file_path: String,
+    entry_names: Vec<String>,
+}
+
+/// Page removal (issue #189): rewrites a CBZ without the named page entries. Destructive — the
+/// heavy lifting (name verification, at-least-one-page floor, temp-write + verify + atomic swap)
+/// lives in converter::remove_pages_from_cbz; failures leave the original file untouched. The
+/// Node route resolves issueId → path and owns the DB fixups; this endpoint trusts the internal
+/// caller like every other path-taking route behind require_internal_auth.
+async fn handle_remove_pages(
+    Json(req): Json<RemovePagesRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let err = |code: StatusCode, msg: String| (code, Json(serde_json::json!({ "error": msg })));
+    if !is_absolute_non_traversing(&req.file_path) {
+        log::warn!("[Remove Pages] Rejected non-absolute or traversing path: {}", req.file_path);
+        return Err(err(StatusCode::FORBIDDEN, "Invalid path.".to_string()));
+    }
+    let path = req.file_path.clone();
+    let names = req.entry_names.clone();
+    let removed_count = names.len();
+    let new_count = tokio::task::spawn_blocking(move || {
+        converter::remove_pages_from_cbz(std::path::Path::new(&path), &names)
+    })
+    .await
+    .map_err(|e| {
+        log::error!("[Remove Pages] join error: {:?}", e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error.".to_string())
+    })?
+    .map_err(|e| {
+        log::warn!("[Remove Pages] rewrite refused/failed for {}: {}", req.file_path, e);
+        // The converter's messages are operator-actionable (stale list, last page, non-zip) —
+        // surface them verbatim as a client error so the UI can show the real reason.
+        err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string())
+    })?;
+    log::info!(
+        "[Remove Pages] Removed {} page(s) from {} — {} page(s) remain (issue #189).",
+        removed_count, req.file_path, new_count
+    );
+    Ok(Json(serde_json::json!({ "new_page_count": new_count, "removed": removed_count })))
 }
 
 #[derive(serde::Deserialize)]

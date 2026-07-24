@@ -17,7 +17,21 @@ function isEncrypted(text: string): boolean {
     return text.startsWith(PREFIX_V2) || text.startsWith(PREFIX_V1);
 }
 
+// Derived-key cache. The key material (DATABASE_ENCRYPTION_KEY row, else NEXTAUTH_SECRET) is
+// static for the process lifetime, but this lookup used to hit the DB on EVERY encrypt/decrypt —
+// including from inside interactive transactions, where SQLite's single-connection pool made the
+// global-client query queue behind the open transaction: a guaranteed self-deadlock (issue #195).
+// Caching also drops a DB round-trip from every decrypted credential read. Process-lifetime
+// freezing is deliberate: a mid-run key flip would make earlier writes undecryptable, so a stable
+// key for the process is the SAFE behavior.
+let cachedKey: Buffer | null = null;
+
+/** Test hook — the cache must not leak between vitest cases. */
+export function __resetEncryptionKeyCacheForTests() { cachedKey = null; }
+
 async function getEncryptionKey() {
+    if (cachedKey) return cachedKey;
+
     // Fetch the persistent key generated during database initialization
     const dbKey = await prisma.systemSetting.findUnique({
         where: { key: 'DATABASE_ENCRYPTION_KEY' }
@@ -37,7 +51,8 @@ async function getEncryptionKey() {
     }
 
     // Derive a 32-byte key from the secret
-    return crypto.createHash('sha256').update(String(secret)).digest();
+    cachedKey = crypto.createHash('sha256').update(String(secret)).digest();
+    return cachedKey;
 }
 
 export async function encryptSecret(text: string | null): Promise<string | null> {

@@ -204,23 +204,36 @@ export async function POST(request: Request) {
         } catch { /* malformed search_source_priority — leave it untouched */ }
     }
 
-    await prisma.$transaction(async (tx) => {
-        
-        if (settings) {
-            for (const [key, value] of Object.entries(settings)) {
-                if (value === '********') continue;
-
-                let stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value ?? "");
-                // Encrypt credential settings at rest; reads are auto-decrypted (db.ts extension + engine).
-                if (SECRET_SETTING_KEYS.has(key) && stringValue) {
-                    stringValue = (await encryptSecret(stringValue)) ?? stringValue;
-                }
-                await tx.systemSetting.upsert({
-                    where: { key },
-                    update: { value: stringValue },
-                    create: { key, value: stringValue }
-                });
+    // Pre-encrypt the flat settings bag OUTSIDE the transaction (issue #195). encryptSecret →
+    // getEncryptionKey used to query the DB through the GLOBAL client mid-transaction; with
+    // SQLite's connection_limit=1 pool that query queued behind the open transaction's own
+    // connection — a guaranteed self-deadlock that expired the transaction at exactly 5s the
+    // first time a freshly typed API credential was saved (masked '********' re-saves skip
+    // encryption, which is why long-configured installs never hit it — but the SETUP WIZARD
+    // finishes through this route, so every new SQLite install did). Same rule as encryptRows
+    // above: no awaited non-transaction work inside an interactive transaction, ever.
+    // NOTE: runs AFTER the Anna's Archive gate, which may rewrite settings.search_source_priority.
+    const preparedSettings: Array<[string, string]> = [];
+    if (settings) {
+        for (const [key, value] of Object.entries(settings)) {
+            if (value === '********') continue;
+            let stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value ?? "");
+            // Encrypt credential settings at rest; reads are auto-decrypted (db.ts extension + engine).
+            if (SECRET_SETTING_KEYS.has(key) && stringValue) {
+                stringValue = (await encryptSecret(stringValue)) ?? stringValue;
             }
+            preparedSettings.push([key, stringValue]);
+        }
+    }
+
+    await prisma.$transaction(async (tx) => {
+
+        for (const [key, stringValue] of preparedSettings) {
+            await tx.systemSetting.upsert({
+                where: { key },
+                update: { value: stringValue },
+                create: { key, value: stringValue }
+            });
         }
 
         const syncTable = async (model: any, data: any[], pk: string = 'id') => {
@@ -324,7 +337,9 @@ export async function POST(request: Request) {
             });
             await syncTable(tx.discordWebhook, parsedHooks);
         }
-    });
+    // Headroom over Prisma's 5s default: a full save is dozens of sequential writes, and on slow
+    // storage (SQLite on an Unraid FUSE share, NAS mounts) each fsync is expensive (issue #195).
+    }, { timeout: 30000, maxWait: 10000 });
 
     const isFinishingSetup = !isSetupComplete && settings?.setup_complete === 'true';
 

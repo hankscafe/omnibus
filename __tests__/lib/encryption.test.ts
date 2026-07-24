@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'crypto';
-import { encryptSecret, decryptSecret, encrypt2FA, decrypt2FA } from '@/lib/encryption';
+import { encryptSecret, decryptSecret, encrypt2FA, decrypt2FA, __resetEncryptionKeyCacheForTests } from '@/lib/encryption';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
@@ -38,8 +38,20 @@ function makeLegacyV1(plaintext: string): string {
 describe('Security: Credential Encryption Engine (AES-256-GCM)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        __resetEncryptionKeyCacheForTests();
         mocks.findUnique.mockResolvedValue({ value: TEST_SECRET });
         process.env.NEXTAUTH_SECRET = 'super_secure_test_secret_key_1234567890';
+    });
+
+    it('resolves the derived key ONCE per process, never per call (#195 deadlock guard)', async () => {
+        // getEncryptionKey used to query the DB on every encrypt/decrypt — from inside an
+        // interactive transaction that query queued behind the transaction's own connection on
+        // the single-connection SQLite pool and deadlocked the settings save. The key material
+        // is static per boot, so it must be fetched exactly once.
+        await encryptSecret('first');
+        await encryptSecret('second');
+        await decryptSecret(await encryptSecret('third'));
+        expect(mocks.findUnique).toHaveBeenCalledTimes(1);
     });
 
     it('encrypts to the authenticated v2 format and round-trips back to the plaintext', async () => {

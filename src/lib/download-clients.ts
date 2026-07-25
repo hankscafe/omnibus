@@ -113,8 +113,11 @@ export const DownloadService = {
     try {
       let fileBuffer: Buffer | null = null;
       
-      // --- THE FIX: Let Omnibus fetch the file into memory for ALL clients except magnets.
-      // This protects NZBGet and Deluge from Cloudflare blocks by utilizing Omnibus's FlareSolverr config!
+      // --- THE FIX: Let Omnibus fetch the file into memory for ALL clients except magnets, so the
+      // download client receives the .nzb/.torrent bytes instead of a URL it may not be able to reach.
+      // NOTE: this is a plain fetch — it does NOT route through FlareSolverr (only the engine's
+      // GetComics/Anna's fetch+stream paths do). A Cloudflare-fronted indexer link falls through to
+      // the raw-URL hand-off below.
       if (!downloadUrl.startsWith('magnet:')) {
         try {
             // SSRF guard: indexer/scraped URLs are untrusted — never let Omnibus fetch an internal host, and

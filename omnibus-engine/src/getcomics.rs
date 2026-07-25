@@ -89,7 +89,7 @@ async fn mark_cloudflare_flag(db: &sqlx::AnyPool) {
 
 /// Records a GetComics 429 timestamp (same shape as cloudflare_block_time / metron_rate_limit_time)
 /// so the app can surface "GetComics is rate limiting us" instead of silent empty searches.
-async fn mark_getcomics_rate_limit_flag(db: &sqlx::AnyPool) {
+pub(crate) async fn mark_getcomics_rate_limit_flag(db: &sqlx::AnyPool) {
     mark_time_flag(db, "getcomics_rate_limit_time").await;
 }
 
@@ -199,26 +199,25 @@ async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr
         mark_getcomics_rate_limit_flag(db).await;
         anyhow::bail!("GetComics rate limited (429) for {} after backoff retries", url);
     }
-    if res.status() == 403 {
+    // 403 is Cloudflare's modern challenge status; 503 is the legacy "Just a moment…" interstitial.
+    // The Anna's Archive copy of this fetcher always handled both — the GetComics path only caught
+    // 403, so a 503 interstitial on a SEARCH page sailed past the solver entirely (2026-07 worklist
+    // item 2). Both now route through the shared session-wrapped solver call.
+    if res.status() == 403 || res.status() == 503 {
         if let Some(flare_url) = flaresolverr.filter(|f| !f.is_empty()) {
             let sc = solver_config(db).await;
-            log::warn!("[GetComics] 403 detected for {}; attempting {} bypass...", url, sc.kind);
-            let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-            let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
-            log::debug!("[GetComics Debug] {} payload: {}", sc.kind, payload);
-            match client.post(&target).json(&payload).timeout(std::time::Duration::from_millis(sc.http_timeout_ms)).send().await {
-                Ok(flare_res) => {
-                    if let Ok(data) = flare_res.json::<serde_json::Value>().await {
-                        if let Some(html) = data["solution"]["response"].as_str() {
-                            log::info!("[GetComics] FlareSolverr bypass successful for {}", url);
-                            log::debug!("[GetComics Debug] FlareSolverr response length: {}", html.len());
-                            return Ok(html.to_string());
-                        }
+            log::warn!("[GetComics] {} detected for {}; attempting {} bypass...", res.status(), url, sc.kind);
+            match solver_request_get(client, flare_url, url, &sc).await {
+                Ok(data) => {
+                    if let Some(html) = data["solution"]["response"].as_str() {
+                        log::info!("[GetComics] {} bypass successful for {}", sc.kind, url);
+                        log::debug!("[GetComics Debug] solver response length: {}", html.len());
+                        return Ok(html.to_string());
                     }
                     mark_cloudflare_flag(db).await;
                 }
                 Err(e) => {
-                    log::warn!("[GetComics] FlareSolverr request failed: {}", e);
+                    log::warn!("[GetComics] {} request failed: {}", sc.kind, e);
                     mark_cloudflare_flag(db).await;
                 }
             }
@@ -230,34 +229,83 @@ async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr
     Ok(res.text().await?)
 }
 
-/// Extracts the cookie header (cf_clearance et al.) + browser User-Agent from a FlareSolverr
-/// `solution` payload. Returns None if no cookies were present. Pure (no I/O) so it can be unit-tested.
-fn parse_flaresolverr_clearance(data: &serde_json::Value) -> Option<(String, String)> {
+/// A solved Cloudflare challenge: the cookie header + UA to replay, plus — when the solver reports
+/// it — the URL its browser actually LANDED on after clearing the challenge and following redirects,
+/// and the status it saw there. Kapowarr-parity (2026-07 review): for one-shot signed /dls/ links the
+/// landed URL, not the original hop, is the fetchable one, because the solve itself may have consumed
+/// the original signed link in the solver's own browser.
+#[derive(Debug, Clone)]
+pub struct SolverClearance {
+    pub cookie: String,
+    pub user_agent: String,
+    pub solved_url: Option<String>,
+    pub solved_status: Option<u16>,
+}
+
+/// Extracts the cookie header (cf_clearance et al.), browser User-Agent, and the solver's landed
+/// URL/status from a FlareSolverr `solution` payload. Returns None if no cookies were present.
+/// Pure (no I/O) so it can be unit-tested.
+fn parse_flaresolverr_clearance(data: &serde_json::Value) -> Option<SolverClearance> {
     let solution = data.get("solution")?;
-    let ua = solution.get("userAgent").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let cookies = solution.get("cookies")?.as_array()?
+    let user_agent = solution.get("userAgent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cookie = solution.get("cookies")?.as_array()?
         .iter()
         .filter_map(|c| Some(format!("{}={}", c.get("name")?.as_str()?, c.get("value")?.as_str()?)))
         .collect::<Vec<_>>()
         .join("; ");
-    if cookies.is_empty() { return None; }
-    Some((cookies, ua))
+    if cookie.is_empty() { return None; }
+    let solved_url = solution.get("url").and_then(|v| v.as_str()).map(str::trim)
+        .filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let solved_status = solution.get("status").and_then(|v| v.as_u64()).map(|s| s as u16);
+    Some(SolverClearance { cookie, user_agent, solved_url, solved_status })
+}
+
+/// POSTs one command to a solver /v1 endpoint and parses the JSON body.
+async fn solver_post(client: &Client, target: &str, payload: &serde_json::Value, timeout_ms: u64) -> anyhow::Result<serde_json::Value> {
+    let res = client.post(target)
+        .json(payload)
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .send().await?;
+    Ok(res.json().await?)
+}
+
+/// Runs a solver `request.get` for `url`, returning the raw JSON response. For FlareSolverr the
+/// solve is wrapped in an explicit sessions.create/destroy pair: a created session reuses a warm
+/// browser, which Kapowarr's author measured as "orders of magnitude faster" than the temporary
+/// browser a sessionless request spins up — and a cold browser is exactly what times out on
+/// GetComics' Turnstile (the "status=ok, cookies=0" failures in our logs). Byparr keeps the
+/// sessionless shape (no session API). Session create failure degrades to sessionless; the destroy
+/// is best-effort and runs even when the solve fails so FlareSolverr doesn't leak browsers.
+pub(crate) async fn solver_request_get(client: &Client, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<serde_json::Value> {
+    let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
+    if sc.kind != "flaresolverr" {
+        let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
+        return solver_post(client, &target, &payload, sc.http_timeout_ms).await;
+    }
+    let session_id = match solver_post(client, &target, &serde_json::json!({ "cmd": "sessions.create" }), 20_000).await {
+        Ok(d) => d.get("session").and_then(|s| s.as_str()).map(|s| s.to_string()),
+        Err(e) => { log::debug!("[Solver] sessions.create failed, degrading to sessionless solve: {e}"); None }
+    };
+    let mut payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
+    if let Some(sid) = &session_id {
+        payload["session"] = serde_json::Value::String(sid.clone());
+    }
+    let result = solver_post(client, &target, &payload, sc.http_timeout_ms).await;
+    if let Some(sid) = &session_id {
+        if let Err(e) = solver_post(client, &target, &serde_json::json!({ "cmd": "sessions.destroy", "session": sid }), 20_000).await {
+            log::debug!("[Solver] sessions.destroy failed (ignored): {e}");
+        }
+    }
+    result
 }
 
 /// Solves a Cloudflare challenge for `url` via the configured solver (FlareSolverr or Byparr — they
-/// share the `/v1` request shape; `sc` carries the per-solver `maxTimeout` unit) and returns
-/// (cookie_header, user_agent) to replay on a direct request. cf_clearance is IP+UA-bound, so the
-/// caller MUST send the returned User-Agent and run with the same outbound IP as the solver. Used to
-/// download Cloudflare-gated GetComics "main server" links (getcomics.org/dls/…) a raw fetch can't get past.
-pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<(String, String)> {
-    let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-    let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
-    // Wait a bit longer than the solver's own solve budget so the engine doesn't cut it off early.
-    let res = client.post(&target)
-        .json(&payload)
-        .timeout(std::time::Duration::from_millis(sc.http_timeout_ms))
-        .send().await?;
-    let data: serde_json::Value = res.json().await?;
+/// share the `/v1` request shape; `sc` carries the per-solver `maxTimeout` unit) and returns the
+/// clearance to replay on a direct request — plus the solver's landed URL, which callers should
+/// prefer for one-shot signed links. cf_clearance is IP+UA-bound, so the caller MUST send the
+/// returned User-Agent and run with the same outbound IP as the solver.
+pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<SolverClearance> {
+    let data = solver_request_get(client, flare_url, url, sc).await?;
     match parse_flaresolverr_clearance(&data) {
         Some(c) => Ok(c),
         None => {
@@ -1134,12 +1182,37 @@ mod tests {
                 ]
             }
         });
-        let (cookie, ua) = parse_flaresolverr_clearance(&data).unwrap();
-        assert_eq!(cookie, "cf_clearance=abc123; __cf_bm=xyz789");
-        assert_eq!(ua, "Mozilla/5.0 (X11; Linux x86_64) Chrome/120");
+        let c = parse_flaresolverr_clearance(&data).unwrap();
+        assert_eq!(c.cookie, "cf_clearance=abc123; __cf_bm=xyz789");
+        assert_eq!(c.user_agent, "Mozilla/5.0 (X11; Linux x86_64) Chrome/120");
+        // No solution.url in the payload -> None, caller keeps the original request URL.
+        assert!(c.solved_url.is_none());
         // No cookies (or no solution) -> None, so the caller falls back to a direct fetch.
         assert!(parse_flaresolverr_clearance(&serde_json::json!({ "solution": { "cookies": [] } })).is_none());
         assert!(parse_flaresolverr_clearance(&serde_json::json!({ "status": "error" })).is_none());
+    }
+
+    // Kapowarr-parity (worklist item 2): the solver's LANDED URL — where its browser ended up after
+    // clearing the challenge and following redirects — is the URL the byte pump should fetch, because
+    // the original /dls/ hop may have been consumed by the solve itself.
+    #[test]
+    fn parses_flaresolverr_clearance_solved_url_and_status() {
+        let data = serde_json::json!({
+            "solution": {
+                "url": "https://cdn.example.net/file/signed-abc.cbz",
+                "status": 200,
+                "userAgent": "Mozilla/5.0 Chrome/120",
+                "cookies": [ { "name": "cf_clearance", "value": "abc" } ]
+            }
+        });
+        let c = parse_flaresolverr_clearance(&data).unwrap();
+        assert_eq!(c.solved_url.as_deref(), Some("https://cdn.example.net/file/signed-abc.cbz"));
+        assert_eq!(c.solved_status, Some(200));
+        // An empty url string is treated as absent, not as a navigable target.
+        let empty = serde_json::json!({
+            "solution": { "url": "", "userAgent": "ua", "cookies": [ { "name": "a", "value": "b" } ] }
+        });
+        assert!(parse_flaresolverr_clearance(&empty).unwrap().solved_url.is_none());
     }
 
     // Pure URL→hoster classifier gating the entire DDL routing.

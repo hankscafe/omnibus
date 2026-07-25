@@ -43,7 +43,10 @@ pub(crate) fn browser_http_client() -> reqwest::Client {
     static C: OnceLock<reqwest::Client> = OnceLock::new();
     C.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            // Complete browser UA — the old value stopped mid-token at AppleWebKit/537.36 (no
+            // Chrome/ or Safari/ suffix), a bot-fingerprint signature that invited challenges.
+            // Keep in sync with download.rs DEFAULT_UA.
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
             .build()
             .expect("build browser reqwest client")
     })

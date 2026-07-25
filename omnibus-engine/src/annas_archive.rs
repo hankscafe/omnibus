@@ -139,15 +139,13 @@ async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr
         if let Some(flare_url) = flaresolverr.filter(|f| !f.is_empty()) {
             let sc = crate::getcomics::solver_config(db).await;
             log::warn!("[Anna's Archive] HTTP {} for {}; attempting {} bypass...", status.as_u16(), url, sc.kind);
-            let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-            let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
-            match client.post(&target).json(&payload).timeout(std::time::Duration::from_millis(sc.http_timeout_ms)).send().await {
-                Ok(flare_res) => {
-                    if let Ok(data) = flare_res.json::<serde_json::Value>().await {
-                        if let Some(html) = data["solution"]["response"].as_str() {
-                            log::info!("[Anna's Archive] {} bypass successful for {}", sc.kind, url);
-                            return Ok(html.to_string());
-                        }
+            // Shared session-wrapped solver call (same policy as the GetComics fetcher — the two
+            // copies had drifted on 403-vs-503 before; keeping one code path prevents a repeat).
+            match crate::getcomics::solver_request_get(client, flare_url, url, &sc).await {
+                Ok(data) => {
+                    if let Some(html) = data["solution"]["response"].as_str() {
+                        log::info!("[Anna's Archive] {} bypass successful for {}", sc.kind, url);
+                        return Ok(html.to_string());
                     }
                     log::warn!("[Anna's Archive] {} returned no usable HTML for {}", sc.kind, url);
                 }

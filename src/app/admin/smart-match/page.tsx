@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw, Layers } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, CheckCheck, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw, Layers } from "lucide-react"
 import PageManagerModal, { PageManagerTarget } from "@/components/page-manager-modal"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
@@ -104,6 +104,8 @@ export default function SmartMatchPage() {
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
     const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+    // Accept All progress: null = idle, otherwise {done, total} across the chunked bulk calls.
+    const [acceptAllProgress, setAcceptAllProgress] = useState<{ done: number; total: number } | null>(null);
     const [isBulkManualMatch, setIsBulkManualMatch] = useState(false);
     // Guard: warn before a bulk Custom-ID applies the same series to multiple FOLDERS (which merges them).
     const [mergeWarnOpen, setMergeWarnOpen] = useState(false);
@@ -395,38 +397,43 @@ export default function SmartMatchPage() {
         toast({ title: "Scan Complete", description: `Found suggestions for ${matchCount} series.` });
     };
 
+    // The exact single-accept payload, shared by the per-row accept, Accept Selected, and Accept
+    // All — so every path carries the same admin overrides and issue-exact fields.
+    const buildMatchPayload = (series: any, suggestion: any) => {
+        const issueOv = issueOverrides[series.id] || {};
+        const meta = metadataOverrides[series.id];
+        return {
+            oldFolderPath: series.folderPath,
+            cvId: suggestion.id,
+            metadataId: suggestion.id,
+            metadataSource: suggestion.metadataSource || 'COMICVINE',
+            // Admin metadata overrides (Edit Metadata) win over the suggestion's values.
+            name: meta?.name || suggestion.name,
+            year: meta?.year || suggestion.year,
+            publisher: meta?.publisher || suggestion.publisher,
+            ...(meta ? {
+                universe: meta.universe || undefined,
+                seriesGroup: meta.seriesGroup || undefined,
+                description: meta.description || undefined,
+                coverImageBase64: meta.coverImageBase64 || undefined,
+                writeToFile: meta.writeToFile,
+                lockMetadata: true,
+            } : {}),
+            exactIssueId: issueOv.issueId || undefined,
+            exactIssueNumber: issueOv.issueNumber || undefined,
+            issueCoverImageBase64: issueOv.coverImageBase64 || undefined
+        };
+    };
+
     const handleAcceptMatch = async (series: any, suggestion: any) => {
         setProcessingId(series.id);
         try {
             Logger.log(`[Smart Match Debug] Accepting match for "${series.name}". Linking to ${suggestion.metadataSource || 'COMICVINE'} ID: ${suggestion.id}`, 'debug');
-            
-            const issueOv = issueOverrides[series.id] || {};
-            const meta = metadataOverrides[series.id];
 
             const res = await fetch('/api/library/match-series', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    oldFolderPath: series.folderPath,
-                    cvId: suggestion.id,
-                    metadataId: suggestion.id,
-                    metadataSource: suggestion.metadataSource || 'COMICVINE',
-                    // Admin metadata overrides (Edit Metadata) win over the suggestion's values.
-                    name: meta?.name || suggestion.name,
-                    year: meta?.year || suggestion.year,
-                    publisher: meta?.publisher || suggestion.publisher,
-                    ...(meta ? {
-                        universe: meta.universe || undefined,
-                        seriesGroup: meta.seriesGroup || undefined,
-                        description: meta.description || undefined,
-                        coverImageBase64: meta.coverImageBase64 || undefined,
-                        writeToFile: meta.writeToFile,
-                        lockMetadata: true,
-                    } : {}),
-                    exactIssueId: issueOv.issueId || undefined,
-                    exactIssueNumber: issueOv.issueNumber || undefined,
-                    issueCoverImageBase64: issueOv.coverImageBase64 || undefined
-                })
+                body: JSON.stringify(buildMatchPayload(series, suggestion))
             });
 
             if (res.ok) {
@@ -472,13 +479,73 @@ export default function SmartMatchPage() {
         }
 
         setIsBulkProcessing(false);
-        
+
         if (failedItems.length > 0) {
             toast({ title: "Bulk Match Completed with Errors", description: `Matched ${successCount}. Failed: ${failedItems.length}`, variant: "destructive" });
         } else if (successCount > 0) {
             toast({ title: "Bulk Match Complete", description: `Successfully matched ${successCount} items.` });
             setSelectedItems(new Set());
             setIsSelectionMode(false);
+        }
+    };
+
+    // Accept All (2026-07-25 worklist item 4): one click accepts every suggestion the auto-scan
+    // produced. Server-side bulk accepts in chunks of 5 — each accept costs a provider fetch plus a
+    // folder move, and one giant request would blow past reverse-proxy/tunnel response ceilings —
+    // with per-chunk UI progress. Failures stay in the list with their errors; successes leave it.
+    const ACCEPT_ALL_CHUNK = 5;
+    const acceptableSeries = unmatched.filter(s => {
+        const g = suggestions[s.id];
+        return g && g !== 'NOT_FOUND' && g !== 'ERROR';
+    });
+
+    const handleAcceptAll = async () => {
+        const targets = acceptableSeries;
+        if (targets.length === 0) return;
+        setAcceptAllProgress({ done: 0, total: targets.length });
+        let successCount = 0;
+        const failedItems: string[] = [];
+
+        try {
+            for (let i = 0; i < targets.length; i += ACCEPT_ALL_CHUNK) {
+                const chunk = targets.slice(i, i + ACCEPT_ALL_CHUNK);
+                let results: Array<{ ok: boolean; error?: string }> = [];
+                try {
+                    const res = await fetch('/api/library/match-series/bulk', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ items: chunk.map(s => buildMatchPayload(s, suggestions[s.id])) })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    results = res.ok && Array.isArray(data.results)
+                        ? data.results
+                        : chunk.map(() => ({ ok: false, error: data.error || `HTTP ${res.status}` }));
+                } catch (e: any) {
+                    results = chunk.map(() => ({ ok: false, error: e?.message || 'Network error' }));
+                }
+
+                const succeededIds = new Set(chunk.filter((_, idx) => results[idx]?.ok).map(s => s.id));
+                chunk.forEach((s, idx) => {
+                    if (results[idx]?.ok) successCount++;
+                    else failedItems.push(`${s.name}${results[idx]?.error ? ` (${results[idx].error})` : ''}`);
+                });
+                if (succeededIds.size > 0) {
+                    setUnmatched(prev => prev.filter(s => !succeededIds.has(s.id)));
+                }
+                setAcceptAllProgress({ done: Math.min(i + chunk.length, targets.length), total: targets.length });
+            }
+        } finally {
+            setAcceptAllProgress(null);
+        }
+
+        if (failedItems.length > 0) {
+            toast({
+                title: "Accept All finished with errors",
+                description: `Matched ${successCount} of ${targets.length}. Failed: ${failedItems.slice(0, 3).join('; ')}${failedItems.length > 3 ? ` and ${failedItems.length - 3} more` : ''}`,
+                variant: "destructive"
+            });
+        } else {
+            toast({ title: "Accept All complete", description: `Successfully matched all ${successCount} suggested series.` });
         }
     };
 
@@ -728,6 +795,17 @@ export default function SmartMatchPage() {
                     
                     <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="h-12 w-full sm:w-auto flex-1 sm:flex-none bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-lg border-0">
                         {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin shrink-0" /> <span className="whitespace-nowrap">Scanning...</span></> : <><FolderSearch className="w-5 h-5 mr-2 shrink-0" /> <span className="whitespace-nowrap">Start Auto-Scan</span></>}
+                    </Button>
+
+                    <Button
+                        onClick={handleAcceptAll}
+                        disabled={isScanning || isBulkProcessing || acceptAllProgress !== null || acceptableSeries.length === 0}
+                        title="Accept every suggestion the auto-scan produced (rows without a suggestion are skipped)"
+                        className="h-12 w-full sm:w-auto flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white font-bold px-6 shadow-lg border-0"
+                    >
+                        {acceptAllProgress
+                            ? <><Loader2 className="w-5 h-5 mr-2 animate-spin shrink-0" /> <span className="whitespace-nowrap">Accepting {acceptAllProgress.done}/{acceptAllProgress.total}...</span></>
+                            : <><CheckCheck className="w-5 h-5 mr-2 shrink-0" /> <span className="whitespace-nowrap">Accept All ({acceptableSeries.length})</span></>}
                     </Button>
                 </div>
             </div>

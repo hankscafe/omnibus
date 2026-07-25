@@ -342,14 +342,14 @@ fn comicinfo_number_re() -> &'static Regex {
 /// fallback. Plain numeric shapes normalize like the filename parser's output (leading zeros
 /// stripped, sign kept) so is_same_issue dedupe and sorting behave identically for both origins;
 /// fancier numbers ("½", "1.MU") are stored verbatim.
-fn issue_number_for_file(info: Option<&ScanComicInfo>, file_name: &str) -> String {
+fn issue_number_for_file(info: Option<&ScanComicInfo>, file_name: &str, series_hint: Option<&str>) -> String {
     if let Some(num) = info.and_then(|i| i.number.as_deref()).map(str::trim).filter(|s| !s.is_empty()) {
         if let Some(caps) = comicinfo_number_re().captures(num) {
             return format!("{}{}", &caps[1], &caps[2]);
         }
         return num.to_string();
     }
-    issue_number_from_filename(file_name)
+    issue_number_from_filename(file_name, series_hint)
 }
 
 /// Per-issue narrative/credit columns from a file's own ComicInfo (discussion #177). Comma-separated
@@ -749,7 +749,56 @@ fn strip_leading_zeros(s: &str) -> String {
 // Parity with Node src/lib/utils/issue-parser.ts extractIssueNumber (negative-number aware).
 // The Node regexes use lookbehind/lookahead, which the `regex` crate doesn't support; those
 // boundary conditions are emulated with manual byte checks at the match positions.
-fn issue_number_from_filename(file_name: &str) -> String {
+/// Consumes `series` as a case/punctuation-insensitive PREFIX of `file_name`, returning the
+/// remainder — or None when the series name isn't a clean prefix (including when a token would be
+/// glued into a longer word: series "No" must never half-consume "Nova"). Tokens are the series
+/// name's ASCII-alphanumeric runs, so "Kaiju No. 8" matches "Kaiju No.8", "kaiju_no_8", etc.
+/// Non-ASCII series names yield no tokens and never strip — a safe no-op.
+fn strip_series_prefix(file_name: &str, series: &str) -> Option<String> {
+    let tokens: Vec<String> = series
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let fb = file_name.as_bytes();
+    let mut i = 0usize;
+    for tok in &tokens {
+        while i < fb.len() && !fb[i].is_ascii_alphanumeric() {
+            i += 1;
+        }
+        if i + tok.len() > fb.len() || !file_name[i..i + tok.len()].eq_ignore_ascii_case(tok) {
+            return None;
+        }
+        i += tok.len();
+        if i < fb.len() && fb[i].is_ascii_alphanumeric() {
+            return None; // glue guard
+        }
+    }
+    Some(file_name[i..].to_string())
+}
+
+fn issue_number_from_filename(file_name: &str, series_hint: Option<&str>) -> String {
+    // 2026-07-25 worklist item 9 (Kaiju No. 8): digits that belong to the TITLE must not be read as
+    // issue numbers. When the caller knows the series, its name is stripped as a prefix first; a
+    // filename that IS just the series name parses as a one-shot ("1") instead of the title digit.
+    // Parity twin: src/lib/utils/issue-parser.ts extractIssueNumber.
+    if let Some(series) = series_hint {
+        if let Some(rest) = strip_series_prefix(file_name, series) {
+            if rest != file_name {
+                if rest.bytes().any(|b| b.is_ascii_digit()) {
+                    return issue_number_from_filename(&rest, None);
+                }
+                return "1".to_string();
+            }
+        }
+    }
+    issue_number_from_filename_unhinted(file_name)
+}
+
+fn issue_number_from_filename_unhinted(file_name: &str) -> String {
     static RE_BRACKET: OnceLock<Regex> = OnceLock::new();
     static RE_CROSSREF: OnceLock<Regex> = OnceLock::new();
     static RE_CROSSREF_KEEP: OnceLock<Regex> = OnceLock::new();
@@ -1442,7 +1491,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let folder_id_nums: Vec<(Option<String>, String)> = files.iter().enumerate().map(|(idx, file)| {
             let fname = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
             let finfo = infos.get(idx).and_then(|o| o.as_ref());
-            (finfo.map(derive_meta).and_then(|d| d.metadata_issue_id), issue_number_for_file(finfo, &fname))
+            (finfo.map(derive_meta).and_then(|d| d.metadata_issue_id), issue_number_for_file(finfo, &fname, Some(&clean_name)))
         }).collect();
         let conflicted_ids = folder_conflicted_issue_ids(&folder_id_nums);
 
@@ -1450,7 +1499,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         for (idx, file) in files.iter().enumerate() {
             let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
             let file_info = infos.get(idx).and_then(|o| o.as_ref());
-            let issue_num = issue_number_for_file(file_info, &file_name);
+            let issue_num = issue_number_for_file(file_info, &file_name, Some(&clean_name));
             let file_derived = file_info.map(derive_meta);
             let fm = issue_file_meta(file_info);
             let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
@@ -1613,7 +1662,10 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     let mut pending_writes: Vec<PendingIssueWrite> = Vec::new();
     for (series_id, file, info) in parsed_files {
         let file_name = Path::new(&file).file_name().unwrap_or_default().to_string_lossy().to_string();
-        let issue_num = issue_number_for_file(info.as_ref(), &file_name);
+        // The folder-derived series name isn't in scope on this path (files landing in EXISTING
+        // series); the file's own embedded ComicInfo series tag is the next-best title hint.
+        let series_hint = info.as_ref().and_then(|i| i.series.as_deref().map(|s| s.to_string()));
+        let issue_num = issue_number_for_file(info.as_ref(), &file_name, series_hint.as_deref());
 
         // Dedupe against the series' existing issues by number. On a match the file was renamed/moved —
         // repoint the existing row's filePath rather than inserting a second row for the same issue.
@@ -2077,20 +2129,20 @@ mod tests {
     fn issue_number_prefers_comicinfo_number_over_filename() {
         let with = |n: &str| ScanComicInfo { number: Some(n.to_string()), ..Default::default() };
         // ComicInfo <Number> is the tagger's ground truth — it outranks the filename guess.
-        assert_eq!(issue_number_for_file(Some(&with("7")), "Saga 012.cbz"), "7");
+        assert_eq!(issue_number_for_file(Some(&with("7")), "Saga 012.cbz", None), "7");
         // Normalized like the filename parser's output so is_same_issue dedupe matches both origins.
-        assert_eq!(issue_number_for_file(Some(&with("007")), "x.cbz"), "7");
-        assert_eq!(issue_number_for_file(Some(&with("-001")), "x.cbz"), "-1");
-        assert_eq!(issue_number_for_file(Some(&with("00.5")), "x.cbz"), "0.5");
-        assert_eq!(issue_number_for_file(Some(&with("12a")), "x.cbz"), "12a");
-        assert_eq!(issue_number_for_file(Some(&with(" 4 ")), "x.cbz"), "4");
+        assert_eq!(issue_number_for_file(Some(&with("007")), "x.cbz", None), "7");
+        assert_eq!(issue_number_for_file(Some(&with("-001")), "x.cbz", None), "-1");
+        assert_eq!(issue_number_for_file(Some(&with("00.5")), "x.cbz", None), "0.5");
+        assert_eq!(issue_number_for_file(Some(&with("12a")), "x.cbz", None), "12a");
+        assert_eq!(issue_number_for_file(Some(&with(" 4 ")), "x.cbz", None), "4");
         // Non-plain shapes are stored verbatim (the DB number column is a string).
-        assert_eq!(issue_number_for_file(Some(&with("½")), "x.cbz"), "½");
-        assert_eq!(issue_number_for_file(Some(&with("1.MU")), "x.cbz"), "1.MU");
+        assert_eq!(issue_number_for_file(Some(&with("½")), "x.cbz", None), "½");
+        assert_eq!(issue_number_for_file(Some(&with("1.MU")), "x.cbz", None), "1.MU");
         // Blank/absent <Number> falls back to filename parsing.
-        assert_eq!(issue_number_for_file(Some(&with("  ")), "Saga 012.cbz"), "12");
-        assert_eq!(issue_number_for_file(None, "Saga 012.cbz"), "12");
-        assert_eq!(issue_number_for_file(Some(&ScanComicInfo::default()), "Batman #5.cbz"), "5");
+        assert_eq!(issue_number_for_file(Some(&with("  ")), "Saga 012.cbz", None), "12");
+        assert_eq!(issue_number_for_file(None, "Saga 012.cbz", None), "12");
+        assert_eq!(issue_number_for_file(Some(&ScanComicInfo::default()), "Batman #5.cbz", None), "5");
     }
 
     #[tokio::test]
@@ -2380,47 +2432,66 @@ mod tests {
     #[test]
     fn issue_number_skips_years() {
         // The core C-7 regression: a bare 4-digit year must never become the issue number.
-        assert_eq!(issue_number_from_filename("Saga 2014 012.cbz"), "12");
-        assert_eq!(issue_number_from_filename("X-Men 1991 05.cbz"), "5");
-        assert_eq!(issue_number_from_filename("Batman 001 (2011).cbz"), "1");
-        assert_eq!(issue_number_from_filename("Series 2020.cbz"), "1"); // only a year -> default
+        assert_eq!(issue_number_from_filename("Saga 2014 012.cbz", None), "12");
+        assert_eq!(issue_number_from_filename("X-Men 1991 05.cbz", None), "5");
+        assert_eq!(issue_number_from_filename("Batman 001 (2011).cbz", None), "1");
+        assert_eq!(issue_number_from_filename("Series 2020.cbz", None), "1"); // only a year -> default
     }
 
     #[test]
     fn issue_number_markers() {
-        assert_eq!(issue_number_from_filename("Spider-Man #15.cbz"), "15");
-        assert_eq!(issue_number_from_filename("Series #0.5.cbz"), "0.5");
-        assert_eq!(issue_number_from_filename("Chapter 7.cbz"), "7");
-        assert_eq!(issue_number_from_filename("Vol 3.cbz"), "3");
-        assert_eq!(issue_number_from_filename("007.cbz"), "7");
-        assert_eq!(issue_number_from_filename("Amazing Series 12a.cbz"), "12a");
+        assert_eq!(issue_number_from_filename("Spider-Man #15.cbz", None), "15");
+        assert_eq!(issue_number_from_filename("Series #0.5.cbz", None), "0.5");
+        assert_eq!(issue_number_from_filename("Chapter 7.cbz", None), "7");
+        assert_eq!(issue_number_from_filename("Vol 3.cbz", None), "3");
+        assert_eq!(issue_number_from_filename("007.cbz", None), "7");
+        assert_eq!(issue_number_from_filename("Amazing Series 12a.cbz", None), "12a");
     }
 
     // Mirrors Node __tests__/lib/utils/issue-parser.test.ts (beta.023/035 negative-number support).
     #[test]
     fn issue_number_explicit_negatives() {
-        assert_eq!(issue_number_from_filename("Spider-Man #-1.cbz"), "-1");
-        assert_eq!(issue_number_from_filename("Deadpool Issue -005.cbz"), "-5");
-        assert_eq!(issue_number_from_filename("X-Men Vol -2.cbz"), "-2");
-        assert_eq!(issue_number_from_filename("Batman (2016) Issue -1.cbz"), "-1");
+        assert_eq!(issue_number_from_filename("Spider-Man #-1.cbz", None), "-1");
+        assert_eq!(issue_number_from_filename("Deadpool Issue -005.cbz", None), "-5");
+        assert_eq!(issue_number_from_filename("X-Men Vol -2.cbz", None), "-2");
+        assert_eq!(issue_number_from_filename("Batman (2016) Issue -1.cbz", None), "-1");
     }
 
     #[test]
     fn issue_number_title_separators_stay_positive() {
-        assert_eq!(issue_number_from_filename("Spider-Man - 1.cbz"), "1");
-        assert_eq!(issue_number_from_filename("Batman - 002.cbz"), "2");
-        assert_eq!(issue_number_from_filename("Batman 2016 #001.cbz"), "1");
+        assert_eq!(issue_number_from_filename("Spider-Man - 1.cbz", None), "1");
+        assert_eq!(issue_number_from_filename("Batman - 002.cbz", None), "2");
+        assert_eq!(issue_number_from_filename("Batman 2016 #001.cbz", None), "1");
+    }
+
+    // Worklist item 9 (Kaiju No. 8): the series-name hint keeps TITLE digits out of the issue
+    // number. Without it, "Kaiju No.8 v01" parsed as issue 8 — the vol token was removed, the
+    // bare-number sweep found the title's 8, and every volume collapsed into one dup-flagged row.
+    #[test]
+    fn series_hint_strips_title_digits_before_extraction() {
+        assert_eq!(issue_number_from_filename("Kaiju No.8 v01.cbz", Some("Kaiju No. 8")), "1");
+        assert_eq!(issue_number_from_filename("Kaiju No. 8 v02.cbz", Some("Kaiju No. 8")), "2");
+        assert_eq!(issue_number_from_filename("Kaiju No. 8 - Chapter 105.cbz", Some("Kaiju No. 8")), "105");
+        assert_eq!(issue_number_from_filename("Kaiju No.8 008.cbz", Some("Kaiju No. 8")), "8");
+        // A file named exactly like the series is a one-shot, not the title digit.
+        assert_eq!(issue_number_from_filename("Kaiju No. 8.cbz", Some("Kaiju No. 8")), "1");
+        // Status quo without the hint (documents the pre-fix behavior for unhinted callers).
+        assert_eq!(issue_number_from_filename("Kaiju No.8 v01.cbz", None), "8");
+        // Not a prefix / glue guard: "No" must not half-consume "Nova"; unrelated hints no-op.
+        assert_eq!(issue_number_from_filename("Nova 003.cbz", Some("No")), "3");
+        assert_eq!(issue_number_from_filename("Batman 005.cbz", Some("Superman")), "5");
+        assert_eq!(issue_number_from_filename("Batman 005 (2016).cbz", Some("Batman")), "5");
     }
 
     #[test]
     fn issue_number_prefers_trailing_numbers_over_volume_tokens() {
-        assert_eq!(issue_number_from_filename("Uncanny X-Men-V1-001.cbz"), "1");
-        assert_eq!(issue_number_from_filename("Uncanny X-Men-V1-023.cbz"), "23");
-        assert_eq!(issue_number_from_filename("Uncanny X-Men-V1-066.cbz"), "66");
-        assert_eq!(issue_number_from_filename("Spider-Man v2 #5.cbz"), "5");
-        assert_eq!(issue_number_from_filename("Batman Vol 2 Issue 12.cbz"), "12");
+        assert_eq!(issue_number_from_filename("Uncanny X-Men-V1-001.cbz", None), "1");
+        assert_eq!(issue_number_from_filename("Uncanny X-Men-V1-023.cbz", None), "23");
+        assert_eq!(issue_number_from_filename("Uncanny X-Men-V1-066.cbz", None), "66");
+        assert_eq!(issue_number_from_filename("Spider-Man v2 #5.cbz", None), "5");
+        assert_eq!(issue_number_from_filename("Batman Vol 2 Issue 12.cbz", None), "12");
         // Volume only as the LAST resort.
-        assert_eq!(issue_number_from_filename("Batman Vol 4.cbz"), "4");
+        assert_eq!(issue_number_from_filename("Batman Vol 4.cbz", None), "4");
     }
 
     #[test]

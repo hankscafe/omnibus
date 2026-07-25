@@ -87,7 +87,7 @@ async function renderIssueFirstPage(archivePath: string): Promise<Buffer | null>
     }
 }
 
-function getFallbackImage() {
+function getFallbackImage(cacheControl: string = 'public, max-age=86400') {
     const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600">
         <rect width="100%" height="100%" fill="#0f172a"/>
@@ -106,7 +106,7 @@ function getFallbackImage() {
     return new NextResponse(svg.trim(), {
         headers: {
             'Content-Type': 'image/svg+xml',
-            'Cache-Control': 'public, max-age=86400'
+            'Cache-Control': cacheControl
         }
     });
 }
@@ -118,13 +118,16 @@ export async function GET(request: NextRequest) {
 
   // --- ISSUE FIRST-PAGE COVERS (discussion #182, local-first ingest) ---
   // ?issueId=<id>: an issue scanned without provider metadata has no coverUrl row of its own; its
-  // archive's first page IS its cover, rendered on demand with zero API calls. Any failure falls
-  // through to the series folder cover via the existing directory branch below.
+  // archive's first page IS its cover, rendered on demand with zero API calls. A FAILED render
+  // answers with the neutral placeholder + no-store — NEVER the series folder art (2026-07-25
+  // worklist item 10: serving the folder cover here made every issue of a freshly-imported series
+  // wear identical volume-1 art whenever the engine was busy post-scan; no-store lets the next
+  // request retry the render instead of caching the miss).
   if (issueId) {
     try {
       const issue = await prisma.issue.findUnique({
         where: { id: issueId },
-        select: { filePath: true, series: { select: { folderPath: true } } },
+        select: { filePath: true },
       });
       if (issue?.filePath) {
         // Containment re-checked even though the path came from our own DB — defense in depth,
@@ -138,12 +141,10 @@ export async function GET(request: NextRequest) {
           }
         }
       }
-      filePath = issue?.series?.folderPath || null;
     } catch (e) {
       Logger.log(`[Cover] Issue first-page render failed for ${issueId}: ${getErrorMessage(e)}`, 'warn');
-      filePath = null;
     }
-    if (!filePath) return getFallbackImage();
+    return getFallbackImage('no-store');
   }
 
   if (!filePath) return new Response("Missing path", { status: 400 });

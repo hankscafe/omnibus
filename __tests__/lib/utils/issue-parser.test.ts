@@ -24,6 +24,35 @@ describe('Utility: Issue Number Parser', () => {
         });
     });
 
+    // 2026-07-25 worklist item 9 (Kaiju No. 8): when the caller knows the series name, digits that
+    // belong to the TITLE must not be read as issue numbers. The series name is consumed as a
+    // punctuation/case-insensitive prefix before extraction; without the hint, behavior is unchanged.
+    describe('extractIssueNumber() with a series-name hint', () => {
+        it('stops title digits from swallowing the volume number (the Kaiju No. 8 case)', () => {
+            expect(extractIssueNumber('Kaiju No.8 v01.cbz', 'Kaiju No. 8')).toBe('1');
+            expect(extractIssueNumber('Kaiju No. 8 v02.cbz', 'Kaiju No. 8')).toBe('2');
+        });
+
+        it('keeps explicit markers and bare numbers working after the strip', () => {
+            expect(extractIssueNumber('Kaiju No. 8 - Chapter 105.cbz', 'Kaiju No. 8')).toBe('105');
+            expect(extractIssueNumber('Kaiju No.8 008.cbz', 'Kaiju No. 8')).toBe('8');
+        });
+
+        it('treats a file named exactly like the series as a one-shot, not as the title digit', () => {
+            expect(extractIssueNumber('Kaiju No. 8.cbz', 'Kaiju No. 8')).toBe('1');
+        });
+
+        it('leaves parsing untouched when the hint is absent or not a prefix', () => {
+            expect(extractIssueNumber('Kaiju No.8 v01.cbz')).toBe('8'); // status quo without the hint
+            expect(extractIssueNumber('Batman 005.cbz', 'Superman')).toBe('5');
+        });
+
+        it('never half-consumes a longer word (glue guard) and ignores non-prefix titles', () => {
+            expect(extractIssueNumber('Nova 003.cbz', 'No')).toBe('3');
+            expect(extractIssueNumber('Batman 005 (2016).cbz', 'Batman')).toBe('5');
+        });
+    });
+
     describe('extractIssueNumber()', () => {
         it('should safely extract explicit negative numbers', () => {
             expect(extractIssueNumber('Spider-Man #-1.cbz')).toBe('-1');

@@ -21,8 +21,37 @@ export function isSameIssue(num1: string | number, num2: string | number): boole
     return float1 === float2 && suffix1 === suffix2;
 }
 
-export function extractIssueNumber(filename: string): string {
-    let clean = filename.replace(/\.\w+$/, ''); 
+// Consumes `seriesName` as a case/punctuation-insensitive PREFIX of `filename`, returning the
+// remainder — or null when the series name isn't a clean prefix (including when a token would be
+// glued into a longer word: series "No" must never half-consume "Nova"). Tokens are the series
+// name's alphanumeric runs, so "Kaiju No. 8" matches "Kaiju No.8", "kaiju_no_8", etc.
+function stripSeriesPrefix(filename: string, seriesName: string): string | null {
+    const tokens = seriesName.toLowerCase().match(/[a-z0-9]+/g);
+    if (!tokens || tokens.length === 0) return null;
+    const lower = filename.toLowerCase();
+    let i = 0;
+    for (const tok of tokens) {
+        while (i < lower.length && !/[a-z0-9]/.test(lower[i])) i++;
+        if (!lower.startsWith(tok, i)) return null;
+        i += tok.length;
+        if (i < lower.length && /[a-z0-9]/.test(lower[i])) return null; // glue guard
+    }
+    return filename.slice(i);
+}
+
+export function extractIssueNumber(filename: string, seriesName?: string): string {
+    // 2026-07-25 worklist item 9 (Kaiju No. 8): digits that belong to the TITLE must not be read as
+    // issue numbers. When the caller knows the series, its name is stripped as a prefix first; a
+    // filename that IS just the series name parses as a one-shot ("1") instead of the title digit.
+    // Callers without the series in hand get the unhinted behavior unchanged.
+    if (seriesName) {
+        const rest = stripSeriesPrefix(filename, seriesName);
+        if (rest !== null && rest !== filename) {
+            if (/\d/.test(rest)) return extractIssueNumber(rest);
+            return "1";
+        }
+    }
+    let clean = filename.replace(/\.\w+$/, '');
 
     // 1. Strip years explicitly
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 

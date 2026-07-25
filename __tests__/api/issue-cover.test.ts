@@ -112,9 +112,13 @@ describe('API Route: issue first-page covers (?issueId=)', () => {
         expect(mocks.fetch).not.toHaveBeenCalled();
     });
 
-    it('falls back to the series folder cover when the engine is down', async () => {
+    // 2026-07-25 worklist item 10: a failed render must NOT serve the series folder art as if it
+    // were the issue's own cover — that's how every issue in a freshly-imported manga series ended
+    // up wearing identical volume-1 art. A transient failure now answers with the neutral branded
+    // placeholder and Cache-Control: no-store, so the next request can retry the render.
+    it('serves the neutral placeholder (no-store), never the series folder art, when the engine is down', async () => {
         mocks.fetch.mockRejectedValue(new Error('ECONNREFUSED'));
-        // The directory branch finds <folder>/cover.jpg.
+        // A folder cover EXISTS — the route must still not use it for an issueId request.
         mocks.fsPromisesReadFile.mockImplementation(async (p: string) => {
             if (String(p).toLowerCase().includes('cover.jpg')) return Buffer.from('folder_cover');
             throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -123,10 +127,12 @@ describe('API Route: issue first-page covers (?issueId=)', () => {
         const res = await GET(req('issueId=issue_1'));
 
         expect(res.status).toBe(200);
-        expect(res.headers.get('Content-Type')).toBe('image/jpeg');
+        expect(res.headers.get('Content-Type')).toBe('image/svg+xml');
+        expect(res.headers.get('Cache-Control')).toBe('no-store');
+        expect(await res.text()).toContain('OMNIBUS');
     });
 
-    it('gives up on a slow engine render and falls back to the folder cover (issue #183)', async () => {
+    it('gives up on a slow engine render with the no-store placeholder (issue #183 watchdog kept)', async () => {
         // The route arms a 5s abort watchdog so scan-pinned engines can't freeze the grid;
         // simulate the watchdog firing as the AbortError the fetch would surface.
         mocks.fetch.mockRejectedValue(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
@@ -138,7 +144,8 @@ describe('API Route: issue first-page covers (?issueId=)', () => {
         const res = await GET(req('issueId=issue_1'));
 
         expect(res.status).toBe(200);
-        expect(res.headers.get('Content-Type')).toBe('image/jpeg');
+        expect(res.headers.get('Content-Type')).toBe('image/svg+xml');
+        expect(res.headers.get('Cache-Control')).toBe('no-store');
         // The render request actually carried the abort signal.
         expect(mocks.fetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     });
@@ -163,7 +170,9 @@ describe('API Route: issue first-page covers (?issueId=)', () => {
         expect(res.headers.get('Content-Type')).toBe('image/svg+xml');
     });
 
-    it('skips straight to the series folder cover when the issue has no file', async () => {
+    it('serves the placeholder for a file-less issue — issueId URLs never wear series art', async () => {
+        // The series page only mints ?issueId= URLs for file-backed issues; a stale link to a
+        // file-less row answers honestly ("no cover of its own") instead of duplicating series art.
         mocks.issueFindUnique.mockResolvedValue({ filePath: null, series: { folderPath: FOLDER } });
         mocks.fsPromisesReadFile.mockImplementation(async (p: string) => {
             if (String(p).toLowerCase().includes('cover.jpg')) return Buffer.from('folder_cover');
@@ -173,6 +182,7 @@ describe('API Route: issue first-page covers (?issueId=)', () => {
         const res = await GET(req('issueId=issue_1'));
 
         expect(mocks.fetch).not.toHaveBeenCalled();
-        expect(res.headers.get('Content-Type')).toBe('image/jpeg');
+        expect(res.headers.get('Content-Type')).toBe('image/svg+xml');
+        expect(res.headers.get('Cache-Control')).toBe('no-store');
     });
 });

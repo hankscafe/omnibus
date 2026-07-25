@@ -151,7 +151,9 @@ export async function GET(request: Request) {
             const filesByNum = new Map<string, string[]>();
             for (const file of files) {
                 if (COMIC_EXT_REGEX.test(file)) {
-                    const stdNum = extractIssueNumber(file);
+                    // Series-name hint keeps title digits (Kaiju No. 8) out of the issue number —
+                    // without it every volume parsed as #8 and collapsed into one dup-flagged row.
+                    const stdNum = extractIssueNumber(file, seriesRecord?.name || undefined);
                     if (!filesByNum.has(stdNum)) filesByNum.set(stdNum, []);
                     filesByNum.get(stdNum)!.push(file);
                 }

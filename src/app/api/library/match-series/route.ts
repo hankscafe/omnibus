@@ -327,7 +327,7 @@ export async function POST(request: Request) {
                     targetIssueMetaId = exactIssueId || null;
                     Logger.log(`[Match Series Debug] Using exact issue override: ${issueNumStr}`, 'debug');
                 } else {
-                    issueNumStr = extractIssueNumber(file);
+                    issueNumStr = extractIssueNumber(file, realName);
                     Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via auto-extraction.`, 'debug');
                 }
                 

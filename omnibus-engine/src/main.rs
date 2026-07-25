@@ -863,6 +863,9 @@ struct BulkRenameRequest {
     series_ids: Vec<String>,
     folder_pattern: String,
     file_pattern: String,
+    /// Manga series use this template when present (worklist item 8); absent = comic pattern for all.
+    #[serde(default)]
+    manga_file_pattern: Option<String>,
 }
 
 /// Bulk rename / standardize, ported from the Node route. Runs SYNCHRONOUSLY (Node calls it via
@@ -876,7 +879,7 @@ async fn handle_bulk_rename(
     if req.series_ids.is_empty() || req.folder_pattern.trim().is_empty() || req.file_pattern.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    match renamer::run_bulk_rename(&state.db, &req.series_ids, &req.folder_pattern, &req.file_pattern).await {
+    match renamer::run_bulk_rename(&state.db, &req.series_ids, &req.folder_pattern, &req.file_pattern, req.manga_file_pattern.as_deref()).await {
         Ok(summary) => Ok(Json(serde_json::json!({
             "filesRenamed": summary.files_renamed,
             "foldersRenamed": summary.folders_renamed,

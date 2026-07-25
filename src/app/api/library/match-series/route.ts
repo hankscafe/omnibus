@@ -112,12 +112,38 @@ export async function POST(request: Request) {
     const safeUniverse = universe ? sanitizeFilename(universe) : '';
     const safeSeriesGroup = seriesGroup ? sanitizeFilename(seriesGroup) : '';
     
-    const isManga = await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
-    
-    let targetLib = isManga 
-        ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
-        : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
-        
+    // The records are fetched BEFORE the manga decision — they carry the prior signals.
+    let existingRecord = await prisma.series.findUnique({
+        where: {
+            metadataSource_metadataId: {
+                metadataSource: targetSource,
+                metadataId: targetMetaId
+            }
+        }
+    });
+
+    const unmatchedRecord = await prisma.series.findFirst({
+        where: { folderPath: oldFolderPath }
+    });
+
+    // NEVER-DEMOTE manga resolution (2026-07-25 worklist item 5): a context-free re-detection from
+    // name+publisher+year used to overwrite isManga and physically move manga-library series into
+    // the Comics library on every match. The admin's library placement and any existing DB rows are
+    // stronger signals than a detection run with no file in hand — detection now runs only when no
+    // prior signal exists, so it can PROMOTE but never demote.
+    const sourceLibrary = libraries.find(l => l.id === (unmatchedRecord?.libraryId || existingRecord?.libraryId));
+    const priorMangaSignal = !!(existingRecord?.isManga || unmatchedRecord?.isManga || sourceLibrary?.isManga);
+    const isManga = priorMangaSignal || await detectManga({ name: safeName, publisher: { name: realPublisher }, year: realYear });
+
+    // Library placement: when the series already lives in a library of the right type, KEEP it there
+    // (a re-match must not shuttle it between same-type libraries); move only on promotion or when it
+    // has no library yet.
+    let targetLib = (sourceLibrary && sourceLibrary.isManga === isManga)
+        ? sourceLibrary
+        : (isManga
+            ? libraries.find(l => l.isDefault && l.isManga) || libraries.find(l => l.isManga)
+            : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga));
+
     if (!targetLib) targetLib = libraries[0];
     if (!targetLib) return NextResponse.json({ error: "No libraries configured." }, { status: 400 });
 
@@ -142,19 +168,6 @@ export async function POST(request: Request) {
 
     const pubDir = path.dirname(newFolderPath);
     if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
-
-    let existingRecord = await prisma.series.findUnique({
-        where: { 
-            metadataSource_metadataId: { 
-                metadataSource: targetSource, 
-                metadataId: targetMetaId 
-            } 
-        }
-    });
-
-    const unmatchedRecord = await prisma.series.findFirst({
-        where: { folderPath: oldFolderPath }
-    });
 
     // Cover precedence: an admin can supply a custom cover in the Smart Matcher editor (hasNewCustomCover);
     // otherwise an already-custom series keeps its cover (keepExistingCustomCover) — a manual re-match must

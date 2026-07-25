@@ -189,11 +189,22 @@ struct LibraryRow {
     is_manga: bool,
 }
 
+/// Per-series file pattern: manga series use the manga template when one is supplied (2026-07-25
+/// worklist item 8 — the engine previously applied `file_pattern` unconditionally, so manga always
+/// got the comic convention on standardize). Empty/blank manga patterns fall back to the comic one.
+fn effective_file_pattern<'a>(is_manga: bool, file_pattern: &'a str, manga_file_pattern: Option<&'a str>) -> &'a str {
+    match manga_file_pattern {
+        Some(m) if is_manga && !m.trim().is_empty() => m,
+        _ => file_pattern,
+    }
+}
+
 pub async fn run_bulk_rename(
     db: &Db,
     series_ids: &[String],
     folder_pattern: &str,
     file_pattern: &str,
+    manga_file_pattern: Option<&str>,
 ) -> Result<RenameSummary> {
     // Empty id list → nothing to rename (`IN ()` is invalid SQL; matches the old ANY('{}')).
     let series_rows = if series_ids.is_empty() {
@@ -224,7 +235,10 @@ pub async fn run_bulk_rename(
         })
         .collect();
 
-    log::info!("[Renamer] Standardize procedure for {} series. Folder: \"{}\" | File: \"{}\"", series_rows.len(), folder_pattern, file_pattern);
+    log::info!(
+        "[Renamer] Standardize procedure for {} series. Folder: \"{}\" | File: \"{}\" | Manga file: \"{}\"",
+        series_rows.len(), folder_pattern, file_pattern, manga_file_pattern.unwrap_or("(comic pattern)")
+    );
 
     let mut files_renamed: i64 = 0;
     let mut folders_renamed: i64 = 0;
@@ -388,7 +402,7 @@ pub async fn run_bulk_rename(
             let raw_series = if s.name.is_empty() { "Unknown" } else { &s.name };
             let year_str = if s.year != 0 { s.year.to_string() } else { "0000".to_string() };
 
-            let mut file_name = file_pattern.to_string();
+            let mut file_name = effective_file_pattern(s.is_manga, file_pattern, manga_file_pattern).to_string();
             for (token, value) in [
                 ("{Publisher}", raw_publisher),
                 ("{Series}", raw_series),
@@ -552,5 +566,15 @@ mod tests {
         assert!(root.exists());
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    // Worklist item 8: manga series get the manga template on standardize; comics never do; a
+    // blank manga pattern falls back to the comic one rather than producing empty file names.
+    #[test]
+    fn manga_series_select_the_manga_file_pattern() {
+        assert_eq!(effective_file_pattern(true, "{Series} #{Issue}", Some("{Series} Vol. {Issue}")), "{Series} Vol. {Issue}");
+        assert_eq!(effective_file_pattern(false, "{Series} #{Issue}", Some("{Series} Vol. {Issue}")), "{Series} #{Issue}");
+        assert_eq!(effective_file_pattern(true, "{Series} #{Issue}", None), "{Series} #{Issue}");
+        assert_eq!(effective_file_pattern(true, "{Series} #{Issue}", Some("   ")), "{Series} #{Issue}");
     }
 }

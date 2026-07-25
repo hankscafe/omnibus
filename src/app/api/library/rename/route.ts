@@ -16,9 +16,16 @@ export async function POST(request: NextRequest) {
     const token = await getToken({ req: request });
     if (token?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
-    const { seriesIds, folderPattern, filePattern } = await request.json();
+    const { seriesIds, folderPattern, filePattern, mangaFilePattern } = await request.json();
 
     if (!seriesIds || !folderPattern || !filePattern) return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
+
+    // Resolve the manga pattern up front so BOTH the engine offload and the local fallback use it.
+    // The old code computed `filePattern || config.manga_file_naming_pattern` — the client always
+    // sends filePattern, so the manga pattern was permanently shadowed (2026-07-25 worklist item 8).
+    const earlySettings = await prisma.systemSetting.findMany();
+    const earlyConfig = Object.fromEntries(earlySettings.map((s: any) => [s.key, s.value]));
+    const activeMangaFilePattern = mangaFilePattern || earlyConfig.manga_file_naming_pattern || "{Series} Vol. {Issue}";
 
     // --- ENGINE OFFLOAD ---
     // The engine runs the identical standardize pipeline (per-file relocation, conflict guard,
@@ -30,7 +37,7 @@ export async function POST(request: NextRequest) {
         const engineRes = await engineFetchLong(ENGINE_URL + '/api/library/rename', {
             method: 'POST',
             headers: engineHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ series_ids: seriesIds, folder_pattern: folderPattern, file_pattern: filePattern }),
+            body: JSON.stringify({ series_ids: seriesIds, folder_pattern: folderPattern, file_pattern: filePattern, manga_file_pattern: activeMangaFilePattern }),
         });
         if (engineRes.ok) {
             const data = await engineRes.json();
@@ -39,7 +46,8 @@ export async function POST(request: NextRequest) {
                 filesRenamed: data.filesRenamed,
                 conflicts: data.conflicts,
                 folderPattern,
-                filePattern
+                filePattern,
+                mangaFilePattern: activeMangaFilePattern
             }, (token.id || token.sub) as string);
             return NextResponse.json({
                 success: true,
@@ -60,14 +68,13 @@ export async function POST(request: NextRequest) {
 
     const libraries = await prisma.library.findMany();
 
-    // --- FETCH GLOBAL FOLDER SETTING ---
-    const settings = await prisma.systemSetting.findMany();
-    const config = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
+    // --- GLOBAL PATTERN SETTINGS (fetched once, before the engine offload) ---
+    const config = earlyConfig;
 
-    // Use passed pattern, fallback to settings
+    // Use passed pattern, fallback to settings. The manga pattern was resolved before the engine
+    // offload (activeMangaFilePattern above) — a distinct field, never shadowed by filePattern.
     const activeFolderPattern = folderPattern || config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
     const activeFilePattern = filePattern || config.file_naming_pattern || "{Series} #{Issue}";
-    const activeMangaFilePattern = filePattern || config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
 
     Logger.log(`[Rename Debug] Initiating standardize procedure for ${seriesList.length} series.`, 'debug');
     Logger.log(`[Rename Debug] Active Patterns -> Folder: "${activeFolderPattern}" | File: "${activeFilePattern}" | Manga: "${activeMangaFilePattern}"`, 'debug');

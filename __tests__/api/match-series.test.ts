@@ -390,3 +390,79 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         expect(coverWrite).toBeTruthy();
     });
 });
+
+// 2026-07-25 worklist item 5: matching used to recompute detectManga({name, publisher, year}) with
+// no file/library/existing-row context, then overwrite isManga, repoint libraryId, and physically
+// move manga-library series into the Comics library. The rule now: NEVER demote — the admin's
+// library placement and any existing DB rows outrank a context-free re-detection; detection only
+// runs (and can only PROMOTE) when no prior signal exists.
+describe('manga never-demote on match (worklist item 5)', () => {
+    const comicLib = { id: 'lib_1', path: '/comics', isDefault: true, isManga: false };
+    const mangaLib = { id: 'lib_manga', path: '/manga', isDefault: false, isManga: true };
+
+    beforeEach(async () => {
+        const { detectManga } = await import('@/lib/manga-detector');
+        // mockReset (not clear) drops any stale mockResolvedValueOnce queues left by earlier suites.
+        vi.mocked(detectManga).mockReset().mockResolvedValue(false);
+        mocks.getSeriesDetails.mockReset().mockResolvedValue({ name: 'Naruto', year: 1999, publisher: 'Shueisha', coverUrl: null, status: 'Ongoing' });
+    });
+
+    it('keeps a manga-library series manga and in its own library even when detection would demote it', async () => {
+        const { detectManga } = await import('@/lib/manga-detector');
+        mocks.findManyLibraries.mockResolvedValue([comicLib, mangaLib]);
+        mocks.findFirstSeries.mockResolvedValue({ id: 'series_m', folderPath: '/manga/Naruto', isManga: true, libraryId: 'lib_manga' });
+        mocks.updateSeries.mockResolvedValue({ id: 'series_m', folderPath: '/manga/Shueisha/Naruto (1999)' });
+
+        const res = await POST(createReq({ oldFolderPath: '/manga/Naruto', metadataId: '987', metadataSource: 'METRON' }));
+        expect(res.status).toBe(200);
+
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ isManga: true, libraryId: 'lib_manga' })
+        }));
+        // A positive prior signal short-circuits detection entirely.
+        expect(vi.mocked(detectManga)).not.toHaveBeenCalled();
+    });
+
+    it('keeps a series in the manga library when only the LIBRARY flag says manga (no series row yet)', async () => {
+        mocks.findManyLibraries.mockResolvedValue([comicLib, mangaLib]);
+        // Series row exists but untyped (isManga false), sitting in the manga library.
+        mocks.findFirstSeries.mockResolvedValue({ id: 'series_u', folderPath: '/manga/Naruto', isManga: false, libraryId: 'lib_manga' });
+        mocks.updateSeries.mockResolvedValue({ id: 'series_u', folderPath: '/manga/Shueisha/Naruto (1999)' });
+
+        const res = await POST(createReq({ oldFolderPath: '/manga/Naruto', metadataId: '987', metadataSource: 'METRON' }));
+        expect(res.status).toBe(200);
+
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ isManga: true, libraryId: 'lib_manga' })
+        }));
+    });
+
+    it('does not move a comic series between same-type libraries on re-match', async () => {
+        const comicLib2 = { id: 'lib_2', path: '/comics2', isDefault: false, isManga: false };
+        mocks.findManyLibraries.mockResolvedValue([comicLib, comicLib2]);
+        mocks.findFirstSeries.mockResolvedValue({ id: 'series_c', folderPath: '/comics2/Batman', isManga: false, libraryId: 'lib_2' });
+        mocks.updateSeries.mockResolvedValue({ id: 'series_c', folderPath: '/comics2/Shueisha/Naruto (1999)' });
+
+        const res = await POST(createReq({ oldFolderPath: '/comics2/Batman', metadataId: '987', metadataSource: 'METRON' }));
+        expect(res.status).toBe(200);
+
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ isManga: false, libraryId: 'lib_2' })
+        }));
+    });
+
+    it('still promotes: detection may route a fresh unmatched series into the manga library', async () => {
+        const { detectManga } = await import('@/lib/manga-detector');
+        vi.mocked(detectManga).mockResolvedValue(true);
+        mocks.findManyLibraries.mockResolvedValue([comicLib, mangaLib]);
+        mocks.findFirstSeries.mockResolvedValue(null);
+        mocks.createSeries.mockResolvedValue({ id: 'series_new', folderPath: '/manga/Shueisha/Naruto (1999)' });
+
+        const res = await POST(createReq({ oldFolderPath: '/unmatched/Naruto', metadataId: '987', metadataSource: 'METRON' }));
+        expect(res.status).toBe(200);
+
+        expect(mocks.createSeries).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ isManga: true, libraryId: 'lib_manga' })
+        }));
+    });
+});

@@ -170,7 +170,9 @@ function SeriesContent() {
           fetch('/api/library/rename/preview', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern })
+              // This dialog pre-fills its single pattern field with the manga template when the
+              // series is manga — route the edited value through the matching server-side slot.
+              body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern, mangaFilePattern: seriesInfo.isManga ? filePattern : undefined })
           })
           .then(res => res.json())
           .then(data => { if (data.previews) setRenamePreviews(data.previews); })
@@ -209,7 +211,7 @@ function SeriesContent() {
           const res = await fetch('/api/library/rename', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern })
+              body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern, mangaFilePattern: seriesInfo.isManga ? filePattern : undefined })
           });
           if (res.ok) {
               const data = await res.json();

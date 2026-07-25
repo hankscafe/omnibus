@@ -190,6 +190,7 @@ function LibraryContent() {
   
   const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
   const [filePattern, setFilePattern] = useState("{Series} #{Issue}");
+  const [mangaFilePattern, setMangaFilePattern] = useState("{Series} Vol. {Issue}");
   const [renamePreviews, setRenamePreviews] = useState<any[]>([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
@@ -199,10 +200,11 @@ function LibraryContent() {
           fetch('/api/library/rename/preview', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                  seriesIds: Array.from(selectedSeries), 
-                  folderPattern, 
-                  filePattern 
+              body: JSON.stringify({
+                  seriesIds: Array.from(selectedSeries),
+                  folderPattern,
+                  filePattern,
+                  mangaFilePattern
               })
           })
           .then(res => res.json())
@@ -212,7 +214,7 @@ function LibraryContent() {
       } else {
           setRenamePreviews([]);
       }
-  }, [renameModalOpen, folderPattern, filePattern, selectedSeries]);
+  }, [renameModalOpen, folderPattern, filePattern, mangaFilePattern, selectedSeries]);
 
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
@@ -265,9 +267,11 @@ function LibraryContent() {
               if (data?.settings) {
                   const savedFolder = data.settings.find((s: any) => s.key === 'folder_naming_pattern')?.value;
                   const savedFile = data.settings.find((s: any) => s.key === 'file_naming_pattern')?.value;
-                  
+                  const savedMangaFile = data.settings.find((s: any) => s.key === 'manga_file_naming_pattern')?.value;
+
                   if (savedFolder) setFolderPattern(savedFolder);
                   if (savedFile) setFilePattern(savedFile);
+                  if (savedMangaFile) setMangaFilePattern(savedMangaFile);
               }
           })
           .catch(() => {});
@@ -676,10 +680,11 @@ function LibraryContent() {
           const res = await fetch('/api/library/rename', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                  seriesIds: Array.from(selectedSeries), 
-                  folderPattern, 
-                  filePattern 
+              body: JSON.stringify({
+                  seriesIds: Array.from(selectedSeries),
+                  folderPattern,
+                  filePattern,
+                  mangaFilePattern
               })
           });
           if (res.ok) {
@@ -1389,11 +1394,21 @@ function LibraryContent() {
 
                       <div className="space-y-2">
                           <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">File Naming Convention</Label>
-                          <Input 
-                              value={filePattern} 
+                          <Input
+                              value={filePattern}
                               onChange={(e) => setFilePattern(e.target.value)}
                               className="bg-background border-border h-12 sm:h-10 font-mono text-sm"
                           />
+                      </div>
+
+                      <div className="space-y-2 sm:col-span-2">
+                          <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Manga File Naming Convention</Label>
+                          <Input
+                              value={mangaFilePattern}
+                              onChange={(e) => setMangaFilePattern(e.target.value)}
+                              className="bg-background border-border h-12 sm:h-10 font-mono text-sm"
+                          />
+                          <p className="text-[11px] text-muted-foreground">Applied to series flagged as manga; others use the file convention above.</p>
                       </div>
                   </div>
 

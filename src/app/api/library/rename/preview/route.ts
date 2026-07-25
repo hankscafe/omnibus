@@ -9,8 +9,8 @@ export async function POST(request: NextRequest) {
         const token = await getToken({ req: request });
         if (token?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
-        const { seriesIds, folderPattern, filePattern } = await request.json();
-        Logger.log(`[Rename Preview Debug] Incoming Request - Series Count: ${seriesIds?.length}, FolderPattern: "${folderPattern}", FilePattern: "${filePattern}"`, 'debug');
+        const { seriesIds, folderPattern, filePattern, mangaFilePattern } = await request.json();
+        Logger.log(`[Rename Preview Debug] Incoming Request - Series Count: ${seriesIds?.length}, FolderPattern: "${folderPattern}", FilePattern: "${filePattern}", MangaFilePattern: "${mangaFilePattern || ''}"`, 'debug');
 
         if (!seriesIds || seriesIds.length === 0) {
             Logger.log("[Rename Preview Debug] Warning: No series IDs provided.", 'warn');
@@ -19,6 +19,13 @@ export async function POST(request: NextRequest) {
 
         const previews = [];
         const libraries = await prisma.library.findMany();
+
+        // Per-series pattern selection mirrors the rename route (worklist item 8) — the preview
+        // previously ran every series through the single filePattern, so it LIED about what the
+        // standardize would do to manga.
+        const settings = await prisma.systemSetting.findMany();
+        const config = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
+        const activeMangaFilePattern = mangaFilePattern || config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
 
         // Loop through each selected series individually to prevent massive DB joins
         for (const seriesId of seriesIds) {
@@ -97,7 +104,7 @@ export async function POST(request: NextRequest) {
                     cleanIssueName = "";
                 }
 
-                const newFileName = filePattern
+                const newFileName = (series.isManga ? activeMangaFilePattern : filePattern)
                     .replace(/{Publisher}/gi, safePublisher)
                     .replace(/{Series}/gi, safeName)
                     .replace(/{Year}/gi, safeYear)

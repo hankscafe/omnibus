@@ -61,6 +61,9 @@ describe('API Route: Bulk Library Renamer', () => {
         vi.clearAllMocks();
         // Default: engine offload unavailable → the route falls back to the local rename loop.
         mocks.engineFetchLong.mockRejectedValue(new Error('engine unavailable'));
+        // The route now resolves the manga pattern BEFORE the engine offload, so every path reads
+        // settings; individual tests override with their own values.
+        mocks.systemSettingFindMany.mockResolvedValue([]);
     });
 
     it('returns the engine summary without running the local loop when the engine handles the job', async () => {
@@ -85,11 +88,69 @@ describe('API Route: Bulk Library Renamer', () => {
         expect(data).toMatchObject({ success: true, filesRenamed: 7, foldersRenamed: 2, conflicts: 1, newPath: '/data/comics/DC Comics/Batman (2016)' });
         // The engine got snake_case params and the whole local pipeline was skipped.
         const body = JSON.parse(mocks.engineFetchLong.mock.calls[0][1].body);
-        expect(body).toEqual({ series_ids: ['series_1'], folder_pattern: '{Publisher}/{Series} ({Year})', file_pattern: '{Series} #{Issue}' });
+        expect(body).toEqual({
+            series_ids: ['series_1'],
+            folder_pattern: '{Publisher}/{Series} ({Year})',
+            file_pattern: '{Series} #{Issue}',
+            manga_file_pattern: '{Series} Vol. {Issue}'
+        });
         expect(mocks.seriesFindMany).not.toHaveBeenCalled();
         expect(mocks.fsMove).not.toHaveBeenCalled();
         // The audit entry still records the engine-reported counts.
         expect(mocks.auditLog).toHaveBeenCalledWith('BULK_RENAME_FILES', expect.objectContaining({ filesRenamed: 7, conflicts: 1 }), 'admin_1');
+    });
+
+    // 2026-07-25 worklist item 8: the manga file pattern existed but the standardize path leaked it
+    // three ways — the engine payload never carried it, and the client's filePattern shadowed the
+    // config value (`filePattern || config.manga_file_naming_pattern` was always the former).
+    it('sends the CONFIG manga pattern to the engine even when the client supplies a comic filePattern', async () => {
+        mocks.engineFetchLong.mockResolvedValue({
+            ok: true,
+            json: async () => ({ filesRenamed: 1, foldersRenamed: 0, conflicts: 0, newPath: '/x' })
+        });
+        mocks.systemSettingFindMany.mockResolvedValue([
+            { key: 'manga_file_naming_pattern', value: '{Series} - Chapter {Issue}' }
+        ]);
+
+        const req = new NextRequest('http://localhost/api/library/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                seriesIds: ['series_1'],
+                folderPattern: '{Publisher}/{Series} ({Year})',
+                filePattern: '{Series} #{Issue}'
+            })
+        });
+        await POST(req);
+
+        const body = JSON.parse(mocks.engineFetchLong.mock.calls[0][1].body);
+        expect(body.file_pattern).toBe('{Series} #{Issue}');
+        expect(body.manga_file_pattern).toBe('{Series} - Chapter {Issue}');
+    });
+
+    it('lets an explicit client mangaFilePattern win over the config value', async () => {
+        mocks.engineFetchLong.mockResolvedValue({
+            ok: true,
+            json: async () => ({ filesRenamed: 1, foldersRenamed: 0, conflicts: 0, newPath: '/x' })
+        });
+        mocks.systemSettingFindMany.mockResolvedValue([
+            { key: 'manga_file_naming_pattern', value: '{Series} - Chapter {Issue}' }
+        ]);
+
+        const req = new NextRequest('http://localhost/api/library/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                seriesIds: ['series_1'],
+                folderPattern: '{Publisher}/{Series} ({Year})',
+                filePattern: '{Series} #{Issue}',
+                mangaFilePattern: '{Series} c{Issue}'
+            })
+        });
+        await POST(req);
+
+        const body = JSON.parse(mocks.engineFetchLong.mock.calls[0][1].body);
+        expect(body.manga_file_pattern).toBe('{Series} c{Issue}');
     });
 
     it('should physically move and rename files based on pattern matching', async () => {

@@ -618,7 +618,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                             </div>
                                         )})}
                                     </div>
-                                    <ScrollBar orientation="horizontal" className="h-1.5" />
+                                    <ScrollBar orientation="horizontal" className="h-4" />
                                 </ScrollArea>
                             ) : (<p className="text-sm text-muted-foreground">No individual issues found.</p>)}
                         </div>

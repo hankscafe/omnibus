@@ -375,12 +375,12 @@ export default function Home() {
 
         {/* Recommendations Shelf */}
         <div className="w-full relative z-10">
-          <RecommendationsShelf />
+          <RecommendationsShelf refreshSignal={refreshSignal} />
         </div>
 
         {/* Recently Added Shelf */}
         <div className="w-full relative z-10">
-          <RecentlyAdded />
+          <RecentlyAdded refreshSignal={refreshSignal} />
         </div>
 
         {/* Popular Issues Grid */}

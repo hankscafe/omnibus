@@ -6,20 +6,22 @@ import { Library, Image as ImageIcon, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link"; 
 
-export function RecentlyAdded() {
+export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
-    fetch('/api/library/recent')
+    let alive = true;
+    fetch(`/api/library/recent?_t=${Date.now()}`, { cache: 'no-store' })
       .then(res => res.json())
       .then(data => {
-        if (data.items) setItems(data.items);
+        if (alive && data.items) setItems(data.items);
       })
       .catch(err => console.error("Failed to fetch recent series:", err))
-      .finally(() => setLoading(false));
-  }, []);
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [refreshSignal]);
 
   if (loading || items.length === 0) return null;
 

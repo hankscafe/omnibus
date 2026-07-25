@@ -1502,22 +1502,22 @@ function LibraryContent() {
       </Dialog>
       
       <Dialog open={!!editing} onOpenChange={() => !updating && setEditing(null)}>
-        <DialogContent className="sm:max-w-[500px] w-[95%] max-h-[90vh] overflow-y-auto bg-background border-border rounded-xl">
+        <DialogContent className="sm:max-w-[720px] w-[95%] max-h-[90vh] overflow-y-auto bg-background border-border rounded-xl">
             <DialogHeader><DialogTitle>Edit Metadata</DialogTitle></DialogHeader>
             {editing && (
-                <div className="grid gap-4 py-4">
-                    <div className="grid gap-2">
+                <div className="grid gap-4 py-4 sm:grid-cols-2">
+                    <div className="grid gap-2 sm:col-span-2">
                         <Label htmlFor="path-copy">Source Folder Path</Label>
                         <div className="flex gap-2">
                             <Input id="path-copy" readOnly value={editing.path || ""} className="bg-muted text-xs truncate border-border text-muted-foreground h-12 sm:h-10" />
                             <Button aria-label="Copy folder path to clipboard" variant="secondary" size="icon" onClick={copyToClipboard} type="button" className="shrink-0 h-12 w-12 sm:h-10 sm:w-10 hover:bg-muted border border-border">{copied ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5 text-muted-foreground" />}</Button>
                         </div>
                     </div>
+                    <div className="grid gap-2 sm:col-span-2"><Label htmlFor="name">Series Name</Label><Input id="name" value={editing.name || ""} onChange={e => setEditing({...editing, name: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
                     <div className="grid gap-2"><Label htmlFor="cvId">ComicVine ID</Label><Input id="cvId" type="number" value={editing.cvId || ""} onChange={e => setEditing({...editing, cvId: e.target.value ? parseInt(e.target.value) : undefined})} className="bg-background border-border h-12 sm:h-10 text-lg" /></div>
                     <div className="grid gap-2"><Label htmlFor="publisher">Publisher</Label><Input id="publisher" value={editing.publisher || ""} onChange={e => setEditing({...editing, publisher: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
-                    <div className="grid gap-2"><Label htmlFor="name">Series Name</Label><Input id="name" value={editing.name || ""} onChange={e => setEditing({...editing, name: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
                     <div className="grid gap-2"><Label htmlFor="year">Year</Label><Input id="year" type="number" value={editing.year || ""} onChange={e => setEditing({...editing, year: e.target.value})} className="bg-background border-border h-12 sm:h-10" /></div>
-                    
+
                     <div className="grid gap-2">
                         <Label htmlFor="status">Status</Label>
                         <Select value={editing.status || "Ongoing"} onValueChange={v => setEditing({...editing, status: v})}>
@@ -1530,13 +1530,13 @@ function LibraryContent() {
                             </SelectContent>
                         </Select>
                     </div>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 sm:col-span-2">
                         <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border"><Switch id="monitor-switch" checked={editing.monitored || false} onCheckedChange={v => setEditing({...editing, monitored: v})} /><Label htmlFor="monitor-switch" className="cursor-pointer">Monitor Series</Label></div>
                         <div className="flex items-center gap-2 bg-muted p-3 rounded-lg border border-border"><Switch id="manga-switch" checked={editing.isManga || false} onCheckedChange={v => setEditing({...editing, isManga: v})} /><Label htmlFor="manga-switch" className="cursor-pointer">Flag as Manga</Label></div>
                     </div>
 
-                    <Button variant="secondary" className="w-full border border-border hover:bg-muted font-semibold mt-1 h-auto py-2.5 whitespace-normal leading-snug text-center" onClick={() => { setMetaSeries(editing); setEditing(null); }}>
+                    <Button variant="secondary" className="w-full border border-border hover:bg-muted font-semibold mt-1 h-auto py-2.5 whitespace-normal leading-snug text-center sm:col-span-2" onClick={() => { setMetaSeries(editing); setEditing(null); }}>
                         <FileEdit className="w-4 h-4 mr-2 shrink-0" /> Edit Metadata (Description, Universe, Series Group)
                     </Button>
                 </div>

@@ -4,23 +4,25 @@ import { useRouter } from "next/navigation";
 import { Sparkles, Image as ImageIcon, Library } from "lucide-react"; 
 import { Button } from "@/components/ui/button";
 
-export function RecommendationsShelf() {
+export function RecommendationsShelf({ refreshSignal = 0 }: { refreshSignal?: number }) {
   const [items, setItems] = useState<any[]>([]);
   const [basedOn, setBasedOn] = useState("");
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
-    fetch('/api/recommendations')
+    let alive = true;
+    fetch(`/api/recommendations?_t=${Date.now()}`, { cache: 'no-store' })
       .then(res => res.json())
       .then(data => {
-        if (data.series) {
+        if (alive && data.series) {
             setItems(data.series);
             setBasedOn(data.basedOn);
         }
       })
-      .finally(() => setLoading(false));
-  }, []);
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [refreshSignal]);
 
   if (loading || items.length === 0) return null;
 

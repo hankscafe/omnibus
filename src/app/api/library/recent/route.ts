@@ -6,26 +6,36 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
-import { getAccessibleLibraryIds, seriesAccessWhere } from '@/lib/library-access';
+import { getAccessibleLibraryIds, nestedSeriesAccessWhere } from '@/lib/library-access';
 
 export async function GET() {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
         const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
-        const recentSeries = await prisma.series.findMany({
-            where: { issues: { some: { filePath: { not: null } } }, ...seriesAccessWhere(accessibleLibs) }, // <-- STRICT CHECK + per-library access
-            orderBy: { id: 'desc' },
+        // "Recently added" = newest ISSUE import per series, so new files landing in an existing
+        // series bump it to the front (series-row order only moved on brand-new series).
+        const newestImports = await prisma.issue.groupBy({
+            by: ['seriesId'],
+            where: { filePath: { not: null }, ...nestedSeriesAccessWhere(accessibleLibs) }, // <-- STRICT CHECK + per-library access
+            _max: { createdAt: true },
+            orderBy: { _max: { createdAt: 'desc' } },
             take: 7,
-            include: { 
+        });
+        const orderedIds = newestImports.map(g => g.seriesId);
+        const seriesRows = orderedIds.length === 0 ? [] : await prisma.series.findMany({
+            where: { id: { in: orderedIds } },
+            include: {
                 _count: { select: { issues: { where: { filePath: { not: null } } } } }, // <-- STRICT CHECK
-                issues: { 
+                issues: {
                     where: { coverUrl: { not: null }, filePath: { not: null } }, // <-- STRICT CHECK
-                    select: { coverUrl: true }, 
-                    take: 1 
-                } 
+                    select: { coverUrl: true },
+                    take: 1
+                }
             }
         });
+        const byId = new Map(seriesRows.map(s => [s.id, s]));
+        const recentSeries = orderedIds.map(id => byId.get(id)).filter((s): s is NonNullable<typeof s> => Boolean(s));
 
         const formatted = recentSeries.map(s => {
             let coverUrl = (s as any).coverUrl || null;

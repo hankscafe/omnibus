@@ -101,3 +101,73 @@ describe('Metadata editor lock affordance (issue #194 (f))', () => {
             expect.objectContaining({ title: 'No changes to save' })));
     });
 });
+
+// ==== Issue #194 (f), series side: the same lock affordance + no-op honesty in series mode ====
+
+const seriesProps = {
+    currentPath: '/lib/DC/Batman (2020)', name: 'Batman', publisher: 'DC', year: 2020,
+};
+
+function mockSeriesFetch(seriesData: Record<string, any>, updateResult: Record<string, any> = { success: true, changed: true }) {
+    fetchMock.mockImplementation(async (url: string, init?: any) => {
+        if (url === '/api/admin/config') {
+            return { ok: true, json: async () => ({ settings: [{ key: 'metadata_write_comicinfo', value: 'true' }] }) };
+        }
+        if (typeof url === 'string' && url.startsWith('/api/library/series?path=')) {
+            return { ok: true, json: async () => ({
+                seriesName: 'Batman', path: '/lib/DC/Batman (2020)', publisher: 'DC', year: 2020,
+                description: 'stored', universe: null, seriesGroup: null, hasCustomMetadata: false,
+                ...seriesData,
+            }) };
+        }
+        if (url === '/api/library/update' && init?.method === 'POST') {
+            return { ok: true, json: async () => updateResult };
+        }
+        return { ok: true, json: async () => ({}) };
+    });
+}
+
+const renderSeriesModal = () => render(
+    <MetadataEditorModal open onOpenChange={vi.fn()} mode="series" series={seriesProps as any} />
+);
+
+describe('Metadata editor lock affordance — series mode (issue #194 (f))', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('shows the lock notice for a locked series and unlocks via clearCustomMetadata', async () => {
+        mockSeriesFetch({ hasCustomMetadata: true }, { success: true, unlocked: true });
+        renderSeriesModal();
+
+        expect(await screen.findByText(/Manual-edits lock is on/i)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Remove Lock/i }));
+
+        await waitFor(() => {
+            const call = fetchMock.mock.calls.find(([url, init]: any[]) =>
+                url === '/api/library/update' && init?.method === 'POST');
+            expect(call).toBeTruthy();
+            expect(JSON.parse(call![1].body)).toEqual({ currentPath: '/lib/DC/Batman (2020)', clearCustomMetadata: true });
+        });
+        await waitFor(() => expect(screen.queryByText(/Manual-edits lock is on/i)).not.toBeInTheDocument());
+    });
+
+    it('shows no lock notice for an unlocked series', async () => {
+        mockSeriesFetch({ hasCustomMetadata: false });
+        renderSeriesModal();
+
+        await screen.findByText(/Write changes to ComicInfo\.xml/i);
+        expect(screen.queryByText(/Manual-edits lock is on/i)).not.toBeInTheDocument();
+    });
+
+    it('reports "No changes to save" when the series save was a no-op', async () => {
+        mockSeriesFetch({}, { success: true, changed: false, newPath: '/lib/DC/Batman (2020)' });
+        renderSeriesModal();
+
+        await screen.findByText(/Write changes to ComicInfo\.xml/i);
+        fireEvent.click(screen.getByRole('button', { name: /Save Metadata/i }));
+
+        await waitFor(() => expect(toastMock).toHaveBeenCalledWith(
+            expect.objectContaining({ title: 'No changes to save' })));
+    });
+});

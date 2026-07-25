@@ -23,7 +23,18 @@ export async function POST(request: Request) {
     const userId = (session?.user as any)?.id || 'System';
 
     const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType, seriesGroup,
-            description, universe, writeToFile, lockMetadata } = await request.json();
+            description, universe, writeToFile, lockMetadata, clearCustomMetadata } = await request.json();
+
+    // Unlock (issue #194 (f), series side): clears the manual-edits lock so provider syncs may
+    // refresh this series' narrative fields again. Mirrors the per-issue unlock; nothing else in
+    // the payload is touched on this path.
+    if (clearCustomMetadata === true) {
+        const record = await prisma.series.findFirst({ where: { folderPath: currentPath } });
+        if (!record) return NextResponse.json({ error: "Series not found." }, { status: 404 });
+        await prisma.series.update({ where: { id: record.id }, data: { hasCustomMetadata: false } });
+        await AuditLogger.log('RESTORE_SERIES_DEFAULTS', { seriesName: record.name, scope: 'lock' }, userId);
+        return NextResponse.json({ success: true, unlocked: true });
+    }
 
     // Mylar booktype values — anything else is ignored rather than stored
     const VALID_BOOK_TYPES = ['Print', 'OneShot', 'TPB', 'GN'];
@@ -100,6 +111,42 @@ export async function POST(request: Request) {
         where: { folderPath: currentPath } 
     });
 
+    // A zero-change save must be inert (issue #194 (f), series side): the metadata editor always
+    // sends lockMetadata, so an unconditional stamp locked the series against provider syncs on a
+    // no-op Save — and the unconditional embed below rewrote EVERY archive's ComicInfo.xml in the
+    // series for nothing. Diff first; the lock only engages when a narrative field genuinely
+    // changed (that's what the lock protects), and nothing at all is written on a true no-op.
+    const norm = (v: unknown) => (v === '' || v === undefined || v === null ? null : v);
+    let narrativeChanged = false;
+    let identityChanged = false;
+    let anyChange = true; // series-create path below always counts as a change
+
+    if (existingRecord) {
+        narrativeChanged =
+            (description !== undefined && norm(description) !== norm(existingRecord.description)) ||
+            (universe !== undefined && norm(universe) !== norm(existingRecord.universe)) ||
+            (seriesGroup !== undefined && norm(seriesGroup) !== norm(existingRecord.seriesGroup));
+        identityChanged =
+            cleanName !== existingRecord.name ||
+            parsedYear !== existingRecord.year ||
+            norm(publisher) !== norm(existingRecord.publisher) ||
+            parsedMonitored !== !!existingRecord.monitored ||
+            parsedIsManga !== existingRecord.isManga ||
+            (status ? status !== existingRecord.status : false) ||
+            (parsedBookType ? parsedBookType !== existingRecord.bookType : false) ||
+            (parsedCvId !== null && parsedCvId.toString() !== existingRecord.metadataId) ||
+            targetLib.id !== existingRecord.libraryId;
+        const pathChanged = currentPath.replace(/\\/g, '/').toLowerCase() !== activePath.toLowerCase();
+        anyChange = narrativeChanged || identityChanged || pathChanged;
+    }
+
+    if (existingRecord && !anyChange) {
+        await AuditLogger.log('UPDATE_SERIES_METADATA', {
+            seriesName: cleanName, oldPath: currentPath, newPath: activePath, changed: false,
+        }, userId);
+        return NextResponse.json({ success: true, newPath: activePath, changed: false });
+    }
+
     if (existingRecord) {
         const newMetadataId = parsedCvId !== null ? parsedCvId.toString() : existingRecord.metadataId;
         const isCv = existingRecord.metadataSource === 'COMICVINE';
@@ -113,7 +160,7 @@ export async function POST(request: Request) {
                 publisher: publisher || null,
                 folderPath: activePath,
                 monitored: parsedMonitored,
-                isManga: parsedIsManga, 
+                isManga: parsedIsManga,
                 metadataId: newMetadataId,
                 cvId: parsedCvId !== null && isCv ? parsedCvId : existingRecord.cvId,
                 metronId: parsedCvId !== null && isMetron ? parsedCvId : existingRecord.metronId,
@@ -124,9 +171,10 @@ export async function POST(request: Request) {
                 ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
                 ...(description !== undefined ? { description: description || null } : {}),
                 ...(universe !== undefined ? { universe: universe || null } : {}),
-                // Only the rich metadata editor locks the series against auto-sync; the basic
-                // Edit Info modal (name/year/publisher) leaves sync behavior unchanged.
-                ...(lockMetadata ? { hasCustomMetadata: true } : {})
+                // Only the rich metadata editor locks the series against auto-sync — and only
+                // when a narrative field actually changed; identity-only and no-op saves leave
+                // sync behavior unchanged (the basic Edit Info modal never sends lockMetadata).
+                ...(lockMetadata && narrativeChanged ? { hasCustomMetadata: true } : {})
             }
         });
 
@@ -194,7 +242,7 @@ export async function POST(request: Request) {
         newPath: activePath
     }, userId);
 
-    return NextResponse.json({ success: true, newPath: activePath });
+    return NextResponse.json({ success: true, newPath: activePath, changed: true });
 
   } catch (error: unknown) {
     Logger.log(`[Library Update API] Error: ${getErrorMessage(error)}`, 'error');

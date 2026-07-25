@@ -283,6 +283,8 @@ export async function GET(request: Request) {
       path: folderPath,
       coverUrl: finalSeriesCoverUrl,
       hasCustomCover: (seriesRecord as any)?.hasCustomCover || false,
+      // Manual-edits lock state — the metadata editor shows it and offers the unlock (issue #194 (f)).
+      hasCustomMetadata: (seriesRecord as any)?.hasCustomMetadata || false,
       downloadedIssues, 
       missingIssues,
       duplicates: duplicatesList

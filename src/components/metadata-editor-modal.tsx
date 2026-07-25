@@ -91,6 +91,7 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
         // A real load echoes back the series identity (seriesName/path). If it didn't, the form
         // would show blanks and a save could wipe the real description/universe/seriesGroup.
         if (!s.seriesName && !s.path) { setLoadFailed(true); setLoading(false); return }
+        setLocked(!!s.hasCustomMetadata)
         setIdentity({
           name: s.seriesName ?? series.name,
           publisher: s.publisher ?? series.publisher,
@@ -221,23 +222,35 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
     }
   }
 
-  // Clears hasCustomMetadata (and the DEEP_SYNCED stamp) so provider syncs and the lazy
-  // enrichment may refill this issue again. The modal stays open so the notice visibly clears.
+  // Clears hasCustomMetadata (and, for issues, the DEEP_SYNCED stamp) so provider syncs and the
+  // lazy enrichment may refill the record again. The modal stays open so the notice visibly clears.
   const handleUnlock = async () => {
-    if (!issue) return
     setUnlocking(true)
     try {
-      const res = await fetch("/api/library/issue", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ issueId: issue.id, clearCustomMetadata: true }),
-      })
+      let res: Response
+      if (mode === "issue" && issue) {
+        res = await fetch("/api/library/issue", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ issueId: issue.id, clearCustomMetadata: true }),
+        })
+      } else if (mode === "series" && series) {
+        res = await fetch("/api/library/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ currentPath: series.currentPath, clearCustomMetadata: true }),
+        })
+      } else {
+        return
+      }
       const result = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(result.error || `Unlock failed (${res.status})`)
       setLocked(false)
       toast({
         title: "Lock removed",
-        description: "Run Refresh Metadata on the series to pull provider data back into this issue.",
+        description: mode === "issue"
+          ? "Run Refresh Metadata on the series to pull provider data back into this issue."
+          : "The next metadata refresh may update this series' description again.",
       })
       onSaved?.(result)
     } catch (e: any) {
@@ -339,14 +352,16 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
               <Input value={form.universe || ""} onChange={e => set("universe", e.target.value)} className="bg-background border-border h-9" />
             </div>
 
-            {mode === "issue" && locked && (
+            {locked && (
               <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/40 p-3 rounded-lg">
                 <div className="grid gap-0.5 flex-1 min-w-[14rem]">
                   <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
                     <Lock className="w-3.5 h-3.5" /> Manual-edits lock is on
                   </span>
                   <p className="text-[11px] text-muted-foreground">
-                    Provider syncs and auto-enrichment preserve these fields. Remove the lock to let Refresh Metadata refill them from the provider.
+                    {mode === "issue"
+                      ? "Provider syncs and auto-enrichment preserve these fields. Remove the lock to let Refresh Metadata refill them from the provider."
+                      : "Provider syncs preserve this series' description and related fields. Remove the lock to let metadata refreshes update them again."}
                   </p>
                 </div>
                 <Button size="sm" variant="outline" disabled={unlocking} onClick={handleUnlock}

@@ -11,6 +11,7 @@ import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { processPageSweepChunk } from '@/lib/pages/page-sweep';
 
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
@@ -689,6 +690,17 @@ export function initWorker() {
                     });
                     
                     SystemNotifier.sendAlert('job_library_scan', { description: `Library scan complete. ${storageMessage}` }).catch(() => {});
+                    break;
+                }
+
+                case 'PAGE_SWEEP': {
+                    // Series page sweep chunk (issue #189 Phase 3). Self-chaining: each run
+                    // handles a handful of files then re-enqueues the remainder, so this single
+                    // worker is never blocked for a whole 400-file sweep. The processor owns
+                    // progress/cancel/completion; enqueueNext is injected to avoid an import cycle.
+                    await processPageSweepChunk(job.data, (next) =>
+                        omnibusQueue.add('PAGE_SWEEP', next, { jobId: `PAGE_SWEEP_${next.runId}_${next.processed}` })
+                    );
                     break;
                 }
 

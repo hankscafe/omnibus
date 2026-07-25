@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
-import { Loader2, Trash2, AlertTriangle, SkipForward, FileArchive } from "lucide-react"
+import { Loader2, Trash2, AlertTriangle, SkipForward, FileArchive, ScanSearch } from "lucide-react"
+import PageSweepModal from "@/components/page-sweep-modal"
 
 export interface PageManagerTarget {
   issueId: string
@@ -44,6 +45,10 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
   const [applying, setApplying] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [appliedAny, setAppliedAny] = useState(false)
+  // Series sweep (issue #189 Phase 3): the tile action hands the page to the sweep modal; a
+  // finished sweep bumps refreshKey so this grid reloads (its own pages may have been removed).
+  const [sweepEntry, setSweepEntry] = useState<string | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const target = queue[idx]
   const isCbz = !!target && CBZ_REGEX.test(target.filePath)
@@ -88,7 +93,7 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, idx, target?.issueId])
+  }, [open, idx, target?.issueId, refreshKey])
 
   const toggle = (name: string) => {
     setMarked(prev => {
@@ -197,6 +202,16 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
                           <span className="bg-red-600 text-white rounded-full p-2"><Trash2 className="w-4 h-4" /></span>
                         </span>
                       )}
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title="Remove this page everywhere in the series"
+                        onClick={(e) => { e.stopPropagation(); setSweepEntry(name) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setSweepEntry(name) } }}
+                        className="absolute bottom-1 right-1 p-1.5 rounded bg-black/60 text-white hover:bg-primary transition-colors"
+                      >
+                        <ScanSearch className="w-3.5 h-3.5" />
+                      </span>
                     </button>
                   )
                 })}
@@ -240,6 +255,15 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
         variant="destructive"
         isLoading={applying}
       />
+
+      {target && (
+        <PageSweepModal
+          open={!!sweepEntry}
+          onOpenChange={(o) => { if (!o) setSweepEntry(null) }}
+          source={sweepEntry ? { issueId: target.issueId, filePath: target.filePath, label: target.label, entryName: sweepEntry } : null}
+          onApplied={() => { setAppliedAny(true); setRefreshKey(k => k + 1) }}
+        />
+      )}
     </>
   )
 }

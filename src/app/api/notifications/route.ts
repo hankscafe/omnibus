@@ -46,7 +46,7 @@ export async function GET() {
     // These do not use the 'notified' flag, they simply show up if there is work to be done.
     if (role === 'ADMIN') {
         // All independent — run them (and the loose-file readdir) concurrently.
-        const [pendingReqs, pendingUsers, openReports, stalledReqs, unmatchedSeriesCount, looseFilesCount, sweepResultSetting] = await Promise.all([
+        const [pendingReqs, pendingUsers, openReports, stalledReqs, unmatchedSeriesCount, looseFilesCount, sweepResultSetting, pageSweepSetting] = await Promise.all([
             prisma.request.findMany({
                 where: { status: 'PENDING_APPROVAL' },
                 include: { user: { select: { username: true } } },
@@ -79,6 +79,7 @@ export async function GET() {
                 return 0;
             })(),
             prisma.systemSetting.findUnique({ where: { key: 'last_unmatched_sweep_result' } }),
+            prisma.systemSetting.findUnique({ where: { key: 'last_page_sweep_result' } }),
         ]);
 
         const totalUnmatched = unmatchedSeriesCount + looseFilesCount;
@@ -137,6 +138,22 @@ export async function GET() {
                 });
             }
         } catch (e) { /* pre-upgrade or corrupt value — no alert */ }
+
+        // Series page sweep result (issue #189 Phase 3) — same dynamic pattern: the next sweep
+        // overwrites the setting, and the 24h cap keeps a final result from lingering forever.
+        try {
+            const ps = pageSweepSetting?.value ? JSON.parse(pageSweepSetting.value) : null;
+            if (ps && (ps.status === 'COMPLETED' || ps.status === 'CANCELLED') && ps.finishedAt && Date.now() - ps.finishedAt < 24 * 60 * 60 * 1000) {
+                formatted.push({
+                    id: 'admin_page_sweep_alert',
+                    type: 'admin_sweep',
+                    title: ps.status === 'COMPLETED' ? 'Page Sweep Finished' : 'Page Sweep Cancelled',
+                    description: `"${ps.sourceLabel}": removed ${ps.removed} page(s) across ${ps.processed} file(s)${ps.failedCount ? `, ${ps.failedCount} failed` : ''}.`,
+                    imageUrl: null,
+                    date: new Date(ps.finishedAt)
+                });
+            }
+        } catch (e) { /* corrupt value — no alert */ }
     }
 
     // Sort all notifications by date descending

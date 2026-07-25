@@ -109,6 +109,16 @@ describe('Page Manager modal (issue #189)', () => {
         expect(screen.getByText(/Series #9/)).toBeInTheDocument();
     });
 
+    it('a tile\'s sweep control opens the series sweep for that page (Phase 3)', async () => {
+        render(<PageManagerModal open onOpenChange={vi.fn()} queue={[cbzTarget]} />);
+        await screen.findByTitle('001.jpg');
+
+        fireEvent.click(screen.getAllByTitle(/Remove this page everywhere in the series/i)[0]);
+        expect(await screen.findByText(/Remove This Page Everywhere/i)).toBeInTheDocument();
+        // Candidate fetch returns nothing in this harness — the sweep lands on an empty review.
+        expect(await screen.findByText(/No identical copies found/i)).toBeInTheDocument();
+    });
+
     it('skip advances without posting anything', async () => {
         const onOpenChange = vi.fn();
         render(<PageManagerModal open onOpenChange={onOpenChange} queue={[cbzTarget, { ...cbzTarget, issueId: 'i9', label: 'Series #9' }]} />);

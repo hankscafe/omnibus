@@ -404,6 +404,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/reader/page", post(handle_reader_page))
         .route("/api/reader/entries", post(handle_reader_entries))
         .route("/api/archive/remove-pages", post(handle_remove_pages))
+        .route("/api/archive/find-page", post(handle_find_page))
         .route("/api/watched-sync", post(handle_watched_sync))
         .route("/api/matcher/sweep", post(handle_matcher_sweep))
         .route("/api/backup", post(handle_backup))
@@ -693,6 +694,68 @@ async fn handle_remove_pages(
         "removed": removed_count,
         "new_file_path": final_path.to_string_lossy(),
     })))
+}
+
+#[derive(serde::Deserialize)]
+struct FindPageRequest {
+    source_path: String,
+    source_entry: String,
+    candidate_paths: Vec<String>,
+}
+
+/// Series page sweep, scan step (issue #189 Phase 3): fingerprints one page and reports every
+/// byte-identical copy across a BATCH of candidate archives. Read-only. CBZ candidates use the
+/// central-directory size prefilter (fast); non-zip candidates are reported as skipped — the
+/// caller shows a convert-first note (hashing a RAR page-by-page would spawn one unrar per page).
+/// Per-candidate failures land in `errors` without failing the batch.
+async fn handle_find_page(
+    Json(req): Json<FindPageRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let err = |code: StatusCode, msg: String| (code, Json(serde_json::json!({ "error": msg })));
+    if !is_absolute_non_traversing(&req.source_path) {
+        return Err(err(StatusCode::FORBIDDEN, "Invalid source path.".to_string()));
+    }
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let (hash, size) = converter::hash_archive_entry(
+            std::path::Path::new(&req.source_path), &req.source_entry,
+        )?;
+        let mut matches: Vec<serde_json::Value> = Vec::new();
+        let mut skipped: Vec<serde_json::Value> = Vec::new();
+        let mut errors: Vec<serde_json::Value> = Vec::new();
+        for cand in &req.candidate_paths {
+            if !is_absolute_non_traversing(cand) {
+                errors.push(serde_json::json!({ "path": cand, "error": "invalid path" }));
+                continue;
+            }
+            let p = std::path::Path::new(cand);
+            if !converter::is_zip_archive(p) {
+                skipped.push(serde_json::json!({ "path": cand, "reason": "not_cbz" }));
+                continue;
+            }
+            match converter::find_matching_pages_in_cbz(p, &hash, size) {
+                Ok(found) => {
+                    for (entry_name, index) in found {
+                        matches.push(serde_json::json!({ "path": cand, "entry_name": entry_name, "index": index }));
+                    }
+                }
+                Err(e) => errors.push(serde_json::json!({ "path": cand, "error": e.to_string() })),
+            }
+        }
+        Ok(serde_json::json!({
+            "source_hash": hash, "source_size": size,
+            "matches": matches, "skipped": skipped, "errors": errors,
+        }))
+    })
+    .await
+    .map_err(|e| {
+        log::error!("[Find Page] join error: {:?}", e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error.".to_string())
+    })?
+    .map_err(|e| {
+        log::warn!("[Find Page] scan failed: {}", e);
+        err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string())
+    })?;
+    Ok(Json(result))
 }
 
 #[derive(serde::Deserialize)]

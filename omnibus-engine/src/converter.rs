@@ -1248,6 +1248,80 @@ pub fn remove_pages_from_archive(path: &Path, entry_names: &[String]) -> Result<
     Ok((final_path, expected_remaining))
 }
 
+/// Real-container check for the sweep's candidate gate: extensions lie, signatures don't.
+pub fn is_zip_archive(path: &Path) -> bool {
+    is_zip_signature(&read_file_signature(path))
+}
+
+/// SHA-256 hex + byte length of ONE entry from any natively readable archive (issue #189
+/// Phase 3): the fingerprint of the page an admin wants found across the series.
+pub fn hash_archive_entry(path: &Path, entry: &str) -> Result<(String, u64)> {
+    use sha2::{Digest, Sha256};
+    let sig = read_file_signature(path);
+    let bytes: Vec<u8> = if is_zip_signature(&sig) {
+        let file = File::open(path).with_context(|| format!("Failed to open archive: {:?}", path))?;
+        let mut archive = zip::ZipArchive::new(file).context("Failed to read archive")?;
+        let mut f = archive.by_name(entry).map_err(|_| anyhow::anyhow!("Entry {:?} not found in {:?}", entry, path.file_name().unwrap_or_default()))?;
+        let mut buf = Vec::new();
+        use std::io::Read;
+        f.read_to_end(&mut buf)?;
+        buf
+    } else if is_rar_signature(&sig) {
+        rar_entry_bytes(path, entry)?
+    } else if is_7z_signature(&sig) {
+        sevenz_entry_bytes(path, entry)?
+    } else {
+        anyhow::bail!("Unsupported archive format: {:?}", path.file_name().unwrap_or_default());
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok((format!("{:x}", hasher.finalize()), bytes.len() as u64))
+}
+
+/// Byte-identical page matches inside a CBZ (issue #189 Phase 3, the series sweep's per-file
+/// step). The zip central directory carries every entry's UNCOMPRESSED size without touching
+/// data, so only size-equal candidates are ever decompressed and hashed — for a typical chapter
+/// that is 0–1 entries, which is what makes a 400-file sweep take seconds. Matching is by
+/// content only (scan groups rename their credit pages); returned indices are positions in the
+/// reader's page order (`sorted_image_entries` parity) so the UI can say "page 3".
+pub fn find_matching_pages_in_cbz(path: &Path, target_hash: &str, target_size: u64) -> Result<Vec<(String, usize)>> {
+    use sha2::{Digest, Sha256};
+    let file = File::open(path).with_context(|| format!("Failed to open archive: {:?}", path))?;
+    let mut archive = zip::ZipArchive::new(file).context("Failed to read archive")?;
+
+    // The reader's exact listing (filter + natural order) is the index authority.
+    let listed = sorted_image_entries(&mut archive);
+    let index_of: std::collections::HashMap<&str, usize> =
+        listed.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+
+    // Central-directory pass: sizes only, no decompression.
+    let mut candidates: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        let f = archive.by_index_raw(i)?;
+        let name = f.name().to_string();
+        if f.size() == target_size && index_of.contains_key(name.as_str()) {
+            candidates.push(name);
+        }
+    }
+
+    let mut matches: Vec<(String, usize)> = Vec::new();
+    for name in candidates {
+        let mut entry = archive.by_name(&name)?;
+        let mut buf = Vec::with_capacity(target_size as usize);
+        use std::io::Read;
+        entry.read_to_end(&mut buf)?;
+        drop(entry);
+        let mut hasher = Sha256::new();
+        hasher.update(&buf);
+        if format!("{:x}", hasher.finalize()) == target_hash {
+            let idx = *index_of.get(name.as_str()).unwrap_or(&0);
+            matches.push((name, idx));
+        }
+    }
+    matches.sort_by_key(|(_, i)| *i);
+    Ok(matches)
+}
+
 /// 7z → CBZ repack minus the marked pages, streamed entry-by-entry with the pure-Rust decoder
 /// (no CLI dependency, unlike conversion's unar path — this keeps removal testable everywhere).
 fn repack_7z_without_pages(path: &Path, remove_set: &std::collections::HashSet<&str>, expected_remaining: usize, tmp_path: &Path) -> Result<()> {
@@ -1758,6 +1832,80 @@ mod tests {
         fs::copy(reader_sevenz_fixture(), &cb7).unwrap();
         let err = remove_pages_from_archive(&cb7, &["../escape.png".to_string()]).unwrap_err();
         assert!(err.to_string().contains("traversal"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ==== Issue #189 Phase 3: series sweep scan (hash + size-prefiltered matching) ====
+
+    /// A zip holding `entries`: (name, bytes). Returns its path inside `dir`.
+    fn make_zip(dir: &Path, file_name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
+        use std::io::Write;
+        let path = dir.join(file_name);
+        let f = File::create(&path).unwrap();
+        let mut zw = ZipWriter::new(f);
+        let opts: FileOptions = FileOptions::default();
+        for (name, bytes) in entries {
+            zw.start_file(*name, opts).unwrap();
+            zw.write_all(bytes).unwrap();
+        }
+        zw.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn find_matching_pages_matches_by_content_not_name_with_reader_indices() {
+        let dir = scratch_dir();
+        let credit: &[u8] = b"scan group credit page bytes";
+        let source = make_zip(&dir, "src.cbz", &[("credit.jpg", credit), ("page1.jpg", b"story page one")]);
+        let (hash, size) = hash_archive_entry(&source, "credit.jpg").unwrap();
+
+        // Candidate: identical bytes under a DIFFERENT name, sorted after two story pages —
+        // reader index must be 2. A same-size decoy must NOT match (hash discriminates).
+        let cand = make_zip(&dir, "ch2.cbz", &[
+            ("01.jpg", b"chapter two page one"),
+            ("02.jpg", b"chapter two page two!!!!!!!!"), // same length as credit, different bytes
+            ("zz_credits.jpg", credit),
+            ("ComicInfo.xml", b"<ComicInfo/>"),
+        ]);
+        assert_eq!(cand, dir.join("ch2.cbz"));
+        let matches = find_matching_pages_in_cbz(&cand, &hash, size).unwrap();
+        assert_eq!(matches, vec![("zz_credits.jpg".to_string(), 2)]);
+
+        // A candidate with no identical page yields nothing.
+        let clean = make_zip(&dir, "ch3.cbz", &[("01.jpg", b"different content entirely")]);
+        assert!(find_matching_pages_in_cbz(&clean, &hash, size).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hash_archive_entry_reads_zip_and_7z_sources() {
+        let dir = scratch_dir();
+        let source = make_zip(&dir, "src.cbz", &[("credit.jpg", b"the page")]);
+        let (zip_hash, zip_size) = hash_archive_entry(&source, "credit.jpg").unwrap();
+        assert_eq!(zip_size, 8);
+        assert_eq!(zip_hash.len(), 64, "sha256 hex");
+        assert!(hash_archive_entry(&source, "nope.jpg").is_err());
+
+        // 7z source (the reader fixture) — the sweep's source page may live in any format.
+        let (h7, s7) = hash_archive_entry(&reader_sevenz_fixture(), "01.png").unwrap();
+        assert_eq!(h7.len(), 64);
+        assert!(s7 > 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_zip_archive_judges_by_signature_not_extension() {
+        use std::io::Write;
+        let dir = scratch_dir();
+        // A "cbr" that is really a zip (the classic lying extension) IS sweepable.
+        let lying = make_zip(&dir, "lying.cbr", &[("01.jpg", b"x")]);
+        assert!(is_zip_archive(&lying));
+        // A real RAR signature is not.
+        let real_rar = dir.join("real.cbr");
+        let mut f = File::create(&real_rar).unwrap();
+        f.write_all(b"Rar!\x1a\x07\x00").unwrap();
+        drop(f);
+        assert!(!is_zip_archive(&real_rar));
         let _ = fs::remove_dir_all(&dir);
     }
 

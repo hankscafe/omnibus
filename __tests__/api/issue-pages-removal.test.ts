@@ -56,8 +56,9 @@ const req = (body: any) => new Request('http://localhost/api/library/issue/pages
     method: 'POST', body: JSON.stringify(body),
 });
 
-// Engine fetch mock: entries listing + remove call, overridable per test.
-function mockEngine({ pages = PAGES, removeStatus = 200, removeBody = { new_page_count: 3, removed: 2 } } = {}) {
+// Engine fetch mock: entries listing + remove call, overridable per test. The engine always
+// echoes new_file_path (same path for in-place CBZ rewrites, a sibling .cbz for RAR/7z repacks).
+function mockEngine({ pages = PAGES, removeStatus = 200, removeBody = { new_page_count: 3, removed: 2, new_file_path: '/comics/S/S 001.cbz' } as any } = {}) {
     fetchMock.mockImplementation(async (url: string) => {
         if (url.endsWith('/api/reader/entries')) {
             return { ok: true, json: async () => ({ pages }) };
@@ -118,6 +119,31 @@ describe('POST /api/library/issue/pages — removal + index fixups (issue #189)'
         expect(mocks.transaction).toHaveBeenCalledTimes(1);
         expect(mocks.audit).toHaveBeenCalledWith('REMOVE_PAGES',
             expect.objectContaining({ issueId: 'i1', removedCount: 2, newPageCount: 3 }), 'admin1');
+    });
+
+    it('updates Issue.filePath when a RAR/7z was repacked as a sibling CBZ (Phase 2)', async () => {
+        mocks.issueFindUnique.mockResolvedValue({ ...row(), filePath: '/comics/S/S 001.cbr' });
+        mockEngine({ removeBody: { new_page_count: 4, removed: 1, new_file_path: '/comics/S/S 001.cbz' } });
+
+        const res = await POST(req({ issueId: 'i1', entryNames: ['p1.jpg'] }));
+        const json = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(json.convertedToCbz).toBe(true);
+        expect(mocks.issueUpdate).toHaveBeenCalledWith({
+            where: { id: 'i1' },
+            data: { pageCount: 4, filePath: '/comics/S/S 001.cbz' },
+        });
+        expect(mocks.audit).toHaveBeenCalledWith('REMOVE_PAGES',
+            expect.objectContaining({ convertedTo: '/comics/S/S 001.cbz' }), 'admin1');
+    });
+
+    it('does not touch filePath on an in-place CBZ rewrite', async () => {
+        const res = await POST(req({ issueId: 'i1', entryNames: ['p1.jpg', 'p3.jpg'] }));
+        const json = await res.json();
+
+        expect(json.convertedToCbz).toBe(false);
+        expect(mocks.issueUpdate).toHaveBeenCalledWith({ where: { id: 'i1' }, data: { pageCount: 3 } });
     });
 
     it('refuses stale entry names with a 409 and never calls the rewrite', async () => {

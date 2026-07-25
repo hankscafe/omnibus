@@ -68,9 +68,12 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "At least one page must remain. Delete the issue instead if that's the intent." }, { status: 400 });
         }
 
-        // Ask the engine to rewrite the file. Its refusals (stale list, last page, non-CBZ) are
-        // actionable messages — pass them through.
+        // Ask the engine to rewrite the file. Its refusals (stale list, last page, unsupported
+        // format) are actionable messages — pass them through. RAR/7z can't be written back, so
+        // removal there repacks the survivors as a sibling .cbz (issue #189 Phase 2) and
+        // new_file_path tells us where the issue's file lives now.
         let newPageCount: number;
+        let newFilePath: string | null = null;
         try {
             const removeRes = await fetch(ENGINE_URL + '/api/archive/remove-pages', {
                 method: 'POST',
@@ -83,6 +86,9 @@ export async function POST(request: Request) {
                 return NextResponse.json({ error: msg }, { status: removeRes.status === 422 ? 422 : 502 });
             }
             newPageCount = data.new_page_count;
+            if (typeof data.new_file_path === 'string' && data.new_file_path && data.new_file_path !== issue.filePath) {
+                newFilePath = data.new_file_path;
+            }
         } catch (e) {
             return NextResponse.json({ error: "The Rust engine is unreachable — page removal needs it. Check the engine container and try again." }, { status: 502 });
         }
@@ -98,7 +104,10 @@ export async function POST(request: Request) {
         const bookmarks = await prisma.bookmark.findMany({ where: { issueId } });
 
         const ops: any[] = [
-            prisma.issue.update({ where: { id: issueId }, data: { pageCount: newPageCount } }),
+            prisma.issue.update({
+                where: { id: issueId },
+                data: { pageCount: newPageCount, ...(newFilePath ? { filePath: newFilePath } : {}) },
+            }),
         ];
         for (const p of progresses) {
             // A pointer ON a removed page lands where the next surviving page now sits.
@@ -131,10 +140,11 @@ export async function POST(request: Request) {
             removedCount: entryNames.length,
             removedPages: entryNames.slice(0, 50),
             newPageCount,
+            ...(newFilePath ? { convertedTo: newFilePath } : {}),
         }, (session.user as any).id);
-        Logger.log(`[Pages] Removed ${entryNames.length} page(s) from ${issueName} — ${newPageCount} page(s) remain (issue #189).`, 'info');
+        Logger.log(`[Pages] Removed ${entryNames.length} page(s) from ${issueName} — ${newPageCount} page(s) remain${newFilePath ? ' (repacked as CBZ)' : ''} (issue #189).`, 'info');
 
-        return NextResponse.json({ success: true, newPageCount, removed: entryNames.length });
+        return NextResponse.json({ success: true, newPageCount, removed: entryNames.length, convertedToCbz: !!newFilePath });
     } catch (error: unknown) {
         Logger.log(`[Pages] Removal failed: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

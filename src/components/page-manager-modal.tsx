@@ -27,11 +27,14 @@ interface Props {
   queue: PageManagerTarget[]
   /** Called when the modal closes after at least one successful removal (refresh page counts etc.). */
   onApplied?: () => void
+  /** Pre-marked entry names for the FIRST queue item — the in-reader flagging handoff (issue #189
+   *  Phase 2). Intersected with the freshly loaded page list, so stale flags simply drop off. */
+  initialMarked?: string[]
 }
 
 const CBZ_REGEX = /\.(cbz|zip)$/i
 
-export default function PageManagerModal({ open, onOpenChange, queue, onApplied }: Props) {
+export default function PageManagerModal({ open, onOpenChange, queue, onApplied, initialMarked }: Props) {
   const { toast } = useToast()
   const [idx, setIdx] = useState(0)
   const [pages, setPages] = useState<string[] | null>(null)
@@ -53,14 +56,14 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied 
     setAppliedAny(false)
   }, [open])
 
-  // Load the current issue's page list. Entry NAMES are the unit of work end to end.
+  // Load the current issue's page list. Entry NAMES are the unit of work end to end. RAR/7z
+  // archives list fine through the engine — removal repacks them as CBZ (note shown in the grid).
   useEffect(() => {
     if (!open || !target) return
     let cancelled = false
     setPages(null)
     setMarked(new Set())
     setLoadError(null)
-    if (!isCbz) return // non-CBZ: render the format notice, nothing to fetch
     setLoading(true)
     fetch(`/api/reader/pages?path=${encodeURIComponent(target.filePath)}`)
       .then(async r => {
@@ -74,6 +77,11 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied 
           setLoadError("No readable pages found in this archive.")
         } else {
           setPages(data.pages)
+          // The in-reader flagging handoff pre-marks pages on the first queue item only.
+          if (idx === 0 && initialMarked && initialMarked.length > 0) {
+            const valid = new Set(data.pages as string[])
+            setMarked(new Set(initialMarked.filter(n => valid.has(n))))
+          }
         }
       })
       .catch(e => { if (!cancelled) setLoadError(e?.message || "Failed to list pages.") })
@@ -119,7 +127,7 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied 
       setAppliedAny(true)
       toast({
         title: "Pages removed",
-        description: `${data.removed} page(s) deleted from ${target.label} — ${data.newPageCount} page(s) remain. Progress and bookmarks were adjusted.`,
+        description: `${data.removed} page(s) deleted from ${target.label} — ${data.newPageCount} page(s) remain.${data.convertedToCbz ? ' The file was repacked as CBZ.' : ''} Progress and bookmarks were adjusted.`,
       })
       setConfirmOpen(false)
       advance()
@@ -147,15 +155,7 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied 
             </DialogDescription>
           </DialogHeader>
 
-          {!target ? null : !isCbz ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 py-10 px-4 text-center">
-              <FileArchive className="w-8 h-8 text-amber-500" />
-              <p className="font-semibold text-foreground">This file isn't a CBZ</p>
-              <p className="text-sm text-muted-foreground max-w-md">
-                Page removal currently supports CBZ archives only — RAR/7z can't be written back. Convert this file to CBZ first (the CBR Auto-Converter in Admin settings), then manage its pages.
-              </p>
-            </div>
-          ) : loading ? (
+          {!target ? null : loading ? (
             <div className="flex-1 flex items-center justify-center py-12 text-muted-foreground">
               <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading pages…
             </div>
@@ -167,6 +167,12 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied 
             </div>
           ) : pages ? (
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+              {!isCbz && (
+                <div className="flex items-start gap-2 p-3 mt-1 rounded border border-amber-500/40 bg-amber-500/10 text-xs text-amber-600 dark:text-amber-400">
+                  <FileArchive className="w-4 h-4 shrink-0 mt-px" />
+                  <span>Removing pages rewrites this file as <strong>CBZ</strong> — RAR/7z archives can't be written back. Reading continues seamlessly afterward.</span>
+                </div>
+              )}
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 py-2">
                 {pages.map((name, i) => {
                   const isMarked = marked.has(name)
@@ -213,7 +219,7 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied 
             )}
             <Button
               variant="destructive"
-              disabled={!isCbz || !pages || marked.size === 0 || allMarked || applying}
+              disabled={!pages || marked.size === 0 || allMarked || applying}
               onClick={() => setConfirmOpen(true)}
               className="font-bold"
             >

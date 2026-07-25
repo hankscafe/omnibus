@@ -652,11 +652,13 @@ struct RemovePagesRequest {
     entry_names: Vec<String>,
 }
 
-/// Page removal (issue #189): rewrites a CBZ without the named page entries. Destructive — the
-/// heavy lifting (name verification, at-least-one-page floor, temp-write + verify + atomic swap)
-/// lives in converter::remove_pages_from_cbz; failures leave the original file untouched. The
-/// Node route resolves issueId → path and owns the DB fixups; this endpoint trusts the internal
-/// caller like every other path-taking route behind require_internal_auth.
+/// Page removal (issue #189): rewrites an archive without the named page entries. CBZ rewrites in
+/// place; RAR/7z are repacked as a sibling .cbz (write-back impossible) and the original retired —
+/// `new_file_path` tells the caller where the file lives now. Destructive — the heavy lifting
+/// (name verification, at-least-one-page floor, temp-write + verify + atomic swap) lives in
+/// converter::remove_pages_from_archive; failures leave the original file untouched. The Node
+/// route resolves issueId → path and owns the DB fixups; this endpoint trusts the internal caller
+/// like every other path-taking route behind require_internal_auth.
 async fn handle_remove_pages(
     Json(req): Json<RemovePagesRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -668,8 +670,8 @@ async fn handle_remove_pages(
     let path = req.file_path.clone();
     let names = req.entry_names.clone();
     let removed_count = names.len();
-    let new_count = tokio::task::spawn_blocking(move || {
-        converter::remove_pages_from_cbz(std::path::Path::new(&path), &names)
+    let (final_path, new_count) = tokio::task::spawn_blocking(move || {
+        converter::remove_pages_from_archive(std::path::Path::new(&path), &names)
     })
     .await
     .map_err(|e| {
@@ -678,15 +680,19 @@ async fn handle_remove_pages(
     })?
     .map_err(|e| {
         log::warn!("[Remove Pages] rewrite refused/failed for {}: {}", req.file_path, e);
-        // The converter's messages are operator-actionable (stale list, last page, non-zip) —
-        // surface them verbatim as a client error so the UI can show the real reason.
+        // The converter's messages are operator-actionable (stale list, last page, unsupported
+        // format) — surface them verbatim as a client error so the UI can show the real reason.
         err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string())
     })?;
     log::info!(
-        "[Remove Pages] Removed {} page(s) from {} — {} page(s) remain (issue #189).",
-        removed_count, req.file_path, new_count
+        "[Remove Pages] Removed {} page(s) from {} — {} page(s) remain at {} (issue #189).",
+        removed_count, req.file_path, new_count, final_path.display()
     );
-    Ok(Json(serde_json::json!({ "new_page_count": new_count, "removed": removed_count })))
+    Ok(Json(serde_json::json!({
+        "new_page_count": new_count,
+        "removed": removed_count,
+        "new_file_path": final_path.to_string_lossy(),
+    })))
 }
 
 #[derive(serde::Deserialize)]

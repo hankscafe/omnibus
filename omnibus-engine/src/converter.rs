@@ -1155,6 +1155,187 @@ pub fn remove_pages_from_cbz(path: &Path, entry_names: &[String]) -> Result<usiz
     Ok(expected_remaining)
 }
 
+/// Page removal for ANY natively readable archive (issue #189 Phase 2). CBZ rewrites in place;
+/// RAR/7z cannot be written back, so removal there IS a conversion: the surviving entries are
+/// repacked into a sibling `.cbz` and the original file is retired. Same safety posture as the
+/// CBZ path — name-verified marks, at-least-one-page floor, verify-then-swap, no failure path
+/// that damages the original.
+///
+/// Returns `(final_path, new_page_count)` — `final_path` differs from the input for RAR/7z
+/// (extension becomes .cbz) and the caller owns updating any stored file path.
+pub fn remove_pages_from_archive(path: &Path, entry_names: &[String]) -> Result<(PathBuf, usize)> {
+    if entry_names.is_empty() {
+        anyhow::bail!("No pages given to remove.");
+    }
+    // Entry names come from the archive's own listing, but never trust them as paths: a
+    // traversal-shaped name must not be able to touch anything outside the work area.
+    if entry_names.iter().any(|n| n.split(['/', '\\']).any(|seg| seg == "..")) {
+        anyhow::bail!("Refusing entry names containing traversal segments.");
+    }
+
+    let sig = read_file_signature(path);
+    if is_zip_signature(&sig) {
+        let n = remove_pages_from_cbz(path, entry_names)?;
+        return Ok((path.to_path_buf(), n));
+    }
+    if !is_rar_signature(&sig) && !is_7z_signature(&sig) {
+        anyhow::bail!("Unsupported archive format for page removal: {:?}", path.file_name().unwrap_or_default());
+    }
+
+    // Shared verification against the archive's CURRENT reader listing (stale marks abort).
+    let images = list_image_entries(path)?;
+    let image_set: std::collections::HashSet<&str> = images.iter().map(|s| s.as_str()).collect();
+    let missing = entry_names.iter().filter(|n| !image_set.contains(n.as_str())).count();
+    if missing > 0 {
+        anyhow::bail!(
+            "{} of the selected pages no longer exist in this archive (it changed since the pages were listed). Re-open the page view and try again.",
+            missing
+        );
+    }
+    let remove_set: std::collections::HashSet<&str> = entry_names.iter().map(|s| s.as_str()).collect();
+    let expected_remaining = images.len() - remove_set.len();
+    if expected_remaining < 1 {
+        anyhow::bail!("Refusing to remove every page — at least one page must remain. Delete the issue instead if that's the intent.");
+    }
+
+    // The rewritten archive is a CBZ next to the original. Never clobber an existing sibling.
+    let final_path = path.with_extension("cbz");
+    if final_path != path && final_path.exists() {
+        anyhow::bail!(
+            "A .cbz with this name already exists next to the original ({:?}) — resolve that first.",
+            final_path.file_name().unwrap_or_default()
+        );
+    }
+    let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp_path = path.with_file_name(format!(".{}.pages_tmp_{}.cbz", file_name, uuid::Uuid::new_v4()));
+
+    let result = if is_7z_signature(&sig) {
+        repack_7z_without_pages(path, &remove_set, expected_remaining, &tmp_path)
+    } else {
+        repack_rar_without_pages(path, &remove_set, expected_remaining, &tmp_path)
+    };
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // Verify the repack before it becomes the real file.
+    let verify = (|| -> Result<()> {
+        let f = File::open(&tmp_path).context("Failed to re-open rewritten archive")?;
+        let mut check = zip::ZipArchive::new(f).context("Rewritten archive is unreadable")?;
+        let n = sorted_image_entries(&mut check).len();
+        if n != expected_remaining {
+            anyhow::bail!("Rewritten archive verification failed (expected {} pages, found {}) — original left untouched.", expected_remaining, n);
+        }
+        Ok(())
+    })();
+    if let Err(e) = verify {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    fs::rename(&tmp_path, &final_path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        anyhow::anyhow!("Failed to move the rewritten archive into place: {}", e)
+    })?;
+    // The original RAR/7z is retired only after the verified CBZ is in place. A failed delete
+    // leaves both files — noisy but safe (the duplicate detector will flag it for cleanup).
+    if final_path != path {
+        if let Err(e) = fs::remove_file(path) {
+            log::warn!("[Converter] Rewrote {:?} as {:?} but could not remove the original: {}", file_name, final_path.file_name().unwrap_or_default(), e);
+        }
+    }
+    Ok((final_path, expected_remaining))
+}
+
+/// 7z → CBZ repack minus the marked pages, streamed entry-by-entry with the pure-Rust decoder
+/// (no CLI dependency, unlike conversion's unar path — this keeps removal testable everywhere).
+fn repack_7z_without_pages(path: &Path, remove_set: &std::collections::HashSet<&str>, expected_remaining: usize, tmp_path: &Path) -> Result<()> {
+    use std::io::Write;
+    let archive = sevenz_rust2::Archive::open(path)
+        .map_err(|e| anyhow::anyhow!("could not open 7z {:?}: {e}", path.file_name().unwrap_or_default()))?;
+    let names: Vec<String> = archive
+        .files
+        .iter()
+        .filter(|f| !f.is_directory() && f.has_stream())
+        .map(|f| f.name().to_string())
+        .collect();
+    let mut reader = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty())
+        .map_err(|e| anyhow::anyhow!("could not read 7z {:?}: {e}", path.file_name().unwrap_or_default()))?;
+
+    let tmp_file = File::create(tmp_path).context("Failed to create temp archive")?;
+    let mut writer = ZipWriter::new(tmp_file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for name in names {
+        if remove_set.contains(name.as_str()) {
+            continue;
+        }
+        let bytes = reader.read_file(&name)
+            .map_err(|e| anyhow::anyhow!("7z produced no bytes for entry {:?}: {e}", name))?;
+        let zip_name = name.replace('\\', "/");
+        let base = zip_name.rsplit('/').next().unwrap_or(&zip_name).to_ascii_lowercase();
+        writer.start_file(zip_name.clone(), options)?;
+        if base == "comicinfo.xml" {
+            let xml = String::from_utf8_lossy(&bytes).to_string();
+            writer.write_all(strip_comic_info_pages(&xml, expected_remaining).as_bytes())?;
+        } else {
+            writer.write_all(&bytes)?;
+        }
+    }
+    writer.finish()?;
+    Ok(())
+}
+
+/// RAR → CBZ repack minus the marked pages via one native extraction pass (unrar/unar — the same
+/// decoders conversion trusts), then a rezip of everything that survived.
+fn repack_rar_without_pages(path: &Path, remove_set: &std::collections::HashSet<&str>, expected_remaining: usize, tmp_path: &Path) -> Result<()> {
+    let temp_dir = extraction_temp_base().join(format!("omnibus_pages_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).context("Failed to create temp directory")?;
+
+    let result = (|| -> Result<()> {
+        let extraction = extract_archive_native(path, &temp_dir)?;
+        validate_extraction(&extraction, find_images(&temp_dir)?.len())?;
+
+        // Drop the marked pages from the extracted tree. A miss here means the extraction didn't
+        // produce what the listing promised — abort rather than repack a wrong set.
+        for name in remove_set {
+            let victim = temp_dir.join(name);
+            fs::remove_file(&victim)
+                .with_context(|| format!("Marked page {:?} was not extracted — archive may be damaged", name))?;
+        }
+
+        // Adjust any ComicInfo.xml in place before the rezip.
+        for entry in jwalk::WalkDir::new(&temp_dir) {
+            let entry = entry?;
+            let p = entry.path();
+            if p.is_file() && p.file_name().map(|n| n.to_string_lossy().eq_ignore_ascii_case("comicinfo.xml")).unwrap_or(false) {
+                if let Ok(xml) = fs::read_to_string(&p) {
+                    let _ = fs::write(&p, strip_comic_info_pages(&xml, expected_remaining));
+                }
+            }
+        }
+
+        let tmp_file = File::create(tmp_path).context("Failed to create temp archive")?;
+        let mut writer = ZipWriter::new(tmp_file);
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for entry in jwalk::WalkDir::new(&temp_dir) {
+            let entry = entry?;
+            let p = entry.path();
+            if p.is_file() {
+                let name = p.strip_prefix(&temp_dir)?.to_string_lossy().replace('\\', "/");
+                writer.start_file(name, options)?;
+                let mut f = File::open(&p)?;
+                std::io::copy(&mut f, &mut writer)?;
+            }
+        }
+        writer.finish()?;
+        Ok(())
+    })();
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    result
+}
+
 /// Ensures `<folder>` has a usable cover. If one already exists (custom upload, a packed cover, or a
 /// prior extraction) its path is returned untouched; otherwise the first page of `archive_path` is
 /// written to `<folder>/cover.<ext>`. Best-effort — returns None on any failure. Only writes formats
@@ -1519,6 +1700,84 @@ mod tests {
         drop(f);
         let err = remove_pages_from_cbz(&fake_rar, &["page1.jpg".to_string()]).unwrap_err();
         assert!(err.to_string().contains("CBZ"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ==== Issue #189 Phase 2: RAR/7z removal = repack as CBZ ====
+
+    #[test]
+    fn remove_pages_from_cb7_repacks_as_cbz_and_retires_original() {
+        // Pure-Rust 7z path — runs everywhere (no unar needed, unlike conversion).
+        let dir = scratch_dir();
+        let cb7 = dir.join("pages_probe.cb7");
+        fs::copy(reader_sevenz_fixture(), &cb7).unwrap();
+
+        let (final_path, remaining) = remove_pages_from_archive(&cb7, &["02.png".to_string()]).unwrap();
+        assert_eq!(final_path, dir.join("pages_probe.cbz"), "rewritten as a sibling CBZ");
+        assert_eq!(remaining, 2);
+        assert!(!cb7.exists(), "original .cb7 retired after the verified repack");
+
+        let mut archive = zip::ZipArchive::new(File::open(&final_path).unwrap()).unwrap();
+        let pages = sorted_image_entries(&mut archive);
+        assert_eq!(pages, vec!["01.png", "10.png"], "marked page gone, order preserved");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_pages_from_cb7_stale_name_aborts_untouched() {
+        let dir = scratch_dir();
+        let cb7 = dir.join("stale_probe.cb7");
+        fs::copy(reader_sevenz_fixture(), &cb7).unwrap();
+        let before = fs::read(&cb7).unwrap();
+
+        let err = remove_pages_from_archive(&cb7, &["ghost.png".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("no longer exist"), "{}", err);
+        assert_eq!(fs::read(&cb7).unwrap(), before, "original byte-identical after abort");
+        assert!(!dir.join("stale_probe.cbz").exists(), "no cbz appears on abort");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_pages_from_cb7_refuses_clobbering_an_existing_cbz_sibling() {
+        let dir = scratch_dir();
+        let cb7 = dir.join("collide.cb7");
+        fs::copy(reader_sevenz_fixture(), &cb7).unwrap();
+        fs::write(dir.join("collide.cbz"), b"already here").unwrap();
+
+        let err = remove_pages_from_archive(&cb7, &["02.png".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{}", err);
+        assert!(cb7.exists(), "original untouched");
+        assert_eq!(fs::read(dir.join("collide.cbz")).unwrap(), b"already here", "sibling not clobbered");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_pages_from_archive_rejects_traversal_entry_names() {
+        let dir = scratch_dir();
+        let cb7 = dir.join("traversal.cb7");
+        fs::copy(reader_sevenz_fixture(), &cb7).unwrap();
+        let err = remove_pages_from_archive(&cb7, &["../escape.png".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("traversal"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_pages_from_rar_repacks_as_cbz() {
+        if !unrar_available() { eprintln!("skipping: unrar not on PATH"); return; }
+        // OMNIBUS_CACHE_DIR steers extraction temp; default /config/cache doesn't exist on dev boxes.
+        std::env::set_var("OMNIBUS_CACHE_DIR", std::env::temp_dir());
+
+        let dir = scratch_dir();
+        let cbr = dir.join("pages_probe.cbr");
+        fs::copy(reader_rar_fixture(), &cbr).unwrap();
+
+        let (final_path, remaining) = remove_pages_from_archive(&cbr, &["10.png".to_string()]).unwrap();
+        assert_eq!(final_path, dir.join("pages_probe.cbz"));
+        assert_eq!(remaining, 2);
+        assert!(!cbr.exists(), "original .cbr retired");
+
+        let mut archive = zip::ZipArchive::new(File::open(&final_path).unwrap()).unwrap();
+        assert_eq!(sorted_image_entries(&mut archive), vec!["01.png", "02.png"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

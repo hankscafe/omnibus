@@ -5,12 +5,14 @@ import { useSearchParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import localforage from "localforage"
-import { 
-  ChevronLeft, ChevronRight, X, Loader2, Maximize, Minimize, BookOpen, 
+import {
+  ChevronLeft, ChevronRight, X, Loader2, Maximize, Minimize, BookOpen,
   Settings as SettingsIcon, SkipBack, SkipForward, CheckCircle2,
   Paintbrush, LayoutTemplate, MonitorPlay, Zap, ZoomIn, ZoomOut, Search, AlignHorizontalSpaceAround,
-  Sun, Bookmark, CloudDownload, Scissors
+  Sun, Bookmark, CloudDownload, Scissors, Flag
 } from "lucide-react"
+import { useSession } from "next-auth/react"
+import PageManagerModal from "@/components/page-manager-modal"
 import { useToast } from "@/components/ui/use-toast"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
@@ -39,6 +41,17 @@ function ReaderContent() {
   
   // Bookmarks State
   const [bookmarks, setBookmarks] = useState<number[]>([]);
+
+  // In-reader page flagging (issue #189 Phase 2, admin-only): flag junk pages while reading; on
+  // close (or via the review chip) the flags pre-fill the Page Manager, which owns the explicit
+  // delete confirmation — flags themselves never delete anything.
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === 'ADMIN';
+  const [issueId, setIssueId] = useState<string | null>(null);
+  const [flaggedPages, setFlaggedPages] = useState<Set<string>>(new Set());
+  const [pageManagerOpen, setPageManagerOpen] = useState(false);
+  const exitAfterManagerRef = useRef(false);
+  const managerAppliedRef = useRef(false);
 
   // PWA Offline Caching State
   const [pageUrls, setPageUrls] = useState<Record<string, string>>({});
@@ -111,6 +124,45 @@ function ReaderContent() {
     return { 'Content-Type': 'application/json' };
   }, []);
 
+  // Flag/unflag the page on screen (by entry NAME — the unit the Page Manager works in).
+  const toggleFlagCurrentPage = () => {
+    const name = pages[currentIndex];
+    if (!name) return;
+    setFlaggedPages(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  // Close intercept: flags pending → review them in the Page Manager first (explicit confirm
+  // lives there); the exit continues when the manager closes. No flags → plain exit.
+  const handleReaderClose = () => {
+    if (isAdmin && issueId && filePath && flaggedPages.size > 0) {
+      exitAfterManagerRef.current = true;
+      setPageManagerOpen(true);
+      return;
+    }
+    router.back();
+  };
+
+  const handleManagerOpenChange = (open: boolean) => {
+    setPageManagerOpen(open);
+    if (!open) {
+      const exit = exitAfterManagerRef.current;
+      const applied = managerAppliedRef.current;
+      exitAfterManagerRef.current = false;
+      managerAppliedRef.current = false;
+      if (exit) {
+        router.back();
+      } else if (applied) {
+        // Pages changed under the open reader — reload so indices, progress, and the page list agree.
+        window.location.reload();
+      }
+    }
+  };
+
   // Fetch Pages, Context, & Exact Progress
   useEffect(() => {
     if (!filePath) return;
@@ -121,6 +173,8 @@ function ReaderContent() {
     setIsReadyToSync(false);
     setPrefsLoaded(false);
     setPages([]);
+    setFlaggedPages(new Set());
+    setIssueId(null);
     
     Promise.all([
       fetch(`/api/reader/pages?path=${encodeURIComponent(filePath)}`).then(res => res.json()),
@@ -175,7 +229,8 @@ function ReaderContent() {
         }
         
         setIsMarkedRead(progressData?.isCompleted || false);
-        setTimeout(() => setIsReadyToSync(true), 500); 
+        setIssueId(progressData?.issueId || null);
+        setTimeout(() => setIsReadyToSync(true), 500);
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
@@ -570,7 +625,7 @@ function ReaderContent() {
         onMouseLeave={() => setHoverTop(false)}
       >
         <div className="flex items-center gap-2">
-            <Button variant="ghost" className="text-white hover:bg-white/20 font-bold" onClick={() => router.back()}>
+            <Button variant="ghost" className="text-white hover:bg-white/20 font-bold" onClick={handleReaderClose}>
                 <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Close</span>
             </Button>
             
@@ -604,15 +659,36 @@ function ReaderContent() {
                     <><CloudDownload className="w-4 h-4 mr-2" /> Offline</>
                 )}
             </Button>
-            <Button 
-                variant="ghost" 
-                size="icon" 
-                className={`text-white hover:bg-white/20 ${bookmarks.includes(currentIndex) ? 'text-yellow-400' : ''}`} 
-                onClick={toggleBookmark} 
+            <Button
+                variant="ghost"
+                size="icon"
+                className={`text-white hover:bg-white/20 ${bookmarks.includes(currentIndex) ? 'text-yellow-400' : ''}`}
+                onClick={toggleBookmark}
                 title="Bookmark Page"
             >
                 <Bookmark className={`w-5 h-5 ${bookmarks.includes(currentIndex) ? 'fill-current' : ''}`} />
             </Button>
+            {isAdmin && issueId && (
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`text-white hover:bg-white/20 ${flaggedPages.has(pages[currentIndex]) ? 'text-red-400' : ''}`}
+                    onClick={toggleFlagCurrentPage}
+                    title="Flag page for removal (reviewed before anything is deleted)"
+                >
+                    <Flag className={`w-5 h-5 ${flaggedPages.has(pages[currentIndex]) ? 'fill-current' : ''}`} />
+                </Button>
+            )}
+            {isAdmin && issueId && flaggedPages.size > 0 && (
+                <Button
+                    variant="ghost"
+                    className="text-red-300 hover:bg-white/20 font-bold text-xs px-2"
+                    onClick={() => setPageManagerOpen(true)}
+                    title="Review flagged pages in the Page Manager"
+                >
+                    Review {flaggedPages.size} flagged
+                </Button>
+            )}
             <Button variant="ghost" size="icon" className={`text-white hover:bg-white/20 ${isMarkedRead ? 'text-green-500' : ''}`} onClick={toggleReadStatus} title="Mark as Read">
                 <CheckCircle2 className="w-5 h-5" />
             </Button>
@@ -937,6 +1013,18 @@ function ReaderContent() {
               </div>
           </DialogContent>
       </Dialog>
+
+      {/* PAGE MANAGER (issue #189 Phase 2): reviews the pages flagged while reading. Flags only
+          pre-fill the grid — deletion happens solely through the manager's explicit confirm. */}
+      {isAdmin && issueId && filePath && (
+          <PageManagerModal
+              open={pageManagerOpen}
+              onOpenChange={handleManagerOpenChange}
+              queue={[{ issueId, filePath, label: `${seriesName || 'Issue'}${issueName ? ' ' + issueName : ''}` }]}
+              initialMarked={[...flaggedPages]}
+              onApplied={() => { managerAppliedRef.current = true; setFlaggedPages(new Set()); }}
+          />
+      )}
     </div>
   )
 }

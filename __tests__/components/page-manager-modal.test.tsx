@@ -80,12 +80,21 @@ describe('Page Manager modal (issue #189)', () => {
         expect(screen.getByRole('button', { name: /Delete 4 Pages/i })).toBeDisabled();
     });
 
-    it('shows the CBZ-only notice for RAR files instead of fetching pages', async () => {
+    it('loads the grid for RAR files with the repack-as-CBZ note, and deletion works (Phase 2)', async () => {
         render(<PageManagerModal open onOpenChange={vi.fn()} queue={[cbrTarget]} />);
 
-        expect(await screen.findByText(/isn't a CBZ/i)).toBeInTheDocument();
-        expect(fetchMock.mock.calls.some(([u]: any[]) => typeof u === 'string' && u.startsWith('/api/reader/pages'))).toBe(false);
-        expect(screen.getByRole('button', { name: /Delete\s*Page/i })).toBeDisabled();
+        expect(await screen.findByTitle('001.jpg')).toBeInTheDocument();
+        expect(screen.getByText(/rewrites this file as/i)).toBeInTheDocument();
+        fireEvent.click(screen.getByTitle('002.jpg'));
+        expect(screen.getByRole('button', { name: /Delete 1 Page/i })).toBeEnabled();
+    });
+
+    it('pre-marks initialMarked pages from the reader handoff, dropping stale names (Phase 2)', async () => {
+        render(<PageManagerModal open onOpenChange={vi.fn()} queue={[cbzTarget]} initialMarked={['002.jpg', 'ghost.jpg']} />);
+
+        expect(await screen.findByTitle('002.jpg')).toBeInTheDocument();
+        expect(screen.getByText(/1 of 4 pages marked/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Delete 1 Page/i })).toBeEnabled();
     });
 
     it('walks a multi-issue queue: applying advances to the next issue', async () => {

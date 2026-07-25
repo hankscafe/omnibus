@@ -59,15 +59,18 @@ export async function GET(request: Request) {
             where: { userId_issueId: { userId, issueId: issue.id } }
         });
 
+        // issueId rides along so the reader knows which DB row it is showing — the in-reader
+        // page-flagging flow (issue #189 Phase 2) needs it for the Page Manager handoff.
         if (progress) {
             return NextResponse.json({
                 currentPage: progress.currentPage,
                 isCompleted: progress.isCompleted,
-                totalPages: progress.totalPages
+                totalPages: progress.totalPages,
+                issueId: issue.id
             });
         }
 
-        return NextResponse.json({ currentPage: 0, isCompleted: false });
+        return NextResponse.json({ currentPage: 0, isCompleted: false, issueId: issue.id });
     } catch (error: unknown) {
         Logger.log(`[Progress API] GET Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ currentPage: 0, isCompleted: false });

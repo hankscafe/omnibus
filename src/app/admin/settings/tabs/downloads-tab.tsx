@@ -425,10 +425,11 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 <SelectContent>
                                     <SelectItem value="flaresolverr">FlareSolverr</SelectItem>
                                     <SelectItem value="byparr">Byparr</SelectItem>
+                                    <SelectItem value="trawl">Trawl</SelectItem>
                                 </SelectContent>
                             </Select>
                             <p className="text-[11px] text-muted-foreground mt-1">
-                                Both speak the same API on port 8191, so the URL below works for either — point it at whichever container you run (Byparr: <code>ghcr.io/thephaseless/byparr</code>). The solve timeout is sent in the correct unit automatically (FlareSolverr uses milliseconds, Byparr uses seconds).
+                                All three speak the same API on port 8191, so the URL below works for any of them — point it at whichever container you run (Byparr: <code>ghcr.io/thephaseless/byparr</code>, Trawl: <code>ghcr.io/germondai/trawl</code>). The solve timeout is sent in the correct unit automatically (FlareSolverr and Trawl use milliseconds, Byparr uses seconds). If FlareSolverr keeps timing out on GetComics challenges, Trawl (Camoufox-based) is the community's current pick.
                             </p>
                         </div>
 

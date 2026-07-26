@@ -95,6 +95,37 @@ describe('System Health & Diagnostics', () => {
         }));
     });
 
+    it('warns while the Cloudflare solver is flagged unresponsive, and clears once the flag is stale', async () => {
+        // 2026-07-26 field incident: a wedged FlareSolverr (nodriver loop crash, climbing task
+        // queue) silently converted every gated download to manual. The engine's circuit breaker
+        // stamps solver_unresponsive_time; the health panel must surface it with the remedy.
+        vi.mocked(fs.promises.statfs).mockResolvedValue({ bsize: 1024, bavail: 10 * 1024 * 1024 * 1024 / 1024 } as any);
+        const baseSettings = [
+            { key: 'cv_api_key', value: 'valid_key' },
+            { key: 'download_path', value: '/downloads' },
+            { key: 'last_backup_sync', value: Date.now().toString() },
+            { key: 'cloudflare_block_time', value: '0' },
+            { key: 'flaresolverr_url', value: 'http://192.168.2.234:8191' },
+        ];
+
+        mocks.findManySettings.mockResolvedValue([
+            ...baseSettings,
+            { key: 'solver_unresponsive_time', value: (Date.now() - 5 * 60 * 1000).toString() }, // 5 min ago
+        ]);
+        let result = await runSystemHealthCheck();
+        const warn = result.checks.find(c => c.id === 'solver_unresponsive');
+        expect(warn?.status).toBe('warning');
+        expect(warn?.message.toLowerCase()).toContain('restart');
+
+        mocks.findManySettings.mockResolvedValue([
+            ...baseSettings,
+            { key: 'solver_unresponsive_time', value: (Date.now() - 2 * 60 * 60 * 1000).toString() }, // 2h ago — stale
+        ]);
+        result = await runSystemHealthCheck();
+        const ok = result.checks.find(c => c.id === 'solver_unresponsive');
+        expect(ok?.status).toBe('ok');
+    });
+
     it('should return a warning when a library folder is read-only', async () => {
         // 10GB free (Healthy space)
         vi.mocked(fs.promises.statfs).mockResolvedValue({ 

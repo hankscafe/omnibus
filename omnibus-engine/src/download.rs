@@ -36,14 +36,14 @@ fn clearance_cache() -> &'static Mutex<Option<CachedClearance>> {
 /// The solve runs WHILE HOLDING THE LOCK, so a burst of concurrent GetComics downloads triggers ONE
 /// FlareSolverr solve — the rest wait on the lock and reuse the result — instead of stampeding a
 /// single-browser FlareSolverr into "no usable cookies" / timeouts.
-async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, sc: &crate::getcomics::SolverConfig) -> Result<(String, String)> {
+async fn get_clearance(client: &reqwest::Client, db: &sqlx::AnyPool, flare_url: &str, url: &str, sc: &crate::getcomics::SolverConfig) -> Result<(String, String)> {
     let mut guard = clearance_cache().lock().await;
     if let Some(c) = guard.as_ref() {
         if c.fetched_at.elapsed() < CLEARANCE_TTL {
             return Ok((c.cookie.clone(), c.user_agent.clone()));
         }
     }
-    let c = crate::getcomics::flaresolverr_clearance(client, flare_url, url, sc).await?;
+    let c = crate::getcomics::flaresolverr_clearance(client, db, flare_url, url, sc).await?;
     *guard = Some(CachedClearance { cookie: c.cookie.clone(), user_agent: c.user_agent.clone(), fetched_at: std::time::Instant::now() });
     Ok((c.cookie, c.user_agent))
 }
@@ -52,9 +52,9 @@ async fn get_clearance(client: &reqwest::Client, flare_url: &str, url: &str, sc:
 /// the solver's landed URL. Used when the cached-cookie replay still answers with a challenge: the
 /// landed URL is per-solve and per-link, so only a fresh solve of THIS url can produce it. Updates
 /// the shared cache so followers still benefit from the new cookie.
-async fn get_clearance_full(client: &reqwest::Client, flare_url: &str, url: &str, sc: &crate::getcomics::SolverConfig) -> Result<crate::getcomics::SolverClearance> {
+async fn get_clearance_full(client: &reqwest::Client, db: &sqlx::AnyPool, flare_url: &str, url: &str, sc: &crate::getcomics::SolverConfig) -> Result<crate::getcomics::SolverClearance> {
     let mut guard = clearance_cache().lock().await;
-    let c = crate::getcomics::flaresolverr_clearance(client, flare_url, url, sc).await?;
+    let c = crate::getcomics::flaresolverr_clearance(client, db, flare_url, url, sc).await?;
     *guard = Some(CachedClearance { cookie: c.cookie.clone(), user_agent: c.user_agent.clone(), fetched_at: std::time::Instant::now() });
     Ok(c)
 }
@@ -444,7 +444,7 @@ async fn attempt_stream_inner(
         match flare {
             Some(flare_url) => {
                 let sc = crate::getcomics::solver_config(db).await;
-                match get_clearance(client, &flare_url, &req.url, &sc).await {
+                match get_clearance(client, db, &flare_url, &req.url, &sc).await {
                     Ok((cookie, ua)) => {
                         log::info!("[Internal DL] GetComics Cloudflare challenge solved via {}; replaying the clearance on the download.", sc.kind);
                         let ua_eff = if ua.is_empty() { DEFAULT_UA.to_string() } else { ua };
@@ -453,7 +453,7 @@ async fn attempt_stream_inner(
                         // Cached cookie stale (or the original hop already consumed) → one fresh solve
                         // of THIS url, then prefer its landed URL for the stream.
                         if content_type.contains("text/html") {
-                            match get_clearance_full(client, &flare_url, &req.url, &sc).await {
+                            match get_clearance_full(client, db, &flare_url, &req.url, &sc).await {
                                 Ok(clearance) => {
                                     let ua_eff = if clearance.user_agent.is_empty() { DEFAULT_UA.to_string() } else { clearance.user_agent.clone() };
                                     // Only chase the landed URL when the solver's browser actually

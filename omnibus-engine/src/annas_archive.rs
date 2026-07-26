@@ -141,7 +141,7 @@ async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr
             log::warn!("[Anna's Archive] HTTP {} for {}; attempting {} bypass...", status.as_u16(), url, sc.kind);
             // Shared session-wrapped solver call (same policy as the GetComics fetcher — the two
             // copies had drifted on 403-vs-503 before; keeping one code path prevents a repeat).
-            match crate::getcomics::solver_request_get(client, flare_url, url, &sc).await {
+            match crate::getcomics::solver_request_get(client, db, flare_url, url, &sc).await {
                 Ok(data) => {
                     if let Some(html) = data["solution"]["response"].as_str() {
                         log::info!("[Anna's Archive] {} bypass successful for {}", sc.kind, url);

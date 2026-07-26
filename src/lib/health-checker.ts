@@ -169,6 +169,25 @@ export async function runSystemHealthCheck() {
         results.push({ id: 'cf_block', name: 'CloudFlare Challenge Detected', status: 'ok', message: 'No' });
     }
 
+    // 5b. Solver responsiveness (issue field-report 2026-07-26): the engine's circuit breaker
+    // stamps solver_unresponsive_time when the configured solver stops answering /v1 (a wedged
+    // FlareSolverr queues requests forever) — every gated download silently degrades to manual
+    // until the container restarts, so surface it loudly. The engine zeroes the flag when the
+    // solver answers again; a stale stamp (>30 min) is treated as recovered.
+    const solverDownTime = parseInt(config.solver_unresponsive_time || '0');
+    if (hasFlare && solverDownTime > Date.now() - (30 * 60 * 1000)) {
+        Logger.log(`[Health Check Debug] Cloudflare solver flagged unresponsive within the last 30 minutes.`, 'debug');
+        results.push({
+            id: 'solver_unresponsive',
+            name: 'Cloudflare Solver Unresponsive',
+            status: 'warning',
+            message: 'The configured solver stopped answering — gated downloads are falling back to manual. Restart the solver container (a wedged FlareSolverr shows climbing "Task queue depth" in its log).',
+            actionLink: '/admin/settings'
+        });
+    } else {
+        results.push({ id: 'solver_unresponsive', name: 'Cloudflare Solver Unresponsive', status: 'ok', message: hasFlare ? 'No — the solver is answering' : 'No solver configured' });
+    }
+
     // 6. API Rate Limits & Call Counts
     const cvLimitTime = parseInt(config.cv_rate_limit_time || '0');
     

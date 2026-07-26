@@ -378,16 +378,17 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: result.success, message: result.message });
     }
 
-    // --- CLOUDFLARE SOLVER TEST (FlareSolverr / Byparr) ---
+    // --- CLOUDFLARE SOLVER TEST (FlareSolverr / Byparr / Trawl) ---
     if (type === 'flaresolverr') {
         const url = config.flaresolverr_url?.replace(/\/$/, '');
-        const solverName = config.solver_type === 'byparr' ? 'Byparr' : 'FlareSolverr';
+        const solverName = config.solver_type === 'byparr' ? 'Byparr' : config.solver_type === 'trawl' ? 'Trawl' : 'FlareSolverr';
         if (!url) return NextResponse.json({ success: false, message: `Missing ${solverName} URL` });
 
-        // FlareSolverr's root returns JSON {msg, version}; Byparr's root redirects to its Swagger docs.
+        // FlareSolverr's root returns JSON {msg, version} (Trawl mirrors the shape); Byparr's root
+        // redirects to its Swagger docs.
         const res = await axios.get(url, { timeout: 10000 });
         if (res.data && res.data.msg) {
-            return NextResponse.json({ success: true, message: `FlareSolverr Connected! (v${res.data.version || 'Unknown'})` });
+            return NextResponse.json({ success: true, message: `${solverName} Connected! (v${res.data.version || 'Unknown'})` });
         }
         return NextResponse.json({ success: true, message: `${solverName} is reachable.` });
     }

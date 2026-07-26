@@ -93,6 +93,16 @@ pub(crate) async fn mark_getcomics_rate_limit_flag(db: &sqlx::AnyPool) {
     mark_time_flag(db, "getcomics_rate_limit_time").await;
 }
 
+/// Zeroes a time flag (recovery transition — the health panel treats '0'/absent as clear).
+async fn clear_time_flag(db: &sqlx::AnyPool, key: &str) {
+    let _ = sqlx::query(
+        r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, '0') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
+    )
+    .bind(key)
+    .execute(db)
+    .await;
+}
+
 async fn mark_time_flag(db: &sqlx::AnyPool, key: &str) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -151,23 +161,119 @@ pub struct SolverConfig {
 /// Reads the solver type + solve budget and derives the per-solver request parameters.
 /// `flaresolverr_timeout` is in seconds (admin-tunable, clamped 30–600); `solver_type` selects the
 /// backend (default `flaresolverr`). GetComics' Cloudflare Turnstile can need far longer than the old
-/// 60s, so the default budget is 300s. For Byparr the payload `maxTimeout` is in SECONDS; for
-/// FlareSolverr it's MILLISECONDS — sending the wrong unit to Byparr would read 300000 as ~83 hours.
-/// The engine's own HTTP timeout always uses real milliseconds + a 15s margin so it never cuts the
-/// solver off before its own budget elapses.
+/// 60s, so the default budget is 300s.
 pub async fn solver_config(db: &sqlx::AnyPool) -> SolverConfig {
     let secs = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_timeout'"#)
-        .fetch_optional(db).await.ok().flatten()
+        .fetch_optional(db).await.ok().flatten();
+    let kind = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'solver_type'"#)
+        .fetch_optional(db).await.ok().flatten();
+    derive_solver_config(kind, secs)
+}
+
+/// Pure half of [`solver_config`] (unit-tested). Three backends share the /v1 shape but differ in
+/// the `maxTimeout` UNIT: FlareSolverr and Trawl take MILLISECONDS, Byparr takes SECONDS — sending
+/// ms to Byparr would read 300000 as ~83 hours. Trawl (Camoufox-based, FlareSolverr-compatible) is
+/// sessionless like Byparr (it manages its own session cache), which solver_request_get handles by
+/// only wrapping `kind == "flaresolverr"` in sessions. The engine's own HTTP timeout is always the
+/// budget + a 15s margin so it never cuts the solver off before the solver's own budget elapses.
+pub(crate) fn derive_solver_config(kind_setting: Option<String>, secs_setting: Option<String>) -> SolverConfig {
+    let secs = secs_setting
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(300)
         .clamp(30, 600);
-    let kind = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'solver_type'"#)
-        .fetch_optional(db).await.ok().flatten()
+    let kind = kind_setting
         .map(|s| s.trim().to_lowercase())
-        .filter(|s| s == "byparr" || s == "flaresolverr")
+        .filter(|s| s == "byparr" || s == "flaresolverr" || s == "trawl")
         .unwrap_or_else(|| "flaresolverr".to_string());
     let payload_timeout = if kind == "byparr" { secs } else { secs * 1000 };
     SolverConfig { kind, payload_timeout, http_timeout_ms: secs * 1000 + 15_000 }
+}
+
+// ==== Solver health (2026-07-26 field incident): a wedged FlareSolverr — nodriver loop crash,
+// climbing "Task queue depth" — left every solve request queued until our budget+margin timeout,
+// turning each gated link into a ~15-minute grind before MANUAL_DDL. Two guards, both process-
+// local (an engine restart forgets them, which is fine — so does a fixed solver):
+//   * a circuit breaker: consecutive TRANSPORT failures (timeout/connect on /v1) pause all solve
+//     attempts for a cooldown and stamp `solver_unresponsive_time` for the health panel;
+//   * a negative clearance cache: a DEFINITIVE "ran the whole budget, could not solve" verdict
+//     skips re-solving that host for a TTL (the success side already has the 600s clearance
+//     cache — this is its mirror).
+
+pub(crate) const SOLVER_BREAKER_THRESHOLD: u32 = 2;
+pub(crate) const SOLVER_BREAKER_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(600);
+pub(crate) const SOLVER_NEGATIVE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+#[derive(Default)]
+pub(crate) struct SolverHealth {
+    transport_failures: u32,
+    breaker_until: Option<std::time::Instant>,
+    negative_hosts: std::collections::HashMap<String, std::time::Instant>,
+}
+
+impl SolverHealth {
+    /// Records a transport failure; returns true exactly when this one OPENED the breaker
+    /// (the caller stamps the health flag on that transition only).
+    pub(crate) fn record_transport_failure(&mut self, now: std::time::Instant) -> bool {
+        self.transport_failures += 1;
+        if self.transport_failures >= SOLVER_BREAKER_THRESHOLD && self.breaker_until.is_none() {
+            self.breaker_until = Some(now + SOLVER_BREAKER_COOLDOWN);
+            return true;
+        }
+        false
+    }
+
+    /// Records a healthy /v1 response; returns true exactly when this CLOSED an open breaker
+    /// (the caller clears the health flag on that transition only).
+    pub(crate) fn record_healthy_transport(&mut self) -> bool {
+        self.transport_failures = 0;
+        self.breaker_until.take().is_some()
+    }
+
+    /// A definitive "solver ran its budget and could not solve" for this host.
+    pub(crate) fn mark_unsolvable(&mut self, host: &str, now: std::time::Instant) {
+        self.negative_hosts.insert(host.to_string(), now + SOLVER_NEGATIVE_TTL);
+    }
+
+    /// Why solving should be SKIPPED right now — breaker open or host negative-cached — or None.
+    /// An elapsed breaker half-opens (state cleared, the next attempt probes for real).
+    pub(crate) fn skip_reason(&mut self, host: &str, now: std::time::Instant) -> Option<String> {
+        if let Some(until) = self.breaker_until {
+            if now < until {
+                return Some(format!(
+                    "solver circuit is open after {} consecutive transport failures; solve attempts resume in {}s",
+                    self.transport_failures,
+                    (until - now).as_secs()
+                ));
+            }
+            self.breaker_until = None;
+            self.transport_failures = 0;
+        }
+        if let Some(until) = self.negative_hosts.get(host) {
+            if now < *until {
+                return Some(format!(
+                    "solver recently failed to solve this host's challenge (ran its full budget); skipping re-solves for another {}s",
+                    (*until - now).as_secs()
+                ));
+            }
+            self.negative_hosts.remove(host);
+        }
+        None
+    }
+}
+
+fn solver_health() -> &'static std::sync::Mutex<SolverHealth> {
+    static S: std::sync::OnceLock<std::sync::Mutex<SolverHealth>> = std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(SolverHealth::default()))
+}
+
+/// True for the solver's definitive challenge-timeout verdict — the "Error solving the challenge.
+/// Timeout after N seconds" body FlareSolverr (and compatibles) return with their 500 after
+/// burning the whole budget. Distinct from transport failures (solver unreachable) and from
+/// no-cookie successes (unexpected shape).
+pub(crate) fn is_challenge_timeout_response(data: &serde_json::Value) -> bool {
+    let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    let message = data.get("message").and_then(|v| v.as_str()).unwrap_or("");
+    status.eq_ignore_ascii_case("error") && message.contains("Error solving the challenge")
 }
 
 async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
@@ -207,7 +313,7 @@ async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr
         if let Some(flare_url) = flaresolverr.filter(|f| !f.is_empty()) {
             let sc = solver_config(db).await;
             log::warn!("[GetComics] {} detected for {}; attempting {} bypass...", res.status(), url, sc.kind);
-            match solver_request_get(client, flare_url, url, &sc).await {
+            match solver_request_get(client, db, flare_url, url, &sc).await {
                 Ok(data) => {
                     if let Some(html) = data["solution"]["response"].as_str() {
                         log::info!("[GetComics] {} bypass successful for {}", sc.kind, url);
@@ -276,15 +382,29 @@ async fn solver_post(client: &Client, target: &str, payload: &serde_json::Value,
 /// GetComics' Turnstile (the "status=ok, cookies=0" failures in our logs). Byparr keeps the
 /// sessionless shape (no session API). Session create failure degrades to sessionless; the destroy
 /// is best-effort and runs even when the solve fails so FlareSolverr doesn't leak browsers.
-pub(crate) async fn solver_request_get(client: &Client, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<serde_json::Value> {
+pub(crate) async fn solver_request_get(client: &Client, db: &sqlx::AnyPool, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<serde_json::Value> {
     let target = if flare_url.ends_with("/v1") { flare_url.to_string() } else { format!("{}/v1", flare_url) };
-    if sc.kind != "flaresolverr" {
-        let payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
-        return solver_post(client, &target, &payload, sc.http_timeout_ms).await;
+    let host = reqwest::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
+
+    // Fail fast while the breaker is open or the host's challenge was just declared unsolvable —
+    // a wedged solver queues requests forever, and re-solving a definitively failed challenge
+    // seconds later burns the full budget for the same verdict.
+    {
+        let mut health = solver_health().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(reason) = health.skip_reason(&host, std::time::Instant::now()) {
+            anyhow::bail!("{reason}");
+        }
     }
-    let session_id = match solver_post(client, &target, &serde_json::json!({ "cmd": "sessions.create" }), 20_000).await {
-        Ok(d) => d.get("session").and_then(|s| s.as_str()).map(|s| s.to_string()),
-        Err(e) => { log::debug!("[Solver] sessions.create failed, degrading to sessionless solve: {e}"); None }
+
+    let session_id = if sc.kind == "flaresolverr" {
+        match solver_post(client, &target, &serde_json::json!({ "cmd": "sessions.create" }), 20_000).await {
+            Ok(d) => d.get("session").and_then(|s| s.as_str()).map(|s| s.to_string()),
+            Err(e) => { log::debug!("[Solver] sessions.create failed, degrading to sessionless solve: {e}"); None }
+        }
+    } else {
+        // Byparr has no session API; Trawl is FlareSolverr-compatible but manages its own
+        // session cache internally — both take the sessionless shape.
+        None
     };
     let mut payload = serde_json::json!({ "cmd": "request.get", "url": url, "maxTimeout": sc.payload_timeout });
     if let Some(sid) = &session_id {
@@ -296,6 +416,44 @@ pub(crate) async fn solver_request_get(client: &Client, flare_url: &str, url: &s
             log::debug!("[Solver] sessions.destroy failed (ignored): {e}");
         }
     }
+
+    // Health accounting on the request.get outcome (transitions only touch the DB flag, and the
+    // std Mutex is never held across an await).
+    match &result {
+        Err(e) => {
+            let opened = {
+                let mut health = solver_health().lock().unwrap_or_else(|p| p.into_inner());
+                health.record_transport_failure(std::time::Instant::now())
+            };
+            if opened {
+                log::warn!(
+                    "[Solver] {} at {} stopped answering ({e}) — that's {} consecutive transport failures, pausing ALL solve attempts for {}s and flagging the health panel. If this persists, RESTART the solver container (a wedged FlareSolverr shows climbing 'Task queue depth' in its own log).",
+                    sc.kind, target, SOLVER_BREAKER_THRESHOLD, SOLVER_BREAKER_COOLDOWN.as_secs()
+                );
+                mark_time_flag(db, "solver_unresponsive_time").await;
+            }
+        }
+        Ok(data) => {
+            let closed = {
+                let mut health = solver_health().lock().unwrap_or_else(|p| p.into_inner());
+                health.record_healthy_transport()
+            };
+            if closed {
+                log::info!("[Solver] {} is answering again — solve attempts resume.", sc.kind);
+                clear_time_flag(db, "solver_unresponsive_time").await;
+            }
+            if is_challenge_timeout_response(data) {
+                {
+                    let mut health = solver_health().lock().unwrap_or_else(|p| p.into_inner());
+                    health.mark_unsolvable(&host, std::time::Instant::now());
+                }
+                log::warn!(
+                    "[Solver] {} ran its full budget but could NOT solve the challenge for {} — this challenge variant may be beyond your solver build. Consider upgrading FlareSolverr to v3.5.0+ (adds Turnstile solving) or switching Solver Backend to Trawl or Byparr in Settings → Downloads. Skipping re-solves for this host for {}s.",
+                    sc.kind, host, SOLVER_NEGATIVE_TTL.as_secs()
+                );
+            }
+        }
+    }
     result
 }
 
@@ -304,8 +462,8 @@ pub(crate) async fn solver_request_get(client: &Client, flare_url: &str, url: &s
 /// clearance to replay on a direct request — plus the solver's landed URL, which callers should
 /// prefer for one-shot signed links. cf_clearance is IP+UA-bound, so the caller MUST send the
 /// returned User-Agent and run with the same outbound IP as the solver.
-pub async fn flaresolverr_clearance(client: &Client, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<SolverClearance> {
-    let data = solver_request_get(client, flare_url, url, sc).await?;
+pub async fn flaresolverr_clearance(client: &Client, db: &sqlx::AnyPool, flare_url: &str, url: &str, sc: &SolverConfig) -> anyhow::Result<SolverClearance> {
+    let data = solver_request_get(client, db, flare_url, url, sc).await?;
     match parse_flaresolverr_clearance(&data) {
         Some(c) => Ok(c),
         None => {
@@ -998,6 +1156,80 @@ pub async fn scrape_deep_link(
 
 #[cfg(test)]
 mod tests {
+    // ==== Solver hardening (2026-07-26, field incident): a wedged FlareSolverr turned every
+    // gated link into a 315s-per-attempt grind. The breaker pauses solve attempts after
+    // consecutive transport failures; the negative cache stops re-solving a challenge the
+    // solver just definitively failed; both are pure state machines tested with synthetic
+    // Instants so no clock or network is involved.
+
+    #[test]
+    fn solver_breaker_opens_at_threshold_and_half_opens_after_cooldown() {
+        use std::time::{Duration, Instant};
+        let mut h = super::SolverHealth::default();
+        let t0 = Instant::now();
+        assert!(!h.record_transport_failure(t0), "first failure must not open the breaker");
+        assert!(h.skip_reason("getcomics.org", t0).is_none());
+        assert!(h.record_transport_failure(t0), "failure #{} opens the breaker exactly once", super::SOLVER_BREAKER_THRESHOLD);
+        assert!(!h.record_transport_failure(t0), "already-open breaker must not re-report the transition");
+        let reason = h.skip_reason("getcomics.org", t0 + Duration::from_secs(1));
+        assert!(reason.is_some(), "solves are skipped while the breaker is open");
+        assert!(reason.unwrap().contains("circuit"), "reason names the breaker");
+        // Cooldown elapsed → half-open: attempts flow again.
+        assert!(h.skip_reason("getcomics.org", t0 + super::SOLVER_BREAKER_COOLDOWN + Duration::from_secs(1)).is_none());
+        // A healthy response closes an open breaker exactly once (the caller clears the flag on that transition).
+        let mut h2 = super::SolverHealth::default();
+        h2.record_transport_failure(t0);
+        h2.record_transport_failure(t0);
+        assert!(h2.record_healthy_transport(), "closing transition reported");
+        assert!(!h2.record_healthy_transport(), "no transition when already closed");
+        assert!(h2.skip_reason("getcomics.org", t0 + Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn solver_negative_cache_blocks_only_that_host_until_ttl() {
+        use std::time::{Duration, Instant};
+        let mut h = super::SolverHealth::default();
+        let t0 = Instant::now();
+        h.mark_unsolvable("getcomics.org", t0);
+        let reason = h.skip_reason("getcomics.org", t0 + Duration::from_secs(5));
+        assert!(reason.is_some(), "the failed host is skipped");
+        assert!(reason.unwrap().contains("failed to solve"), "reason names the unsolved challenge");
+        assert!(h.skip_reason("annas-archive.org", t0 + Duration::from_secs(5)).is_none(), "other hosts are unaffected");
+        assert!(h.skip_reason("getcomics.org", t0 + super::SOLVER_NEGATIVE_TTL + Duration::from_secs(1)).is_none(), "expires after the TTL");
+    }
+
+    #[test]
+    fn challenge_timeout_response_is_recognized_from_the_fs_error_shape() {
+        // The exact shape FlareSolverr returns with its 500 after burning the whole budget.
+        let timeout = serde_json::json!({
+            "status": "error",
+            "message": "Error: Error solving the challenge. Timeout after 300.0 seconds.",
+            "startTimestamp": 1, "endTimestamp": 2, "version": "3.4.1"
+        });
+        assert!(super::is_challenge_timeout_response(&timeout));
+        let ok = serde_json::json!({ "status": "ok", "message": "Challenge solved!", "solution": { "cookies": [] } });
+        assert!(!super::is_challenge_timeout_response(&ok));
+        let other_error = serde_json::json!({ "status": "error", "message": "Error: invalid URL" });
+        assert!(!super::is_challenge_timeout_response(&other_error));
+    }
+
+    #[test]
+    fn derive_solver_config_units_cover_all_three_backends() {
+        // Trawl is FlareSolverr-compatible: /v1, maxTimeout in MILLISECONDS, sessionless is fine
+        // (it manages its own session cache internally).
+        let trawl = super::derive_solver_config(Some("Trawl".into()), Some("120".into()));
+        assert_eq!(trawl.kind, "trawl");
+        assert_eq!(trawl.payload_timeout, 120_000, "trawl takes milliseconds like FlareSolverr");
+        assert_eq!(trawl.http_timeout_ms, 120_000 + 15_000);
+        let byparr = super::derive_solver_config(Some("byparr".into()), Some("120".into()));
+        assert_eq!(byparr.payload_timeout, 120, "byparr takes seconds");
+        let junk = super::derive_solver_config(Some("selenium".into()), None);
+        assert_eq!(junk.kind, "flaresolverr", "unknown backends fall back to the default");
+        assert_eq!(junk.payload_timeout, 300_000);
+        let clamped = super::derive_solver_config(None, Some("5".into()));
+        assert_eq!(clamped.payload_timeout, 30_000, "budget clamps to the 30s floor");
+    }
+
     use super::*;
 
     // ==== Size parsing (Kapowarr-parity: the "Size : X" text on teasers/sections) ====

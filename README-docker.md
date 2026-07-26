@@ -156,7 +156,9 @@ services:
   # --- OPTIONAL: Cloudflare solver ---
   # Lets Omnibus solve Cloudflare challenges on sites like GetComics automatically.
   # Uncomment this service, then point the Cloudflare Solver URL in Omnibus settings
-  # at http://flaresolverr:8191 (a Byparr container works with the same setting).
+  # at http://flaresolverr:8191. Byparr (ghcr.io/thephaseless/byparr) and Trawl
+  # (ghcr.io/germondai/trawl) are drop-in alternatives on the same port - pick the
+  # matching Solver Backend in Settings.
   # flaresolverr:
   #   image: ghcr.io/flaresolverr/flaresolverr:latest
   #   container_name: flaresolverr

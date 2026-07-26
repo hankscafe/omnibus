@@ -1,8 +1,10 @@
 // src/app/library/page.tsx
 "use client"
 
-import { useState, useEffect, useCallback, useRef, forwardRef, Suspense } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef, forwardRef, Suspense } from "react"
 import { VirtuosoGrid, TableVirtuoso, type TableComponents } from "react-virtuoso"
+import { AlphaJumpBar } from "@/components/alpha-jump-bar"
+import { computeLetterBuckets, letterForName, type LetterBucket } from "@/lib/utils/alpha-buckets"
 import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card } from "@/components/ui/card"
@@ -11,7 +13,7 @@ import {
   BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType, CalendarDays
+  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType, CalendarDays, ArrowUp
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -133,6 +135,12 @@ function LibraryContent() {
   toastRef.current = toast;
 
   const [series, setSeries] = useState<LibrarySeries[]>([])
+  // Alphabet jump bar (worklist item 6): the names index in server order powers the letter rail;
+  // anchorOffset is the absolute index the current window starts at (0 = normal top-down list).
+  const [namesIndex, setNamesIndex] = useState<string[] | null>(null)
+  const [anchorOffset, setAnchorOffset] = useState(0)
+  const [activeLetter, setActiveLetter] = useState<string | null>(null)
+  const anchorRef = useRef(0)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -312,6 +320,9 @@ function LibraryContent() {
       const params = new URLSearchParams();
       params.append('page', pageNum.toString());
       params.append('limit', f.limit.toString());
+      // Letter-jump anchor: absolute offset = anchor + page window (the server prefers offset over
+      // page math when present). anchor 0 keeps the legacy page-only requests byte-identical.
+      if (anchorRef.current > 0) params.append('offset', String(anchorRef.current + (pageNum - 1) * f.limit));
       
       if (isRefreshScan) params.append('refresh', 'true');
       if (f.search.trim()) { params.append('q', f.search.trim()); params.append('type', f.type); }
@@ -350,12 +361,28 @@ function LibraryContent() {
           if (data.publishers) {
               setUniquePublishers(data.publishers);
           }
+
+          // Refresh the jump bar's names index on every list RESET under an alphabetical sort
+          // (fire-and-forget; the bar simply appears when it lands). Non-alpha sorts hide the bar.
+          if (pageNum === 1 && !appendResults) {
+              if ((f.sort || 'alpha_asc').startsWith('alpha')) {
+                  const nameParams = new URLSearchParams(params);
+                  nameParams.delete('page'); nameParams.delete('limit'); nameParams.delete('offset'); nameParams.delete('refresh');
+                  nameParams.append('namesOnly', '1');
+                  fetch(`/api/library?${nameParams.toString()}`, { cache: 'no-store' })
+                      .then(r => r.json())
+                      .then(d => { if (Array.isArray(d.names)) setNamesIndex(d.names); })
+                      .catch(() => {});
+              } else {
+                  setNamesIndex(null);
+              }
+          }
       } catch (e: any) {
           toastRef.current({ title: "Error", description: "Failed to fetch library data.", variant: "destructive" });
-      } finally { 
-          setLoading(false); 
-          setLoadingMore(false); 
-          setIsRefreshing(false); 
+      } finally {
+          setLoading(false);
+          setLoadingMore(false);
+          setIsRefreshing(false);
       }
   }, []);
 
@@ -399,16 +426,55 @@ function LibraryContent() {
       
   }, [loadLibraryData, fetchCollections]);
 
-  useEffect(() => { 
+  useEffect(() => {
       if (isFirstRender.current) return;
-      setPage(1); 
-      loadLibraryData(1, false, false); 
+      // Any filter/sort/search change clears a letter-jump anchor — the new result set starts at
+      // its own top and the bar recomputes from the fresh names index.
+      anchorRef.current = 0;
+      setAnchorOffset(0);
+      setActiveLetter(null);
+      setPage(1);
+      loadLibraryData(1, false, false);
   }, [debouncedSearch, searchType, libraryFilter, publisherFilter, sortOption, showFavoritesOnly, activeCollection, monitoredFilter, eraFilter, bookTypeFilter, readStatus, randomTrigger, pageSize, loadLibraryData, statusFilter])
 
   const toggleViewMode = (mode: 'grid' | 'list') => {
       setViewMode(mode)
       localStorage.setItem('omnibus-library-view', mode)
   }
+
+  // --- Alphabet jump bar (worklist item 6) ---
+  const isAlphaSort = sortOption === 'alpha_asc' || sortOption === 'alpha_desc';
+  const letterBuckets = useMemo(() => (isAlphaSort && namesIndex ? computeLetterBuckets(namesIndex) : []), [isAlphaSort, namesIndex]);
+
+  const handleLetterJump = useCallback((bucket: LetterBucket) => {
+      anchorRef.current = bucket.offset;
+      setAnchorOffset(bucket.offset);
+      setActiveLetter(bucket.letter);
+      setSeries([]);
+      setPage(1);
+      loadLibraryData(1, false, false);
+      window.scrollTo({ top: 0 });
+  }, [loadLibraryData]);
+
+  const handleBackToTop = useCallback(() => {
+      anchorRef.current = 0;
+      setAnchorOffset(0);
+      setActiveLetter(null);
+      setSeries([]);
+      setPage(1);
+      loadLibraryData(1, false, false);
+      window.scrollTo({ top: 0 });
+  }, [loadLibraryData]);
+
+  // The letter under the current scroll position, derived from the visible range + names index.
+  const handleRangeChanged = useCallback(({ startIndex }: { startIndex: number }) => {
+      if (!namesIndex) return;
+      const name = namesIndex[anchorRef.current + startIndex];
+      if (name) {
+          const letter = letterForName(name);
+          setActiveLetter(prev => (prev === letter ? prev : letter));
+      }
+  }, [namesIndex]);
 
   const handlePageSizeChange = (val: string) => {
       const newSize = parseInt(val);
@@ -939,6 +1005,23 @@ function LibraryContent() {
           </div>
       </div>
 
+      {/* Alphabet jump rail — alphabetical sorts only; hidden during selection to keep the two
+          interaction models apart. The anchored chip offers the way back to the list top. */}
+      {isAlphaSort && !isSelectionMode && (
+          <AlphaJumpBar buckets={letterBuckets} activeLetter={activeLetter} onJump={handleLetterJump} />
+      )}
+      {anchorOffset > 0 && (
+          <div className="sticky top-2 z-30 flex justify-center pointer-events-none">
+              <button
+                  type="button"
+                  onClick={handleBackToTop}
+                  className="pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-background/90 backdrop-blur-sm px-4 py-1.5 text-xs font-bold shadow-md text-muted-foreground hover:text-primary transition-colors"
+              >
+                  <ArrowUp className="w-3.5 h-3.5" /> Showing from “{activeLetter}” — back to top
+              </button>
+          </div>
+      )}
+
       {loading && page === 1 ? (
         <LibrarySkeleton count={pageSize} />
       ) : series.length === 0 ? (
@@ -950,6 +1033,7 @@ function LibraryContent() {
           useWindowScroll
           data={series}
           endReached={handleEndReached}
+          rangeChanged={handleRangeChanged}
           increaseViewportBy={800}
           computeItemKey={(_, item) => item.id || item.path}
           listClassName="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10"
@@ -1101,6 +1185,7 @@ function LibraryContent() {
               useWindowScroll
               data={series}
               endReached={handleEndReached}
+              rangeChanged={handleRangeChanged}
               increaseViewportBy={800}
               computeItemKey={(_, item) => item.id || item.path}
               context={{ isSelectionMode, selectedSeries, toggleSeriesSelection }}

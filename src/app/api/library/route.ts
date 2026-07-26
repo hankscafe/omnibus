@@ -30,7 +30,14 @@ export async function GET(request: Request) {
     
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.max(1, parseInt(searchParams.get('limit') || '24', 10));
-    const skip = (page - 1) * limit;
+    // Alphabet jump bar (worklist item 6): an absolute offset anchors the window mid-alphabet
+    // (letter → first-occurrence index from the names index); when present it overrides page math.
+    const offsetParam = searchParams.get('offset');
+    const offset = offsetParam !== null ? Math.max(0, parseInt(offsetParam, 10) || 0) : null;
+    const skip = offset !== null ? offset : (page - 1) * limit;
+    // namesOnly: the light names index powering the jump bar — the exact server order under the
+    // current filters, no pagination, none of the heavy includes.
+    const namesOnly = searchParams.get('namesOnly') === '1';
     
     const shouldScanDisk = searchParams.get('refresh') === 'true';
     const q = searchParams.get('q') || '';
@@ -186,6 +193,15 @@ export async function GET(request: Request) {
         default: orderBy = { name: 'asc' };
     }
 
+    if (namesOnly) {
+        const nameRows = await prisma.series.findMany({
+            where: (where.AND.length > 0 ? where : {}),
+            orderBy,
+            select: { name: true },
+        });
+        return NextResponse.json({ names: nameRows.map(r => r.name) });
+    }
+
     const totalCount = await prisma.series.count({ where: (where.AND.length > 0 ? where : {}) });
 
     let finalSkip = skip;
@@ -311,8 +327,9 @@ export async function GET(request: Request) {
         series: formatted,
         // Only present on page 1 — the client keeps its existing list on infinite-scroll appends. (Omitted,
         // not [], so the client's `if (data.publishers)` guard doesn't wipe the dropdown on later pages.)
+        // A jump-anchored first window (offset > 0) counts as a fresh page 1 for this purpose.
         ...(page === 1 ? { publishers: publishersRaw.map(p => p.publisher).filter(Boolean).sort() } : {}),
-        hasMore: skip + limit < totalCount
+        hasMore: finalSkip + limit < totalCount
     });
 
   } catch (error: unknown) {

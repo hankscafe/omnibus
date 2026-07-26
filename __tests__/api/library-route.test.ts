@@ -104,4 +104,43 @@ describe('API Route: Library Advanced Search', () => {
             ])
         );
     });
+
+    // Beta E (2026-07-25 worklist item 6): the alphabet jump bar needs (a) a light names index in
+    // the exact server order under the current filters, and (b) an absolute-offset window so a
+    // letter click can anchor the list mid-alphabet without paging from the start.
+    describe('alphabet jump bar support', () => {
+        it('namesOnly returns the bare sorted names and skips the heavy include path', async () => {
+            mocks.findManySeries.mockResolvedValue([{ name: 'Alpha' }, { name: 'Batman' }]);
+
+            const res = await GET(new Request('http://localhost/api/library?path=/library&namesOnly=1&sort=alpha_asc'));
+            const data = await res.json();
+
+            expect(data.names).toEqual(['Alpha', 'Batman']);
+            const call = mocks.findManySeries.mock.calls[0][0];
+            expect(call.select).toEqual({ name: true });
+            expect(call.orderBy).toEqual({ name: 'asc' });
+            expect(call.skip).toBeUndefined();
+            expect(call.take).toBeUndefined();
+        });
+
+        it('offset overrides page-based skip and drives hasMore from the absolute position', async () => {
+            mocks.countSeries.mockResolvedValue(100);
+            mocks.findManySeries.mockResolvedValue([{ id: '1', issues: [], favorites: [] }]);
+
+            const res = await GET(new Request('http://localhost/api/library?path=/library&offset=37&limit=24'));
+            const data = await res.json();
+
+            expect(mocks.findManySeries.mock.calls[0][0].skip).toBe(37);
+            expect(data.hasMore).toBe(true); // 37 + 24 < 100
+
+            vi.clearAllMocks();
+            mocks.getServerSession.mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } });
+            mocks.countSeries.mockResolvedValue(50);
+            mocks.findManySeries.mockResolvedValue([{ id: '2', issues: [], favorites: [] }]);
+
+            const res2 = await GET(new Request('http://localhost/api/library?path=/library&offset=37&limit=24'));
+            const data2 = await res2.json();
+            expect(data2.hasMore).toBe(false); // 37 + 24 >= 50
+        });
+    });
 });

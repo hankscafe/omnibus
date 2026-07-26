@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
 import { copyText } from "@/lib/utils/clipboard"
+import { cn } from "@/lib/utils"
 import { Switch } from "@/components/ui/switch"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -93,7 +94,7 @@ const LIST_TABLE_COMPONENTS: TableComponents<LibrarySeries, ListRowContext> = {
     return (
       <tr
         {...props}
-        className={`transition-colors group ${selectionMode ? 'cursor-pointer hover:bg-muted ' + (isSelected ? 'bg-primary/10' : '') : 'hover:bg-muted/50'}`}
+        className={cn("transition-colors group", selectionMode ? cn("cursor-pointer hover:bg-muted", isSelected && "bg-primary/10") : "hover:bg-muted/50")}
         onClick={() => { if (selectionMode && item.id) context!.toggleSeriesSelection(item.id); }}
       />
     );
@@ -807,16 +808,16 @@ function LibraryContent() {
         <h1 className="text-3xl font-bold flex items-center gap-2 text-foreground">Library</h1>
         <div className="flex flex-wrap items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-end">
             <div className="flex bg-muted p-1 rounded-md shrink-0 shadow-inner border border-border overflow-x-auto max-w-full" role="tablist" aria-label="Library Section Filters">
-                <Button role="tab" aria-selected={libraryFilter === 'ALL'} variant={libraryFilter === 'ALL' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'ALL' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('ALL')}>All</Button>
-                <Button role="tab" aria-selected={libraryFilter === 'COMICS'} variant={libraryFilter === 'COMICS' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'COMICS' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('COMICS')}>Comics</Button>
-                <Button role="tab" aria-selected={libraryFilter === 'MANGA'} variant={libraryFilter === 'MANGA' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'MANGA' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`} onClick={() => setLibraryFilter('MANGA')}>Manga</Button>
+                <Button role="tab" aria-selected={libraryFilter === 'ALL'} variant={libraryFilter === 'ALL' ? 'default' : 'ghost'} size="sm" className={cn("h-8 sm:h-7 px-3 text-xs", libraryFilter === 'ALL' ? "shadow-sm bg-background text-foreground" : "text-muted-foreground")} onClick={() => setLibraryFilter('ALL')}>All</Button>
+                <Button role="tab" aria-selected={libraryFilter === 'COMICS'} variant={libraryFilter === 'COMICS' ? 'default' : 'ghost'} size="sm" className={cn("h-8 sm:h-7 px-3 text-xs", libraryFilter === 'COMICS' ? "shadow-sm bg-background text-foreground" : "text-muted-foreground")} onClick={() => setLibraryFilter('COMICS')}>Comics</Button>
+                <Button role="tab" aria-selected={libraryFilter === 'MANGA'} variant={libraryFilter === 'MANGA' ? 'default' : 'ghost'} size="sm" className={cn("h-8 sm:h-7 px-3 text-xs", libraryFilter === 'MANGA' ? "shadow-sm bg-background text-foreground" : "text-muted-foreground")} onClick={() => setLibraryFilter('MANGA')}>Manga</Button>
                 {isAdmin && (
-                    <Button role="tab" aria-selected={libraryFilter === 'UNMATCHED'} variant={libraryFilter === 'UNMATCHED' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'UNMATCHED' ? 'shadow-sm bg-orange-500 hover:bg-orange-600 text-white' : 'text-orange-500 hover:text-orange-600'}`} onClick={() => setLibraryFilter('UNMATCHED')}>
+                    <Button role="tab" aria-selected={libraryFilter === 'UNMATCHED'} variant={libraryFilter === 'UNMATCHED' ? 'default' : 'ghost'} size="sm" className={cn("h-8 sm:h-7 px-3 text-xs", libraryFilter === 'UNMATCHED' ? "shadow-sm bg-orange-500 hover:bg-orange-600 text-white" : "text-orange-500 hover:text-orange-600")} onClick={() => setLibraryFilter('UNMATCHED')}>
                         Unmatched
                     </Button>
                 )}
                 {isAdmin && (
-                    <Button role="tab" aria-selected={libraryFilter === 'PENDING'} variant={libraryFilter === 'PENDING' ? 'default' : 'ghost'} size="sm" className={`h-8 sm:h-7 px-3 text-xs ${libraryFilter === 'PENDING' ? 'shadow-sm bg-blue-500 hover:bg-blue-600 text-white' : 'text-blue-500 hover:text-blue-600'}`} onClick={() => setLibraryFilter('PENDING')}>
+                    <Button role="tab" aria-selected={libraryFilter === 'PENDING'} variant={libraryFilter === 'PENDING' ? 'default' : 'ghost'} size="sm" className={cn("h-8 sm:h-7 px-3 text-xs", libraryFilter === 'PENDING' ? "shadow-sm bg-blue-500 hover:bg-blue-600 text-white" : "text-blue-500 hover:text-blue-600")} onClick={() => setLibraryFilter('PENDING')}>
                         Pending
                     </Button>
                 )}
@@ -826,7 +827,7 @@ function LibraryContent() {
                 <Button aria-label="Browse all individual issues by release date" variant="outline" size="sm" onClick={() => router.push('/library/issues')} className="h-10 sm:h-9 border-border">
                     <CalendarDays className="w-4 h-4 mr-2" /> All Issues
                 </Button>
-                <Button aria-label={isSelectionMode ? "Cancel series selection" : "Enter series selection mode"} variant={isSelectionMode ? "secondary" : "outline"} size="sm" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedSeries(new Set()); }} className={`h-10 sm:h-9 ${isSelectionMode ? "bg-primary/20 text-primary border-primary/50 hover:bg-primary/30" : "border-border"}`}>
+                <Button aria-label={isSelectionMode ? "Cancel series selection" : "Enter series selection mode"} variant={isSelectionMode ? "secondary" : "outline"} size="sm" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedSeries(new Set()); }} className={cn("h-10 sm:h-9", isSelectionMode ? "bg-primary/20 text-primary border-primary/50 hover:bg-primary/30" : "border-border")}>
                     <CheckSquare className="w-4 h-4 mr-2" /> {isSelectionMode ? "Cancel Select" : "Select"}
                 </Button>
                 <Button aria-label="Scan library folders for new files" onClick={handleRefresh} disabled={loading || isRefreshing} variant="outline" size="sm" className="h-10 sm:h-9 border-border">
@@ -875,10 +876,10 @@ function LibraryContent() {
                   </Select>
                   
                   <div className="flex items-center gap-1 border border-border rounded-md p-1 bg-background shadow-sm shrink-0">
-                    <Button aria-label="Grid view mode" variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'grid' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('grid')}>
+                    <Button aria-label="Grid view mode" variant="ghost" size="icon" className={cn("h-8 w-8 sm:h-7 sm:w-7 transition-colors", viewMode === 'grid' ? "bg-primary/20 text-primary hover:bg-primary/30" : "text-muted-foreground hover:bg-muted hover:text-foreground")} onClick={() => toggleViewMode('grid')}>
                         <LayoutGrid className="w-4 h-4" />
                     </Button>
-                    <Button aria-label="List view mode" variant="ghost" size="icon" className={`h-8 w-8 sm:h-7 sm:w-7 transition-colors ${viewMode === 'list' ? 'bg-primary/20 text-primary hover:bg-primary/30' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} onClick={() => toggleViewMode('list')}>
+                    <Button aria-label="List view mode" variant="ghost" size="icon" className={cn("h-8 w-8 sm:h-7 sm:w-7 transition-colors", viewMode === 'list' ? "bg-primary/20 text-primary hover:bg-primary/30" : "text-muted-foreground hover:bg-muted hover:text-foreground")} onClick={() => toggleViewMode('list')}>
                         <List className="w-4 h-4" />
                     </Button>
                 </div>
@@ -888,8 +889,8 @@ function LibraryContent() {
           {/* Mobile: 2-up grid so the dropdowns don't stack one-per-row; sm+: original wrapped flex row */}
           <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-row sm:flex-wrap sm:items-center w-full">
               <div className="col-span-2 flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 max-w-full">
-                  <Button aria-label="Filter by favorite status" variant={showFavoritesOnly ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${showFavoritesOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
-                      <Heart className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''} sm:mr-2`} />
+                  <Button aria-label="Filter by favorite status" variant={showFavoritesOnly ? "default" : "outline"} className={cn("shrink-0 h-10 sm:h-9 font-bold shadow-sm", showFavoritesOnly ? "bg-primary hover:bg-primary/90 text-primary-foreground border-0" : "bg-background border-border text-muted-foreground hover:text-primary")} onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}>
+                      <Heart className={cn("w-4 h-4", showFavoritesOnly && "fill-current", "sm:mr-2")} />
                       <span className="hidden sm:inline-block">Favorites</span>
                   </Button>
                   
@@ -899,7 +900,7 @@ function LibraryContent() {
                   </Button>
 
                   {isAdmin && (
-                      <Button aria-label="Filter monitored series" variant={monitoredFilter ? "default" : "outline"} className={`shrink-0 h-10 sm:h-9 font-bold shadow-sm ${monitoredFilter ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'bg-background border-border text-muted-foreground hover:text-primary'}`} onClick={() => setMonitoredFilter(!monitoredFilter)}>
+                      <Button aria-label="Filter monitored series" variant={monitoredFilter ? "default" : "outline"} className={cn("shrink-0 h-10 sm:h-9 font-bold shadow-sm", monitoredFilter ? "bg-primary hover:bg-primary/90 text-primary-foreground border-0" : "bg-background border-border text-muted-foreground hover:text-primary")} onClick={() => setMonitoredFilter(!monitoredFilter)}>
                           <Activity className={`w-4 h-4 sm:mr-2`} />
                           <span className="hidden sm:inline-block">Monitored</span>
                       </Button>
@@ -908,7 +909,7 @@ function LibraryContent() {
 
               <div className="flex items-center gap-1 w-full sm:w-auto flex-1 sm:flex-none">
                   <Select value={activeCollection} onValueChange={setActiveCollection}>
-                      <SelectTrigger aria-label="Filter by reading list" className={`w-full sm:w-[150px] h-10 sm:h-9 shadow-sm ${activeCollection !== "ALL" ? "bg-primary/10 text-primary border-primary/30 font-bold" : "bg-background border-border"}`}>
+                      <SelectTrigger aria-label="Filter by reading list" className={cn("w-full sm:w-[150px] h-10 sm:h-9 shadow-sm", activeCollection !== "ALL" ? "bg-primary/10 text-primary border-primary/30 font-bold" : "bg-background border-border")}>
                           <div className="flex items-center gap-2 truncate"><Layers className="w-3 h-3 shrink-0"/> <SelectValue placeholder="Reading Lists" /></div>
                       </SelectTrigger>
                       <SelectContent className="bg-popover border-border">
@@ -1045,7 +1046,7 @@ function LibraryContent() {
               const navId = item.id || item.path;
               return (
                 <div className="group flex flex-col space-y-2 relative">
-                  <Card className={`aspect-[2/3] overflow-hidden shadow-sm transition-all p-0 relative flex flex-col ${isSelectionMode ? (isSelected ? 'border-4 border-primary scale-95' : 'border-2 border-border cursor-pointer') : 'border-border group-hover:shadow-md cursor-pointer bg-background'}`}>
+                  <Card className={cn("aspect-[2/3] overflow-hidden shadow-sm transition-all p-0 relative flex flex-col", isSelectionMode ? (isSelected ? "border-4 border-primary scale-95" : "border-2 border-border cursor-pointer") : "border-border group-hover:shadow-md cursor-pointer bg-background")}>
                       {isSelectionMode && item.id && (<div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">{isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-white/80" />}</div>)}
                       
                       <div 
@@ -1067,7 +1068,7 @@ function LibraryContent() {
                                 src={item.cover} 
                                 alt={`Cover art for ${item.name}`} 
                                 loading="lazy" 
-                                className={`object-cover w-full h-full relative z-10 transition-opacity ${isCompleted ? 'opacity-60' : ''}`} 
+                                className={cn("object-cover w-full h-full relative z-10 transition-opacity", isCompleted && "opacity-60")} 
                                 onError={(e) => { e.currentTarget.style.display = 'none'; }} 
                               />
                           )}
@@ -1091,8 +1092,8 @@ function LibraryContent() {
                           )}
                           {!isSelectionMode && (
                               <div className="absolute top-1.5 right-1.5 z-30">
-                                  <button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`h-8 w-8 sm:h-6 sm:w-6 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center transition-all ${item.isFavorite ? 'text-primary opacity-100' : 'text-white/70 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-primary'}`}>
-                                      <Heart className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${item.isFavorite ? 'fill-current' : ''}`} />
+                                  <button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={cn("h-8 w-8 sm:h-6 sm:w-6 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center transition-all", item.isFavorite ? "text-primary opacity-100" : "text-white/70 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-primary")}>
+                                      <Heart className={cn("w-4 h-4 sm:w-3.5 sm:h-3.5", item.isFavorite && "fill-current")} />
                                   </button>
                               </div>
                           )}
@@ -1108,54 +1109,51 @@ function LibraryContent() {
                           {progress > 0 && !isCompleted && (<div className="absolute bottom-0 left-0 right-0 h-2.5 bg-black/80 z-10 border-t border-black/40"><div className="h-full bg-primary transition-all duration-500 shadow-sm shadow-primary/50" style={{ width: `${progress}%` }} /></div>)}
                       </div>
 
-                        <div className={`absolute inset-0 bg-black/80 transition-opacity flex-col items-center justify-center gap-1.5 p-3 z-20 pointer-events-none group-hover:pointer-events-auto ${isSelectionMode ? 'hidden' : 'hidden md:flex opacity-0 group-hover:opacity-100'}`}>
-                        <Button 
-                            variant="default" 
-                            size="sm" 
-                            className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 min-w-0 px-2" 
+                        <div className={cn("absolute inset-0 bg-black/80 transition-opacity flex-col items-center justify-center gap-1.5 p-3 z-20 pointer-events-none group-hover:pointer-events-auto", isSelectionMode ? "hidden" : "hidden md:flex opacity-0 group-hover:opacity-100")}>
+                        <Button
+                            variant="default"
+                            size="sm"
+                            className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
                             onClick={(e) => handleNavigate(e as any, item.path, navId)}
                             aria-label={`Open reader for ${item.name}`}
                         >
-                            {navigatingTo === navId ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 mr-1.5 shrink-0" />} 
-                            <span className="truncate">{navigatingTo === navId ? "Loading..." : "Read Series"}</span>
+                            {navigatingTo === navId ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 shrink-0" />}
+                            <span>{navigatingTo === navId ? "Loading..." : "Read"}</span>
                         </Button>
-                        <div className="flex gap-1.5 w-full">
-                          <Button 
-                            variant="secondary" 
-                            size="sm" 
-                            className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
+                        <div className="flex gap-1.5 w-full justify-center">
+                          <Button
+                            variant="secondary"
+                            size="icon-sm"
+                            className="shadow-md"
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}
                             title="Add to List"
                             aria-label={`Add ${item.name} to a reading list`}
                         >
-                            <ListPlus className="w-4 h-4 shrink-0" /> 
+                            <ListPlus className="w-4 h-4" />
                         </Button>
                         {isAdmin && (
-                            <Button 
-                                variant="secondary" 
-                                size="sm" 
-                                className="h-10 sm:h-8 flex-1 shadow-lg font-bold px-1.5 min-w-0 flex items-center justify-center" 
+                            <Button
+                                variant="secondary"
+                                size="icon-sm"
+                                className="shadow-md"
                                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}
                                 title="Edit Metadata"
                                 aria-label={`Edit metadata for ${item.name}`}
                             >
-                                <Settings2 className="w-4 h-4 shrink-0" /> 
+                                <Settings2 className="w-4 h-4" />
                             </Button>
                             )}
-                        </div>
                         {isAdmin && (
-                            // --- NEW: Using the new explicit Metadata variables ---
-                            <Button aria-label={`Refresh cover art for ${item.name}`} variant="default" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold border-0 min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.metadataId || item.cvId?.toString(), item.metadataSource || 'COMICVINE', item.path); }}>
-                                <RefreshCw className="w-3 h-3 mr-1.5 shrink-0" /> 
-                                <span className="truncate">Fetch Cover</span>
+                            <Button aria-label={`Refresh cover art for ${item.name}`} variant="secondary" size="icon-sm" className="shadow-md" onClick={(e) => { e.preventDefault(); e.stopPropagation(); initiateRefreshMetadata(item.metadataId || item.cvId?.toString(), item.metadataSource || 'COMICVINE', item.path); }} title="Refresh Cover">
+                                <RefreshCw className="w-4 h-4" />
                             </Button>
                         )}
                         {activeCollection !== "ALL" && (
-                            <Button aria-label={`Remove ${item.name} from current list`} variant="destructive" size="sm" className="h-10 sm:h-8 w-full shadow-lg text-xs sm:text-[10px] font-bold min-w-0 px-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}>
-                                <Minus className="w-3 h-3 mr-1.5 shrink-0" /> 
-                                <span className="truncate">Remove</span>
+                            <Button aria-label={`Remove ${item.name} from current list`} variant="destructive" size="icon-sm" className="shadow-md" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }} title="Remove from List">
+                                <Minus className="w-4 h-4" />
                             </Button>
                         )}
+                        </div>
                       </div>
                   </Card>
                   <div 
@@ -1171,7 +1169,7 @@ function LibraryContent() {
                       }}
                   >
                       <div className="flex items-start justify-between gap-1 cursor-pointer hover:underline">
-                          <h3 className={`text-[12px] sm:text-[11px] font-bold truncate leading-tight ${isCompleted ? 'text-muted-foreground' : 'text-foreground'}`} title={item.name}>{item.name}</h3>
+                          <h3 className={cn("text-[12px] sm:text-[11px] font-bold truncate leading-tight", isCompleted ? "text-muted-foreground" : "text-foreground")} title={item.name}>{item.name}</h3>
                       </div>
                       <p className="text-[10px] sm:text-[9px] text-muted-foreground mt-0.5 truncate" title={item.publisher || 'Unknown'}>{item.publisher || 'Unknown'} • {item.year || '????'}</p>
                   </div>
@@ -1222,14 +1220,14 @@ function LibraryContent() {
                                       src={item.cover} 
                                       alt={`Cover art for ${item.name}`} 
                                       loading="lazy" 
-                                      className={`w-full h-full object-cover relative z-10 transition-opacity ${isCompleted ? 'opacity-60' : ''}`} 
+                                      className={cn("w-full h-full object-cover relative z-10 transition-opacity", isCompleted && "opacity-60")} 
                                       onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                     />
                                 )}
                                 {isCompleted && (<div className="absolute inset-0 flex items-center justify-center bg-green-500/20 z-20"><Check className="w-4 h-4 text-green-500 font-bold"/></div>)}
                             </div>
                         </td>
-                        <td className={`px-4 py-3 font-bold ${isCompleted ? 'text-muted-foreground' : 'text-foreground'}`}>
+                        <td className={cn("px-4 py-3 font-bold", isCompleted ? "text-muted-foreground" : "text-foreground")}>
                             <div className="flex items-center gap-2">
                                 {isSelectionMode ? (<span>{item.name}</span>) : (
                                     <button 
@@ -1241,7 +1239,7 @@ function LibraryContent() {
                                         {navigatingTo === navId && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
                                     </button>
                                 )}
-                                {!isSelectionMode && (<button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={`transition-colors focus:outline-none p-2 -m-2 ${item.isFavorite ? 'text-primary' : 'text-muted-foreground/50 hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}><Heart className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${item.isFavorite ? 'fill-current' : ''}`} /></button>)}
+                                {!isSelectionMode && (<button aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(item.id, item.isFavorite); }} className={cn("transition-colors focus:outline-none p-2 -m-2", item.isFavorite ? "text-primary" : "text-muted-foreground/50 hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100")}><Heart className={cn("w-4 h-4 sm:w-3.5 sm:h-3.5", item.isFavorite && "fill-current")} /></button>)}
                                 
                                 {item.monitored && (
                                     <Badge className="shrink-0 bg-emerald-600 hover:bg-emerald-600 text-white border-0 text-[9px] px-1.5 h-4 uppercase tracking-wider flex items-center">
@@ -1309,11 +1307,11 @@ function LibraryContent() {
               <span aria-live="polite" className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedSeries.size} Selected</span>
               
               <div className="flex gap-2 shrink-0">
-                <Button aria-label="Mark selected series as unread" size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedSeries.size > 0 ? 'text-primary hover:bg-muted border-primary/50' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress('UNREAD')}>
+                <Button aria-label="Mark selected series as unread" size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedSeries.size > 0 ? "text-primary hover:bg-muted border-primary/50" : "bg-muted text-muted-foreground cursor-not-allowed border-border")} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkProgress('UNREAD')}>
                     <EyeOff className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Mark Unread</span>
                 </Button>
                 
-                <Button aria-label="Add selected series to a reading list" size="sm" variant="outline" className={`h-10 sm:h-8 shadow-sm font-bold transition-all ${selectedSeries.size > 0 ? 'text-primary hover:bg-muted border-primary/50' : 'bg-muted text-muted-foreground cursor-not-allowed border-border'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkListModalOpen(true)}>
+                <Button aria-label="Add selected series to a reading list" size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedSeries.size > 0 ? "text-primary hover:bg-muted border-primary/50" : "bg-muted text-muted-foreground cursor-not-allowed border-border")} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkListModalOpen(true)}>
                     <ListPlus className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Add to List</span>
                 </Button>
 
@@ -1366,7 +1364,7 @@ function LibraryContent() {
                 )}
 
                 {isAdmin && (
-                  <Button aria-label="Delete selected series" size="sm" className={`h-10 sm:h-8 shadow-sm font-bold ml-1 sm:ml-2 transition-all ${selectedSeries.size > 0 ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-muted text-muted-foreground cursor-not-allowed'}`} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkDeleteModalOpen(true)}>
+                  <Button aria-label="Delete selected series" size="sm" className={cn("h-10 sm:h-8 shadow-sm font-bold ml-1 sm:ml-2 transition-all", selectedSeries.size > 0 ? "bg-red-600 hover:bg-red-700 text-white" : "bg-muted text-muted-foreground cursor-not-allowed")} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkDeleteModalOpen(true)}>
                       <Trash2 className="w-4 h-4" />
                   </Button>
                 )}

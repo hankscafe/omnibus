@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
-import { Loader2, Calendar as CalendarIcon, Clock, ChevronLeft, ChevronRight, Image as ImageIcon, BookOpen, Download, Plus, Activity, Check, ExternalLink } from "lucide-react"
+import { Loader2, Calendar as CalendarIcon, Clock, ChevronLeft, ChevronRight, Image as ImageIcon, BookOpen, Download, Plus, Activity, Check, ExternalLink, Eye } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
@@ -257,7 +257,7 @@ export default function CalendarPage() {
                 </TabsList>
 
                 {/* TAB 1: MY TRACKED SERIES */}
-                <TabsContent value="my-pulls" className="space-y-6 animate-in fade-in duration-500">
+                <TabsContent value="my-pulls" className="space-y-6 animate-in fade-in duration-300">
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-muted/50 p-4 rounded-xl border border-border">
                         <div className="flex items-center gap-2">
                             <Button variant="outline" size="sm" onClick={() => setLocalWeekOffset(w => w - 1)} disabled={loadingLocal} className="border-border">
@@ -295,7 +295,7 @@ export default function CalendarPage() {
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                                     {monthIssues.map((issue) => (
                                         <Link key={issue.id} href={`/library/series?path=${encodeURIComponent(issue.seriesPath || '')}`} className="group block h-full">
-                                            <Card className="shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors">
+                                            <Card className="shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors duration-200">
                                                 <div className="relative aspect-[2/3] w-full bg-muted border-b border-border overflow-hidden">
                                                     {issue.coverUrl ? (
                                                         <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" />
@@ -317,9 +317,9 @@ export default function CalendarPage() {
                                                     )}
                                                     
                                                     {/* Hidden on mobile to prevent overlay flash issues, visible on desktop hover */}
-                                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex items-center justify-center z-10 pointer-events-none">
-                                                        <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg pointer-events-auto" tabIndex={-1}>
-                                                            <BookOpen className="w-4 h-4 mr-2" /> View Series
+                                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity duration-200 hidden sm:flex items-center justify-center z-10 pointer-events-none">
+                                                        <Button size="sm" className="font-bold shadow-md pointer-events-auto" tabIndex={-1}>
+                                                            <Eye className="w-3 h-3 mr-2" /> View Series
                                                         </Button>
                                                     </div>
                                                 </div>
@@ -342,7 +342,7 @@ export default function CalendarPage() {
                 </TabsContent>
 
                 {/* TAB 2: GLOBAL PULL LIST */}
-                <TabsContent value="global-pulls" className="space-y-6 animate-in fade-in duration-500">
+                <TabsContent value="global-pulls" className="space-y-6 animate-in fade-in duration-300">
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-muted/50 p-4 rounded-xl border border-border">
                         <div className="flex items-center gap-2">
                             <Button variant="outline" size="sm" onClick={() => setWeekOffset(w => w - 1)} disabled={loadingGlobal} className="border-border">
@@ -391,7 +391,7 @@ export default function CalendarPage() {
                                         const inLibrary = issue.inLibrary || isVolRequested;
 
                                         return (
-                                        <Card key={issue.id} className="group shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors">
+                                        <Card key={issue.id} className="group shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors duration-200">
                                             <div className="relative aspect-[2/3] w-full bg-muted border-b border-border overflow-hidden">
                                                 {issue.coverUrl ? <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" /> : <ImageIcon className="w-8 h-8 text-muted-foreground/30 m-auto h-full" />}
                                                 
@@ -409,56 +409,80 @@ export default function CalendarPage() {
                                                 </div>
 
                                                 {/* Desktop Only Hover Overlay */}
-                                                <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex flex-col items-center justify-center z-10 p-2 gap-2">
+                                                <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity duration-200 hidden sm:flex flex-col items-center justify-center z-10 p-2 gap-1.5">
                                                     {isMonitored ? (
-                                                        <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100">
-                                                            <Check className="w-4 h-4 mr-2"/> {inLibrary ? "Monitored" : "Subscribed"}
-                                                        </Button>
+                                                        <>
+                                                            <Button size="sm" variant="secondary" disabled className="w-full text-[10px] font-bold whitespace-nowrap uppercase tracking-wider bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-2 border-white h-8 opacity-100 shadow-md">
+                                                                <Check className="w-3 h-3 mr-1"/> {inLibrary ? "Monitored" : "Subscribed"}
+                                                            </Button>
+                                                            <div className="flex flex-col gap-1.5 w-full">
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="outline"
+                                                                    disabled
+                                                                    className="text-[10px] font-bold whitespace-nowrap uppercase tracking-wider text-white border-2 border-white/50 h-8 opacity-50 cursor-not-allowed"
+                                                                >
+                                                                    <Download className="w-3 h-3 mr-1"/> Request Issue
+                                                                </Button>
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="ghost"
+                                                                    asChild
+                                                                    className="text-[10px] font-bold whitespace-nowrap uppercase tracking-wider text-white border-2 border-white/50 hover:bg-white/20 h-8"
+                                                                >
+                                                                    <a href={`https://metron.cloud/issue/${issue.id}/`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                                                                        <ExternalLink className="w-3 h-3 mr-1"/> Details
+                                                                    </a>
+                                                                </Button>
+                                                            </div>
+                                                        </>
                                                     ) : (
-                                                        <Button 
-                                                            size="sm" 
-                                                            className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg"
-                                                            disabled={requestingTarget === `vol-${volIdKey}`}
-                                                            onClick={(e) => {
-                                                                e.preventDefault();
-                                                                e.stopPropagation();
-                                                                setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: (issue as any).metadataSource || 'METRON' })
-                                                            }}
-                                                        >
-                                                            {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Plus className="w-4 h-4 mr-2" />} Request Series
-                                                        </Button>
+                                                        <>
+                                                            <div className="flex flex-col gap-1.5 w-full">
+                                                                <Button
+                                                                    size="sm"
+                                                                    className="text-[10px] font-bold whitespace-nowrap uppercase tracking-wider bg-primary hover:bg-primary/90 text-primary-foreground border-2 border-white h-8"
+                                                                    disabled={requestingTarget === `vol-${volIdKey}`}
+                                                                    onClick={(e) => {
+                                                                        e.preventDefault();
+                                                                        e.stopPropagation();
+                                                                        setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: (issue as any).metadataSource || 'METRON' })
+                                                                    }}
+                                                                >
+                                                                    {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Plus className="w-3 h-3 mr-1" />} Request Series
+                                                                </Button>
+                                                                {isIssueRequested ? (
+                                                                    <Button size="sm" variant="secondary" disabled className="text-[10px] font-bold whitespace-nowrap uppercase tracking-wider bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-2 border-white h-8 opacity-100 shadow-md">
+                                                                        <Check className="w-3 h-3 mr-1"/> Requested
+                                                                    </Button>
+                                                                ) : (
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="outline"
+                                                                        className="text-[10px] font-bold whitespace-nowrap uppercase tracking-wider text-white border-2 border-white h-8 hover:bg-white/20"
+                                                                        disabled={requestingTarget === `iss-${issueTargetName}`}
+                                                                        onClick={(e) => {
+                                                                            e.preventDefault();
+                                                                            e.stopPropagation();
+                                                                            handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
+                                                                        }}
+                                                                    >
+                                                                        {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />} Request Issue
+                                                                    </Button>
+                                                                )}
+                                                            </div>
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                asChild
+                                                                className="w-full text-[10px] font-bold whitespace-nowrap uppercase tracking-wider text-white border-2 border-white/50 hover:bg-white/20 h-7"
+                                                            >
+                                                                <a href={`https://metron.cloud/issue/${issue.id}/`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                                                                    <ExternalLink className="w-3 h-3 mr-1" /> View Details
+                                                                </a>
+                                                            </Button>
+                                                        </>
                                                     )}
-
-                                                    {isIssueRequested ? (
-                                                        <Button size="sm" variant="secondary" disabled className="w-full font-bold bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 opacity-100">
-                                                            <Check className="w-4 h-4 mr-2"/> Requested
-                                                        </Button>
-                                                    ) : (
-                                                        <Button 
-                                                            size="sm" 
-                                                            variant="outline"
-                                                            className="w-full font-bold text-white border-white/30 hover:bg-white/20"
-                                                            disabled={requestingTarget === `iss-${issueTargetName}` || isMonitored}
-                                                            onClick={(e) => {
-                                                                e.preventDefault();
-                                                                e.stopPropagation();
-                                                                handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
-                                                            }}
-                                                        >
-                                                            {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />} Request Issue
-                                                        </Button>
-                                                    )}
-
-                                                    <Button 
-                                                        size="sm" 
-                                                        variant="ghost"
-                                                        asChild
-                                                        className="w-full font-bold text-white hover:bg-white/20 mt-1"
-                                                    >
-                                                        <a href={`https://metron.cloud/issue/${issue.id}/`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                                                            <ExternalLink className="w-4 h-4 mr-2" /> View Details
-                                                        </a>
-                                                    </Button>
                                                 </div>
                                             </div>
                                             <CardContent className="p-3 flex-1 flex flex-col justify-between">
@@ -487,7 +511,7 @@ export default function CalendarPage() {
                                                                 setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: (issue as any).metadataSource || 'METRON' })
                                                             }}
                                                         >
-                                                            {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Plus className="w-3 h-3 mr-1.5" />} Req Series
+                                                            {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Plus className="w-3 h-3 mr-1.5" />} Request Series
                                                         </Button>
                                                     )}
 
@@ -507,7 +531,7 @@ export default function CalendarPage() {
                                                                 handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
                                                             }}
                                                         >
-                                                            {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />} Req Issue
+                                                            {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />} Request Issue
                                                         </Button>
                                                     )}
 

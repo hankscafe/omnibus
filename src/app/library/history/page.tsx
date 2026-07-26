@@ -47,38 +47,38 @@ export default function HistoryPage() {
                     className="group space-y-2 cursor-pointer" 
                     onClick={() => router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`)}
                 >
-                    <div className="relative aspect-[2/3] rounded-xl overflow-hidden border border-border shadow-sm bg-muted transition-all group-hover:shadow-md group-hover:scale-[1.02] group-hover:ring-2 group-hover:ring-primary">
+                    <div className="relative aspect-[2/3] rounded-xl overflow-hidden border border-border shadow-sm bg-muted transition-[transform,box-shadow] duration-200 group-hover:shadow-md group-hover:scale-[1.02] group-hover:ring-2 group-hover:ring-primary">
                         <img src={item.seriesCoverUrl} className="w-full h-full object-cover" alt="" />
                         
                         {/* Gradient for progress bar visibility */}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none group-hover:opacity-0 transition-opacity" />
+                        <div className="absolute inset-0 bg-linear-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none group-hover:opacity-0 transition-opacity duration-200" />
 
                         {/* Hover action overlay */}
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-4 z-20">
-                            <Button 
-                                size="sm" 
-                                className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-lg" 
-                                onClick={(e) => { 
-                                    e.stopPropagation(); 
-                                    router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`); 
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center p-4 z-20">
+                            <Button
+                                size="sm"
+                                className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-0 shadow-md"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
                                 }}
                             >
-                                <BookOpen className="w-4 h-4 mr-2" /> {item.isCompleted ? "Re-read" : "Resume"}
+                                <BookOpen className="w-3 h-3 mr-2" /> {item.isCompleted ? "Re-read" : "Resume"}
                             </Button>
                         </div>
                         
                         {/* Floating Progress Bar */}
-                        <div className="absolute bottom-0 left-0 w-full p-2 z-20 group-hover:opacity-0 transition-opacity pointer-events-none">
+                        <div className="absolute bottom-0 left-0 w-full p-2 z-20 group-hover:opacity-0 transition-opacity duration-200 pointer-events-none">
                             <div className="flex justify-end mb-1">
                                 <p className="text-white/90 text-[10px] font-mono drop-shadow-md">{item.percentage}%</p>
                             </div>
-                            <div className="w-full bg-white/30 h-1.5 rounded-full overflow-hidden backdrop-blur-sm">
-                                <div className="bg-primary h-full transition-all duration-500 shadow-sm shadow-primary/50" style={{ width: `${item.percentage}%` }} />
+                            <div className="w-full bg-white/30 h-1.5 rounded-full overflow-hidden backdrop-blur-xs">
+                                <div className="bg-primary h-full transition-[width] duration-300 ease-out shadow-sm shadow-primary/50" style={{ width: `${item.percentage}%` }} />
                             </div>
                         </div>
                     </div>
                     <div className="px-0.5">
-                        <h3 className="text-sm font-bold truncate text-foreground group-hover:text-primary transition-colors">{item.seriesName}</h3>
+                        <h3 className="text-sm font-bold truncate text-foreground group-hover:text-primary transition-colors duration-200">{item.seriesName}</h3>
                         <p className="text-xs text-muted-foreground">Issue #{item.issueNumber}</p>
                     </div>
                 </div>

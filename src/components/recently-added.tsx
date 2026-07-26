@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Library, Image as ImageIcon, ArrowRight } from "lucide-react"; 
+import { Eye, Image as ImageIcon, ArrowRight } from "lucide-react"; 
 import { Button } from "@/components/ui/button";
 import Link from "next/link"; 
 
@@ -31,7 +31,7 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
         <h2 className="text-2xl font-bold tracking-tight text-foreground">Recently Added</h2>
         <Button asChild variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 group font-bold hidden sm:flex">
             <Link href="/library">
-                View Library <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                <span>Library</span> <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
             </Link>
         </Button>
       </div>
@@ -40,7 +40,7 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
         {items.map((item) => (
             <div 
               key={item.id} 
-              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-all cursor-pointer border border-border snap-start"
+              className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-[transform,box-shadow] duration-200 cursor-pointer border border-border snap-start"
               onClick={() => router.push(`/library/series?path=${encodeURIComponent(item.path)}`)}
             >
               {item.coverUrl ? (
@@ -51,7 +51,7 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
                   </div>
               )}
 
-              <div className="absolute bottom-0 left-0 w-full p-3 bg-gradient-to-t from-black/90 via-black/60 to-transparent z-10 group-hover:opacity-0 transition-opacity duration-300 pointer-events-none">
+              <div className="absolute bottom-0 left-0 w-full p-3 bg-linear-to-t from-black/90 via-black/60 to-transparent z-10 group-hover:opacity-0 transition-opacity duration-200 ease-out pointer-events-none">
                   <div className="flex flex-col mb-1.5">
                       <p className="text-white font-bold text-xs truncate drop-shadow-md">{item.name}</p>
                       <p className="text-white/80 text-[10px] font-medium drop-shadow-md mt-0.5">
@@ -60,19 +60,19 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
                   </div>
               </div>
 
-              <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 hidden sm:flex flex-col justify-end p-4 text-center gap-2 z-20">
+              <div className="absolute inset-0 bg-linear-to-t from-black/95 via-black/60 to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ease-out hidden sm:flex flex-col justify-end p-4 text-center gap-2 z-20">
                   <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md">{item.name}</h3>
                   <p className="text-white/80 text-xs mb-2 drop-shadow-md">{item.year || '????'}</p>
                   
-                  <Button 
-                      size="sm" 
-                      className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
+                  <Button
+                      size="sm"
+                      className="w-full min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
                       onClick={(e) => {
                           e.stopPropagation();
                           router.push(`/library/series?path=${encodeURIComponent(item.path)}`);
                       }}
                   >
-                      <Library className="w-3 h-3 mr-2" /> View Series
+                      <Eye className="w-3 h-3 shrink-0" /> <span>View</span>
                   </Button>
               </div>
             </div>
@@ -82,7 +82,7 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
       <div className="sm:hidden pt-2">
         <Button asChild variant="outline" className="w-full border-primary/50 text-primary hover:bg-primary/10 group font-bold">
             <Link href="/library">
-                View Library <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                <span>Library</span> <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
             </Link>
         </Button>
       </div>

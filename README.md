@@ -38,6 +38,12 @@ While I know AI-assisted ("vibe-coded") projects can sometimes be met with skept
 
 The last several releases added a lot. The biggest things to be aware of:
 
+* **Comic Panel-Frame Navigation (Community!):** A comic-styled header redesign — the active page sits in a bold panel frame with an offset shadow, Admin lives in the avatar menu, and the whole button system picked up tactile press feedback and `prefers-reduced-motion` support. Contributed by [JoeJoeflyn](https://github.com/JoeJoeflyn) in [#186](https://github.com/hankscafe/omnibus/pull/186) — Omnibus' first merged community feature!
+* **Page Manager:** Preview any issue's pages on the series page, delete scanner junk or corrupted pages (CBR repack included), flag a bad page right from the reader mid-read, and sweep an entire series for flagged pages as a background job.
+* **Alphabet Jump Bar:** A Plex-style floating #/A–Z rail on alphabetically-sorted libraries — jump straight to a letter, watch the rail track your position as you scroll, with letters that have nothing under your current filters dimmed.
+* **Cloudflare Downloads That Finish Themselves:** The FlareSolverr path was rebuilt around the choreography that battle-tested download tools use — solver session reuse, streaming from the solver's landed URL, and partial-transfer resume — so GetComics links that used to fall to "manual download" now usually complete on their own.
+* **Manga Pipeline Hardening:** Matching never demotes a manga series back to Comics, Standardize applies your manga naming pattern, series-name-aware parsing fixes "Kaiju No. 8"-style titles, per-issue covers self-heal instead of wearing volume-1 art everywhere, and completed series finish their metadata enrichment automatically even after a rate-limit interruption.
+* **One-Click Accept All:** When the Smart Matcher's auto-scan matches everything, a single button applies every suggestion in one pass.
 * **Self-Describing Library (Local-First Ingest):** Scans now read `series.json` (Mylar format) and embedded `ComicInfo.xml` — including inside RAR archives — so a properly tagged library browses, builds its calendar, and even rebuilds itself into a fresh database with **zero metadata-provider API calls**. `series.json` export is on by default (Omnibus never overwrites one it didn't create), and your files supply release dates, issue numbers, and covers directly.
 * **Native CBR/RAR Reading:** The Rust engine reads `.cbr`/`.rar` archives directly — in the web reader *and* streamed to OPDS apps like Panels — so conversion to `.cbz` is now optional (the auto-converter remains on by default and recommended).
 * **Smarter Matching:** A configurable Match Confidence Mode (Trust / Confirm / Auto / Custom), plus an hourly budget-aware background sweep that keeps retrying unmatched series within the ComicVine rate limit — big imports finish matching themselves, and auto-matches surface in the admin notification bell.
@@ -72,6 +78,7 @@ The last several releases added a lot. The biggest things to be aware of:
   - [Additional Screenshots](#additional-screenshots)
 - [Installation (Docker)](#installation-docker)
 - [Acknowledgements](#acknowledgements)
+- [Contributors](#contributors)
 
 ---
 
@@ -174,6 +181,7 @@ A meticulously organized, highly performant view of your physical files, built t
   * Try the "Surprise Me" button for a randomized library shuffle when you don't know what to read!
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.
 * **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view to easily navigate massive collections.
+* **Alphabet Jump Bar:** On alphabetical sorts, a Plex-style floating #/A–Z rail appears along the right edge. Letters with no series under your current filters are dimmed; click a live letter to jump the infinite-scrolling list straight there, and the rail highlights your position as you scroll.
 
 ### Manga Support
 Manga is a first-class citizen, not an afterthought. Omnibus detects it, shelves it, names it, and filters it — your call how much of it you want to see.
@@ -182,6 +190,7 @@ Manga is a first-class citizen, not an afterthought. Omnibus detects it, shelves
 * **Dedicated Manga Libraries & Naming:** Flag any library as a Manga destination and detected manga routes there automatically, with its own file-naming pattern (e.g. `{Series} Vol. {Issue}`) separate from your western comics.
 * **Discover Visibility Modes:** Show all manga, hide it entirely, or allow only specific publishers on the Discover page — and the filter works identically whether ComicVine or Metron is your primary source.
 * **Manga Request Gate:** An "Allow Manga Requests" toggle can keep manga out of the download pipeline completely: when off, requests detected as manga are politely rejected before any automation fires. Library scans and series you already own are unaffected.
+* **Sticky Manga Identity & Smarter Parsing:** Matching — smart or manual — never demotes a manga series back to Comics; once a series lives in a manga library, that verdict sticks. Filename parsing is series-name aware, so titles with numbers in the name ("Kaiju No. 8") parse their volume numbers correctly instead of colliding with the series title.
 * **Right-to-Left Reading:** The web reader's RTL mode and vertical webtoon scrolling handle manga the way it's meant to be read, with preferences saved per series.
 
 ### Series Page
@@ -211,6 +220,7 @@ The dedicated hub for an individual comic run or manga volume. This page aggrega
 * **Offline Downloading:** Admins can grant users permission to download raw .cbz files directly from the browser for offline reading in third-party apps.
 * **Community Reviews & Ratings:** Users can leave a 1-5 star rating and written review for any series. The series page aggregates these into a total community score, allowing users to share their thoughts and recommendations with others on the server.
 * **Issue Reporting System:** Users can report broken files, incorrect metadata, or bad archives directly from the series page. Admins receive an alert and can resolve the issue, sending a direct inbox message back to the user upon completion.
+* **Page Manager:** Open any issue's page strip to preview every page and delete scanner junk, ads, or corrupted pages — edits repack the archive safely, CBR included. Pages flagged by readers queue here for review, and a whole-series sweep can hunt flagged pages across an entire run as a background job.
 
 ### Web Reader
 A completely custom, zero-friction reading experience built natively into the browser. No external apps required.
@@ -235,6 +245,7 @@ A completely custom, zero-friction reading experience built natively into the br
 * **Smart Preloading:** Silently caches the next several pages in the background so you never experience loading spinners while reading.
 * **Control Schemes:** Fully mapped keyboard shortcuts for desktop readers (Arrow keys, Spacebar, F to Fullscreen), and intuitive tap/swipe zones for mobile and tablet users.
 * **Live Image Adjustments:** Adjust brightness and contrast overlays independently of your device settings for late-night reading sessions.
+* **Flag Bad Pages:** Spot a corrupted or junk page mid-read? Flag it without leaving the reader — flagged pages queue up for admin review in the series Page Manager.
 * **Pinch-to-Zoom & Per-Series Preferences:** Pinch (or scroll-wheel) to zoom and pan high-detail pages, and save reading preferences — direction, layout, and fit — on a per-series basis so each title reopens exactly the way you like it.
 * **Progressive Web App (PWA) & Offline Reading:** Install Omnibus to your home screen as a PWA. Users can click the "Offline" button in the Web Reader to silently cache an entire issue to their device's local storage, allowing them to read flawlessly without an active internet connection. Installed PWAs also get a dedicated refresh button in the header (iOS standalone apps have no pull-to-refresh).
 
@@ -324,7 +335,7 @@ A personalized space for each user on your server to manage their identity, trac
 
 * **Personal Identity:** Customize your account by uploading a unique profile avatar and a custom hero banner for your user dashboard.
 * **Reading Statistics:** Track your all-time reading habits. View your total issues read, estimated pages turned, and your most-read publishers or genres.
-* **UI Customization:** Set your own personal theme preferences (Dark mode, Light mode, or System default) and UI accent colors. These settings are tied to your account and persist across any device you log into.
+* **UI Customization:** Set your own personal theme preferences (Dark mode, Light mode, or System default) plus five comic-inspired color themes — Vigilante Red, Krypton Green, Mutant Yellow, Symbiote, and Speedster — that re-accent the entire interface. These settings are tied to your account and persist across any device you log into.
 * **Account Security:** Safely update your password and view or revoke active login sessions across your different devices.
 * **Personal API Keys:** Generate secure, user-specific API tokens to integrate your Omnibus reading progress with third-party trackers (like MyAnimeList, AniList, or custom scripts) without giving out Admin access.
 * **Trophies & Achievements:** Unlock custom trophies and milestones based on your reading habits! Earn achievements for reading a certain number of comics, making requests, or exploring different publishers. Trophies are proudly displayed on your profile.
@@ -384,8 +395,8 @@ Settings are organized into **8 task-focused tabs** — Metadata, Library & File
 * **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
 * **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, and Terabox. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
 * **Anna's Archive Search Source:** Search Anna's Archive (the shadow-library aggregator) as a first-class source alongside GetComics and your indexers. Use it in interactive search (no API key required — gated files drop to the manual queue) or prioritize it as an automated source (requires a premium API key plus a passing connection test). Includes a configurable mirror base URL with automatic failover as Anna's Archive rotates domains.
-* **Selectable Cloudflare Solver:** Route requests through a FlareSolverr **or** Byparr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics, with a configurable solve timeout. When a link stays gated, Omnibus holds it for manual download — and you can hand the file back via Manual File Upload.
-* **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the AI misses, you can manually input a specific ComicVine Volume ID or Metron Series ID to force a perfect match. Includes bulk processing for whole folders at once, an inline metadata editor (Series Group / Universe and per-issue covers included), archive-extracted cover previews, and overwrite-safety guards so a re-match never clobbers existing files.
+* **Selectable Cloudflare Solver:** Route requests through a FlareSolverr **or** Byparr container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics, with a configurable solve timeout. The download pipeline drives the solver the way battle-tested tools do — reusing solver sessions, streaming from the solver's landed URL, and resuming partial transfers — so gated links that used to need hand-holding now usually finish on their own. When a link still stays gated, Omnibus holds it for manual download — and you can hand the file back via Manual File Upload. A ready-to-uncomment `flaresolverr` service ships in the compose example below.
+* **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the AI misses, you can manually input a specific ComicVine Volume ID or Metron Series ID to force a perfect match. Includes bulk processing for whole folders at once, an inline metadata editor (Series Group / Universe and per-issue covers included), archive-extracted cover previews, and overwrite-safety guards so a re-match never clobbers existing files. And when an auto-scan matches everything, a one-click **Accept All** applies every suggestion in a single pass.
 * **Match Confidence Modes & Background Sweep:** Choose how much matching automation you trust — **Trust** (auto-accept confident matches, with a tunable similarity threshold), **Confirm** (file IDs auto, suggestions need approval), **Auto** (only near-exact name matches), or **Custom** (fully manual). An hourly, ComicVine-budget-aware background sweep keeps retrying unmatched series so large imports finish matching themselves instead of stalling at the rate-limit wall — successful auto-matches light up the admin notification bell and a results card on the Smart Match page.
 * **Request Lifecycle Self-Healing:** Downloads that stall after repeated retries recover automatically, titles that aren't available on any source yet wait in a dedicated **Awaiting-Release** state (re-searched on a slow cadence, with per-request snooze) instead of counting as failures, and a periodic sweep revives dead requests — you never have to delete a request just to make it retry.
 * **Search Quality Controls:** GetComics results advertise their download size in interactive search; releases over 400MB automatically prefer third-party mirrors over GetComics' throttled servers (never excluded, just re-ordered); rate limits are respected with real backoff and a health-panel warning; and an opt-in accepts undated scene releases when nothing dated exists (a release *with* a matching year always wins). Bulk packs/collections can be allowed and even prioritized for faster library building.
@@ -556,6 +567,18 @@ services:
       - /path/to/your/nas/config:/config
       - /path/to/your/nas/data:/data
 
+  # --- OPTIONAL: Cloudflare solver ---
+  # Lets Omnibus solve Cloudflare challenges on sites like GetComics automatically.
+  # Uncomment this service, then point the Cloudflare Solver URL in Omnibus settings
+  # at http://flaresolverr:8191 (a Byparr container works with the same setting).
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   container_name: flaresolverr
+  #   restart: unless-stopped
+  #   environment:
+  #     - TZ=America/New_York
+  #   # No ports needed: Omnibus reaches it over the internal Docker network.
+
   omnibus-redis:
     image: redis:alpine
     container_name: omnibus-redis
@@ -592,5 +615,31 @@ Omnibus stands on the shoulders of giants. This project was heavily inspired by 
 ---
 
 ## Contributors
-- **Gemini** - AI Technical Collaborator & Project Advisor
-- **Claude (Anthropic)** - For extensive AI assistance with code review, debugging, and refactoring.
+
+Omnibus is built in the open, and it gets better every time someone sends a pull request, files a sharp bug report, or tests a fix against their own library. Thank you.
+
+### Code
+
+<a href="https://github.com/hankscafe/omnibus/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=hankscafe/omnibus" alt="Code contributors" />
+</a>
+
+* **[JoeJoeflyn](https://github.com/JoeJoeflyn)** — the comic panel-frame header navigation and app-wide button polish ([#186](https://github.com/hankscafe/omnibus/pull/186)), Omnibus' first merged community feature
+
+### Bug Hunters & Field Testers
+
+Special thanks to the people whose reports and hands-on testing turned into real fixes and features:
+
+* **[anacronismo](https://github.com/anacronismo)** — tracked down the cover-corruption bug and field-verified the repair tooling ([#194](https://github.com/hankscafe/omnibus/issues/194), [#196](https://github.com/hankscafe/omnibus/issues/196))
+* **[CapitanoNemo78](https://github.com/CapitanoNemo78)** — the request that became the Page Manager ([#189](https://github.com/hankscafe/omnibus/issues/189))
+* **[misleadingrhino](https://github.com/misleadingrhino)** — a dozen bug reports in the project's formative months
+* **[lboyce](https://github.com/lboyce)** — a wave of metadata reports, including the credits-wipe find ([#179](https://github.com/hankscafe/omnibus/issues/179))
+* **[brando2021x](https://github.com/brando2021x)** — the database-deadlock report behind the v1.3.1 hotfix ([#195](https://github.com/hankscafe/omnibus/issues/195))
+* **[colinrjrobbins](https://github.com/colinrjrobbins)**, **[randrini](https://github.com/randrini)**, **[SamTanna](https://github.com/SamTanna)**, **[wpigoury](https://github.com/wpigoury)** — steady, detailed reports across multiple releases
+* …and everyone else who has opened an issue, joined the Discord, or kicked the tires on a beta. It all counts.
+
+### AI Collaborators
+
+True to its vibe-coded roots, Omnibus is built with heavy AI assistance: **Claude (Anthropic)** for code review, debugging, and refactoring, and **Gemini** as technical collaborator and project advisor.
+
+Want to see your name here? [Open an issue](https://github.com/hankscafe/omnibus/issues), send a PR, or come say hi in the [Discord](https://discord.gg/FBnzdBZP).

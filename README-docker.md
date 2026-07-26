@@ -26,7 +26,7 @@ Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omni
 
   * **Dual Metadata Engines:** Choose between ComicVine (default) or Metron.Cloud as your primary source to automatically pull high-res covers, synopses, and creator credits. 
   * **All-In-One Pipeline:** Discover new releases, request missing issues, send them to your download clients (qBittorrent, SABnzbd, etc.), and read them—all from one interface.
-  * **Native Web Reader:** Blazing fast, zero-friction browser reading for `.cbz`, `.cbr` (auto-converts to cbz), and `.epub` archives with LTR, RTL (Manga), and Webtoon scroll support.
+  * **Native Web Reader:** Blazing fast, zero-friction browser reading for `.cbz`, `.cbr`/`.rar` (read natively by the Rust engine — auto-conversion to cbz stays optional), and `.epub` archives with LTR, RTL (Manga), and Webtoon scroll support.
   * **Automated Organization & Smart Matcher:** Auto-extracts, renames, and routes downloaded files to your mapped library directories. Unmatched loose files can be instantly organized using the AI-assisted Smart Matcher with support for both ComicVine and Metron IDs.
   * **Smart Reading Lists:** Instantly auto-build reading orders by pasting a ComicVine or Metron Event ID. Easily import external lists from CBL files, CSVs (League of Comic Geeks), AniList, or MyAnimeList.
   * **Release Calendar & Discovery:** Track upcoming global comic releases and maintain a personalized pull list (powered by Metron), complete with color-coded library badges to instantly spot missing or unreleased issues.
@@ -153,6 +153,18 @@ services:
       - /path/to/your/nas/config:/config
       - /path/to/your/nas/data:/data
 
+  # --- OPTIONAL: Cloudflare solver ---
+  # Lets Omnibus solve Cloudflare challenges on sites like GetComics automatically.
+  # Uncomment this service, then point the Cloudflare Solver URL in Omnibus settings
+  # at http://flaresolverr:8191 (a Byparr container works with the same setting).
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   container_name: flaresolverr
+  #   restart: unless-stopped
+  #   environment:
+  #     - TZ=America/New_York
+  #   # No ports needed: Omnibus reaches it over the internal Docker network.
+
   omnibus-redis:
     image: redis:alpine
     container_name: omnibus-redis
@@ -179,3 +191,4 @@ If you run into issues, have suggestions, or want to contribute, please join the
 
   * [**Report a Bug / Request a Feature**](https://github.com/hankscafe/omnibus/issues)
   * [**Join the Discord**](https://discord.gg/FBnzdBZP)
+  * **Pull requests welcome!** Community contributions are credited in the [Contributors section](https://github.com/hankscafe/omnibus#contributors) of the main README.

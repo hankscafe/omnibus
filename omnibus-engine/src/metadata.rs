@@ -22,6 +22,34 @@ pub(crate) fn file_complete_predicate() -> &'static str {
         ))"#
 }
 
+/// WHERE fragment matching issue rows that have never been provider-paired: scanner-born rows
+/// carry `unmatched_<uuid>` ids (scanner.rs) until a sync's number-anchored pairing links them,
+/// and provider-created rows always carry a real id. `_` is a LIKE wildcard, hence the ESCAPE.
+pub(crate) fn unenriched_issue_predicate() -> &'static str {
+    r#"("metadataId" IS NULL OR "metadataId" LIKE 'unmatched!_%' ESCAPE '!')"#
+}
+
+/// How many times a rate-limit-halted batch re-queues itself before giving up. The scheduled
+/// sweep is the durable backstop either way — with the Ended-complete skip gated on enrichment,
+/// nothing is stranded by giving up here.
+pub(crate) const MAX_RATE_LIMIT_RETRIES: u32 = 2;
+/// Delay before a halted batch retries — CV's budget window is hourly, so half of it lets the
+/// window meaningfully refill without pushing the heal past the next sweep anyway.
+pub(crate) const RATE_LIMIT_RETRY_DELAY_SECS: u64 = 30 * 60;
+
+/// Retry plan for a rate-limit-halted batch: the series that hit the limit plus everything after
+/// it in batch order, or None when the attempt cap is reached (or there is nothing to retry).
+pub(crate) fn plan_rate_limit_retry(all_ids: &[String], halt_index: usize, attempt: u32) -> Option<Vec<String>> {
+    if attempt >= MAX_RATE_LIMIT_RETRIES {
+        return None;
+    }
+    let ids = all_ids.get(halt_index..)?;
+    if ids.is_empty() {
+        return None;
+    }
+    Some(ids.to_vec())
+}
+
 /// Series ids with a metadata sync currently in flight, shared across every spawned sync task.
 /// Two concurrent syncs of the same series interleave non-idempotent issue upserts and can
 /// cross-pair rows (issue #194) — the later trigger is always redundant, so it skips the series.
@@ -53,6 +81,22 @@ impl Drop for SyncClaim {
 }
 
 pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::Result<()> {
+    sync_metadata_attempt(db, series_ids, 0).await
+}
+
+/// Boxed indirection for the retry recursion — an async fn cannot await itself directly; the
+/// erased concrete return type breaks the Send-inference cycle.
+fn sync_metadata_attempt_boxed(
+    db: Db,
+    series_ids: Option<Vec<String>>,
+    attempt: u32,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> {
+    Box::pin(sync_metadata_attempt(db, series_ids, attempt))
+}
+
+/// Body of [`sync_metadata`]. `rate_limit_attempt` counts how many times this batch has already
+/// re-queued itself after a provider rate-limit halt (0 = the original request).
+async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, rate_limit_attempt: u32) -> anyhow::Result<()> {
     // ComicVine API key (Metron series don't need it, so this is optional).
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
         .fetch_optional(&db.pool)
@@ -132,7 +176,11 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
 
     let mut ok_count = 0usize;
     let mut fail_count = 0usize;
-    for series in series_list {
+    // Batch order snapshot — on a rate-limit halt, the tail from the halted series onward is
+    // re-queued (best-effort, in-process; the scheduled sweep is the durable backstop).
+    let all_ids: Vec<String> = series_list.iter().map(|r| r.get::<String, _>("id")).collect();
+    let mut halted_at: Option<usize> = None;
+    for (series_idx, series) in series_list.iter().enumerate() {
         let series_id: String = series.get("id");
         let series_name: String = series.get("name");
 
@@ -193,6 +241,7 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
             // just-blocked API for every remaining series.
             if msg.contains("FATAL_RATE_LIMIT") || msg.contains("429") {
                 log::warn!("[Metadata Sync] Halted batch due to rate limits to protect IP. ({})", msg);
+                halted_at = Some(series_idx);
                 break;
             }
             log::error!("[Metadata] {} fetch failed for {}: {:?}", metadata_source, series_name, e);
@@ -219,6 +268,34 @@ pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>) -> anyhow::R
             .await
         {
             log::error!("[Metadata] Failed to bump updatedAt for {}: {:?}", series_name, e);
+        }
+    }
+
+    // 2026-07-26 (worklist item 10 follow-up): a halted batch used to evaporate — the BullMQ job
+    // completes as soon as the engine ACCEPTs, so nothing upstream ever retries. Re-queue the
+    // unfinished tail here (delayed, attempt-capped). A retried batch runs as TARGETED
+    // (Some(ids) ⇒ full_fetch): the original semantics for the match-time case, and a bounded
+    // upgrade for a halted sweep tail (≤15 ids, ≤MAX attempts).
+    if let Some(idx) = halted_at {
+        match plan_rate_limit_retry(&all_ids, idx, rate_limit_attempt) {
+            Some(retry_ids) => {
+                let attempt = rate_limit_attempt + 1;
+                let retry_db = db.clone();
+                log::info!(
+                    "[Metadata Sync] Re-queuing {} rate-limit-halted series in {}s (attempt {}/{}).",
+                    retry_ids.len(), RATE_LIMIT_RETRY_DELAY_SECS, attempt, MAX_RATE_LIMIT_RETRIES
+                );
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(RATE_LIMIT_RETRY_DELAY_SECS)).await;
+                    if let Err(e) = sync_metadata_attempt_boxed(retry_db, Some(retry_ids), attempt).await {
+                        log::error!("[Metadata Sync] Rate-limit retry attempt {} failed: {:?}", attempt, e);
+                    }
+                });
+            }
+            None => log::warn!(
+                "[Metadata Sync] Rate-limit halt left {} series unfinished and the retry cap ({}) is spent — the scheduled sweep will finish them.",
+                all_ids.len() - idx, MAX_RATE_LIMIT_RETRIES
+            ),
         }
     }
 
@@ -392,13 +469,28 @@ async fn fetch_comicvine(
     // API-call reduction: an Ended series we already hold in full has no new issues to page, so skip
     // the entire /issues/ pagination (the bulk of the calls). The cheap volume call above still ran,
     // so series-level fields are refreshed. count_of_issues comes from the volume; status from end_year.
+    // Local-first caveat (2026-07-26, worklist item 10 follow-up): scanner-born rows make the count
+    // look complete without ever having been provider-paired — a match-time sync halted by a 429
+    // leaves exactly that state. The shortcut is only safe once every row is enriched; until then
+    // THIS fetch is what finishes the pairing (per-issue covers included), so it must run.
     let cv_total = vol_data["count_of_issues"].as_i64().unwrap_or(0);
     if !full_fetch && status == "Ended" && cv_total > 0 {
         let local_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
             .bind(series_id).fetch_one(&db.pool).await.unwrap_or(0);
         if local_count >= cv_total {
-            log::info!("[Metadata] {} is Ended and complete ({}/{}) — skipping ComicVine issue fetch.", series_name, local_count, cv_total);
-            return Ok(0);
+            let unenriched: i64 = sqlx::query_scalar(&format!(
+                r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1 AND {}"#,
+                unenriched_issue_predicate()
+            ))
+            .bind(series_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or(1); // on a read error, err toward fetching — never re-strand the series
+            if unenriched == 0 {
+                log::info!("[Metadata] {} is Ended and complete ({}/{}) — skipping ComicVine issue fetch.", series_name, local_count, cv_total);
+                return Ok(0);
+            }
+            log::info!("[Metadata] {} is Ended and complete by count ({}/{}) but {} rows were never provider-paired — running the issue fetch.", series_name, local_count, cv_total, unenriched);
         }
     }
 
@@ -1785,6 +1877,59 @@ mod tests {
         let rows = sqlx::query(&sql).fetch_all(&pool).await.unwrap();
         let ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>("id")).collect();
         assert_eq!(ids, vec!["s2", "s3", "s4"], "only s1 is file-complete");
+    }
+
+    // ==== 2026-07-26 (worklist item 10 follow-up): the Ended-complete skip must not hide series
+    // whose rows were born from files and never provider-paired — this predicate is the gate.
+    // SQL-level test (same rationale as the file_complete test above): LIKE-escape correctness
+    // is dialect behavior, not Rust logic.
+
+    #[tokio::test]
+    async fn unenriched_predicate_counts_only_unpaired_rows() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1) // each :memory: connection is its own DB — keep exactly one
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataId" TEXT)"#)
+            .execute(&pool).await.unwrap();
+
+        for (id, sid, mid) in [
+            ("i1", "s1", Some("4000-123")),        // provider-paired → not counted
+            ("i2", "s1", Some("unmatched_abc")),   // scanner-born → counted
+            ("i3", "s1", None::<&str>),            // never linked at all → counted
+            ("i4", "s1", Some("unmatchedZ99")),    // no literal underscore → must NOT match the escaped pattern
+            ("i5", "s2", Some("unmatched_other")), // other series → excluded by the caller's seriesId filter
+        ] {
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "metadataId") VALUES ($1, $2, $3)"#)
+                .bind(id).bind(sid).bind(mid).execute(&pool).await.unwrap();
+        }
+
+        let sql = format!(
+            r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1 AND {}"#,
+            unenriched_issue_predicate()
+        );
+        let n: i64 = sqlx::query_scalar(&sql).bind("s1").fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 2, "exactly the scanner-born and NULL rows count as unenriched");
+    }
+
+    // ==== Rate-limit halt retry plan: the series that hit the limit plus everything after it in
+    // the batch re-queue, capped at MAX_RATE_LIMIT_RETRIES attempts.
+
+    #[test]
+    fn plan_rate_limit_retry_returns_tail_from_halted_series() {
+        let ids: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(plan_rate_limit_retry(&ids, 2, 0), Some(vec!["c".to_string(), "d".to_string()]));
+        assert_eq!(plan_rate_limit_retry(&ids, 0, 1), Some(ids.clone()));
+        assert_eq!(plan_rate_limit_retry(&ids, 3, 0), Some(vec!["d".to_string()]));
+    }
+
+    #[test]
+    fn plan_rate_limit_retry_gives_up_at_cap_and_out_of_range() {
+        let ids: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(plan_rate_limit_retry(&ids, 0, MAX_RATE_LIMIT_RETRIES), None);
+        assert_eq!(plan_rate_limit_retry(&ids, 5, 0), None);
+        assert_eq!(plan_rate_limit_retry(&[], 0, 0), None);
     }
 
     #[test]

@@ -17,6 +17,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { CONFIG_DIR } from '@/lib/utils/paths';
 import { issueIdentityMismatch } from '@/lib/metadata/issue-identity';
+import { embedUploadedCoverIntoArchive } from '@/lib/pages/insert-cover-core';
 
 const MAX_BYTES = 15 * 1024 * 1024; // 15MB
 
@@ -63,7 +64,22 @@ export async function POST(request: Request) {
             issueName: `${issue.series?.name || ''} #${issue.number}`
         }, (session.user as any).id);
 
-        return NextResponse.json({ success: true, coverUrl });
+        // Issue #189 follow-up: optionally bake the uploaded cover INTO the archive as page 0
+        // (insert-only — a superseded old cover page is removed via the Page Manager). The shared
+        // core owns the engine call and the +1 index fixups. A failed embed never fails the
+        // upload: the sidecar cover above is already saved for display.
+        let embedResult: Awaited<ReturnType<typeof embedUploadedCoverIntoArchive>> | null = null;
+        if (body?.embedInArchive === true) {
+            embedResult = await embedUploadedCoverIntoArchive(issue.id, (session.user as any).id, 'upload');
+        }
+
+        return NextResponse.json({
+            success: true,
+            coverUrl,
+            ...(embedResult ? (embedResult.ok
+                ? { embedded: true, embed: { newPageCount: embedResult.newPageCount, entryName: embedResult.entryName, convertedToCbz: embedResult.convertedToCbz, newFilePath: embedResult.newFilePath } }
+                : { embedded: false, embedError: embedResult.error }) : {}),
+        });
     } catch (error: unknown) {
         Logger.log(`[Issue Cover Upload] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

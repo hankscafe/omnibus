@@ -407,6 +407,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/reader/page", post(handle_reader_page))
         .route("/api/reader/entries", post(handle_reader_entries))
         .route("/api/archive/remove-pages", post(handle_remove_pages))
+        .route("/api/archive/insert-cover", post(handle_insert_cover))
         .route("/api/archive/find-page", post(handle_find_page))
         .route("/api/watched-sync", post(handle_watched_sync))
         .route("/api/matcher/sweep", post(handle_matcher_sweep))
@@ -654,6 +655,63 @@ async fn handle_reader_entries(
 struct RemovePagesRequest {
     file_path: String,
     entry_names: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct InsertCoverRequest {
+    file_path: String,
+    /// The uploaded image on the shared /config volume (Node writes the sidecar, we read it —
+    /// no base64 over the internal wire for a 15MB image).
+    image_path: String,
+    /// Lowercase extension for the embedded entry name ("jpg" | "png" | "webp").
+    image_ext: String,
+}
+
+/// Cover embedding (issue #189 follow-up): inserts an uploaded issue cover as the archive's
+/// first page. Insert-only — existing pages are never touched; CBZ rewrites in place, RAR/7z
+/// repack as a sibling .cbz (`new_file_path` says where the file lives now). The Node route owns
+/// identity (issueId → paths) and the DB fixups; this endpoint trusts the internal caller like
+/// every other path-taking route behind require_internal_auth.
+async fn handle_insert_cover(
+    Json(req): Json<InsertCoverRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let err = |code: StatusCode, msg: String| (code, Json(serde_json::json!({ "error": msg })));
+    if !is_absolute_non_traversing(&req.file_path) || !is_absolute_non_traversing(&req.image_path) {
+        log::warn!("[Insert Cover] Rejected non-absolute or traversing path: {} / {}", req.file_path, req.image_path);
+        return Err(err(StatusCode::FORBIDDEN, "Invalid path.".to_string()));
+    }
+    let ext = match req.image_ext.as_str() {
+        "jpg" | "jpeg" | "png" | "webp" => req.image_ext.clone(),
+        other => {
+            log::warn!("[Insert Cover] Rejected unexpected image extension: {}", other);
+            return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Unsupported cover image type.".to_string()));
+        }
+    };
+    let path = req.file_path.clone();
+    let image_path = req.image_path.clone();
+    let (final_path, entry_name, new_count) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let image = std::fs::read(&image_path)?;
+        converter::insert_cover_into_archive(std::path::Path::new(&path), &image, &ext)
+    })
+    .await
+    .map_err(|e| {
+        log::error!("[Insert Cover] join error: {:?}", e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error.".to_string())
+    })?
+    .map_err(|e| {
+        log::warn!("[Insert Cover] embed refused/failed for {}: {}", req.file_path, e);
+        // Converter messages are operator-actionable — surface them verbatim.
+        err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string())
+    })?;
+    log::info!(
+        "[Insert Cover] Embedded uploaded cover as {} — {} page(s) at {} (issue #189 follow-up).",
+        entry_name, new_count, final_path.display()
+    );
+    Ok(Json(serde_json::json!({
+        "new_page_count": new_count,
+        "entry_name": entry_name,
+        "new_file_path": final_path.to_string_lossy(),
+    })))
 }
 
 /// Page removal (issue #189): rewrites an archive without the named page entries. CBZ rewrites in

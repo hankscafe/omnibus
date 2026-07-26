@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     const req = (await request.json()) as any;
     const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber,
-            universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64 } = req;
+            universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64, issueCoverEmbed } = req;
 
     const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
     const targetSource = metadataSource || 'COMICVINE';
@@ -440,6 +440,17 @@ export async function POST(request: Request) {
                                         data: { coverUrl: `/api/uploads/issue-covers/${finalIssueId}.jpg?t=${Date.now()}`, hasCustomCover: true }
                                     });
                                     Logger.log(`[Match Series Debug] Wrote custom issue cover for ${finalIssueId}`, 'debug');
+                                    // Issue #189 follow-up: bake the matcher's cover into the archive as
+                                    // page 0 when asked (insert-only; shared core = same fixups/audit as
+                                    // the series-page upload). Never aborts the match on failure — the
+                                    // sidecar cover above is already saved for display.
+                                    if (issueCoverEmbed === true) {
+                                        const { embedUploadedCoverIntoArchive } = await import('@/lib/pages/insert-cover-core');
+                                        const embedOutcome = await embedUploadedCoverIntoArchive(finalIssueId, (session?.user as any)?.id, 'matcher');
+                                        if (!embedOutcome.ok) {
+                                            Logger.log(`[Match Series] Cover saved but embedding into the archive failed for ${finalIssueId}: ${embedOutcome.error}`, 'warn');
+                                        }
+                                    }
                                 } catch (coverErr) {
                                     Logger.log(`[Match Series] Failed to write issue cover for ${finalIssueId}: ${getErrorMessage(coverErr)}`, 'warn');
                                 }

@@ -1155,6 +1155,179 @@ pub fn remove_pages_from_cbz(path: &Path, entry_names: &[String]) -> Result<usiz
     Ok(expected_remaining)
 }
 
+/// Entry name for an embedded cover (issue #189 follow-up): must sort strictly BEFORE the
+/// archive's current first image entry under natural_cmp — the reader's page ordering — so the
+/// cover is page 0 for Omnibus and for name-sorting external readers alike. "000_cover" by
+/// convention; when the archive already opens with something that sorts at or below it, '!'
+/// prefixes escape lower ('!' sorts before digits and letters). Proven by construction: the
+/// candidate is only returned once natural_cmp says Less (capped — a first entry behind 8 '!'
+/// marks is not a real library file).
+pub(crate) fn cover_entry_name(first_existing: Option<&str>, ext: &str) -> String {
+    let mut candidate = format!("000_cover.{}", ext);
+    let Some(first) = first_existing else { return candidate };
+    for _ in 0..8 {
+        if natural_cmp(&candidate, first) == std::cmp::Ordering::Less {
+            return candidate;
+        }
+        candidate = format!("!{}", candidate);
+    }
+    candidate
+}
+
+/// Embeds an uploaded issue cover as the FIRST page of a CBZ (issue #189 follow-up: an uploaded
+/// cover should travel with the file — OPDS, Komga/Kavita on the same storage, and plain
+/// unzipping all see it). Insert-only by design: existing pages are never touched or replaced
+/// (the Page Manager removes a superseded cover). Same safety posture as remove_pages_from_cbz:
+/// temp file in the same directory, verified — page count AND the cover landing at index 0 —
+/// then atomically renamed over the original.
+///
+/// Returns `(entry_name, new_image_page_count)`.
+pub fn insert_cover_into_cbz(path: &Path, image: &[u8], ext: &str) -> Result<(String, usize)> {
+    if image.is_empty() {
+        anyhow::bail!("No image bytes given to embed.");
+    }
+    let sig = read_file_signature(path);
+    if !is_zip_signature(&sig) {
+        anyhow::bail!("Only CBZ archives can be rewritten in place. Convert this file to CBZ first.");
+    }
+
+    let file = File::open(path).with_context(|| format!("Failed to open archive: {:?}", path))?;
+    let mut archive = zip::ZipArchive::new(file).context("Failed to read archive")?;
+    let images = sorted_image_entries(&mut archive);
+    let entry_name = cover_entry_name(images.first().map(|s| s.as_str()), ext);
+    if archive.by_name(&entry_name).is_ok() {
+        anyhow::bail!("The archive already contains an entry named {} — was this cover already embedded?", entry_name);
+    }
+    let expected_count = images.len() + 1;
+
+    let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp_path = path.with_file_name(format!(".{}.cover_tmp_{}", file_name, uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let tmp_file = File::create(&tmp_path).context("Failed to create temp archive")?;
+        let mut writer = ZipWriter::new(tmp_file);
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        use std::io::Write;
+        writer.start_file(entry_name.clone(), options)?;
+        writer.write_all(image)?;
+
+        for i in 0..archive.len() {
+            let name = archive.by_index_raw(i).map(|f| f.name().to_string())?;
+            let base = name.rsplit('/').next().unwrap_or(&name).to_ascii_lowercase();
+            if base == "comicinfo.xml" {
+                // Decompress + adjust + re-store: the page table inside indexes by position and
+                // is stale the moment the cover shifts every page up by one.
+                let mut entry = archive.by_index(i)?;
+                let mut xml = String::new();
+                use std::io::Read;
+                entry.read_to_string(&mut xml).context("Failed to read ComicInfo.xml")?;
+                drop(entry);
+                let adjusted = strip_comic_info_pages(&xml, expected_count);
+                writer.start_file(name, options)?;
+                writer.write_all(adjusted.as_bytes())?;
+            } else {
+                let entry = archive.by_index_raw(i)?;
+                writer.raw_copy_file(entry)?;
+            }
+        }
+        writer.finish()?;
+
+        // Trust nothing until the rewritten archive proves itself: right count, cover at page 0.
+        let check_file = File::open(&tmp_path).context("Failed to re-open rewritten archive")?;
+        let mut check = zip::ZipArchive::new(check_file).context("Rewritten archive is unreadable")?;
+        let check_images = sorted_image_entries(&mut check);
+        if check_images.len() != expected_count {
+            anyhow::bail!(
+                "Rewritten archive verification failed (expected {} pages, found {}) — original left untouched.",
+                expected_count, check_images.len()
+            );
+        }
+        if check_images.first().map(|s| s.as_str()) != Some(entry_name.as_str()) {
+            anyhow::bail!("Rewritten archive verification failed (embedded cover did not land at page 0) — original left untouched.");
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        anyhow::anyhow!("Failed to swap the rewritten archive into place: {}", e)
+    })?;
+
+    Ok((entry_name, expected_count))
+}
+
+/// Cover insertion for ANY natively readable archive. CBZ (including zip-in-disguise) rewrites
+/// in place; RAR/7z cannot be written back, so insertion repacks everything into a sibling
+/// `.cbz` with the cover first and retires the original — the same posture as
+/// remove_pages_from_archive, composed from the same repack helpers (empty remove-set) plus the
+/// in-place insert.
+///
+/// Returns `(final_path, entry_name, new_page_count)` — `final_path` differs from the input for
+/// RAR/7z and the caller owns updating any stored file path.
+pub fn insert_cover_into_archive(path: &Path, image: &[u8], ext: &str) -> Result<(PathBuf, String, usize)> {
+    let sig = read_file_signature(path);
+    if is_zip_signature(&sig) {
+        let (entry, count) = insert_cover_into_cbz(path, image, ext)?;
+        return Ok((path.to_path_buf(), entry, count));
+    }
+    if !is_rar_signature(&sig) && !is_7z_signature(&sig) {
+        anyhow::bail!("Unsupported archive format for cover insertion: {:?}", path.file_name().unwrap_or_default());
+    }
+
+    let existing = list_image_entries(path)?;
+    let expected_existing = existing.len();
+
+    // Never clobber an existing sibling .cbz (same rule as page removal).
+    let final_path = path.with_extension("cbz");
+    if final_path != path && final_path.exists() {
+        anyhow::bail!(
+            "A .cbz with this name already exists next to the original ({:?}) — resolve that first.",
+            final_path.file_name().unwrap_or_default()
+        );
+    }
+    let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp_path = path.with_file_name(format!(".{}.cover_tmp_{}.cbz", file_name, uuid::Uuid::new_v4()));
+
+    // 1. Repack the FULL archive (empty remove-set) into a temp CBZ, 2. insert the cover into
+    // that temp in place, 3. verify, 4. move into place and retire the original.
+    let empty: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let repack = if is_7z_signature(&sig) {
+        repack_7z_without_pages(path, &empty, expected_existing, &tmp_path)
+    } else {
+        repack_rar_without_pages(path, &empty, expected_existing, &tmp_path)
+    };
+    if let Err(e) = repack {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    let inserted = insert_cover_into_cbz(&tmp_path, image, ext);
+    let (entry_name, new_count) = match inserted {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+    };
+
+    fs::rename(&tmp_path, &final_path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        anyhow::anyhow!("Failed to move the rewritten archive into place: {}", e)
+    })?;
+    // The original RAR/7z is retired only after the verified CBZ is in place (a failed delete
+    // leaves both files — noisy but safe).
+    if final_path != path {
+        if let Err(e) = fs::remove_file(path) {
+            log::warn!("[Converter] Embedded a cover into {:?} as {:?} but could not remove the original: {}", file_name, final_path.file_name().unwrap_or_default(), e);
+        }
+    }
+    Ok((final_path, entry_name, new_count))
+}
+
 /// Page removal for ANY natively readable archive (issue #189 Phase 2). CBZ rewrites in place;
 /// RAR/7z cannot be written back, so removal there IS a conversion: the surviving entries are
 /// repacked into a sibling `.cbz` and the original file is retired. Same safety posture as the
@@ -1850,6 +2023,70 @@ mod tests {
         }
         zw.finish().unwrap();
         path
+    }
+
+    // ==== Issue #189 follow-up (2026-07-26): uploaded issue covers embed as the archive's first
+    // page. The entry name must sort FIRST under natural_cmp (the reader's ordering) no matter
+    // what the archive already starts with; insertion reuses the removal safety posture
+    // (temp + verify + atomic swap) and bumps ComicInfo's PageCount while dropping the stale
+    // <Pages> table.
+
+    #[test]
+    fn cover_entry_name_sorts_before_first_under_natural_cmp() {
+        let n = cover_entry_name(Some("page1.jpg"), "jpg");
+        assert_eq!(natural_cmp(&n, "page1.jpg"), std::cmp::Ordering::Less);
+        assert!(n.ends_with(".jpg"));
+        // An archive already starting at 000 forces an escape prefix.
+        let n = cover_entry_name(Some("000.jpg"), "jpg");
+        assert_eq!(natural_cmp(&n, "000.jpg"), std::cmp::Ordering::Less);
+        // Even a pathological '!'-prefixed first entry stays beatable.
+        let n = cover_entry_name(Some("!000.jpg"), "png");
+        assert_eq!(natural_cmp(&n, "!000.jpg"), std::cmp::Ordering::Less);
+        assert!(n.ends_with(".png"));
+        // Empty archive: any sane default works.
+        assert!(cover_entry_name(None, "jpg").ends_with(".jpg"));
+    }
+
+    #[test]
+    fn insert_cover_into_cbz_lands_first_and_adjusts_comicinfo() {
+        let dir = scratch_dir();
+        let cbz = make_pages_cbz(&dir); // page1..page4 + ComicInfo (PageCount 4, Pages table, Notes)
+        let (entry, new_count) = insert_cover_into_cbz(&cbz, b"uploaded cover bytes", "jpg").unwrap();
+        assert_eq!(new_count, 5);
+        let images = list_image_entries(&cbz).unwrap();
+        assert_eq!(images.len(), 5);
+        assert_eq!(images[0], entry, "cover entry must be the reader's page 0");
+        let f = File::open(&cbz).unwrap();
+        let mut z = zip::ZipArchive::new(f).unwrap();
+        let mut xml = String::new();
+        use std::io::Read;
+        z.by_name("ComicInfo.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(xml.contains("<PageCount>5</PageCount>"), "PageCount must follow the insert: {}", xml);
+        assert!(!xml.contains("<Pages"), "stale page table must be dropped: {}", xml);
+        assert!(xml.contains("keep me"), "unrelated ComicInfo content must survive");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn insert_cover_into_cbz_beats_an_existing_000_page() {
+        let dir = scratch_dir();
+        let cbz = make_zip(&dir, "zeros.cbz", &[("000.jpg", b"old cover"), ("001.jpg", b"page")]);
+        let (entry, new_count) = insert_cover_into_cbz(&cbz, b"new cover", "jpg").unwrap();
+        assert_eq!(new_count, 3);
+        assert_eq!(list_image_entries(&cbz).unwrap()[0], entry);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn insert_cover_into_archive_on_zip_in_disguise_rewrites_in_place() {
+        let dir = scratch_dir();
+        // A .cbr that is really a zip (the signature, not the extension, decides the path).
+        let lying = make_zip(&dir, "lying_insert.cbr", &[("01.jpg", b"page one")]);
+        let (final_path, entry, new_count) = insert_cover_into_archive(&lying, b"cover", "jpg").unwrap();
+        assert_eq!(final_path, lying, "zip-in-disguise rewrites in place, no repack");
+        assert_eq!(new_count, 2);
+        assert_eq!(list_image_entries(&lying).unwrap()[0], entry);
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, CheckCheck, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw, Layers } from "lucide-react"
@@ -98,6 +99,16 @@ export default function SmartMatchPage() {
     const [exactIssueId, setExactIssueId] = useState("");
     const [exactIssueNumber, setExactIssueNumber] = useState("");
     const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string, coverImageBase64?: string }>>({});
+    // Issue #189 follow-up: whether picked issue covers are ALSO baked into the archive as page 0
+    // on Accept (default on, remembered). One switch governs every cover picked on this page.
+    const [embedIssueCovers, setEmbedIssueCovers] = useState(true);
+    useEffect(() => {
+        try { if (localStorage.getItem('omnibus-embed-issue-cover') === '0') setEmbedIssueCovers(false); } catch { /* private mode */ }
+    }, []);
+    const updateEmbedIssueCovers = (v: boolean) => {
+        setEmbedIssueCovers(v);
+        try { localStorage.setItem('omnibus-embed-issue-cover', v ? '1' : '0'); } catch { /* private mode */ }
+    };
     const [manualMatchResult, setManualMatchResult] = useState<any>(null);
     
     // --- NEW: Multi-Select & Bulk Processing State ---
@@ -421,7 +432,9 @@ export default function SmartMatchPage() {
             } : {}),
             exactIssueId: issueOv.issueId || undefined,
             exactIssueNumber: issueOv.issueNumber || undefined,
-            issueCoverImageBase64: issueOv.coverImageBase64 || undefined
+            issueCoverImageBase64: issueOv.coverImageBase64 || undefined,
+            // Issue #189 follow-up: bake the cover into the archive as page 0 (engine insert-only).
+            issueCoverEmbed: issueOv.coverImageBase64 ? embedIssueCovers : undefined
         };
     };
 
@@ -1295,6 +1308,12 @@ export default function SmartMatchPage() {
                                                     </button>
                                                 )}
                                             </div>
+                                            {issueOverrides[manualMatchTarget.id]?.coverImageBase64 && (
+                                                <label className="flex items-center gap-2 pt-1 cursor-pointer" title="Issue #189 follow-up: insert-only — an old cover page is removed via Manage Pages; CBR/CB7 repack as CBZ.">
+                                                    <Checkbox checked={embedIssueCovers} onCheckedChange={(c) => updateEmbedIssueCovers(!!c)} />
+                                                    <span className="text-xs text-muted-foreground">Also embed as the archive&apos;s first page on Accept</span>
+                                                </label>
+                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -1326,7 +1345,7 @@ export default function SmartMatchPage() {
                                                 />
                                             </div>
                                             <div className="sm:col-span-2 flex items-center gap-1.5">
-                                                <label className="relative w-8 h-8 shrink-0 rounded border border-border overflow-hidden cursor-pointer flex items-center justify-center bg-muted hover:border-primary/50" title={issueOverrides[id]?.coverImageBase64 ? "Replace issue cover" : "Set issue cover"}>
+                                                <label className="relative w-8 h-8 shrink-0 rounded border border-border overflow-hidden cursor-pointer flex items-center justify-center bg-muted hover:border-primary/50" title={(issueOverrides[id]?.coverImageBase64 ? "Replace issue cover" : "Set issue cover") + (embedIssueCovers ? " (embeds into the archive on Accept)" : "")}>
                                                     <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => { handleIssueCoverPick(id, e.target.files?.[0]); e.currentTarget.value = ''; }} />
                                                     {issueOverrides[id]?.coverImageBase64
                                                         ? <img src={issueOverrides[id]?.coverImageBase64} className="w-full h-full object-cover" alt="" />

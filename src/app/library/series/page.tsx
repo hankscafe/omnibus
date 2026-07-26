@@ -79,6 +79,13 @@ function SeriesContent() {
   });
 
   const [coverUploading, setCoverUploading] = useState(false);
+  // Issue #189 follow-up: picking an issue cover stages it into a confirm dialog with an
+  // "embed into the archive" choice (default on, remembered across sessions).
+  const [pendingIssueCover, setPendingIssueCover] = useState<string | null>(null);
+  const [embedCoverInArchive, setEmbedCoverInArchive] = useState(true);
+  useEffect(() => {
+    try { if (localStorage.getItem('omnibus-embed-issue-cover') === '0') setEmbedCoverInArchive(false); } catch { /* private mode */ }
+  }, []);
 
   const [searchProvider, setSearchProvider] = useState("COMICVINE");
   const [metronConfigured, setMetronConfigured] = useState(false);
@@ -691,7 +698,9 @@ function SeriesContent() {
     }
   };
 
-  // Admin: upload a custom cover for the active issue (writes uploads/issue-covers/<id>.jpg + locks it).
+  // Admin: pick a custom cover for the active issue — stages it into the confirm dialog below
+  // (issue #189 follow-up) instead of uploading immediately, so the admin can choose whether to
+  // also embed it into the archive as page 0.
   const handleIssueCoverFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ''; // let the same file be re-picked later
@@ -700,7 +709,6 @@ function SeriesContent() {
       toast({ title: "Image too large", description: "Please choose an image under 15MB.", variant: "destructive" });
       return;
     }
-    setCoverUploading(true);
     try {
       const imageBase64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -708,15 +716,44 @@ function SeriesContent() {
         reader.onerror = () => reject(new Error("Could not read the image file."));
         reader.readAsDataURL(file);
       });
+      setPendingIssueCover(imageBase64);
+    } catch (err) {
+      toast({ title: "Could not read image", description: getErrorMessage(err), variant: "destructive" });
+    }
+  };
+
+  // Uploads the staged cover (writes uploads/issue-covers/<id>.jpg + locks it), optionally baking
+  // it into the archive as page 0 — insert-only; an old cover page is removed via Manage Pages.
+  const confirmIssueCoverUpload = async () => {
+    if (!pendingIssueCover || !activeIssue?.id) return;
+    const embed = embedCoverInArchive && !!activeIssue?.fullPath;
+    try { localStorage.setItem('omnibus-embed-issue-cover', embedCoverInArchive ? '1' : '0'); } catch { /* private mode */ }
+    setCoverUploading(true);
+    try {
       const res = await fetch('/api/library/issue/cover-upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issueId: activeIssue.id, imageBase64 })
+        body: JSON.stringify({ issueId: activeIssue.id, imageBase64: pendingIssueCover, embedInArchive: embed })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Upload failed');
-      setActiveIssue((prev: any) => prev ? { ...prev, coverUrl: data.coverUrl, hasCustomCover: true } : prev);
-      toast({ title: "Issue cover updated", description: "Your custom cover has been saved for this issue." });
+      setActiveIssue((prev: any) => prev ? {
+        ...prev,
+        coverUrl: data.coverUrl,
+        hasCustomCover: true,
+        ...(data.embed?.newFilePath ? { fullPath: data.embed.newFilePath } : {}),
+      } : prev);
+      setPendingIssueCover(null);
+      if (data.embedded) {
+        toast({
+          title: "Cover saved & embedded",
+          description: `The cover is now page 1 of the archive${data.embed?.convertedToCbz ? ' (repacked as CBZ)' : ''}. The old cover page, if any, can be removed via Manage Pages.`
+        });
+      } else if (data.embedError) {
+        toast({ title: "Cover saved for display only", description: `Embedding into the archive failed: ${data.embedError}`, variant: "destructive" });
+      } else {
+        toast({ title: "Issue cover updated", description: "Your custom cover has been saved for this issue." });
+      }
     } catch (err) {
       toast({ title: "Upload failed", description: getErrorMessage(err), variant: "destructive" });
     } finally {
@@ -2179,6 +2216,44 @@ function SeriesContent() {
                   </Button>
               </div>
               <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditModalOpen(false)} className="border-border hover:bg-muted">Cancel</Button><Button className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground" onClick={handleManualEditSave} disabled={isSavingEdit}>{isSavingEdit ? <Loader2 className="animate-spin mr-2" /> : "Save Changes"}</Button></div>
+          </DialogContent>
+      </Dialog>
+
+      {/* Issue #189 follow-up: confirm a picked issue cover + choose whether to embed it into the archive. */}
+      <Dialog open={!!pendingIssueCover} onOpenChange={(open) => { if (!open) setPendingIssueCover(null); }}>
+          <DialogContent className="sm:max-w-[420px]">
+              <DialogHeader>
+                  <DialogTitle>Set Issue Cover</DialogTitle>
+                  <DialogDescription>This cover applies to {activeIssue?.name || 'the selected issue'} and is locked against metadata syncs.</DialogDescription>
+              </DialogHeader>
+              <div className="flex gap-4 items-start">
+                  <div className="w-28 aspect-[2/3] shrink-0 rounded-md overflow-hidden border border-border bg-muted">
+                      {pendingIssueCover && <img src={pendingIssueCover} alt="Cover preview" className="w-full h-full object-cover" />}
+                  </div>
+                  <div className="flex-1 space-y-3">
+                      <label className={`flex items-start gap-2.5 ${activeIssue?.fullPath ? 'cursor-pointer' : 'opacity-60'}`}>
+                          <Switch
+                              checked={embedCoverInArchive && !!activeIssue?.fullPath}
+                              onCheckedChange={(c) => setEmbedCoverInArchive(!!c)}
+                              disabled={!activeIssue?.fullPath}
+                          />
+                          <span className="text-sm leading-snug">
+                              <span className="font-medium block">Also embed as the first page of the archive</span>
+                              <span className="text-muted-foreground text-xs block mt-0.5">
+                                  {activeIssue?.fullPath
+                                      ? 'Bakes the image into the file as page 1 so external readers and OPDS see it too. Existing pages are never touched — remove a superseded cover page via Manage Pages. CBR/CB7 files are repacked as CBZ.'
+                                      : 'This issue has no file on disk, so the cover will be display-only.'}
+                              </span>
+                          </span>
+                      </label>
+                  </div>
+              </div>
+              <DialogFooter>
+                  <Button variant="outline" className="border-border hover:bg-muted" onClick={() => setPendingIssueCover(null)} disabled={coverUploading}>Cancel</Button>
+                  <Button className="bg-primary font-bold hover:bg-primary/90 text-primary-foreground" onClick={confirmIssueCoverUpload} disabled={coverUploading}>
+                      {coverUploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />} Save Cover
+                  </Button>
+              </DialogFooter>
           </DialogContent>
       </Dialog>
 

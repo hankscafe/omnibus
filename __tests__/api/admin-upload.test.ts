@@ -181,3 +181,47 @@ describe('API Route: /api/admin/upload (single-shot + chunked)', () => {
         expect(res.status).toBe(403);
     });
 });
+
+describe('Truncated-body enforcement (field bug 2026-07-27 round 2: ~10MiB cutoffs accepted as success)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.files.clear();
+        sweepSessions(Date.now() + 60_000);
+        mocks.session.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });
+        mocks.ensureDir.mockResolvedValue(undefined);
+        mocks.readdir.mockResolvedValue([]);
+        mocks.stat.mockRejectedValue(new Error('ENOENT'));
+        mocks.remove.mockResolvedValue(undefined);
+        mocks.move.mockResolvedValue(undefined);
+        mocks.pathExists.mockResolvedValue(false);
+        mocks.createWriteStream.mockImplementation((p: string, opts?: { flags?: string }) => {
+            const arr = opts?.flags === 'a' ? (mocks.files.get(p) || []) : [];
+            mocks.files.set(p, arr);
+            return new Writable({ write(chunk, _enc, cb) { arr.push(Buffer.from(chunk)); cb(); } });
+        });
+    });
+
+    it('rejects a chunk whose body delivers fewer bytes than Content-Length declared', async () => {
+        const res = await upload(
+            { destination: 'watched', filename: 'Big.cbz', uploadId: 'trunc1234', totalChunks: '2', chunkIndex: '0', chunkOffset: '0' },
+            'AAAA',
+            { 'content-length': '50331648' }, // client declared 48MiB; only 4 bytes arrived
+        );
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error).toContain('truncated');
+        expect(json.error).toContain('50331648');
+        expect(mocks.remove).toHaveBeenCalled(); // the short .part never lingers as a live session
+    });
+
+    it('rejects a truncated single-shot upload instead of importing a short file', async () => {
+        const res = await upload(
+            { destination: 'watched', filename: 'Small.cbz' },
+            'hello',
+            { 'content-length': '9999999' },
+        );
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toContain('truncated');
+        expect(mocks.move).not.toHaveBeenCalled();
+    });
+});

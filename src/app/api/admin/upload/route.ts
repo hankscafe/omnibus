@@ -194,6 +194,22 @@ export async function POST(req: NextRequest) {
       throw streamErr;
     }
 
+    // Truncation enforcement (field bug 2026-07-27, round 2): a request body can end "cleanly"
+    // short of its declared Content-Length (observed twice cutting a 48MiB chunk at ~10MiB) —
+    // the stream sees a normal end, so without this check the short write was ACCEPTED with a
+    // 200 and the mismatch only surfaced as a confusing 409 on the NEXT chunk (or worse, a
+    // truncated single-shot file imported corrupt). The client always declares the exact size.
+    if (declared > 0 && bytes !== declared) {
+      if (isChunked) dropSession(uploadId);
+      await fs.remove(tmpPath).catch(() => {});
+      tmpPath = null;
+      Logger.log(`[Upload] Truncated body for ${safeName}${isChunked ? ` (chunk ${chunkIndex + 1}/${totalChunks})` : ''}: received ${bytes} of ${declared} declared bytes — rejecting.`, 'error');
+      return NextResponse.json(
+        { error: `The connection delivered only ${bytes} of ${declared} declared bytes — the upload was truncated in transit. Retry the file; if it keeps cutting off at the same size, something between the browser and the server is capping request bodies.` },
+        { status: 400 },
+      );
+    }
+
     // The authoritative record of how far this session has gotten — offset checks for the next
     // chunk read THIS, never the NAS's (possibly stale) idea of the file size.
     if (isChunked) noteChunkAppended(uploadId, priorBytes + bytes);

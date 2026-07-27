@@ -12,10 +12,12 @@
 // CHUNKED MODE (beta.015): Cloudflare's edge caps request bodies at ~100MB on free/pro plans, and
 // tunnel traffic goes through that edge — so the client slices big files into <50MB chunks. Each
 // chunk arrives with uploadId + chunkIndex/totalChunks + chunkOffset; the server appends to a
-// deterministic .part file and VERIFIES the offset against the file's actual size before every
-// append, so a retried or out-of-order chunk can never corrupt the file (mismatch → 409, the
-// client aborts). No server-side session state; the last chunk finalizes via the same atomic
-// rename as single-shot mode. Requests without chunk params behave exactly as before.
+// deterministic .part file and VERIFIES the offset before every append, so a retried or
+// out-of-order chunk can never corrupt the file (mismatch → 409, the client aborts). Offsets are
+// verified against the process's OWN append accounting (chunk-session.ts) — never bare fs.stat,
+// whose answer is stale for seconds on NFS/SMB-backed drop folders (field bug 2026-07-27) — with
+// an open()-based probe as the restart fallback, and the assembled size is verified before the
+// final atomic rename. Requests without chunk params behave exactly as before.
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs-extra';
 import path from 'path';
@@ -30,6 +32,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { WATCHED_DIR, UNMATCHED_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 import { isComicFile } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
+import { noteChunkAppended, sessionBytes, dropSession, sweepSessions, freshFileSize, verifyChunkOffset, verifyAssembledSize } from '@/lib/uploads/chunk-session';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -53,6 +56,7 @@ async function resolveUniquePath(dir: string, filename: string): Promise<string>
 
 export async function POST(req: NextRequest) {
   let tmpPath: string | null = null;
+  let sessionId: string | null = null;
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
@@ -116,6 +120,7 @@ export async function POST(req: NextRequest) {
     if (!isChunked || chunkIndex === 0) {
       try {
         const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        sweepSessions(cutoff);
         for (const entry of await fs.readdir(destDir)) {
           if (!entry.startsWith('.upload-') || !entry.endsWith('.part')) continue;
           const p = path.join(destDir, entry);
@@ -133,21 +138,29 @@ export async function POST(req: NextRequest) {
     tmpPath = path.join(destDir, isChunked ? `.upload-${uploadId}-${safeName}.part` : `.upload-${Date.now()}-${safeName}.part`);
 
     if (isChunked) {
-      // Offset verification makes retries/reordering harmless: the .part's actual size must equal
-      // the chunk's declared offset, or the session is out of sync and the client must restart.
-      const existing = await fs.stat(tmpPath).catch(() => null);
-      const actualSize = existing ? existing.size : 0;
+      sessionId = uploadId;
+      // Offset verification makes retries/reordering harmless. The process's own append
+      // accounting is authoritative (NFS attribute caches serve stale stat() sizes for seconds —
+      // field bug 2026-07-27); the open()-based probe only covers a mid-upload server restart.
       if (chunkIndex === 0) {
         // A fresh session (or a clean retry of chunk 0) always starts from zero.
-        if (existing) await fs.remove(tmpPath).catch(() => {});
-      } else if (!existing || actualSize !== chunkOffset) {
-        // Missing session (server restarted / sweep removed it) or size drift. Leave the .part
-        // alone (the age sweep collects it); the client restarts the file with a fresh session.
-        tmpPath = null;
-        return NextResponse.json(
-          { error: `Upload session out of sync (expected offset ${chunkOffset}, have ${existing ? actualSize : 'no session'}). Retry the file.` },
-          { status: 409 },
-        );
+        dropSession(uploadId);
+        if (await fs.pathExists(tmpPath)) await fs.remove(tmpPath).catch(() => {});
+      } else {
+        const verdict = await verifyChunkOffset({
+          chunkOffset,
+          sessionTotal: sessionBytes(uploadId),
+          probe: () => freshFileSize(tmpPath as string),
+        });
+        if (!verdict.ok) {
+          // Leave the .part alone (the age sweep collects it); the client restarts the file.
+          dropSession(uploadId);
+          tmpPath = null;
+          return NextResponse.json(
+            { error: `Upload session out of sync (expected offset ${chunkOffset}, have ${verdict.have}). Retry the file.` },
+            { status: 409 },
+          );
+        }
       }
     }
 
@@ -172,6 +185,7 @@ export async function POST(req: NextRequest) {
         fs.createWriteStream(tmpPath, isChunked && chunkIndex > 0 ? { flags: 'a' } : undefined),
       );
     } catch (streamErr) {
+      if (isChunked) dropSession(uploadId);
       await fs.remove(tmpPath).catch(() => {});
       tmpPath = null;
       if (tooLarge) {
@@ -179,6 +193,10 @@ export async function POST(req: NextRequest) {
       }
       throw streamErr;
     }
+
+    // The authoritative record of how far this session has gotten — offset checks for the next
+    // chunk read THIS, never the NAS's (possibly stale) idea of the file size.
+    if (isChunked) noteChunkAppended(uploadId, priorBytes + bytes);
 
     // Non-final chunk: acknowledge and wait for the rest. tmpPath is nulled so the catch-all
     // cleanup can't delete a live session.
@@ -189,9 +207,27 @@ export async function POST(req: NextRequest) {
 
     const totalBytes = priorBytes + bytes;
     if (totalBytes === 0) {
+      if (isChunked) dropSession(uploadId);
       await fs.remove(tmpPath).catch(() => {});
       tmpPath = null;
       return NextResponse.json({ error: 'Empty file.' }, { status: 400 });
+    }
+
+    // Final gate for chunked assemblies: the on-disk size must equal what the session
+    // accumulated across requests, or the storage backend lost bytes — a truncated comic must
+    // never rename into the drop folder (it would import as a corrupt archive).
+    if (isChunked) {
+      const check = await verifyAssembledSize(totalBytes, () => freshFileSize(tmpPath as string));
+      dropSession(uploadId);
+      if (!check.ok) {
+        await fs.remove(tmpPath).catch(() => {});
+        tmpPath = null;
+        Logger.log(`[Upload] Assembled size mismatch for ${safeName}: expected ${totalBytes}, on disk ${check.have ?? 'missing'} — rejecting.`, 'error');
+        return NextResponse.json(
+          { error: `Assembled file is ${check.have ?? 0} bytes but ${totalBytes} were uploaded — the storage backend dropped data. Retry the file.` },
+          { status: 500 },
+        );
+      }
     }
 
     // Resolve collisions only after a successful write, then move into place.
@@ -205,6 +241,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, filename: finalName, destination });
   } catch (error: unknown) {
+    if (sessionId) dropSession(sessionId);
     if (tmpPath) await fs.remove(tmpPath).catch(() => {});
     Logger.log(`[Upload] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

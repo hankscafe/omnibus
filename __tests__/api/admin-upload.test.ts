@@ -40,6 +40,28 @@ vi.mock('@/lib/utils/paths', () => ({
     isPathWithinRoots: () => true,
 }));
 
+// The session module's real logic runs (map accounting, offset verdicts, assembled-size gate) —
+// only its open()+fstat probe is redirected at the test's in-memory "disk": first the bytes the
+// write-stream mock captured, then the scripted stat, then "missing". Mirrors how the route sees
+// the world without touching the real filesystem.
+vi.mock('@/lib/uploads/chunk-session', async (importOriginal) => {
+    const real = await importOriginal<typeof import('@/lib/uploads/chunk-session')>();
+    return {
+        ...real,
+        freshFileSize: async (p: string) => {
+            const written = mocks.files.get(p);
+            if (written) return Buffer.concat(written).length;
+            try {
+                const st = await mocks.stat(p);
+                return st?.size ?? null;
+            } catch {
+                return null;
+            }
+        },
+    };
+});
+import { sweepSessions } from '@/lib/uploads/chunk-session';
+
 const upload = (qs: Record<string, string>, body: string, extraHeaders: Record<string, string> = {}) => {
     const params = new URLSearchParams(qs);
     return POST(new Request(`http://localhost/api/admin/upload?${params.toString()}`, {
@@ -60,6 +82,7 @@ describe('API Route: /api/admin/upload (single-shot + chunked)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.files.clear();
+        sweepSessions(Date.now() + 60_000); // module-level session map must not leak across tests
         mocks.session.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });
         mocks.ensureDir.mockResolvedValue(undefined);
         mocks.readdir.mockResolvedValue([]);           // nothing for the stale-part sweep

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     axiosGet: vi.fn(),
     axiosPost: vi.fn(),
     findManyHeaders: vi.fn(),
+    settingFindUnique: vi.fn(),
     log: vi.fn()
 }));
 
@@ -22,7 +23,8 @@ vi.mock('axios', () => ({
 // 3. Mock the Database and the Logger
 vi.mock('@/lib/db', () => ({
     prisma: {
-        customHeader: { findMany: mocks.findManyHeaders }
+        customHeader: { findMany: mocks.findManyHeaders },
+        systemSetting: { findUnique: mocks.settingFindUnique }
     }
 }));
 
@@ -252,5 +254,58 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
         await expect(
             DownloadService.addDownload(delugeClient, 'magnet:?xt=urn:btih:abc', 'Batman #1', 0, 0)
         ).rejects.toThrow('Deluge add failed');
+    });
+});
+describe('Issue #197: Prowlarr NZB handoff fetches content instead of handing NZBGet a URL', () => {
+    const nzbgetClient = {
+        type: 'nzbget',
+        url: 'http://192.168.2.220:6789',
+        user: 'nzbget',
+        pass: 'pass',
+        category: 'comics'
+    };
+    const PROWLARR_DL = 'http://192.168.2.210:9696/1/download?apikey=k&link=abc';
+    const NZB_XML = '<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file/></nzb>';
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.findManyHeaders.mockResolvedValue([]);
+        mocks.settingFindUnique.mockImplementation(({ where }: any) =>
+            Promise.resolve(where.key === 'prowlarr_url' ? { key: 'prowlarr_url', value: 'http://192.168.2.210:9696' } : null));
+        mocks.axiosPost.mockResolvedValue({ data: { result: 1 } });
+    });
+
+    it('pre-fetches from the configured Prowlarr origin (private host allowed) and appends base64 content', async () => {
+        mocks.axiosGet.mockResolvedValueOnce({ data: Buffer.from(NZB_XML) });
+
+        const result = await DownloadService.addDownload(nzbgetClient, PROWLARR_DL, 'Comic #1', 0, 0);
+
+        expect(result.success).toBe(true);
+        expect(mocks.axiosGet).toHaveBeenCalledTimes(1);
+        expect(mocks.axiosGet.mock.calls[0][0]).toBe(PROWLARR_DL);
+        const rpc = mocks.axiosPost.mock.calls[0][1];
+        expect(rpc.method).toBe('append');
+        expect(rpc.params[1]).toBe(Buffer.from(NZB_XML).toString('base64'));
+    });
+
+    it('discards an HTML block page (Cloudflare) and falls back to the URL with a warning', async () => {
+        mocks.axiosGet.mockResolvedValueOnce({ data: Buffer.from('<!DOCTYPE html><html><title>Just a moment...</title></html>') });
+
+        await DownloadService.addDownload(nzbgetClient, PROWLARR_DL, 'Comic #1', 0, 0);
+
+        const rpc = mocks.axiosPost.mock.calls[0][1];
+        expect(rpc.params[1]).toBe(PROWLARR_DL);
+        const warned = mocks.log.mock.calls.some(c => String(c[0]).toLowerCase().includes('html'));
+        expect(warned).toBe(true);
+    });
+
+    it('still refuses to pre-fetch private hosts that are NOT the configured Prowlarr origin', async () => {
+        mocks.settingFindUnique.mockResolvedValue(null); // nothing configured
+
+        await DownloadService.addDownload(nzbgetClient, PROWLARR_DL, 'Comic #1', 0, 0);
+
+        expect(mocks.axiosGet).not.toHaveBeenCalled();
+        const rpc = mocks.axiosPost.mock.calls[0][1];
+        expect(rpc.params[1]).toBe(PROWLARR_DL);
     });
 });

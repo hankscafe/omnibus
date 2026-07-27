@@ -10,7 +10,8 @@ import { DiscordNotifier } from './discord';
 import { getErrorMessage } from './utils/error';
 import { HosterEngine } from './hosters';
 import { decryptSecret } from './encryption';
-import { assertSafeFetchUrl, assertSafeRedirect } from './utils/ssrf';
+import { assertSafeFetchUrl, assertSafeRedirect, isTrustedConfiguredOrigin } from './utils/ssrf';
+import { looksLikeHtmlPage } from './utils/content-sniff';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 
 async function getNetworkHeaders() {
@@ -123,9 +124,25 @@ export const DownloadService = {
             // SSRF guard: indexer/scraped URLs are untrusted — never let Omnibus fetch an internal host, and
             // re-validate each redirect hop. On block/failure we fall through to handing the raw URL to the
             // download client (whose own fetch happens outside Omnibus's network).
-            assertSafeFetchUrl(downloadUrl);
+            // Issue #197 exception: a URL on the admin-configured Prowlarr origin is first-party
+            // infrastructure (Prowlarr download links point back at Prowlarr itself, usually a LAN
+            // host) — without this, the pre-fetch never engages for Prowlarr NZBs and NZBGet gets a
+            // URL whose redirect target (the indexer) blocks downloader user-agents behind Cloudflare.
+            // Redirect hops are still validated: a hop to an internal target aborts the fetch.
+            const prowlarrUrl = (await prisma.systemSetting.findUnique({ where: { key: 'prowlarr_url' } }))?.value;
+            if (!isTrustedConfiguredOrigin(downloadUrl, [prowlarrUrl])) {
+                assertSafeFetchUrl(downloadUrl);
+            }
             const fileRes = await axios.get(downloadUrl, { responseType: 'arraybuffer', ...baseConfig, maxRedirects: 5, beforeRedirect: assertSafeRedirect });
-            fileBuffer = Buffer.from(fileRes.data);
+            const candidate = Buffer.from(fileRes.data);
+            // Issue #197 layer 2: a Cloudflare/login HTML page is never a valid .nzb/.torrent —
+            // handing it over produces NZBGet's "Fetch: success / Scan: skipped". Discard and
+            // fall through to the URL instead (the client may still have its own way in).
+            if (looksLikeHtmlPage(candidate)) {
+                Logger.log(`[Proxy] Fetched content for "${title}" is an HTML page (Cloudflare or indexer block?) — not handing it to the client as a file; using URL instead.`, 'warn');
+            } else {
+                fileBuffer = candidate;
+            }
         } catch (err) { Logger.log(`[Proxy] File fetch skipped/failed (${getErrorMessage(err)}), using URL instead.`, 'info'); }
       }
 

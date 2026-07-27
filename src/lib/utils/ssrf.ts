@@ -35,6 +35,32 @@ export function isBlockedFetchHost(hostname: string): boolean {
 }
 
 /**
+ * True when `rawUrl` targets the exact same origin (scheme+host+port) as one of the
+ * admin-configured base URLs (issue #197: Prowlarr download links point back at Prowlarr itself —
+ * usually a LAN host the internal-host block rightly rejects for untrusted input, but an origin
+ * the admin typed into settings is first-party infrastructure, not scraped data). Callers may
+ * bypass assertSafeFetchUrl for exactly that origin; redirect hops must still be validated
+ * individually (assertSafeRedirect), so a trusted first hop cannot bounce to an internal target.
+ */
+export function isTrustedConfiguredOrigin(rawUrl: string, configuredBaseUrls: (string | null | undefined)[]): boolean {
+    let target: URL;
+    try {
+        target = new URL(rawUrl);
+    } catch {
+        return false;
+    }
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
+    for (const base of configuredBaseUrls) {
+        if (!base) continue;
+        try {
+            const b = new URL(base);
+            if ((b.protocol === 'http:' || b.protocol === 'https:') && b.origin === target.origin) return true;
+        } catch { /* unparseable configured value — never widens trust */ }
+    }
+    return false;
+}
+
+/**
  * Validate a URL before fetching it server-side. Returns the parsed URL or throws with a safe message.
  */
 export function assertSafeFetchUrl(rawUrl: string): URL {

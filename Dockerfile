@@ -29,9 +29,15 @@ RUN find .next/standalone/node_modules -type d -name "brace-expansion" -exec rm 
 RUN find .next/standalone/node_modules -type d -name "nodemailer" -exec rm -rf {} + || true
 RUN find .next/standalone/node_modules -type d -name "uuid" -exec rm -rf {} + || true
 
+# Next's standalone package.json carries the app's FULL dependency lists — devDependencies
+# included — and the pin-install below reconciles that whole tree. That used to ship dev-only
+# packages (shadcn → @modelcontextprotocol/sdk → @hono/node-server, flagged by the Docker Hub
+# scan 2026-07-26) into the production image. Strip dev deps first; --omit=dev is belt and braces.
+RUN cd .next/standalone && node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.devDependencies;fs.writeFileSync('package.json',JSON.stringify(p,null,2));"
+
 # nodemailer pinned to match package-lock (was @latest, which is how the image drifted from the
 # lockfile and carried untested versions — the CVE-2026-39244 scan surfaced that gap).
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.6 nodemailer@9.0.3 uuid@11.1.1 --no-save --legacy-peer-deps --force
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.8 nodemailer@9.0.3 uuid@11.1.1 --no-save --omit=dev --legacy-peer-deps --force
 
 # --- Stage 2: Final Production Image ---
 FROM node:26-slim AS runner

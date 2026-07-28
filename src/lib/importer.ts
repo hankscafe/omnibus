@@ -100,7 +100,7 @@ function ensureLocalCover(folder: string, archivePath: string): string | null {
 }
 
 export const Importer = {
-  async importRequest(requestId: string) {
+  async importRequest(requestId: string, opts?: { sourcePathOverride?: string }) {
     const req = await prisma.request.findUnique({ 
         where: { id: requestId },
         include: { user: true } 
@@ -121,7 +121,15 @@ export const Importer = {
     const downloadRoot = config.download_path || './downloads';
     const trackingHash = req.downloadLink && !req.downloadLink.startsWith('http') ? req.downloadLink : null;
 
-    if (trackingHash) {
+    // Direct-to-request upload (2026-07-27): the admin handed us THE file for this request via
+    // the gated-request "Upload File" button — no client/folder guessing, the exact path wins.
+    // isFromClient stays false so the source is treated like a DDL temp (moved, never seeded).
+    if (opts?.sourcePathOverride) {
+        sourcePath = opts.sourcePathOverride;
+        Logger.log(`[Importer] Using admin-uploaded file for request [${requestId}]: ${sourcePath}`, 'info');
+    }
+
+    if (!sourcePath && trackingHash) {
       try {
           const allActive = await DownloadService.getAllActiveDownloads();
           const downloadItem = allActive.find((t: any) => t.id === trackingHash || t.name === req.activeDownloadName);

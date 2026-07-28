@@ -57,7 +57,7 @@ function sendBody(
   qs: URLSearchParams,
   body: Blob,
   onProgress: (loaded: number) => void,
-): Promise<{ ok: boolean; status: number; error?: string; filename?: string }> {
+): Promise<{ ok: boolean; status: number; error?: string; filename?: string; imported?: boolean }> {
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest()
     xhr.open("POST", `/api/admin/upload?${qs.toString()}`)
@@ -65,13 +65,13 @@ function sendBody(
       if (e.lengthComputable) onProgress(e.loaded)
     }
     xhr.onload = () => {
-      let res: { success?: boolean; filename?: string; error?: string } = {}
+      let res: { success?: boolean; filename?: string; error?: string; imported?: boolean } = {}
       try {
         res = JSON.parse(xhr.responseText || "{}")
       } catch {
         /* non-JSON response (proxy error page) — uploadFailureMessage supplies the guidance */
       }
-      if (xhr.status >= 200 && xhr.status < 300 && res.success) resolve({ ok: true, status: xhr.status, filename: res.filename })
+      if (xhr.status >= 200 && xhr.status < 300 && res.success) resolve({ ok: true, status: xhr.status, filename: res.filename, imported: res.imported })
       else resolve({ ok: false, status: xhr.status, error: res.error })
     }
     xhr.onerror = () => resolve({ ok: false, status: 0 })
@@ -87,7 +87,7 @@ async function uploadOne(
   destination: Destination,
   requestId: string | undefined,
   onProgress: (pct: number) => void,
-): Promise<{ ok: boolean; error?: string; filename?: string }> {
+): Promise<{ ok: boolean; error?: string; filename?: string; imported?: boolean }> {
   const baseQs = () => {
     const qs = new URLSearchParams({ destination, filename: file.name })
     if (requestId) qs.set("requestId", requestId)
@@ -96,7 +96,7 @@ async function uploadOne(
 
   if (file.size <= CHUNK_SIZE) {
     const res = await sendBody(baseQs(), file, (loaded) => onProgress(Math.round((loaded / Math.max(1, file.size)) * 100)))
-    return res.ok ? { ok: true, filename: res.filename } : { ok: false, error: uploadFailureMessage(res.status, res.error) }
+    return res.ok ? { ok: true, filename: res.filename, imported: res.imported } : { ok: false, error: uploadFailureMessage(res.status, res.error) }
   }
 
   const uploadId = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`).replace(/[^a-zA-Z0-9-]/g, "")
@@ -111,7 +111,7 @@ async function uploadOne(
     qs.set("chunkOffset", String(offset))
     const res = await sendBody(qs, slice, (loaded) => onProgress(Math.round(((offset + loaded) / file.size) * 100)))
     if (!res.ok) return { ok: false, error: uploadFailureMessage(res.status, res.error) }
-    if (i === totalChunks - 1) return { ok: true, filename: res.filename }
+    if (i === totalChunks - 1) return { ok: true, filename: res.filename, imported: res.imported }
   }
   return { ok: false, error: "Upload ended unexpectedly." }
 }
@@ -176,12 +176,14 @@ export function ManualUploadPanel({
     setIsUploading(true)
     let success = 0
     let failed = 0
+    let imported = 0 // matched straight into their request (gated-request uploads)
 
     for (const item of queued) {
       patchItem(item.id, { status: "uploading", progress: 0, error: undefined })
       const res = await uploadOne(item.file, destination, requestId, (pct) => patchItem(item.id, { progress: pct }))
       if (res.ok) {
         success++
+        if (res.imported) imported++
         patchItem(item.id, { status: "done", progress: 100, finalName: res.filename })
       } else {
         failed++
@@ -189,8 +191,9 @@ export function ManualUploadPanel({
       }
     }
 
-    // Kick the importer once for the whole batch (watched only — unmatched is read live by Smart Matcher).
-    if (destination === "watched" && startImport && success > 0) {
+    // Kick the importer once for the whole batch (watched only — unmatched is read live by Smart
+    // Matcher, and request-imported files never touched the watched folder at all).
+    if (destination === "watched" && startImport && success > imported) {
       try {
         await fetch("/api/admin/jobs/trigger", {
           method: "POST",
@@ -205,9 +208,10 @@ export function ManualUploadPanel({
     setIsUploading(false)
     toast({
       title: failed === 0 ? "Upload complete" : "Upload finished with errors",
-      description:
-        `${success} uploaded${failed ? `, ${failed} failed` : ""}` +
-        (destination === "watched" && startImport && success ? " — import started." : "."),
+      description: imported > 0
+        ? `${imported} matched straight to the request and imported${success > imported ? `, ${success - imported} sent to Watched` : ""}${failed ? `, ${failed} failed` : ""}.`
+        : `${success} uploaded${failed ? `, ${failed} failed` : ""}` +
+          (destination === "watched" && startImport && success ? " — import started." : "."),
       variant: failed ? "destructive" : undefined,
     })
     if (success > 0) onComplete?.()

@@ -33,6 +33,8 @@ import { WATCHED_DIR, UNMATCHED_DIR, isPathWithinRoots } from '@/lib/utils/paths
 import { isComicFile } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { noteChunkAppended, sessionBytes, dropSession, sweepSessions, freshFileSize, verifyChunkOffset, verifyAssembledSize } from '@/lib/uploads/chunk-session';
+import { prisma } from '@/lib/db';
+import { Importer } from '@/lib/importer';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -244,6 +246,43 @@ export async function POST(req: NextRequest) {
           { status: 500 },
         );
       }
+    }
+
+    // Direct-to-request import (2026-07-27): an upload from a gated request's "Upload File"
+    // button carries requestId — the admin is handing us THE file for THAT queue entry, so it
+    // must never take the generic watched-sync → Smart Matcher path. Park it in the downloads
+    // root (outside watched-sync's reach, no race) and run the same import pipeline a completed
+    // automated download uses; only a declined import falls back to the Watched folder.
+    if (requestId) {
+      const dlSetting = await prisma.systemSetting.findUnique({ where: { key: 'download_path' } }).catch(() => null);
+      const downloadRoot = dlSetting?.value || './downloads';
+      await fs.ensureDir(downloadRoot);
+      const parkedPath = await resolveUniquePath(downloadRoot, safeName);
+      await fs.move(tmpPath, parkedPath, { overwrite: false });
+      tmpPath = null;
+
+      let imported = false;
+      try {
+        imported = (await Importer.importRequest(requestId, { sourcePathOverride: parkedPath })) === true;
+      } catch (e) {
+        Logger.log(`[Upload] Direct import for request ${requestId} failed: ${getErrorMessage(e)} — falling back to Watched.`, 'warn');
+      }
+
+      if (imported) {
+        const finalName = path.basename(parkedPath);
+        await AuditLogger.log('MANUAL_UPLOAD', { filename: finalName, destination: 'request', bytes: totalBytes, requestId, imported: true, ...(isChunked ? { chunks: totalChunks } : {}) }, userId);
+        Logger.log(`[Upload] Manual upload imported directly into request ${requestId}: ${finalName} (${totalBytes} bytes).`, 'info');
+        return NextResponse.json({ success: true, filename: finalName, imported: true, requestId });
+      }
+
+      // Declined (request already terminal, import pipeline said no, …): hold the file in the
+      // normal drop folder so nothing is ever lost — the generic flow takes over from here.
+      const fallbackPath = await resolveUniquePath(destDir, safeName);
+      await fs.move(parkedPath, fallbackPath, { overwrite: false });
+      const finalName = path.basename(fallbackPath);
+      await AuditLogger.log('MANUAL_UPLOAD', { filename: finalName, destination, bytes: totalBytes, requestId, imported: false, ...(isChunked ? { chunks: totalChunks } : {}) }, userId);
+      Logger.log(`[Upload] Direct import declined for request ${requestId} — ${finalName} held in ${destination} for normal matching.`, 'info');
+      return NextResponse.json({ success: true, filename: finalName, destination, imported: false });
     }
 
     // Resolve collisions only after a successful write, then move into place.

@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     move: vi.fn(),
     pathExists: vi.fn(),
     createWriteStream: vi.fn(),
+    importRequest: vi.fn(),
+    settingFindUnique: vi.fn(),
     files: new Map<string, Buffer[]>(),
 }));
 
@@ -38,6 +40,10 @@ vi.mock('@/lib/utils/paths', () => ({
     WATCHED_DIR: '/watched',
     UNMATCHED_DIR: '/unmatched',
     isPathWithinRoots: () => true,
+}));
+vi.mock('@/lib/importer', () => ({ Importer: { importRequest: mocks.importRequest } }));
+vi.mock('@/lib/db', () => ({
+    prisma: { systemSetting: { findUnique: mocks.settingFindUnique } }
 }));
 
 // The session module's real logic runs (map accounting, offset verdicts, assembled-size gate) —
@@ -223,5 +229,65 @@ describe('Truncated-body enforcement (field bug 2026-07-27 round 2: ~10MiB cutof
         expect(res.status).toBe(400);
         expect((await res.json()).error).toContain('truncated');
         expect(mocks.move).not.toHaveBeenCalled();
+    });
+});
+
+describe('Direct-to-request import (2026-07-27: gated-request uploads must never detour to Smart Matcher)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.files.clear();
+        sweepSessions(Date.now() + 60_000);
+        mocks.session.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });
+        mocks.ensureDir.mockResolvedValue(undefined);
+        mocks.readdir.mockResolvedValue([]);
+        mocks.stat.mockRejectedValue(new Error('ENOENT'));
+        mocks.remove.mockResolvedValue(undefined);
+        mocks.move.mockResolvedValue(undefined);
+        mocks.pathExists.mockResolvedValue(false);
+        mocks.settingFindUnique.mockResolvedValue({ key: 'download_path', value: '/dl' });
+        mocks.createWriteStream.mockImplementation((p: string, opts?: { flags?: string }) => {
+            const arr = opts?.flags === 'a' ? (mocks.files.get(p) || []) : [];
+            mocks.files.set(p, arr);
+            return new Writable({ write(chunk, _enc, cb) { arr.push(Buffer.from(chunk)); cb(); } });
+        });
+    });
+
+    it('parks the file in the downloads root and runs the request import pipeline', async () => {
+        mocks.importRequest.mockResolvedValue(true);
+
+        const res = await upload({ destination: 'watched', filename: 'Gated.cbz', requestId: 'req_1' }, 'bytes');
+        const json = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(json).toMatchObject({ success: true, imported: true, requestId: 'req_1', filename: 'Gated.cbz' });
+        // Parked OUTSIDE the watched folder (no watched-sync race, no Smart Matcher detour)…
+        expect(mocks.move).toHaveBeenCalledWith(
+            expect.stringContaining('.part'),
+            path.join('/dl', 'Gated.cbz'),
+            { overwrite: false },
+        );
+        // …and the same import pipeline a completed automated download uses gets the exact path.
+        expect(mocks.importRequest).toHaveBeenCalledWith('req_1', { sourcePathOverride: path.join('/dl', 'Gated.cbz') });
+        // Never moved into /watched.
+        const watchedMoves = mocks.move.mock.calls.filter(c => String(c[1]).includes('watched'));
+        expect(watchedMoves).toHaveLength(0);
+    });
+
+    it('falls back to the Watched folder when the direct import declines', async () => {
+        mocks.importRequest.mockResolvedValue(false);
+
+        const res = await upload({ destination: 'watched', filename: 'Gated.cbz', requestId: 'req_1' }, 'bytes');
+        const json = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(json).toMatchObject({ success: true, imported: false, filename: 'Gated.cbz' });
+        expect(mocks.move).toHaveBeenCalledWith(path.join('/dl', 'Gated.cbz'), path.join('/watched', 'Gated.cbz'), { overwrite: false });
+    });
+
+    it('never touches the import pipeline without a requestId', async () => {
+        const res = await upload({ destination: 'watched', filename: 'Plain.cbz' }, 'bytes');
+        expect(res.status).toBe(200);
+        expect(mocks.importRequest).not.toHaveBeenCalled();
+        expect((await res.json()).imported).toBeUndefined();
     });
 });

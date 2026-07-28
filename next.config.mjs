@@ -1,7 +1,17 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  
+
+  // Next 15.5 routes every middleware-matched request through an internal proxy layer that
+  // buffers the body — capped at 10MB by DEFAULT and SILENTLY TRUNCATED beyond it (no error;
+  // reproduced locally: a 48MiB upload chunk arrived as exactly 10,485,760 bytes). Our
+  // middleware matches everything, so chunked uploads (48MiB), issue-cover uploads (15MB),
+  // and backup restores were all quietly capped. Raised to the app's own 2GB upload ceiling
+  // (OMNIBUS_MAX_UPLOAD_MB); the route-level declared-vs-received check remains the backstop.
+  experimental: {
+    middlewareClientMaxBodySize: '2gb',
+  },
+
   // Removes the "X-Powered-By: Next.js" header
   poweredByHeader: false,
   

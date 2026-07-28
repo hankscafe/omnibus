@@ -9,6 +9,9 @@ import { DiscordNotifier } from '@/lib/discord';
 import { getErrorMessage } from './utils/error';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { JUNK_WORDS as junkWords } from '@/lib/utils/search-terms';
+import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
+import { resolveRemotePath } from '@/lib/utils/path-resolver';
+import path from 'path';
 
 const globalForCron = globalThis as unknown as { _cronInitialized: boolean };
 
@@ -273,6 +276,23 @@ export function initCronJobs() {
                       const clientConfig = await prisma.downloadClient.findFirst({ where: { name: torrent.clientName } });
                       if (clientConfig) {
                           await DownloadService.removeDownload(clientConfig, torrent.id).catch(() => {});
+
+                          // Issue #198 companion fix: SAB/NZBGet report failures from HISTORY, where the
+                          // queue-scoped wipe above can't delete files (SAB's history del_files only covers
+                          // failed jobs it still knows; NZBGet's never touches disk) — clear the leftover
+                          // job folder from the category folder ourselves. Torrents are excluded: their
+                          // client-side delete already removed the payload.
+                          if (['sab', 'nzbget'].includes(clientConfig.type)) {
+                              try {
+                                  const dlRoot = clientConfig.localPath
+                                      || (await prisma.systemSetting.findUnique({ where: { key: 'download_path' } }))?.value
+                                      || './downloads';
+                                  const failedSource = await resolveRemotePath(path.join(dlRoot, torrent.name));
+                                  await deleteUsenetSource({ clientType: clientConfig.type, clientRoot: dlRoot, sourcePath: failedSource, reason: 'failed' });
+                              } catch (cleanupErr) {
+                                  Logger.log(`[Cron] Failed-download cleanup skipped: ${getErrorMessage(cleanupErr)}`, 'debug');
+                              }
+                          }
                       }
 
                       // 2. Fetch request and check retry cap

@@ -252,10 +252,17 @@ export const DownloadService = {
               });
           }
           else if (client.type === 'sab') {
-              await axios.get(`${cleanUrl}/api`, { 
-                  params: { mode: 'queue', name: 'delete', value: downloadId, del_files: 1, apikey: client.apiKey, output: 'json' }, 
-                  ...baseConfig 
+              await axios.get(`${cleanUrl}/api`, {
+                  params: { mode: 'queue', name: 'delete', value: downloadId, del_files: 1, apikey: client.apiKey, output: 'json' },
+                  ...baseConfig
               });
+              // Failed/finished jobs live in HISTORY where the queue delete no-ops (issue #198
+              // companion fix). Best-effort: SAB deletes a failed job's files with del_files=1
+              // but never a completed job's, so this can't eat a finished download.
+              await axios.get(`${cleanUrl}/api`, {
+                  params: { mode: 'history', name: 'delete', value: downloadId, del_files: 1, apikey: client.apiKey, output: 'json' },
+                  ...baseConfig
+              }).catch(() => {});
           }
           else if (client.type === 'deluge') {
               const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, baseConfig);
@@ -267,9 +274,15 @@ export const DownloadService = {
           else if (client.type === 'nzbget') {
               const auth = Buffer.from(`${client.user}:${client.pass}`).toString('base64');
               // GroupDelete removes the item and associated files
-              await axios.post(`${cleanUrl}/jsonrpc`, { 
-                  method: "editqueue", params: ["GroupDelete", 0, "", [parseInt(downloadId)]] 
+              await axios.post(`${cleanUrl}/jsonrpc`, {
+                  method: "editqueue", params: ["GroupDelete", 0, "", [parseInt(downloadId)]]
               }, { headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } });
+              // Items that failed or finished are parked in HISTORY, out of GroupDelete's reach
+              // (issue #198 companion fix). HistoryDelete clears the record (NZBIDs stay stable
+              // from queue to history); leftover files are handled by the filesystem cleanup.
+              await axios.post(`${cleanUrl}/jsonrpc`, {
+                  method: "editqueue", params: ["HistoryDelete", 0, "", [parseInt(downloadId)]]
+              }, { headers: { ...baseConfig.headers, Authorization: `Basic ${auth}` } }).catch(() => {});
           }
 
           Logger.log(`[${client.type.toUpperCase()}] SUCCESS: Removed cancelled download ${downloadId}`, 'success');

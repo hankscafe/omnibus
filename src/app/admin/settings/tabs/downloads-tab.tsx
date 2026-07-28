@@ -87,6 +87,20 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                             )}
                         </div>
                     </div>
+
+                    {/* Issue #198: usenet downloads are copied into the library — this deletes the original */}
+                    <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                        <Switch
+                            id="usenet-delete-after-import"
+                            checked={config.usenet_delete_after_import === "true"}
+                            onCheckedChange={(c) => setConfig({...config, usenet_delete_after_import: c ? "true" : "false"})}
+                            className="scale-110 sm:scale-100"
+                        />
+                        <div className="grid gap-1 ml-2">
+                            <Label htmlFor="usenet-delete-after-import" className="cursor-pointer font-bold text-base text-foreground">Delete Usenet Downloads After Import</Label>
+                            <p className="text-[11px] text-muted-foreground">Once an NZBGet/SABnzbd download has been copied into the library and the copy verified, the original file and its job folder are deleted from the client&apos;s category folder. Torrent downloads are never touched — deleting those would break seeding. Requires the download folder to be mounted writable in Omnibus.</p>
+                        </div>
+                    </div>
                 </CardContent>
             </Card>
             <Card className="shadow-sm border-border bg-background">

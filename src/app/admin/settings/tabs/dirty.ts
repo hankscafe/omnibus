@@ -38,6 +38,7 @@ const TAB_CONFIG_KEYS: Record<string, string[]> = {
         'annas_archive_interactive_enabled', 'annas_archive_base_url', 'annas_archive_formats',
         'gc_avoid_large_downloads', 'solver_type', 'flaresolverr_url', 'flaresolverr_timeout',
         'download_retry_delay', 'awaiting_retry_days', 'flag_stalled_requests',
+        'usenet_delete_after_import',
     ],
     discovery: [
         'show_popular_issues', 'show_new_releases',

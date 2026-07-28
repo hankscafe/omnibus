@@ -309,3 +309,51 @@ describe('Issue #197: Prowlarr NZB handoff fetches content instead of handing NZ
         expect(rpc.params[1]).toBe(PROWLARR_DL);
     });
 });
+
+describe('Issue #198: removeDownload reaches HISTORY items, not just the queue', () => {
+    // SAB/NZBGet report failures from history (par/unpack failures land there), where the old
+    // queue-scoped delete silently no-op'd — failed jobs' files lingered forever.
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.findManyHeaders.mockResolvedValue([]);
+        mocks.settingFindUnique.mockResolvedValue(null);
+    });
+
+    it('SABnzbd: sweeps the queue AND the history, both with del_files', async () => {
+        const sabClient = { type: 'sab', url: 'http://192.168.1.60:8085', apiKey: 'sabkey', category: 'comics' };
+        mocks.axiosGet.mockResolvedValue({ data: { status: true } });
+
+        const ok = await DownloadService.removeDownload(sabClient, 'SABnzbd_nzo_abc123');
+
+        expect(ok).toBe(true);
+        expect(mocks.axiosGet).toHaveBeenCalledTimes(2);
+        const queueParams = mocks.axiosGet.mock.calls[0][1].params;
+        expect(queueParams).toMatchObject({ mode: 'queue', name: 'delete', value: 'SABnzbd_nzo_abc123', del_files: 1 });
+        const historyParams = mocks.axiosGet.mock.calls[1][1].params;
+        expect(historyParams).toMatchObject({ mode: 'history', name: 'delete', value: 'SABnzbd_nzo_abc123', del_files: 1 });
+    });
+
+    it('NZBGet: GroupDelete for the queue, then HistoryDelete for the parked record', async () => {
+        const nzbClient = { type: 'nzbget', url: 'http://192.168.1.61:6789', user: 'nzbget', pass: 'pass', category: 'comics' };
+        mocks.axiosPost.mockResolvedValue({ data: { result: true } });
+
+        const ok = await DownloadService.removeDownload(nzbClient, '42');
+
+        expect(ok).toBe(true);
+        expect(mocks.axiosPost).toHaveBeenCalledTimes(2);
+        expect(mocks.axiosPost.mock.calls[0][1]).toEqual({ method: 'editqueue', params: ['GroupDelete', 0, '', [42]] });
+        expect(mocks.axiosPost.mock.calls[1][1]).toEqual({ method: 'editqueue', params: ['HistoryDelete', 0, '', [42]] });
+    });
+
+    it('a failing history sweep never fails the removal (best-effort)', async () => {
+        const sabClient = { type: 'sab', url: 'http://192.168.1.60:8085', apiKey: 'sabkey', category: 'comics' };
+        mocks.axiosGet
+            .mockResolvedValueOnce({ data: { status: true } })       // queue delete works
+            .mockRejectedValueOnce(new Error('history endpoint 500')); // history sweep hiccups
+
+        const ok = await DownloadService.removeDownload(sabClient, 'SABnzbd_nzo_abc123');
+
+        expect(ok).toBe(true);
+    });
+});

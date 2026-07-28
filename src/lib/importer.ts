@@ -16,6 +16,7 @@ import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { WATCHED_DIR } from '@/lib/utils/paths';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
 // engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
@@ -121,6 +122,15 @@ export const Importer = {
     const downloadRoot = config.download_path || './downloads';
     const trackingHash = req.downloadLink && !req.downloadLink.startsWith('http') ? req.downloadLink : null;
 
+    // Issue #198: usenet downloads are COPIED into the library (the torrent seed-preservation
+    // path), stranding the original in the client's category folder. When the toggle is on and
+    // the source came from a tracked NZBGet/SAB item, the verified import deletes the original.
+    // Only the tracked-client branch below fills these — the folder-search fallback can't prove
+    // the source isn't a seeding torrent, so it never cleans up.
+    const usenetDeleteAfterImport = config.usenet_delete_after_import === 'true';
+    let sourceClientType: string | null = null;
+    let sourceClientRoot: string | null = null;
+
     // Direct-to-request upload (2026-07-27): the admin handed us THE file for this request via
     // the gated-request "Upload File" button — no client/folder guessing, the exact path wins.
     // isFromClient stays false so the source is treated like a DDL temp (moved, never seeded).
@@ -144,7 +154,9 @@ export const Importer = {
               const clientRoot = clientConfig?.localPath || downloadRoot;
               const rawPath = path.join(clientRoot, downloadItem.name);
               sourcePath = await resolveRemotePath(rawPath);
-              
+              sourceClientType = clientConfig?.type || null;
+              sourceClientRoot = clientRoot;
+
               Logger.log(`[Importer Debug] Using client root path: ${clientRoot} for ${downloadItem.name}`, 'debug');
           } else {
               Logger.log("[Importer] Download not found in active client list. Falling back to folder search.", "warn");
@@ -455,6 +467,14 @@ export const Importer = {
             } catch (ignoreErr) { }
         }
 
+        // Issue #198: the whole batch is safely in the watched folder — delete the original job
+        // from the usenet client's category folder. Partial routing keeps the source untouched so
+        // the leftover files stay recoverable.
+        const expectedBatchCount = isBatchFolder ? batchFiles.length : nestedArchiveCount;
+        if (usenetDeleteAfterImport && sourceClientType && expectedBatchCount > 0 && moveSuccessCount >= expectedBatchCount) {
+            await deleteUsenetSource({ clientType: sourceClientType, clientRoot: sourceClientRoot, sourcePath, reason: 'imported' });
+        }
+
         return true;
     }
 
@@ -763,6 +783,16 @@ export const Importer = {
 
       if (!moveSuccess) throw new Error("Failed to move file after multiple attempts due to network locks.");
 
+      // Issue #198: verify the copy NOW, while finalPath still mirrors the source byte-for-byte
+      // (conversion replaces it with a different-sized .cbz later). The actual delete waits until
+      // the very end of the import — if any later step throws, the retry cycle still has its source.
+      let usenetSourceVerified = false;
+      if (usenetDeleteAfterImport && sourceClientType && (isFromClient || trackingHash)) {
+          try {
+              usenetSourceVerified = fs.statSync(finalPath).size === fs.statSync(actualSourceFile).size;
+          } catch { usenetSourceVerified = false; }
+      }
+
       finalPath = fixMagicNumberSync(finalPath);
       fileName = path.basename(finalPath);
 
@@ -995,6 +1025,12 @@ export const Importer = {
               year: series?.year?.toString(),
               date: new Date().toLocaleString()
           });
+      }
+
+      // Issue #198: import fully landed (file, DB rows, request status) — now the original usenet
+      // download is safe to delete.
+      if (usenetSourceVerified) {
+          await deleteUsenetSource({ clientType: sourceClientType, clientRoot: sourceClientRoot, sourcePath, reason: 'imported' });
       }
 
       Logger.log(`[Importer] Successfully imported to: ${destFolder}`, "success");

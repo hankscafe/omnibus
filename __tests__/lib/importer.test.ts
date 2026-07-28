@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
     findManySettings: vi.fn(),
     findManyLibraries: vi.fn(),
     findFirstSeries: vi.fn(),
+    findFirstClient: vi.fn(),
+    getAllActiveDownloads: vi.fn(),
     updateRequest: vi.fn(),
     createIssue: vi.fn(),
     upsertSeries: vi.fn(),
@@ -27,11 +29,12 @@ const mocks = vi.hoisted(() => ({
 // 2. Deeply Mock Dependencies to save RAM and prevent OOM crashes
 vi.mock('@/lib/db', () => ({
     prisma: {
-        request: { findUnique: mocks.findUniqueRequest, update: mocks.updateRequest, count: vi.fn().mockResolvedValue(0) },
+        request: { findUnique: mocks.findUniqueRequest, update: mocks.updateRequest, updateMany: vi.fn().mockResolvedValue({ count: 1 }), count: vi.fn().mockResolvedValue(0) },
         systemSetting: { findMany: mocks.findManySettings, findUnique: vi.fn().mockResolvedValue(null) },
         library: { findMany: mocks.findManyLibraries },
         series: { findFirst: mocks.findFirstSeries, upsert: mocks.upsertSeries, update: vi.fn() },
-        issue: { create: mocks.createIssue, findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn().mockResolvedValue([]) }
+        issue: { create: mocks.createIssue, findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+        downloadClient: { findFirst: mocks.findFirstClient }
     }
 }));
 
@@ -59,7 +62,7 @@ vi.mock('@/lib/queue', () => ({
 vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: mocks.sendAlert } }));
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/utils/path-resolver', () => ({ resolveRemotePath: vi.fn((path) => path) }));
-vi.mock('@/lib/download-clients', () => ({ DownloadService: { getAllActiveDownloads: vi.fn().mockResolvedValue([]) } }));
+vi.mock('@/lib/download-clients', () => ({ DownloadService: { getAllActiveDownloads: mocks.getAllActiveDownloads } }));
 
 // Prevent heavy libraries from loading
 vi.mock('@/lib/manga-detector', () => ({ detectManga: mocks.detectManga }));
@@ -90,6 +93,8 @@ describe('File System: Importer Engine', () => {
         vi.stubGlobal('fetch', mocks.fetch);
         mocks.fetch.mockRejectedValue(new Error('engine unavailable'));
         mocks.zipGetEntries.mockReturnValue([]);
+        mocks.getAllActiveDownloads.mockResolvedValue([]);
+        mocks.findFirstClient.mockResolvedValue(null);
     });
 
     it('should stall the request if the downloaded file is missing from the hard drive', async () => {
@@ -295,5 +300,61 @@ describe('File System: Importer Engine', () => {
         // (vi.clearAllMocks does not reset implementations).
         vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => false, size: 1000000 } as any);
         vi.mocked(fs.promises.readdir).mockResolvedValue([] as any);
+    });
+
+    // ==== Issue #198: delete the original usenet download once its copy into the library is verified ====
+
+    const usenetRequest = {
+        id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01 (2016)',
+        downloadLink: 'nzb_42', volumeId: 'cv_123', createdAt: new Date()
+    };
+    const usenetActiveItem = { id: 'nzb_42', name: 'Batman 01 (2016)', clientName: 'NZBGet', progress: '100.0', status: 'SUCCESS/ALL' };
+
+    function armUsenetImport(clientType: string, toggle?: string) {
+        mocks.findManySettings.mockResolvedValue([
+            { key: 'download_path', value: '/downloads' },
+            { key: 'folder_naming_pattern', value: '{Publisher}/{Series} ({Year})' },
+            { key: 'file_naming_pattern', value: '{Series} #{Issue}' },
+            ...(toggle ? [{ key: 'usenet_delete_after_import', value: toggle }] : [])
+        ]);
+        mocks.findUniqueRequest.mockResolvedValueOnce(usenetRequest);
+        mocks.getAllActiveDownloads.mockResolvedValue([usenetActiveItem]);
+        mocks.findFirstClient.mockResolvedValue({ type: clientType, localPath: '/nzbget/comics', name: 'NZBGet' });
+        mocks.findFirstSeries.mockResolvedValueOnce({
+            id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false
+        });
+    }
+
+    it('deletes the verified usenet source after import when the toggle is on (issue #198)', async () => {
+        armUsenetImport('nzbget', 'true');
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        // The copy still happened (usenet imports stay copy-then-delete, never a move mid-flight)…
+        expect(fs.copy).toHaveBeenCalled();
+        // …and the ORIGINAL job path in the client's folder was removed afterwards.
+        expect(fs.remove).toHaveBeenCalledWith(expect.stringContaining('Batman 01 (2016)'));
+        expect(vi.mocked(fs.remove).mock.calls[0][0]).toContain('nzbget');
+    });
+
+    it('leaves the usenet source alone when the toggle is off (the default)', async () => {
+        armUsenetImport('nzbget'); // no usenet_delete_after_import key at all
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        expect(fs.copy).toHaveBeenCalled();
+        expect(fs.remove).not.toHaveBeenCalled();
+    });
+
+    it('never deletes a torrent client source, even with the toggle on (seeding)', async () => {
+        armUsenetImport('qbit', 'true');
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        expect(fs.copy).toHaveBeenCalled();
+        expect(fs.remove).not.toHaveBeenCalled();
     });
 });

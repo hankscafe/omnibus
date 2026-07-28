@@ -344,16 +344,27 @@ export async function POST(request: Request) {
     const isFinishingSetup = !isSetupComplete && settings?.setup_complete === 'true';
 
     if (isSetupComplete || isFinishingSetup) {
-        await AuditLogger.log('UPDATE_SYSTEM_CONFIG', {
-            message: isFinishingSetup ? "Initial system setup completed." : "System configuration and integrations updated.",
-            updatedSections: Object.keys(body).filter(k => body[k] !== undefined)
-        }, userId || 'System');
+        // The settings transaction is already committed — nothing past this point may turn the
+        // response into a failure (a 500 here made the client silently skip its saved-state
+        // bookkeeping while the save had in fact landed).
+        try {
+            await AuditLogger.log('UPDATE_SYSTEM_CONFIG', {
+                message: isFinishingSetup ? "Initial system setup completed." : "System configuration and integrations updated.",
+                updatedSections: Object.keys(body).filter(k => body[k] !== undefined)
+            }, userId || 'System');
+        } catch (e) {
+            Logger.log(`Config-save audit write failed: ${getErrorMessage(e)}`, 'error');
+        }
 
         if (isFinishingSetup) {
             Logger.log("[Setup] Initial configuration saved successfully. Welcome to Omnibus!", "success");
         }
 
-        await syncSchedules().catch(e => Logger.log(`Failed to sync BullMQ schedules: ${getErrorMessage(e)}`, 'error'));
+        // Fire-and-forget (same pattern as the boot-time call in cron.ts): with Redis down,
+        // BullMQ retries each command for tens of seconds — awaiting that stalled the response
+        // for minutes while the button sat disabled and the save looked lost. The schedules
+        // reconcile in the background exactly as before; the response never waits on Redis.
+        Promise.resolve(syncSchedules()).catch(e => Logger.log(`Failed to sync BullMQ schedules: ${getErrorMessage(e)}`, 'error'));
     }
 
     return NextResponse.json({ success: true, warnings: gateWarnings });

@@ -434,7 +434,7 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setLoading(true);
 
-    const payload = { 
+    const payload = {
         settings: {
             ...config,
             hoster_priority: JSON.stringify(hosterPriority),
@@ -442,21 +442,29 @@ export default function SettingsPage() {
             release_scoring_rules: JSON.stringify(scoringRules)
         },
         libraries: configuredLibraries,
-        indexers: configuredIndexers, 
+        indexers: configuredIndexers,
         customHeaders: customHeaders,
-        searchAcronyms: customAcronyms, 
+        searchAcronyms: customAcronyms,
         downloadClients: configuredClients,
         hosterAccounts: configuredHosters,
         discordWebhooks: configuredWebhooks
     }
 
+    // A save must never fail (or hang) silently: every exit from this function either resets the
+    // unsaved-changes baseline or puts a toast on screen saying why it didn't. The abort timer
+    // frees the button if the server wedges mid-request — without it, one stuck response pinned
+    // `loading` and the whole page dead until a reload.
+    const abort = new AbortController();
+    const abortTimer = setTimeout(() => abort.abort(), 45000);
+
     try {
-        const res = await fetch('/api/admin/config', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify(payload) 
+        const res = await fetch('/api/admin/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: abort.signal
         })
-        
+
         if (res.ok) {
             const saveData = await res.json().catch(() => ({} as any));
             // The server may have reverted Anna's Archive automation (the API-key + connection-test gate);
@@ -477,9 +485,25 @@ export default function SettingsPage() {
             } else {
                 toast({ title: "Settings Saved", description: "Configuration persisted to database." })
             }
+        } else {
+            const errData = await res.json().catch(() => ({} as any));
+            toast({
+                title: "Save Failed",
+                description: `${errData?.error || `The server answered HTTP ${res.status}.`} Some changes may still have been applied — reload the page to see what persisted.`,
+                variant: "destructive"
+            });
         }
-    } finally { 
-        setLoading(false) 
+    } catch (e: any) {
+        toast({
+            title: e?.name === 'AbortError' ? "Save Timed Out" : "Save Failed",
+            description: e?.name === 'AbortError'
+                ? "No response after 45 seconds. The server may still be applying the save in the background — reload the page to check before saving again."
+                : `Could not reach the server: ${e?.message || e}. Check that Omnibus is running, then try again.`,
+            variant: "destructive"
+        });
+    } finally {
+        clearTimeout(abortTimer);
+        setLoading(false)
     }
   }
 

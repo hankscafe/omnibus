@@ -176,6 +176,60 @@ describe('System Health & Diagnostics', () => {
         expect(result.status).toBe('DEGRADED');
     });
 
+    describe('Engine handshake probe (prod incident 2026-07-20: secret mismatch read as healthy)', () => {
+        const healthyDisk = () => {
+            vi.mocked(fs.promises.statfs).mockResolvedValue({ bsize: 1024, bavail: 15 * 1024 * 1024 * 1024 / 1024 } as any);
+            vi.mocked(fs.promises.access).mockResolvedValue(undefined);
+        };
+
+        // Route engine fetches: /health answers as a healthy dev build; the authed probe's
+        // response is the variable under test. Everything else keeps the default update-check shape.
+        const routeEngineFetches = (authProbe: { ok: boolean, status?: number }) => {
+            mocks.fetch.mockImplementation((url: string) => {
+                const u = String(url);
+                if (u.includes('/api/health/auth')) return Promise.resolve({ ...authProbe, json: async () => ({ ok: authProbe.ok }) });
+                if (u.includes(':8000/health')) return Promise.resolve({ ok: true, json: async () => ({ version: '1.0.0', release: false }) });
+                return Promise.resolve({ ok: true, json: async () => ({ currentVersion: '1.0.0', latestVersion: '1.0.0', updateAvailable: false }) });
+            });
+        };
+
+        it('maps a 401 from the authed probe to a NEXTAUTH_SECRET-mismatch ERROR (engine up, jobs doomed)', async () => {
+            healthyDisk();
+            routeEngineFetches({ ok: false, status: 401 });
+
+            const result = await runSystemHealthCheck();
+
+            const auth = result.checks.find(c => c.id === 'engine_auth');
+            expect(auth?.status).toBe('error');
+            expect(auth?.message).toContain('NEXTAUTH_SECRET');
+            expect(auth?.message).toContain('sha256sum');
+            // The engine itself still reads as reachable — the mismatch is its own named failure.
+            expect(result.checks.find(c => c.id === 'engine_version')?.status).toBe('ok');
+            expect(result.status).toBe('DEGRADED');
+        });
+
+        it('verifies the handshake with a green entry when the authed probe returns 200', async () => {
+            healthyDisk();
+            routeEngineFetches({ ok: true, status: 200 });
+
+            const result = await runSystemHealthCheck();
+
+            const auth = result.checks.find(c => c.id === 'engine_auth');
+            expect(auth?.status).toBe('ok');
+            expect(result.status).toBe('HEALTHY');
+        });
+
+        it('renders NO handshake verdict for an older engine without the endpoint (404) — never a false alarm', async () => {
+            healthyDisk();
+            routeEngineFetches({ ok: false, status: 404 });
+
+            const result = await runSystemHealthCheck();
+
+            expect(result.checks.find(c => c.id === 'engine_auth')).toBeUndefined();
+            expect(result.status).toBe('HEALTHY');
+        });
+    });
+
     it('should return HEALTHY status when all systems are green', async () => {
         // 15GB free
         vi.mocked(fs.promises.statfs).mockResolvedValue({ 

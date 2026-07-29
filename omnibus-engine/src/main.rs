@@ -241,6 +241,37 @@ mod version_tests {
         assert!(!resolve_version(Some("  \n".into())).1);
         assert!(!resolve_version(None).1);
     }
+
+    #[test]
+    fn internal_auth_decision_matrix() {
+        // No secret configured (loopback dev bind): open regardless of what the caller sends.
+        assert!(internal_auth_ok(None, None));
+        assert!(internal_auth_ok(Some("whatever"), None));
+        // Secret configured: missing or wrong header is refused, exact match passes.
+        assert!(internal_auth_ok(Some("s3cret"), Some("s3cret")));
+        assert!(!internal_auth_ok(None, Some("s3cret")));
+        assert!(!internal_auth_ok(Some("wrong"), Some("s3cret")));
+        assert!(!internal_auth_ok(Some(""), Some("s3cret")));
+    }
+
+    #[tokio::test]
+    async fn auth_health_acknowledges() {
+        // The endpoint's value is WHERE it sits (behind require_internal_auth); the body is a
+        // constant ack the Node health check treats as "handshake verified".
+        let Json(v) = handle_auth_health().await;
+        assert_eq!(v["ok"], true);
+    }
+}
+
+/// Pure decision core of `require_internal_auth`, split out so the accept/reject matrix is
+/// unit-testable without an axum harness. No configured secret = open (the engine refuses to start
+/// non-loopback without one, so this only ever applies to a loopback dev bind); with a secret, the
+/// header must be present and match in constant time.
+fn internal_auth_ok(provided: Option<&str>, configured: Option<&str>) -> bool {
+    match configured {
+        None => true,
+        Some(secret) => provided.map(|p| secrets_match(p, secret)).unwrap_or(false),
+    }
 }
 
 /// Authenticates Node→engine calls with the shared NEXTAUTH_SECRET (X-Internal-Secret header),
@@ -252,15 +283,9 @@ async fn require_internal_auth(
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if let Some(secret) = &state.internal_secret {
-        let ok = req.headers()
-            .get("x-internal-secret")
-            .and_then(|v| v.to_str().ok())
-            .map(|p| secrets_match(p, secret))
-            .unwrap_or(false);
-        if !ok {
-            return Err(StatusCode::UNAUTHORIZED);
-        }
+    let provided = req.headers().get("x-internal-secret").and_then(|v| v.to_str().ok());
+    if !internal_auth_ok(provided, state.internal_secret.as_deref()) {
+        return Err(StatusCode::UNAUTHORIZED);
     }
     Ok(next.run(req).await)
 }
@@ -397,6 +422,12 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
     let shared_state = Arc::new(AppState { db, limiter, internal_secret });
 
     let api = Router::new()
+        // Authenticated liveness probe: behind require_internal_auth like every /api route, so a
+        // 200 proves the caller's X-Internal-Secret matches this container's — while /health below
+        // only proves the process is up. The Node health panel maps a 401 here to a
+        // NEXTAUTH_SECRET-mismatch error (prod incident 2026-07-20: mismatched secrets read as a
+        // healthy engine while every forwarded job failed with 401).
+        .route("/api/health/auth", get(handle_auth_health))
         .route("/api/repack", post(handle_repack))
         .route("/api/scan", post(handle_scan))
         .route("/api/converter/cbr-sweep", post(handle_cbr_sweep))
@@ -471,6 +502,12 @@ async fn handle_health() -> Json<serde_json::Value> {
         "version": version,
         "release": release,
     }))
+}
+
+/// Handler for the authenticated liveness probe (GET /api/health/auth — see the route comment).
+/// Reaching it at all is the proof; the body is a constant acknowledgment.
+async fn handle_auth_health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": true }))
 }
 
 /// Records a FAILED JobLog so a background-task failure is DB-visible (BullMQ already got its 202,

@@ -65,6 +65,30 @@ export async function runSystemHealthCheck() {
         } else {
             results.push({ id: 'engine_version', name: 'Engine Version', status: 'warning', message: `Could not read the engine version (HTTP ${engRes.status}).` });
         }
+
+        // 1c. Authenticated handshake probe (prod incident 2026-07-20): /health is deliberately
+        // unauthenticated, so a NEXTAUTH_SECRET mismatch between the web and engine containers
+        // left this panel green while every forwarded job died with "Rust returned error status
+        // 401". A 200 from the guarded /api/health/auth proves the shared secret matches; a 401
+        // means the two containers disagree. Older engines without the endpoint answer 404 —
+        // no verdict, so nothing is shown rather than a false alarm.
+        try {
+            const authRes = await fetch(`${ENGINE_URL}/api/health/auth`, { headers: engineHeaders(), signal: AbortSignal.timeout(5000) });
+            if (authRes.ok) {
+                results.push({ id: 'engine_auth', name: 'Engine Handshake', status: 'ok', message: 'Web ↔ engine internal secret verified.' });
+            } else if (authRes.status === 401 || authRes.status === 403) {
+                results.push({
+                    id: 'engine_auth',
+                    name: 'Engine Handshake',
+                    status: 'error',
+                    message: `Engine is reachable but rejected the internal handshake (HTTP ${authRes.status}): the web and engine containers are running different NEXTAUTH_SECRET values, so every scan, conversion, download, metadata sync, and search forwarded to the engine fails with 401. Set the exact same secret on both services (watch for quoting differences or a trailing newline between env files) and recreate both containers. To byte-compare, run in each container: printf %s "$NEXTAUTH_SECRET" | sha256sum`,
+                });
+            }
+            // Any other status (404/405: engine predates the endpoint) → no verdict, stay silent.
+        } catch (authErr) {
+            // Transient wobble on the second probe only — reachability itself just succeeded above.
+            Logger.log(`[Health Check Debug] Engine handshake probe skipped: ${getErrorMessage(authErr)}`, 'debug');
+        }
     } catch(e) {
         Logger.log(`[Health Check Debug] Engine version check failed: ${getErrorMessage(e)}`, 'debug');
         // Unreachable is an ERROR, not a warning (issue #187): since v1.2.0 the engine sidecar is

@@ -183,14 +183,21 @@ export async function GET(request: Request) {
         }
     }
 
+    // Every sort carries a unique `id` tiebreaker (v1.4.1). OFFSET pagination requires a TOTAL
+    // order: PostgreSQL gives rows with equal sort keys no deterministic order between executions,
+    // so page windows under a bare `name`/`year` sort could overlap and gap (comic libraries are
+    // full of exact-name ties — rebooted volumes share a title). On the live pg profile that
+    // starved infinite-scroll appends and made the library visibly jitter between adjacent-letter
+    // items while scrolling. The names index below shares this orderBy, so the jump bar's offsets
+    // are computed against the same total order the pages realize.
     let orderBy: any = {};
     switch (sort) {
-        case 'alpha_desc': orderBy = { name: 'desc' }; break;
-        case 'year_desc': orderBy = { year: 'desc' }; break;
-        case 'year_asc': orderBy = { year: 'asc' }; break;
-        case 'count_desc': orderBy = { issues: { _count: 'desc' } }; break;
-        case 'random': orderBy = { id: 'asc' }; break; 
-        default: orderBy = { name: 'asc' };
+        case 'alpha_desc': orderBy = [{ name: 'desc' }, { id: 'desc' }]; break;
+        case 'year_desc': orderBy = [{ year: 'desc' }, { name: 'asc' }, { id: 'asc' }]; break;
+        case 'year_asc': orderBy = [{ year: 'asc' }, { name: 'asc' }, { id: 'asc' }]; break;
+        case 'count_desc': orderBy = [{ issues: { _count: 'desc' } }, { name: 'asc' }, { id: 'asc' }]; break;
+        case 'random': orderBy = { id: 'asc' }; break;
+        default: orderBy = [{ name: 'asc' }, { id: 'asc' }];
     }
 
     if (namesOnly) {

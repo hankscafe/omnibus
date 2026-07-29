@@ -27,7 +27,10 @@ export async function GET(req: Request) {
         where: seriesAccessWhere(accessibleLibs),
         skip,
         take: limit + 1,
-        orderBy: { name: 'asc' }
+        // `id` tiebreaker (v1.4.1): OFFSET pagination needs a total order — on PostgreSQL, bare
+        // name-sorted pages could overlap/gap on exact-name ties, duplicating or dropping series
+        // across OPDS catalog pages (same defect as the library browse fix).
+        orderBy: [{ name: 'asc' }, { id: 'asc' }]
     });
 
     const hasNext = seriesList.length > limit;

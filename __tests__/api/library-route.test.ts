@@ -118,7 +118,9 @@ describe('API Route: Library Advanced Search', () => {
             expect(data.names).toEqual(['Alpha', 'Batman']);
             const call = mocks.findManySeries.mock.calls[0][0];
             expect(call.select).toEqual({ name: true });
-            expect(call.orderBy).toEqual({ name: 'asc' });
+            // Total order incl. tiebreaker (v1.4.1) — the index must be computed against the SAME
+            // order the page windows realize, or the bar's offsets drift off the real positions.
+            expect(call.orderBy).toEqual([{ name: 'asc' }, { id: 'asc' }]);
             expect(call.skip).toBeUndefined();
             expect(call.take).toBeUndefined();
         });
@@ -141,6 +143,35 @@ describe('API Route: Library Advanced Search', () => {
             const res2 = await GET(new Request('http://localhost/api/library?path=/library&offset=37&limit=24'));
             const data2 = await res2.json();
             expect(data2.hasMore).toBe(false); // 37 + 24 >= 50
+        });
+    });
+
+    // v1.4.1 field regression (live pg deployment): OFFSET pagination requires a TOTAL order.
+    // PostgreSQL gives rows with equal sort keys no deterministic order between executions, so a
+    // bare name/year sort let page windows overlap and gap on ties (rebooted volumes share exact
+    // names) — infinite scroll appends starved and the library jittered between adjacent-letter
+    // items. Every paginated sort must therefore end in the unique `id` tiebreaker.
+    describe('v1.4.1: every paginated sort carries a unique id tiebreaker', () => {
+        const orderByFor = async (sort: string) => {
+            const res = await GET(new Request(`http://localhost/api/library?path=/library&sort=${sort}`));
+            expect(res.status).toBe(200);
+            return mocks.findManySeries.mock.calls[0][0].orderBy;
+        };
+
+        it('alpha_asc ends in id', async () => {
+            expect(await orderByFor('alpha_asc')).toEqual([{ name: 'asc' }, { id: 'asc' }]);
+        });
+        it('alpha_desc ends in id', async () => {
+            expect(await orderByFor('alpha_desc')).toEqual([{ name: 'desc' }, { id: 'desc' }]);
+        });
+        it('year sorts end in id (year ties are rampant)', async () => {
+            expect(await orderByFor('year_desc')).toEqual([{ year: 'desc' }, { name: 'asc' }, { id: 'asc' }]);
+        });
+        it('count_desc ends in id (issue-count ties are rampant)', async () => {
+            expect(await orderByFor('count_desc')).toEqual([{ issues: { _count: 'desc' } }, { name: 'asc' }, { id: 'asc' }]);
+        });
+        it('random keeps its already-unique id order', async () => {
+            expect(await orderByFor('random')).toEqual({ id: 'asc' });
         });
     });
 });

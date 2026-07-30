@@ -2,7 +2,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, useRef, forwardRef, Suspense } from "react"
-import { VirtuosoGrid, TableVirtuoso, type TableComponents } from "react-virtuoso"
+import { TableVirtuoso, type TableComponents } from "react-virtuoso"
 import { AlphaJumpBar } from "@/components/alpha-jump-bar"
 import { computeLetterBuckets, letterForName, type LetterBucket } from "@/lib/utils/alpha-buckets"
 import { useSession } from "next-auth/react"
@@ -468,6 +468,8 @@ function LibraryContent() {
   }, [loadLibraryData]);
 
   // The letter under the current scroll position, derived from the visible range + names index.
+  // Still fed by TableVirtuoso's rangeChanged in list view; the grid view computes the same thing
+  // from scroll math (see the effect below) since it no longer renders through a virtualizer.
   const handleRangeChanged = useCallback(({ startIndex }: { startIndex: number }) => {
       if (!namesIndex) return;
       const name = namesIndex[anchorRef.current + startIndex];
@@ -476,6 +478,36 @@ function LibraryContent() {
           setActiveLetter(prev => (prev === letter ? prev : letter));
       }
   }, [namesIndex]);
+
+  // Grid-view active letter (v1.4.2): first visible row × columns → index into the names window.
+  // Pure reads inside rAF; state only changes when the letter actually flips, so scrolling never
+  // feeds back into layout.
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+      if (!isAlphaSort || !namesIndex || viewMode !== 'grid') return;
+      let raf = 0;
+      const onScroll = () => {
+          if (raf) return;
+          raf = requestAnimationFrame(() => {
+              raf = 0;
+              const grid = gridRef.current;
+              const firstCard = grid?.firstElementChild as HTMLElement | null;
+              if (!grid || !firstCard) return;
+              const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').length || 1;
+              const rowHeight = firstCard.getBoundingClientRect().height + 16; // + gap-4
+              const gridTop = grid.getBoundingClientRect().top + window.scrollY;
+              const row = Math.max(0, Math.floor((window.scrollY - gridTop + 120) / rowHeight));
+              const name = namesIndex[anchorRef.current + row * cols];
+              if (name) {
+                  const letter = letterForName(name);
+                  setActiveLetter(prev => (prev === letter ? prev : letter));
+              }
+          });
+      };
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+      return () => { window.removeEventListener('scroll', onScroll); if (raf) cancelAnimationFrame(raf); };
+  }, [isAlphaSort, namesIndex, viewMode]);
 
   const handlePageSizeChange = (val: string) => {
       const newSize = parseInt(val);
@@ -518,16 +550,53 @@ function LibraryContent() {
       toastRef.current({ title: "Scanning Disk", description: "Checking folders for new comics..." });
   }
 
-  // Virtuoso drives infinite loading via endReached (it fires as the user nears the end of the virtualized
-  // list). Selection mode pauses pagination, matching the prior sentinel which was hidden while selecting.
+  // Infinite loading, shared by the grid sentinel and TableVirtuoso's endReached. A ref latch
+  // (not the loadingMore state, whose commit lags events) guarantees each page is requested once;
+  // reading page/hasMore/selection through refs keeps this callback identity-stable and immune to
+  // stale closures. The page fetch is a plain call here — never a side effect inside a state
+  // updater, which React may legally invoke more than once.
+  const pageRef = useRef(1);
+  const hasMoreRef = useRef(true);
+  const selectionRef = useRef(false);
+  const loadingRef = useRef(false);
+  const loadMoreLatch = useRef(false);
+  useEffect(() => {
+      pageRef.current = page;
+      hasMoreRef.current = hasMore;
+      selectionRef.current = isSelectionMode;
+      loadingRef.current = loading;
+  });
+
   const handleEndReached = useCallback(() => {
-      if (loading || loadingMore || !hasMore || isSelectionMode) return;
-      setPage(prevPage => {
-          const nextPage = prevPage + 1;
-          loadLibraryData(nextPage, false, true);
-          return nextPage;
-      });
-  }, [hasMore, loading, loadingMore, isSelectionMode, loadLibraryData]);
+      if (loadMoreLatch.current || loadingRef.current || !hasMoreRef.current || selectionRef.current) return;
+      loadMoreLatch.current = true;
+      const nextPage = pageRef.current + 1;
+      pageRef.current = nextPage;
+      setPage(nextPage);
+      Promise.resolve(loadLibraryData(nextPage, false, true)).finally(() => { loadMoreLatch.current = false; });
+  }, [loadLibraryData]);
+
+  // Grid-view pagination trigger (v1.4.2): observe the sentinel with the same 800px lead the old
+  // increaseViewportBy gave, and re-check after each append (an IntersectionObserver only fires on
+  // crossings — if the sentinel is STILL in range after new rows land, no event would come and the
+  // list would stall one page in).
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+      const el = loadMoreSentinelRef.current;
+      if (!el) return;
+      const obs = new IntersectionObserver(
+          (entries) => { if (entries.some(e => e.isIntersecting)) handleEndReached(); },
+          { rootMargin: '800px 0px' }
+      );
+      obs.observe(el);
+      return () => obs.disconnect();
+  }, [handleEndReached, loading, viewMode, series.length > 0]);
+
+  useEffect(() => {
+      const el = loadMoreSentinelRef.current;
+      if (!el || loading) return;
+      if (el.getBoundingClientRect().top < window.innerHeight + 800) handleEndReached();
+  }, [series.length, loading, handleEndReached]);
 
   const toggleFavorite = async (seriesId: string, currentStatus: boolean) => {
       if (!seriesId) return;
@@ -1030,22 +1099,24 @@ function LibraryContent() {
           {activeCollection !== "ALL" ? (<><Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>This reading list is currently empty.</p></>) : (<><Folder className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No comics found matching your criteria.</p></>)}
         </div>
       ) : viewMode === 'grid' ? (
-        <VirtuosoGrid
-          useWindowScroll
-          data={series}
-          endReached={handleEndReached}
-          rangeChanged={handleRangeChanged}
-          increaseViewportBy={800}
-          computeItemKey={(_, item) => item.id || item.path}
-          listClassName="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10"
-          itemContent={(_, item: LibrarySeries) => {
+        // v1.4.2: plain CSS grid again — the virtualized grid (VirtuosoGrid + useWindowScroll,
+        // in place since beta.063) fought the browser's scroll anchoring at the infinite-scroll
+        // boundary: each page APPEND at the edge threw the viewport back up by whole rows, so a
+        // big library "jumped up and down and never settled" (field report on the first large
+        // PostgreSQL deployment; reproduced under real wheel input against a 3k-series library —
+        // the throwback survived removing the jump bar, rangeChanged, and covers, and is inherent
+        // to the append/measure/anchor feedback). The plain grid + sentinel below is the shape
+        // that served every release before beta.063; the jump bar is unaffected (its letter
+        // offsets are server-side windows, and the active letter now comes from scroll math).
+        <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-10">
+          {series.map((item: LibrarySeries) => {
               const unread = item.unreadCount !== undefined ? item.unreadCount : item.count;
               const isCompleted = unread === 0 && item.count > 0;
               const progress = item.progressPercentage || 0;
               const isSelected = selectedSeries.has(item.id);
               const navId = item.id || item.path;
               return (
-                <div className="group flex flex-col space-y-2 relative">
+                <div key={item.id || item.path} className="group flex flex-col space-y-2 relative">
                   <Card className={cn("aspect-[2/3] overflow-hidden shadow-sm transition-all p-0 relative flex flex-col", isSelectionMode ? (isSelected ? "border-4 border-primary scale-95" : "border-2 border-border cursor-pointer") : "border-border group-hover:shadow-md cursor-pointer bg-background")}>
                       {isSelectionMode && item.id && (<div className="absolute top-2 left-2 z-40 bg-black/50 backdrop-blur-sm rounded p-1 pointer-events-none">{isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-white/80" />}</div>)}
                       
@@ -1175,8 +1246,8 @@ function LibraryContent() {
                   </div>
                 </div>
               )
-          }}
-        />
+          })}
+        </div>
       ) : (
         <div className="border border-border rounded-lg overflow-hidden bg-background pb-0 mb-10">
             <TableVirtuoso
@@ -1289,6 +1360,12 @@ function LibraryContent() {
             />
         </div>
       )}
+
+      {/* Infinite-scroll sentinel (v1.4.2): drives grid-view pagination the pre-virtualization
+          way — an IntersectionObserver near-viewport trigger plus an after-append re-check, both
+          latched so a page is only ever requested once. Rendered for the list view too (harmless
+          alongside TableVirtuoso's own endReached; the latch dedupes). */}
+      {!loading && series.length > 0 && <div ref={loadMoreSentinelRef} aria-hidden className="h-px" />}
 
       {loadingMore && (
           <div className="flex justify-center pt-8 pb-12 w-full">

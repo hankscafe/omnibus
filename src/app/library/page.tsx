@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
 import { copyText } from "@/lib/utils/clipboard"
+import { coverSrc, COVER_GRID_WIDTH } from "@/lib/utils/cover-url"
 import { cn } from "@/lib/utils"
 import { Switch } from "@/components/ui/switch"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
@@ -1135,12 +1136,12 @@ function LibraryContent() {
                       >
                           <ImageIcon className="w-8 h-8 text-muted-foreground/30 absolute z-0" />
                           {item.cover && (
-                              <img 
-                                src={item.cover} 
-                                alt={`Cover art for ${item.name}`} 
-                                loading="lazy" 
-                                className={cn("object-cover w-full h-full relative z-10 transition-opacity", isCompleted && "opacity-60")} 
-                                onError={(e) => { e.currentTarget.style.display = 'none'; }} 
+                              <img
+                                src={coverSrc(item.cover, COVER_GRID_WIDTH)}
+                                alt={`Cover art for ${item.name}`}
+                                loading="lazy"
+                                className={cn("object-cover w-full h-full relative z-10 transition-opacity", isCompleted && "opacity-60")}
+                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
                               />
                           )}
                           {!isSelectionMode && (
@@ -1287,11 +1288,11 @@ function LibraryContent() {
                             >
                                 <ImageIcon className="w-4 h-4 text-muted-foreground/50 absolute z-0" />
                                 {item.cover && (
-                                    <img 
-                                      src={item.cover} 
-                                      alt={`Cover art for ${item.name}`} 
-                                      loading="lazy" 
-                                      className={cn("w-full h-full object-cover relative z-10 transition-opacity", isCompleted && "opacity-60")} 
+                                    <img
+                                      src={coverSrc(item.cover, COVER_GRID_WIDTH)}
+                                      alt={`Cover art for ${item.name}`}
+                                      loading="lazy"
+                                      className={cn("w-full h-full object-cover relative z-10 transition-opacity", isCompleted && "opacity-60")}
                                       onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                     />
                                 )}

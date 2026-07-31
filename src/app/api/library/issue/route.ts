@@ -10,7 +10,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { parseComicVineCredits } from '@/lib/utils';
-import { sanitizeDescription } from '@/lib/utils/sanitize';
+import { sanitizeDescription, providerWikiBase } from '@/lib/utils/sanitize';
 import { safeParse } from '@/lib/utils/safe-parse';
 import { omnibusQueue } from '@/lib/queue';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
@@ -259,8 +259,10 @@ export async function GET(request: Request) {
         storyArcs: parsedStoryArcs,
         teams: parsedTeams,
         locations: parsedLocations,
-        // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored XSS).
-        description: sanitizeDescription(issue.description),
+        // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored
+        // XSS), resolving provider-relative wiki links against the issue's own source (falling back
+        // to the series') so they stop 404ing on the Omnibus origin.
+        description: sanitizeDescription(issue.description, providerWikiBase(issue.metadataSource || issue.series?.metadataSource)),
         // Manual-edits lock state — the metadata editor shows it and offers the unlock (issue #194 (f)).
         hasCustomMetadata: !!issue.hasCustomMetadata
     });

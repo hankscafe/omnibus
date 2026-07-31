@@ -252,8 +252,19 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             const now = Date.now();
             const lastCheck = (token.lastSessionCheck as number) || 0;
             if (now - lastCheck > 5 * 60 * 1000) {
-                const dbUser = await prisma.user.findUnique({ where: { id: token.id as string }, select: { sessionVersion: true } });
-                if (!dbUser || dbUser.sessionVersion !== (token.sessionVersion || 0)) return { error: "SessionExpired" };
+                // Fail OPEN on a THROWN read (fork review 2026-07-29, their #4): SQLite busy while a
+                // restore monopolizes the single connection, or a pg blip, used to throw out of this
+                // callback and kill the session — a surprise logout for every open tab. A revocation
+                // verdict still requires a read that RESOLVES (a deleted user resolves null and
+                // expires); only exceptions defer. lastSessionCheck is stamped either way so a
+                // struggling DB gets one probe per 5-minute cycle, not one per session fetch —
+                // which bounds the fail-open window for a revoked session to that same cycle.
+                try {
+                    const dbUser = await prisma.user.findUnique({ where: { id: token.id as string }, select: { sessionVersion: true } });
+                    if (!dbUser || dbUser.sessionVersion !== (token.sessionVersion || 0)) return { error: "SessionExpired" };
+                } catch (e) {
+                    Logger.log(`[Auth] sessionVersion check deferred on transient DB error: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+                }
                 token.lastSessionCheck = now;
             }
         }
@@ -280,19 +291,30 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                 }
             }
         }
+        // Same fail-open posture as the sessionVersion sweep: a thrown lookup leaves this round's
+        // token unchanged (the cookie/token state persists, so the swap or revert simply retries on
+        // the next callback run) instead of killing the admin's session.
         if (impersonateId && token.originalAdminId) {
             if (token.id !== impersonateId) {
-                const targetUser = await prisma.user.findUnique({ where: { id: impersonateId } });
-                if (targetUser) {
-                    token.id = targetUser.id; token.role = targetUser.role; token.autoApproveRequests = targetUser.autoApproveRequests;
-                    token.canRequest = targetUser.canRequest; token.canDownload = targetUser.canDownload; token.canCreateGlobalLists = targetUser.canCreateGlobalLists; token.picture = targetUser.avatar; token.isImpersonating = true;
+                try {
+                    const targetUser = await prisma.user.findUnique({ where: { id: impersonateId } });
+                    if (targetUser) {
+                        token.id = targetUser.id; token.role = targetUser.role; token.autoApproveRequests = targetUser.autoApproveRequests;
+                        token.canRequest = targetUser.canRequest; token.canDownload = targetUser.canDownload; token.canCreateGlobalLists = targetUser.canCreateGlobalLists; token.picture = targetUser.avatar; token.isImpersonating = true;
+                    }
+                } catch (e) {
+                    Logger.log(`[Auth] Impersonation swap deferred on transient DB error: ${e instanceof Error ? e.message : String(e)}`, 'warn');
                 }
             }
         } else if (!impersonateId && token.isImpersonating) {
-            const adminUser = await prisma.user.findUnique({ where: { id: token.originalAdminId as string } });
-            if (adminUser) {
-                token.id = adminUser.id; token.role = adminUser.role; token.autoApproveRequests = adminUser.autoApproveRequests;
-                token.canRequest = adminUser.canRequest; token.canDownload = adminUser.canDownload; token.canCreateGlobalLists = adminUser.canCreateGlobalLists; token.picture = adminUser.avatar; token.isImpersonating = false;
+            try {
+                const adminUser = await prisma.user.findUnique({ where: { id: token.originalAdminId as string } });
+                if (adminUser) {
+                    token.id = adminUser.id; token.role = adminUser.role; token.autoApproveRequests = adminUser.autoApproveRequests;
+                    token.canRequest = adminUser.canRequest; token.canDownload = adminUser.canDownload; token.canCreateGlobalLists = adminUser.canCreateGlobalLists; token.picture = adminUser.avatar; token.isImpersonating = false;
+                }
+            } catch (e) {
+                Logger.log(`[Auth] Impersonation revert deferred on transient DB error: ${e instanceof Error ? e.message : String(e)}`, 'warn');
             }
         }
         return token as any;

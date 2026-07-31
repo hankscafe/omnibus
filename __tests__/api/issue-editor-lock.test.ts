@@ -41,7 +41,7 @@ vi.mock('@/lib/metadata/providers/metron', () => ({
 vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
 vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: mocks.queueAdd } }));
-vi.mock('@/lib/utils/sanitize', () => ({ sanitizeDescription: (s: unknown) => s }));
+vi.mock('@/lib/utils/sanitize', () => ({ sanitizeDescription: (s: unknown) => s, providerWikiBase: () => null }));
 vi.mock('@/lib/utils/paths', () => ({ CONFIG_DIR: '/config' }));
 vi.mock('fs', () => {
     const promises = {

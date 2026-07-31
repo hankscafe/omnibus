@@ -12,7 +12,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
-import { sanitizeDescription } from '@/lib/utils/sanitize';
+import { sanitizeDescription, providerWikiBase } from '@/lib/utils/sanitize';
 import { safeParse } from '@/lib/utils/safe-parse';
 import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 
@@ -275,8 +275,9 @@ export async function GET(request: Request) {
       bookType: seriesRecord?.bookType || null,
       monitored: seriesRecord?.monitored || false,
       isManga: seriesRecord?.isManga || false,
-      // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored XSS).
-      description: sanitizeDescription(seriesRecord?.description) || null,
+      // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored
+      // XSS), resolving provider-relative wiki links so they stop 404ing on the Omnibus origin.
+      description: sanitizeDescription(seriesRecord?.description, providerWikiBase(seriesRecord?.metadataSource)) || null,
       universe: seriesRecord?.universe || null,
       // Series-level genres (Metron genres / CV volume concepts, issue #180) — JSON array string in the DB.
       genres: safeParse((seriesRecord as any)?.genres),

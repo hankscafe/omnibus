@@ -4,7 +4,7 @@ import { apiClient as axios } from '@/lib/api-client';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { parseComicVineCredits } from '@/lib/utils';
-import { sanitizeDescription } from '@/lib/utils/sanitize';
+import { sanitizeDescription, providerWikiBase } from '@/lib/utils/sanitize';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { logApiUsage } from '@/lib/utils/system-flags';
@@ -81,8 +81,10 @@ export async function GET(request: Request) {
                 publisher: details.publisher || 'Unknown', 
                 image: details.coverUrl,
                 year: details.releaseDate ? details.releaseDate.split('-')[0] : '????',
-                description: issueDesc || "No description available.",
-                siteUrl: `https://metron.cloud/issue/${details.sourceId}/`, 
+                // Metron descriptions get the same sanitize+link-resolve treatment as the CV branch
+                // below — no consumer should ever see unsanitized provider HTML.
+                description: sanitizeDescription(issueDesc, providerWikiBase('METRON')) || "No description available.",
+                siteUrl: `https://metron.cloud/issue/${details.sourceId}/`,
                 writers: details.writers || [],
                 artists: details.artists || [],
                 coverArtists: details.coverArtists || [],
@@ -93,7 +95,7 @@ export async function GET(request: Request) {
                 locations: details.locations || [],
                 genres: [],
                 storyArcs: details.storyArcs || [],
-                htmlDescription: details.description || ""
+                htmlDescription: sanitizeDescription(details.description, providerWikiBase('METRON'))
             };
         } else {
             const details = await metron.getSeriesDetails(id);
@@ -105,14 +107,14 @@ export async function GET(request: Request) {
                 publisher: details?.publisher,
                 image: details?.coverUrl,
                 year: details?.year?.toString() || '????',
-                description: details?.description || "No description available.",
-                siteUrl: `https://metron.cloud/series/${details?.sourceId}/`, 
+                description: sanitizeDescription(details?.description, providerWikiBase('METRON')) || "No description available.",
+                siteUrl: `https://metron.cloud/series/${details?.sourceId}/`,
                 // Bypass strict TypeScript checking for these dynamic API fields
                 count: (details as any)?.issueCount || (details as any)?.count_of_issues || "?",
                 issues: (details as any)?.issues || [],
                 writers: [], artists: [], coverArtists: [], colorists: [], letterers: [],
                 characters: [], teams: [], locations: [], genres: [], storyArcs: [],
-                htmlDescription: details?.description || ""
+                htmlDescription: sanitizeDescription(details?.description, providerWikiBase('METRON'))
             };
         }
     } else {
@@ -140,7 +142,7 @@ export async function GET(request: Request) {
         if (!issueData) return NextResponse.json({ error: 'Not Found' }, { status: 404 });
 
         const rawHtml = issueData.description || issueData.deck || "";
-        const cleanHtml = sanitizeDescription(rawHtml);
+        const cleanHtml = sanitizeDescription(rawHtml, providerWikiBase('COMICVINE'));
         const { writers, artists, coverArtists, colorists, letterers, characters, genres, storyArcs, teams, locations } = parseComicVineCredits(
             issueData.person_credits, 
             issueData.character_credits, 

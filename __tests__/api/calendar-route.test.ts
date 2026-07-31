@@ -103,3 +103,37 @@ describe('API Route: GET /api/calendar (tracked-series week view)', () => {
         expect(data.releases[0].libraryState).toBe('UNRELEASED');
     });
 });
+
+// "My Pull List" (v1.4.3): scope=followed swaps the series filter from the GLOBAL monitored flag
+// to the CURRENT USER's follows — the default stays byte-compatible for the tracked tab and every
+// dashboard/widget consumer.
+describe('API Route: GET /api/calendar scope contract', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.getServerSession.mockResolvedValue({ user: { id: 'u1', role: 'ADMIN' } });
+        mocks.findManyIssues.mockResolvedValue([]);
+    });
+
+    it('defaults to the tracked view: monitored series, no follow filter', async () => {
+        await GET(new Request('http://localhost/api/calendar?weekOffset=0'));
+
+        const where = mocks.findManyIssues.mock.calls[0][0].where;
+        expect(where.series.monitored).toBe(true);
+        expect(where.series.follows).toBeUndefined();
+    });
+
+    it('scope=followed filters to the session user\'s follows and drops the monitored requirement', async () => {
+        await GET(new Request('http://localhost/api/calendar?weekOffset=0&scope=followed'));
+
+        const where = mocks.findManyIssues.mock.calls[0][0].where;
+        expect(where.series.follows).toEqual({ some: { userId: 'u1' } });
+        expect(where.series.monitored).toBeUndefined();
+    });
+
+    it('honors scope=followed in the no-weekOffset compat mode too', async () => {
+        await GET(new Request('http://localhost/api/calendar?scope=followed'));
+
+        const where = mocks.findManyIssues.mock.calls[0][0].where;
+        expect(where.series.follows).toEqual({ some: { userId: 'u1' } });
+    });
+});

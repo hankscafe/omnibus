@@ -38,7 +38,10 @@ export default function CalendarPage() {
     const isAdmin = session?.user?.role === 'ADMIN';
     const canRequest = isAdmin || (session?.user as any)?.canRequest;
 
-    const [activeTab, setActiveTab] = useState("my-pulls");
+    // Personal-first since the follow feature landed: the pull list IS the user's calendar. The
+    // tracked and global tabs keep their values ("my-pulls" predates the personal tab; renaming
+    // tab values is a load-bearing change we don't need).
+    const [activeTab, setActiveTab] = useState("personal-pulls");
     const [metronConfigured, setMetronConfigured] = useState<boolean | null>(null);
     
     // Local Tracked State
@@ -46,6 +49,12 @@ export default function CalendarPage() {
     const [loadingLocal, setLoadingLocal] = useState(true);
     const [localWeekOffset, setLocalWeekOffset] = useState(0);
     const [localWeekLabel, setLocalWeekLabel] = useState("This Week");
+
+    // Personal Pull List state (releases in series the user FOLLOWS — scope=followed)
+    const [personalIssues, setPersonalIssues] = useState<UpcomingIssue[]>([]);
+    const [loadingPersonal, setLoadingPersonal] = useState(true);
+    const [personalWeekOffset, setPersonalWeekOffset] = useState(0);
+    const [personalWeekLabel, setPersonalWeekLabel] = useState("This Week");
     
     // Global Pull List State
     const [globalIssues, setGlobalIssues] = useState<UpcomingIssue[]>([]);
@@ -129,6 +138,26 @@ export default function CalendarPage() {
             .finally(() => setLoadingLocal(false));
     }, [activeTab, localWeekOffset, metronConfigured]);
 
+    // 1b. Fetch Personal Pull List (followed series — scope=followed)
+    useEffect(() => {
+        if (metronConfigured !== true) return;
+        if (activeTab !== "personal-pulls") return;
+        setLoadingPersonal(true);
+        document.title = "Omnibus - Release Calendar";
+        fetch(`/api/calendar?weekOffset=${personalWeekOffset}&scope=followed`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.releases) {
+                    setPersonalIssues(data.releases);
+                    const start = new Date(data.startDate + "T00:00:00Z");
+                    const end = new Date(data.endDate + "T00:00:00Z");
+                    setPersonalWeekLabel(`${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}`);
+                }
+            })
+            .catch(() => {})
+            .finally(() => setLoadingPersonal(false));
+    }, [activeTab, personalWeekOffset, metronConfigured]);
+
     // 2. Fetch Global Pull List (Metron)
     useEffect(() => {
         if (metronConfigured !== true) return;
@@ -173,6 +202,68 @@ export default function CalendarPage() {
 
     const groupedLocalIssues = parseDateGroup(localIssues);
     const groupedGlobalIssues = parseDateGroup(globalIssues);
+    const groupedPersonalIssues = parseDateGroup(personalIssues);
+
+    // Month-grouped release card grid, shared by the tracked tab and the personal pull list —
+    // identical cards (follow bell, library-state badge, series link) over different data.
+    const renderReleaseGroups = (grouped: Record<string, UpcomingIssue[]>) => (
+        Object.entries(grouped).map(([month, monthIssues]) => (
+            <div key={month} className="space-y-4">
+                <h2 className="text-xl font-black text-foreground border-b border-border pb-2 uppercase tracking-widest flex items-center gap-2">
+                    <CalendarIcon className="w-5 h-5 text-muted-foreground" /> {month}
+                </h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    {monthIssues.map((issue) => (
+                        <Link key={issue.id} href={`/library/series?path=${encodeURIComponent(issue.seriesPath || '')}`} className="group block h-full">
+                            <Card className="shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors duration-200">
+                                <div className="relative aspect-[2/3] w-full bg-muted border-b border-border overflow-hidden">
+                                    {issue.coverUrl ? (
+                                        <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" />
+                                    ) : (
+                                        <ImageIcon className="w-8 h-8 text-muted-foreground/30 m-auto h-full" />
+                                    )}
+                                    {issue.seriesId && (
+                                        <div className="absolute top-2 left-2 z-20">
+                                            <FollowBell seriesId={issue.seriesId} seriesName={issue.seriesName} isFollowing={followedIds.has(issue.seriesId)} onToggled={handleFollowToggled} className="h-7 w-7 bg-black/50 hover:bg-black/70 border-0 text-white" />
+                                        </div>
+                                    )}
+                                    {issue.libraryState === 'IN_LIBRARY' ? (
+                                        <div className="absolute top-2 right-2 bg-emerald-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest shadow-md">
+                                            In Library
+                                        </div>
+                                    ) : issue.libraryState === 'RELEASED' ? (
+                                        <div className="absolute top-2 right-2 bg-amber-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest shadow-md">
+                                            Released
+                                        </div>
+                                    ) : (
+                                        <div className="absolute top-2 right-2 bg-purple-600 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest">
+                                            Unreleased
+                                        </div>
+                                    )}
+
+                                    {/* Hidden on mobile to prevent overlay flash issues, visible on desktop hover */}
+                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity duration-200 hidden sm:flex items-center justify-center z-10 pointer-events-none">
+                                        <Button size="sm" className="font-bold shadow-md pointer-events-auto" tabIndex={-1}>
+                                            <Eye className="w-3 h-3 mr-2" /> View Series
+                                        </Button>
+                                    </div>
+                                </div>
+                                <CardContent className="p-3 flex-1 flex flex-col justify-between">
+                                    <div>
+                                        <p className="font-bold text-xs truncate text-foreground group-hover:text-primary transition-colors" title={issue.seriesName}>{issue.seriesName}</p>
+                                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mt-0.5">Issue #{issue.issueNumber}</p>
+                                    </div>
+                                    <div className="mt-2 pt-2 border-t border-border">
+                                        <Badge variant="secondary" className="w-full justify-center bg-muted text-muted-foreground border-border text-[10px] font-mono">{issue.parsedDay}</Badge>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </Link>
+                    ))}
+                </div>
+            </div>
+        ))
+    );
 
     const handleRequest = async (id: number | string, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, metadataSource: string = 'COMICVINE', monitorOnly: boolean = false, releaseDate?: string) => {
         const exactIssueName = name; 
@@ -269,9 +360,45 @@ export default function CalendarPage() {
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 <TabsList className="bg-muted border border-border mb-6">
+                    <TabsTrigger value="personal-pulls" className="font-bold">My Pull List</TabsTrigger>
                     <TabsTrigger value="my-pulls" className="font-bold">Omnibus Tracked Series</TabsTrigger>
                     <TabsTrigger value="global-pulls" className="font-bold">Global Pull List</TabsTrigger>
                 </TabsList>
+
+                {/* TAB 0: MY PULL LIST — releases in series the user follows */}
+                <TabsContent value="personal-pulls" className="space-y-6 animate-in fade-in duration-300">
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-muted/50 p-4 rounded-xl border border-border">
+                        <div className="flex items-center gap-2">
+                            <Button variant="outline" size="sm" onClick={() => setPersonalWeekOffset(w => w - 1)} disabled={loadingPersonal} className="border-border">
+                                <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => setPersonalWeekOffset(w => w + 1)} disabled={loadingPersonal} className="border-border">
+                                Next <ChevronRight className="w-4 h-4 ml-1" />
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => setPersonalWeekOffset(0)} disabled={personalWeekOffset === 0 || loadingPersonal} className="font-bold">
+                                Today
+                            </Button>
+                        </div>
+                        <div className="flex items-center gap-4 w-full sm:w-auto">
+                            <span className="font-mono text-sm font-bold bg-background px-3 py-1.5 rounded-md border border-border">{personalWeekLabel}</span>
+                        </div>
+                    </div>
+
+                    {loadingPersonal ? (
+                        <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
+                    ) : Object.keys(groupedPersonalIssues).length === 0 ? (
+                        <div className="text-center py-20 border-2 border-dashed border-border bg-muted/30 rounded-xl">
+                            <Clock className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
+                            <p className="text-lg font-bold text-foreground">Nothing on your pull list this week</p>
+                            <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">Follow series with the bell button — their upcoming releases appear here. Requesting a series follows it automatically.</p>
+                            <Button className="mt-4 font-bold bg-primary hover:bg-primary/90 text-primary-foreground" asChild>
+                                <Link href="/library">Browse Library</Link>
+                            </Button>
+                        </div>
+                    ) : (
+                        renderReleaseGroups(groupedPersonalIssues)
+                    )}
+                </TabsContent>
 
                 {/* TAB 1: MY TRACKED SERIES */}
                 <TabsContent value="my-pulls" className="space-y-6 animate-in fade-in duration-300">
@@ -304,62 +431,7 @@ export default function CalendarPage() {
                             </Button>
                         </div>
                     ) : (
-                        Object.entries(groupedLocalIssues).map(([month, monthIssues]) => (
-                            <div key={month} className="space-y-4">
-                                <h2 className="text-xl font-black text-foreground border-b border-border pb-2 uppercase tracking-widest flex items-center gap-2">
-                                    <CalendarIcon className="w-5 h-5 text-muted-foreground" /> {month}
-                                </h2>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                                    {monthIssues.map((issue) => (
-                                        <Link key={issue.id} href={`/library/series?path=${encodeURIComponent(issue.seriesPath || '')}`} className="group block h-full">
-                                            <Card className="shadow-sm border-border bg-background overflow-hidden h-full flex flex-col hover:border-primary/50 transition-colors duration-200">
-                                                <div className="relative aspect-[2/3] w-full bg-muted border-b border-border overflow-hidden">
-                                                    {issue.coverUrl ? (
-                                                        <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" />
-                                                    ) : (
-                                                        <ImageIcon className="w-8 h-8 text-muted-foreground/30 m-auto h-full" />
-                                                    )}
-                                                    {issue.seriesId && (
-                                                        <div className="absolute top-2 left-2 z-20">
-                                                            <FollowBell seriesId={issue.seriesId} seriesName={issue.seriesName} isFollowing={followedIds.has(issue.seriesId)} onToggled={handleFollowToggled} className="h-7 w-7 bg-black/50 hover:bg-black/70 border-0 text-white" />
-                                                        </div>
-                                                    )}
-                                                    {issue.libraryState === 'IN_LIBRARY' ? (
-                                                        <div className="absolute top-2 right-2 bg-emerald-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest shadow-md">
-                                                            In Library
-                                                        </div>
-                                                    ) : issue.libraryState === 'RELEASED' ? (
-                                                        <div className="absolute top-2 right-2 bg-amber-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest shadow-md">
-                                                            Released
-                                                        </div>
-                                                    ) : (
-                                                        <div className="absolute top-2 right-2 bg-purple-600 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest">
-                                                            Unreleased
-                                                        </div>
-                                                    )}
-                                                    
-                                                    {/* Hidden on mobile to prevent overlay flash issues, visible on desktop hover */}
-                                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity duration-200 hidden sm:flex items-center justify-center z-10 pointer-events-none">
-                                                        <Button size="sm" className="font-bold shadow-md pointer-events-auto" tabIndex={-1}>
-                                                            <Eye className="w-3 h-3 mr-2" /> View Series
-                                                        </Button>
-                                                    </div>
-                                                </div>
-                                                <CardContent className="p-3 flex-1 flex flex-col justify-between">
-                                                    <div>
-                                                        <p className="font-bold text-xs truncate text-foreground group-hover:text-primary transition-colors" title={issue.seriesName}>{issue.seriesName}</p>
-                                                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mt-0.5">Issue #{issue.issueNumber}</p>
-                                                    </div>
-                                                    <div className="mt-2 pt-2 border-t border-border">
-                                                        <Badge variant="secondary" className="w-full justify-center bg-muted text-muted-foreground border-border text-[10px] font-mono">{issue.parsedDay}</Badge>
-                                                    </div>
-                                                </CardContent>
-                                            </Card>
-                                        </Link>
-                                    ))}
-                                </div>
-                            </div>
-                        ))
+                        renderReleaseGroups(groupedLocalIssues)
                     )}
                 </TabsContent>
 

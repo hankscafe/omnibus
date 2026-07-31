@@ -23,17 +23,27 @@ export async function GET(request: Request) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         // Per-library access: non-admins only see calendar entries from libraries they've been granted.
-        const accessibleLibs = await getAccessibleLibraryIds((session.user as any).id, (session.user as any).role);
+        const userId = (session.user as any).id;
+        const accessibleLibs = await getAccessibleLibraryIds(userId, (session.user as any).role);
         const seriesAccess = accessibleLibs !== 'ALL' ? { libraryId: { in: accessibleLibs } } : {};
 
         const { searchParams } = new URL(request.url);
         const weekOffsetParam = searchParams.get('weekOffset');
 
+        // scope=followed → the personal "My Pull List": releases in series the CURRENT USER follows
+        // (regardless of the global monitored flag). Default stays the tracked view (monitored
+        // series), so dashboards/widgets and the existing tab are byte-compatible. Note the honest
+        // semantic: a followed-but-unmonitored series shows the future issues its last metadata
+        // sync knew about; monitored series stay fresher via SERIES_MONITOR.
+        const seriesScope = searchParams.get('scope') === 'followed'
+            ? { follows: { some: { userId } } }
+            : { monitored: true };
+
         // --- BACKWARDS COMPATIBILITY MODE (For Dashboards/Widgets) ---
         if (weekOffsetParam === null) {
             const today = new Date().toISOString().split('T')[0];
             const upcoming = await prisma.issue.findMany({
-                where: { releaseDate: { gte: today }, series: { monitored: true } },
+                where: { releaseDate: { gte: today }, series: seriesScope },
                 include: { series: { select: { name: true, folderPath: true, coverUrl: true, publisher: true } } },
                 orderBy: { releaseDate: 'asc' },
                 take: 200
@@ -71,7 +81,7 @@ export async function GET(request: Request) {
         const upcoming = await prisma.issue.findMany({
             where: {
                 releaseDate: { gte: startDateStr, lte: endDateStr },
-                series: { monitored: true, ...seriesAccess }
+                series: { ...seriesScope, ...seriesAccess }
             },
             include: { series: { select: { name: true, folderPath: true, coverUrl: true, publisher: true } } },
             orderBy: { releaseDate: 'asc' }

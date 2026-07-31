@@ -15,6 +15,7 @@ import { copyText } from "@/lib/utils/clipboard"
 import Link from "next/link"
 import { useColorTheme } from "@/components/ThemeProvider"
 import { COMIC_EXT_REGEX } from "@/lib/utils/formats"
+import { ProfileUpdatesSection } from "@/components/profile-updates-section"
 import { 
   User as UserIcon, Upload, Loader2, ListOrdered, CheckCircle2, 
   Clock, XCircle, Activity, ArrowRight, Info, Calendar, BookOpen, 
@@ -938,6 +939,10 @@ export default function ProfilePage() {
                         </CardContent>
                     </Card>
                 </div>
+
+                {/* Updates: newest arrivals in followed series (collapsible; the profile is the
+                    doorway to /library/updates now that the header nav entries are gone) */}
+                <ProfileUpdatesSection />
 
                 {/* Recent History Grid */}
                 {profile?.recentHistory && profile.recentHistory.length > 0 && (

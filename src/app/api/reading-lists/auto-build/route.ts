@@ -7,6 +7,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
+import { collectMissingArcSeries, MissingArcSeries } from '@/lib/utils/arc-missing-series';
 
 // Helper function to respect Metron's 20 req/min burst limit
 async function fetchWithBackoff(url: string, auth: any, maxRetries = 3) {
@@ -60,6 +61,8 @@ export async function POST(request: Request) {
         let eventDescription = "";
         let eventCoverUrl = null;
         let issuesList: any[] = [];
+        // Captured for the opt-in missing-series sweep after the build (CV branch only).
+        let cvApiKey: string | null = null;
 
         if (eventSource === 'METRON') {
             const metronUser = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
@@ -119,6 +122,7 @@ export async function POST(request: Request) {
             // COMICVINE
             const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
             if (!setting?.value) return NextResponse.json({ error: "ComicVine API Key missing" }, { status: 400 });
+            cvApiKey = setting.value;
 
             Logger.log(`[Auto-Build] Fetching ComicVine Arc details...`, 'info');
             const eventRes = await cachedCvGet(`https://comicvine.gamespot.com/api/story_arc/4045-${eventId}/`, {
@@ -207,8 +211,23 @@ export async function POST(request: Request) {
             await prisma.readingListItem.createMany({ data: issuesToCreate });
         }
 
+        // Opt-in (fork review #5): resolve which arc series the library lacks ENTIRELY, so the
+        // client can offer metadata-only adds through the normal /api/request monitorOnly pipeline
+        // (permissions, manga gate, and audit all apply there). Failures degrade to an empty list —
+        // the just-built reading list is never at risk.
+        let missingSeries: MissingArcSeries[] = [];
+        if (body.addMissingSeries === true) {
+            try {
+                const unmatchedIds = issuesToCreate.filter(i => !i.issueId).map(i => i.cvIssueId);
+                missingSeries = await collectMissingArcSeries(issuesList, unmatchedIds, eventSource, cvApiKey);
+                Logger.log(`[Auto-Build] Missing-series sweep: ${missingSeries.length} series not in the library at all.`, 'info');
+            } catch (e) {
+                Logger.log(`[Auto-Build] Missing-series sweep failed (list still built): ${getErrorMessage(e)}`, 'warn');
+            }
+        }
+
         Logger.log(`[Auto-Build] Successfully completed building "${eventName}"!`, 'info');
-        return NextResponse.json({ success: true, listId: newList.id, message: `Imported ${issuesToCreate.length} issues into ${eventName}!` });
+        return NextResponse.json({ success: true, listId: newList.id, missingSeries, message: `Imported ${issuesToCreate.length} issues into ${eventName}!` });
 
     } catch (error: unknown) {
         Logger.log(`[Auto-Build] Fatal Error: ${getErrorMessage(error)}`, 'error');

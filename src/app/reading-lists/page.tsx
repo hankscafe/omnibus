@@ -14,11 +14,11 @@ import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { copyText } from "@/lib/utils/clipboard"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
-import { 
-    BookOpen, Trash2, Plus, GripVertical, Loader2, Image as ImageIcon, 
+import {
+    BookOpen, Trash2, Plus, GripVertical, Loader2, Image as ImageIcon,
     ArrowLeft, ListOrdered, Calendar, Minus, FolderOpen, CloudDownload,
     Check, DownloadCloud, Sparkles, Globe, ExternalLink, Share2, Info,
-    ChevronDown, ChevronUp, LayoutList, List
+    ChevronDown, ChevronUp, LayoutList, List, RefreshCw
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -49,8 +49,14 @@ function ReadingListsContent() {
   const [autoBuildModalOpen, setAutoBuildModalOpen] = useState(false)
   const [eventId, setEventId] = useState("")
   const [eventSource, setEventSource] = useState("COMICVINE")
-  const [autoBuildGlobal, setAutoBuildGlobal] = useState(false) 
+  const [autoBuildGlobal, setAutoBuildGlobal] = useState(false)
   const [isAutoBuilding, setIsAutoBuilding] = useState(false)
+  const [autoBuildAddMissing, setAutoBuildAddMissing] = useState(false)
+
+  // Refresh affordances (fork review #1)
+  const [isRefreshingList, setIsRefreshingList] = useState(false)
+  const [refreshingItemIds, setRefreshingItemIds] = useState<Set<string>>(new Set())
+  const [resyncingSeriesIds, setResyncingSeriesIds] = useState<Set<string>>(new Set())
 
   // CSV Import Modal
   const [csvModalOpen, setCsvModalOpen] = useState(false)
@@ -240,7 +246,7 @@ function ReadingListsContent() {
           const res = await fetch('/api/reading-lists/auto-build', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ eventId: parseInt(eventId), eventSource, isGlobal: autoBuildGlobal })
+              body: JSON.stringify({ eventId: parseInt(eventId), eventSource, isGlobal: autoBuildGlobal, addMissingSeries: autoBuildAddMissing })
           });
           const data = await res.json();
           if (res.ok) {
@@ -249,6 +255,14 @@ function ReadingListsContent() {
               setEventId("");
               setAutoBuildGlobal(false);
               fetchLists(data.listId);
+              if (autoBuildAddMissing) {
+                  if (Array.isArray(data.missingSeries) && data.missingSeries.length > 0) {
+                      void addMissingArcSeries(data.missingSeries);
+                  } else {
+                      toast({ title: "No missing series", description: "Every series in this arc is already in your library." });
+                  }
+                  setAutoBuildAddMissing(false);
+              }
           } else {
               throw new Error(data.error);
           }
@@ -256,6 +270,106 @@ function ReadingListsContent() {
           toast({ title: "Auto-Build Failed", description: e.message, variant: "destructive" });
       } finally {
           setIsAutoBuilding(false);
+      }
+  }
+
+  // Fork review #5: entirely-unowned arc series get added metadata-only through the NORMAL request
+  // pipeline (permissions, manga gate, audit all apply). Sequential with an 800ms stagger — each add
+  // triggers provider metadata resolution + folder creation server-side, and the fork's own testing
+  // showed un-staggered bursts are what hurt (their #6). monitorOnly never downloads the back
+  // catalog; monitored series DO auto-download future releases, same as any monitored series.
+  const addMissingArcSeries = async (series: { id: string; name: string; source: string }[]) => {
+      toast({ title: `Adding ${series.length} missing series…`, description: "Metadata and cover only — nothing downloads now." });
+      let added = 0, failed = 0;
+      for (let i = 0; i < series.length; i++) {
+          const s = series[i];
+          try {
+              const res = await fetch('/api/request', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ cvId: parseInt(s.id, 10) || s.id, name: s.name, type: 'volume', metadataSource: s.source, monitorOnly: true })
+              });
+              if (res.ok) added++; else failed++;
+          } catch { failed++; }
+          if (i < series.length - 1) await new Promise(r => setTimeout(r, 800));
+      }
+      toast({
+          title: "Missing series added",
+          description: `${added} series added metadata-only${failed ? `, ${failed} failed` : ''}. Monitored series will auto-download future releases.`
+      });
+  }
+
+  // Fork review #1: re-fetching re-runs the server's auto-link pass for unlinked items; admins
+  // additionally queue a live metadata resync for every unique linked series in the list (each
+  // resync is one live provider call, so they run sequentially with a small stagger).
+  const handleRefreshList = async () => {
+      if (!activeList || isRefreshingList) return;
+      setIsRefreshingList(true);
+      try {
+          const uniqueSeries = new Map<string, any>();
+          if (isAdmin) {
+              for (const item of activeList.items) {
+                  const s = item.issue?.series;
+                  if (s?.metadataId && !String(s.metadataId).startsWith('unmatched')) uniqueSeries.set(s.id, s);
+              }
+          }
+          await fetchLists(activeList.id);
+          let resynced = 0;
+          for (const s of Array.from(uniqueSeries.values())) {
+              try {
+                  const res = await fetch('/api/library/refresh-series', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ metadataId: s.metadataId, metadataSource: s.metadataSource || 'COMICVINE', folderPath: s.folderPath })
+                  });
+                  if (res.ok) resynced++;
+              } catch { /* per-series failure shouldn't stop the sweep */ }
+              await new Promise(r => setTimeout(r, 300));
+          }
+          toast({
+              title: "List refreshed",
+              description: resynced > 0
+                  ? `Missing items re-checked; metadata resynced for ${resynced} series.`
+                  : "Missing items re-checked against the library."
+          });
+          if (resynced > 0) fetchLists(activeList.id);
+      } finally {
+          setIsRefreshingList(false);
+      }
+  }
+
+  // Per-row re-check for a missing item: the list GET re-runs auto-linking, so a refetch is the
+  // re-check — the row-level state just scopes the spinner to the row that asked.
+  const handleRefreshItem = async (itemId: string) => {
+      setRefreshingItemIds(prev => new Set(prev).add(itemId));
+      try {
+          await fetchLists(activeListId);
+      } finally {
+          setRefreshingItemIds(prev => { const next = new Set(prev); next.delete(itemId); return next; });
+      }
+  }
+
+  // Per-row admin resync for a linked series (one live provider call via refresh-series).
+  const handleResyncSeries = async (series: any) => {
+      if (!series?.metadataId || resyncingSeriesIds.has(series.id)) return;
+      setResyncingSeriesIds(prev => new Set(prev).add(series.id));
+      try {
+          const res = await fetch('/api/library/refresh-series', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ metadataId: series.metadataId, metadataSource: series.metadataSource || 'COMICVINE', folderPath: series.folderPath })
+          });
+          if (res.ok) {
+              toast({ title: "Metadata resynced", description: series.name });
+              fetchLists(activeListId);
+          } else {
+              const data = await res.json().catch(() => ({}));
+              toast({ title: "Resync failed", description: data.error || "Request failed", variant: "destructive" });
+          }
+      } catch (e: any) {
+          toast({ title: "Resync failed", description: e.message, variant: "destructive" });
+      } finally {
+          setResyncingSeriesIds(prev => { const next = new Set(prev); next.delete(series.id); return next; });
       }
   }
 
@@ -686,9 +800,19 @@ function ReadingListsContent() {
                                           <List className="w-3.5 h-3.5 mr-1.5" /> Flat (Reorder)
                                       </Button>
                                   </div>
-                                  <Button 
-                                      size="sm" 
-                                      variant="outline" 
+                                  <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-10 sm:h-auto font-bold border-border"
+                                      onClick={handleRefreshList}
+                                      disabled={isRefreshingList}
+                                      title={isAdmin ? "Re-check missing items against the library and resync metadata for every linked series" : "Re-check missing items against the library"}
+                                  >
+                                      {isRefreshingList ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />} Refresh
+                                  </Button>
+                                  <Button
+                                      size="sm"
+                                      variant="outline"
                                       className="h-10 sm:h-auto font-bold border-border"
                                       onClick={async () => {
                                           if ((activeList as any).shareId) {
@@ -785,6 +909,16 @@ function ReadingListsContent() {
                                                         )}
                                                     </div>
                                                     <div className="flex items-center gap-2 pr-2 shrink-0">
+                                                        {!issue && (
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" title="Re-check this item against the library" onClick={() => handleRefreshItem(item.id)} disabled={refreshingItemIds.has(item.id)}>
+                                                                {refreshingItemIds.has(item.id) ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                            </Button>
+                                                        )}
+                                                        {issue && isAdmin && (
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary hidden sm:flex" title={`Resync metadata for ${series.name}`} onClick={() => handleResyncSeries(series)} disabled={resyncingSeriesIds.has(series.id)}>
+                                                                {resyncingSeriesIds.has(series.id) ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                            </Button>
+                                                        )}
                                                         {issue && (
                                                             <Button size="sm" asChild className="h-8 shadow-sm font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
                                                                 <Link href={`/reader?path=${encodeURIComponent(issue.filePath)}&series=${encodeURIComponent(series.folderPath)}`}>
@@ -846,6 +980,9 @@ function ReadingListsContent() {
                                                               </div>
 
                                                               <div className="flex items-center gap-2 shrink-0 pr-2">
+                                                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" title="Re-check this item against the library" onClick={() => handleRefreshItem(item.id)} disabled={refreshingItemIds.has(item.id)}>
+                                                                      {refreshingItemIds.has(item.id) ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                                  </Button>
                                                                   {isAlreadyRequested ? (
                                                                       <Button size="sm" variant="secondary" disabled className="h-8 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed">
                                                                           <Check className="w-3.5 h-3.5 mr-1"/> Requested
@@ -890,6 +1027,11 @@ function ReadingListsContent() {
                                                           </div>
 
                                                           <div className="flex items-center gap-2 shrink-0 pr-2">
+                                                              {isAdmin && (
+                                                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary hidden sm:flex" title={`Resync metadata for ${series.name}`} onClick={() => handleResyncSeries(series)} disabled={resyncingSeriesIds.has(series.id)}>
+                                                                      {resyncingSeriesIds.has(series.id) ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                                  </Button>
+                                                              )}
                                                               <Button size="sm" asChild className="h-8 shadow-sm font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
                                                                   <Link href={`/reader?path=${encodeURIComponent(issue.filePath)}&series=${encodeURIComponent(series.folderPath)}`}>
                                                                       <BookOpen className="w-3.5 h-3.5 sm:mr-2" /> <span className="hidden sm:inline">Read</span>
@@ -998,6 +1140,16 @@ function ReadingListsContent() {
                         <div className="grid gap-0.5">
                             <Label htmlFor="auto-global-toggle" className="font-bold cursor-pointer">Make story arc public</Label>
                             <p className="text-[10px] text-muted-foreground">This reading order will be available to all users.</p>
+                        </div>
+                    </div>
+                )}
+
+                {(isAdmin || (session?.user as any)?.canRequest) && (
+                    <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                        <Switch id="auto-add-missing-toggle" checked={autoBuildAddMissing} onCheckedChange={setAutoBuildAddMissing} />
+                        <div className="grid gap-0.5">
+                            <Label htmlFor="auto-add-missing-toggle" className="font-bold cursor-pointer">Add missing series to my library</Label>
+                            <p className="text-[10px] text-muted-foreground">Series from this arc you don't own at all are added metadata-only and monitored. Nothing downloads now, but future releases auto-download like any monitored series.</p>
                         </div>
                     </div>
                 )}

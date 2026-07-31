@@ -9,11 +9,12 @@ import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { 
-  BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink, 
+import {
+  BookOpen, RefreshCw, Folder, Settings2, Loader2, Image as ImageIcon, ExternalLink,
   Search, SortAsc, Filter, LayoutGrid, List, Check, Heart, ListPlus, Minus, Layers, Trash2,
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
-  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType, CalendarDays, ArrowUp
+  Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType, CalendarDays, ArrowUp,
+  Bell, BellOff
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -29,6 +30,7 @@ import { Switch } from "@/components/ui/switch"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
+import { FollowBell } from "@/components/follow-bell"
 import MetadataEditorModal from "@/components/metadata-editor-modal"
 
 interface Comic {
@@ -194,6 +196,58 @@ function LibraryContent() {
   const [bulkListModalOpen, setBulkListModalOpen] = useState(false);
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
   const [bulkDeleteFiles, setBulkDeleteFiles] = useState(false);
+
+  // Per-user followed set (Beta C) — one fetch decorates every card; bells update it optimistically.
+  const [followedIds, setFollowedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch('/api/library/follow')
+      .then(res => res.ok ? res.json() : { seriesIds: [] })
+      .then(data => setFollowedIds(new Set(data.seriesIds || [])))
+      .catch(() => {});
+  }, []);
+
+  const handleFollowToggled = (seriesId: string, isFollowing: boolean) => {
+    setFollowedIds(prev => {
+        const next = new Set(prev);
+        if (isFollowing) next.add(seriesId); else next.delete(seriesId);
+        return next;
+    });
+  };
+
+  // Bulk follow/unfollow for the selection bar — explicit set semantics (never toggle a mixed
+  // selection), one request for the whole batch.
+  const handleBulkFollow = async (follow: boolean) => {
+    setIsBulkProcessing(true);
+    const ids = Array.from(selectedSeries);
+    try {
+        const res = await fetch('/api/library/follow', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seriesIds: ids, follow })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            setFollowedIds(prev => {
+                const next = new Set(prev);
+                for (const id of ids) { if (follow) next.add(id); else next.delete(id); }
+                return next;
+            });
+            toastRef.current({
+                title: follow ? "Following" : "Unfollowed",
+                description: follow
+                    ? `${data.followed ?? ids.length} series will show new arrivals in your Updates feed.`
+                    : `${data.unfollowed ?? ids.length} series removed from your Updates feed.`
+            });
+        } else {
+            toastRef.current({ title: "Update Failed", variant: "destructive" });
+        }
+    } catch (e) {
+        toastRef.current({ title: "Update Failed", variant: "destructive" });
+    } finally {
+        setIsBulkProcessing(false);
+    }
+  };
 
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [repackModalOpen, setRepackModalOpen] = useState(false);
@@ -1193,6 +1247,7 @@ function LibraryContent() {
                             <span>{navigatingTo === navId ? "Loading..." : "Read"}</span>
                         </Button>
                         <div className="flex gap-1.5 w-full justify-center">
+                          <FollowBell seriesId={item.id} seriesName={item.name} isFollowing={followedIds.has(item.id)} onToggled={handleFollowToggled} />
                           <Button
                             variant="secondary"
                             size="icon-sm"
@@ -1339,7 +1394,8 @@ function LibraryContent() {
                         {!isSelectionMode && (
                             <td className="px-4 py-3 text-right">
                                 <div className="flex items-center justify-end gap-2">
-                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:text-primary hover:bg-primary/10" title="Add to List" aria-label={`Add ${item.name} to a reading list`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}> <ListPlus className="w-5 h-5 sm:w-4 sm:h-4" /> </Button> 
+                                    <FollowBell seriesId={item.id} seriesName={item.name} isFollowing={followedIds.has(item.id)} onToggled={handleFollowToggled} variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 shadow-none hover:text-primary hover:bg-primary/10" />
+                                    <Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 hover:text-primary hover:bg-primary/10" title="Add to List" aria-label={`Add ${item.name} to a reading list`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTargetSeries(item); }}> <ListPlus className="w-5 h-5 sm:w-4 sm:h-4" /> </Button>
                                     {activeCollection !== "ALL" && (<Button variant="ghost" size="icon" className="h-10 w-10 sm:h-8 sm:w-8 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="Remove from List" aria-label={`Remove ${item.name} from current reading list`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }}> <Minus className="w-5 h-5 sm:w-4 sm:h-4" /> </Button>)} 
                                     <Button aria-label={`Edit metadata for ${item.name}`} variant="ghost" size="icon" className="hidden sm:inline-flex h-8 w-8 hover:bg-muted" title="Edit Metadata" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(item); }}> <Settings2 className="w-4 h-4 text-muted-foreground" /> </Button>
                                     <Button 
@@ -1391,6 +1447,14 @@ function LibraryContent() {
                 
                 <Button aria-label="Add selected series to a reading list" size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedSeries.size > 0 ? "text-primary hover:bg-muted border-primary/50" : "bg-muted text-muted-foreground cursor-not-allowed border-border")} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => setBulkListModalOpen(true)}>
                     <ListPlus className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Add to List</span>
+                </Button>
+
+                <Button aria-label="Follow selected series" title="Follow selected — new arrivals show in your Updates feed" size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedSeries.size > 0 ? "text-primary hover:bg-muted border-primary/50" : "bg-muted text-muted-foreground cursor-not-allowed border-border")} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkFollow(true)}>
+                    <Bell className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Follow</span>
+                </Button>
+
+                <Button aria-label="Unfollow selected series" title="Unfollow selected — remove from your Updates feed" size="sm" variant="outline" className={cn("h-10 sm:h-8 shadow-sm font-bold transition-all", selectedSeries.size > 0 ? "text-muted-foreground hover:bg-muted border-border" : "bg-muted text-muted-foreground cursor-not-allowed border-border")} disabled={selectedSeries.size === 0 || isBulkProcessing} onClick={() => handleBulkFollow(false)}>
+                    <BellOff className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Unfollow</span>
                 </Button>
 
                 {activeCollection !== "ALL" && (

@@ -2,13 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, Image as ImageIcon, ArrowRight } from "lucide-react"; 
+import { Eye, Image as ImageIcon, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import Link from "next/link"; 
+import Link from "next/link";
+import { FollowBell } from "@/components/follow-bell";
 
 export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // Per-user followed set (Beta C): every carousel card gets a follow bell in its hover overlay.
+  const [followedIds, setFollowedIds] = useState<Set<string>>(new Set());
   const router = useRouter();
 
   useEffect(() => {
@@ -20,8 +23,20 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
       })
       .catch(err => console.error("Failed to fetch recent series:", err))
       .finally(() => { if (alive) setLoading(false); });
+    fetch('/api/library/follow')
+      .then(res => res.ok ? res.json() : { seriesIds: [] })
+      .then(data => { if (alive) setFollowedIds(new Set(data.seriesIds || [])); })
+      .catch(() => {});
     return () => { alive = false; };
   }, [refreshSignal]);
+
+  const handleFollowToggled = (seriesId: string, isFollowing: boolean) => {
+    setFollowedIds(prev => {
+        const next = new Set(prev);
+        if (isFollowing) next.add(seriesId); else next.delete(seriesId);
+        return next;
+    });
+  };
 
   if (loading || items.length === 0) return null;
 
@@ -64,16 +79,19 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
                   <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md">{item.name}</h3>
                   <p className="text-white/80 text-xs mb-2 drop-shadow-md">{item.year || '????'}</p>
                   
-                  <Button
-                      size="sm"
-                      className="w-full min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
-                      onClick={(e) => {
-                          e.stopPropagation();
-                          router.push(`/library/series?path=${encodeURIComponent(item.path)}`);
-                      }}
-                  >
-                      <Eye className="w-3 h-3 shrink-0" /> <span>View</span>
-                  </Button>
+                  <div className="flex gap-1.5 w-full min-w-0">
+                      <Button
+                          size="sm"
+                          className="flex-1 min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
+                          onClick={(e) => {
+                              e.stopPropagation();
+                              router.push(`/library/series?path=${encodeURIComponent(item.path)}`);
+                          }}
+                      >
+                          <Eye className="w-3 h-3 shrink-0" /> <span>View</span>
+                      </Button>
+                      <FollowBell seriesId={item.id} seriesName={item.name} isFollowing={followedIds.has(item.id)} onToggled={handleFollowToggled} className="h-8 w-8 shrink-0" size="icon-sm" />
+                  </div>
               </div>
             </div>
         ))}

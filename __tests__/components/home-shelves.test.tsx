@@ -29,14 +29,16 @@ describe('home shelves refresh wiring', () => {
 
     it('RecentlyAdded re-fetches with no-store when refreshSignal bumps', async () => {
         fetchMock.mockResolvedValue(shelfPayload('items'));
+        // Since Beta C the shelf also fetches /api/library/follow (bell decoration), so count the
+        // recent-endpoint calls specifically instead of total fetches.
+        const recentCalls = () => fetchMock.mock.calls.filter(c => String(c[0]).includes('/api/library/recent'));
         const { rerender } = render(<RecentlyAdded refreshSignal={0} />);
-        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(recentCalls()).toHaveLength(1));
 
-        expect(String(fetchMock.mock.calls[0][0])).toContain('/api/library/recent');
-        expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ cache: 'no-store' }));
+        expect(recentCalls()[0][1]).toEqual(expect.objectContaining({ cache: 'no-store' }));
 
         rerender(<RecentlyAdded refreshSignal={1} />);
-        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(recentCalls()).toHaveLength(2));
     });
 
     it('RecommendationsShelf re-fetches with no-store when refreshSignal bumps', async () => {

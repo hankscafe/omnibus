@@ -12,6 +12,7 @@ import { Loader2, Calendar as CalendarIcon, Clock, ChevronLeft, ChevronRight, Im
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
+import { FollowBell } from "@/components/follow-bell"
 
 interface UpcomingIssue {
     id: string | number;
@@ -56,6 +57,22 @@ export default function CalendarPage() {
     const [requestingTarget, setRequestingTarget] = useState<string | null>(null);
     const [requestedVolumes, setRequestedVolumes] = useState<Set<number>>(new Set());
     const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set());
+
+    // Per-user followed set (Beta C): decorates tracked-series cards with follow bells.
+    const [followedIds, setFollowedIds] = useState<Set<string>>(new Set());
+    useEffect(() => {
+        fetch('/api/library/follow')
+            .then(res => res.ok ? res.json() : { seriesIds: [] })
+            .then(data => setFollowedIds(new Set(data.seriesIds || [])))
+            .catch(() => {});
+    }, []);
+    const handleFollowToggled = (seriesId: string, isFollowing: boolean) => {
+        setFollowedIds(prev => {
+            const next = new Set(prev);
+            if (isFollowing) next.add(seriesId); else next.delete(seriesId);
+            return next;
+        });
+    };
     const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, issueNumber: string, metadataSource: string } | null>(null);
     
     const router = useRouter();
@@ -301,6 +318,11 @@ export default function CalendarPage() {
                                                         <img src={issue.coverUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" alt="" />
                                                     ) : (
                                                         <ImageIcon className="w-8 h-8 text-muted-foreground/30 m-auto h-full" />
+                                                    )}
+                                                    {issue.seriesId && (
+                                                        <div className="absolute top-2 left-2 z-20">
+                                                            <FollowBell seriesId={issue.seriesId} seriesName={issue.seriesName} isFollowing={followedIds.has(issue.seriesId)} onToggled={handleFollowToggled} className="h-7 w-7 bg-black/50 hover:bg-black/70 border-0 text-white" />
+                                                        </div>
                                                     )}
                                                     {issue.libraryState === 'IN_LIBRARY' ? (
                                                         <div className="absolute top-2 right-2 bg-emerald-500 text-white rounded-md px-1.5 py-0.5 text-[9px] font-bold z-20 uppercase tracking-widest shadow-md">

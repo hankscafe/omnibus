@@ -38,6 +38,7 @@ model User {
   requests            Request[]
   readProgresses      ReadProgress[]
   favorites           Favorite[]
+  follows             SeriesFollow[]
   collections         Collection[]
   readingLists        ReadingList[]
   trophies            UserTrophy[]
@@ -161,6 +162,7 @@ model Series {
 
   issues          Issue[]
   favorites       Favorite[]
+  follows         SeriesFollow[]
   collectionItems CollectionItem[]
   issueReports    IssueReport[]
   reviews         Review[]
@@ -345,6 +347,24 @@ model ReaderPreference {
 }
 
 model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  seriesId  String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  series    Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, seriesId])
+  @@index([userId])
+  @@index([seriesId])
+}
+
+// Per-user "follow" (subscription) — feeds the Updates feed. Deliberately orthogonal to Favorite
+// (curation) and to Series.monitored (GLOBAL download automation): following never triggers
+// downloads and never touches monitored. Created explicitly via the series-page button, and
+// automatically whenever a user makes a request for the series.
+model SeriesFollow {
   id        String   @id @default(cuid())
   userId    String
   seriesId  String

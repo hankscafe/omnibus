@@ -380,6 +380,17 @@ export async function initDatabase() {
         Logger.log(`[DB Init] Default-access flag backfill failed: ${getErrorMessage(e)}`, "error");
     }
 
+    // 14. One-time backfill for per-user follows (the Updates-feed subscription signal): derive a
+    //     follow for every distinct (user, series) in request history — exactly the rows the
+    //     auto-follow-on-request rule would have produced had it always existed. Sentinel-guarded
+    //     inside the helper; SQLite-safe filter-first insert (no skipDuplicates), same as #12.
+    try {
+        const { backfillFollowsFromRequests } = await import('./follows');
+        await backfillFollowsFromRequests();
+    } catch (e) {
+        Logger.log(`[DB Init] Follow backfill failed: ${getErrorMessage(e)}`, "error");
+    }
+
     // Inside initDatabase(), right before Logger.log("[DB Init] Schema mapping complete.")
     const logLevelSetting = await prisma.systemSetting.findUnique({ where: { key: 'system_log_level' } });
     if (logLevelSetting?.value) {

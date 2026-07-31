@@ -80,11 +80,14 @@ export async function GET(request: Request) {
     }
 
     let isFavorite = false;
+    let isFollowing = false;
     const progressMap: Record<string, { readProgress: number, isRead: boolean }> = {};
-    
+
     if (userId && seriesRecord) {
         const favorite = await prisma.favorite.findUnique({ where: { userId_seriesId: { userId: userId, seriesId: seriesRecord.id } } });
         if (favorite) isFavorite = true;
+        const follow = await prisma.seriesFollow.findUnique({ where: { userId_seriesId: { userId: userId, seriesId: seriesRecord.id } } });
+        if (follow) isFollowing = true;
         const progresses = await prisma.readProgress.findMany({ where: { userId: userId, issue: { seriesId: seriesRecord.id } }, include: { issue: true } });
         for (const p of progresses) {
             if (p.issue?.filePath) {
@@ -262,9 +265,10 @@ export async function GET(request: Request) {
         : seriesRecord?.coverUrl || null;
 
     // --- NEW: Inject metadataId and metadataSource to fully support Metron routing on the frontend ---
-    return NextResponse.json({ 
-      id: seriesRecord?.id || null, 
-      isFavorite, 
+    return NextResponse.json({
+      id: seriesRecord?.id || null,
+      isFavorite,
+      isFollowing,
       cvId: (seriesRecord?.metadataId && !seriesRecord.metadataId.startsWith('unmatched_')) ? parseInt(seriesRecord.metadataId) : null,
       metadataId: seriesRecord?.metadataId || null,
       metadataSource: seriesRecord?.metadataSource || 'COMICVINE',

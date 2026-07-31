@@ -18,6 +18,7 @@ import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 import { omnibusQueue } from '@/lib/queue';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
+import { followSeries, followSeriesByCatalogId } from '@/lib/follows';
 
 export const dynamic = 'force-dynamic';
 
@@ -297,6 +298,11 @@ export async function POST(request: NextRequest) {
 
       syncSeriesMetadata(resolvedCvId.toString(), series.folderPath, metadataSource).catch(err => {});
 
+      // Requesting is the strongest interest signal: auto-follow the series for the requester so it
+      // feeds their Updates feed. Best-effort (never fails the request), idempotent, and covers the
+      // Auto-Build add-missing flow too since that flows through this route.
+      await followSeries(userId, series.id);
+
       if (monitorOnly) {
           return NextResponse.json({ 
               success: true, 
@@ -456,6 +462,10 @@ export async function POST(request: NextRequest) {
           downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
         }
       });
+
+      // Single-issue path: the series may or may not be in the library — follow it when it is
+      // (silent no-op otherwise; the volume path above creates-and-follows directly).
+      await followSeriesByCatalogId(userId, metadataSource, resolvedCvId?.toString());
 
       if (issueStatus === 'PENDING_APPROVAL') {
           SystemNotifier.sendAlert('pending_request', {

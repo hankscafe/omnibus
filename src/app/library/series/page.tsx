@@ -12,7 +12,7 @@ import {
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
-  MapPin, Shield, FolderSearch, Upload, RotateCcw, FolderInput
+  MapPin, Shield, FolderSearch, Upload, RotateCcw, FolderInput, Bell, BellRing
 } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
@@ -74,8 +74,8 @@ function SeriesContent() {
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean, genres?: string[]}>({
-    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false, genres: []
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, isFollowing: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean, genres?: string[]}>({
+    name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, isFollowing: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false, genres: []
   });
 
   const [coverUploading, setCoverUploading] = useState(false);
@@ -287,9 +287,10 @@ function SeriesContent() {
                 metadataId: data.metadataId,
                 metadataSource: data.metadataSource || 'COMICVINE',
                 path: data.path || folderPath,
-                id: data.id || null, 
+                id: data.id || null,
                 isFavorite: data.isFavorite || false,
-                publisher: data.publisher || null, 
+                isFollowing: data.isFollowing || false,
+                publisher: data.publisher || null,
                 year: data.year ? data.year.toString() : null,
                 description: data.description || null,
                 status: data.status || null,
@@ -410,9 +411,10 @@ function SeriesContent() {
               metadataId: data.metadataId !== undefined ? data.metadataId : prev.metadataId,
               metadataSource: data.metadataSource || prev.metadataSource,
               path: data.path || folderPath,
-              id: data.id || prev.id, 
+              id: data.id || prev.id,
               isFavorite: data.isFavorite !== undefined ? data.isFavorite : prev.isFavorite,
-              publisher: data.publisher || prev.publisher, 
+              isFollowing: data.isFollowing !== undefined ? data.isFollowing : prev.isFollowing,
+              publisher: data.publisher || prev.publisher,
               year: data.year ? data.year.toString() : prev.year,
               description: data.description || prev.description,
               status: data.status || prev.status,
@@ -612,6 +614,24 @@ function SeriesContent() {
     } catch (e) {
         setSeriesInfo(prev => ({ ...prev, isFavorite: currentStatus }));
         toast({ title: "Error", description: "Failed to update favorites.", variant: "destructive" });
+    }
+  };
+
+  // Follow = subscription (feeds the Updates feed). Orthogonal to Favorite (curation) and to the
+  // global monitored flag (download automation) — same optimistic-toggle shape as the favorite.
+  const toggleFollow = async () => {
+    if (!seriesInfo.id) return;
+    const currentStatus = seriesInfo.isFollowing;
+    setSeriesInfo(prev => ({ ...prev, isFollowing: !currentStatus }));
+    try {
+        await fetch('/api/library/follow', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seriesId: seriesInfo.id })
+        });
+    } catch (e) {
+        setSeriesInfo(prev => ({ ...prev, isFollowing: currentStatus }));
+        toast({ title: "Error", description: "Failed to update follows.", variant: "destructive" });
     }
   };
 
@@ -1261,6 +1281,10 @@ function SeriesContent() {
                   
                   <Button variant={seriesInfo.isFavorite ? "default" : "outline"} className={cn("w-full font-bold transition-all", seriesInfo.isFavorite ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'border-border hover:bg-muted')} onClick={toggleFavorite} disabled={!seriesInfo.id}>
                       <Heart className={cn("w-4 h-4 mr-2", seriesInfo.isFavorite && "fill-current")} /> Favorite
+                  </Button>
+
+                  <Button variant={seriesInfo.isFollowing ? "default" : "outline"} className={cn("w-full font-bold transition-all", seriesInfo.isFollowing ? 'bg-primary hover:bg-primary/90 text-primary-foreground border-0' : 'border-border hover:bg-muted')} onClick={toggleFollow} disabled={!seriesInfo.id} title="Follow this series — new arrivals show in your Updates feed. Never triggers downloads.">
+                      {seriesInfo.isFollowing ? <BellRing className="w-4 h-4 mr-2" /> : <Bell className="w-4 h-4 mr-2" />} {seriesInfo.isFollowing ? "Following" : "Follow"}
                   </Button>
                   
                   {isAdmin && (

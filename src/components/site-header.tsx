@@ -54,20 +54,23 @@ function NotificationBell() {
     const comicIds = notifications.filter(n => n.type === 'comic').map(n => n.id);
     const trophyIds = notifications.filter(n => n.type === 'trophy').map(n => n.id);
     const reportIds = notifications.filter(n => n.type === 'report').map(n => n.id);
+    // The follow-arrivals entry is dynamic (no notified flag) — clearing stamps the seen marker
+    // instead, or the entry would reappear on the next poll.
+    const followUpdatesSeen = notifications.some(n => n.type === 'follow_updates');
 
     // We clear local state instantly so Admin alerts disappear immediately visually
     setNotifications([])
     setOpen(false)
 
-    if (comicIds.length === 0 && trophyIds.length === 0 && reportIds.length === 0) return;
+    if (comicIds.length === 0 && trophyIds.length === 0 && reportIds.length === 0 && !followUpdatesSeen) return;
 
     try {
       await fetch('/api/notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestIds: comicIds, trophyIds, reportIds })
+        body: JSON.stringify({ requestIds: comicIds, trophyIds, reportIds, followUpdatesSeen })
       })
-    } catch (e) { 
+    } catch (e) {
       // Silently ignore network errors on clear
     }
   }
@@ -105,6 +108,7 @@ function NotificationBell() {
               // Map links based on type
               let targetLink = "/library";
               if (n.type === 'trophy') targetLink = "/profile";
+              else if (n.type === 'follow_updates') targetLink = "/library/updates";
               else if (n.type === 'admin_req') targetLink = "/admin";
               else if (n.type === 'admin_user') targetLink = "/admin/users";
               else if (n.type === 'admin_report') targetLink = "/admin/reports";
@@ -140,6 +144,10 @@ function NotificationBell() {
                       <div className="h-12 w-12 shrink-0 bg-orange-100 dark:bg-orange-900/30 rounded-full shadow-inner overflow-hidden border border-orange-400 dark:border-orange-500/50 flex items-center justify-center">
                         <Search className="h-6 w-6 text-orange-600 dark:text-orange-500" />
                       </div>
+                  ) : n.type === 'follow_updates' ? (
+                      <div className="h-12 w-12 shrink-0 bg-primary/10 rounded-full shadow-inner overflow-hidden border border-primary/40 flex items-center justify-center">
+                        <Bell className="h-6 w-6 text-primary" />
+                      </div>
                   ) : (
                       // Report UI
                       <div className="h-12 w-12 shrink-0 bg-red-100 dark:bg-red-900/30 rounded-full shadow-inner overflow-hidden border border-red-400 dark:border-red-500/50 flex items-center justify-center">
@@ -152,7 +160,7 @@ function NotificationBell() {
                       {n.type === 'trophy' ? `Trophy Unlocked: ${n.title}` : (n.title || 'Requested Issue')}
                     </p>
                     
-                    {['report', 'admin_report', 'admin_user', 'admin_req', 'admin_sweep'].includes(n.type) && (
+                    {['report', 'admin_report', 'admin_user', 'admin_req', 'admin_sweep', 'follow_updates'].includes(n.type) && (
                         <p className="text-[11px] sm:text-[10px] text-muted-foreground line-clamp-1 italic mb-1 border-l-2 border-muted pl-1">{n.description}</p>
                     )}
 

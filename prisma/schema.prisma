@@ -35,6 +35,11 @@ model User {
   // SECURITY FIX: Used to invalidate all active sessions instantly
   sessionVersion      Int       @default(0)
 
+  // Bell-notification marker for followed-series arrivals: the "N new issues in your follows"
+  // entry counts arrivals AFTER this stamp (visiting /library/updates or clearing the bell sets
+  // it). Nullable = never seen → the 30-day feed window bounds the first count.
+  lastSeenUpdatesAt   DateTime?
+
   requests            Request[]
   readProgresses      ReadProgress[]
   favorites           Favorite[]

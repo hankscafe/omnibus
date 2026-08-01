@@ -7,6 +7,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { UNMATCHED_DIR } from '@/lib/utils/paths';
+import { getAccessibleLibraryIds } from '@/lib/library-access';
 
 export async function GET() {
   try {
@@ -19,7 +20,7 @@ export async function GET() {
 
     // 1. STANDARD USER NOTIFICATIONS — independent queries, run in parallel (polled every 60s/session).
     // We include DOWNLOADING and MANUAL_DDL to alert them when an admin approves a request.
-    const [activeComics, newTrophies, newReports] = await Promise.all([
+    const [activeComics, newTrophies, newReports, me, accessibleLibs] = await Promise.all([
       prisma.request.findMany({
         where: { userId, status: { in: ['DOWNLOADING', 'MANUAL_DDL', 'IMPORTED', 'COMPLETED'] }, notified: false },
         orderBy: { updatedAt: 'desc' }
@@ -34,6 +35,8 @@ export async function GET() {
         include: { series: true },
         orderBy: { updatedAt: 'desc' }
       }),
+      prisma.user.findUnique({ where: { id: userId }, select: { lastSeenUpdatesAt: true } }),
+      getAccessibleLibraryIds(userId, role),
     ]);
 
     let formatted = [
@@ -41,6 +44,41 @@ export async function GET() {
         ...newTrophies.map(t => ({ id: t.id, type: 'trophy', title: t.trophy.name, description: t.trophy.description, imageUrl: t.trophy.iconUrl, date: t.earnedAt })),
         ...newReports.map(r => ({ id: r.id, type: 'report', title: `Resolved: ${r.series.name}`, description: r.adminComment || 'Your issue has been resolved by an Admin.', imageUrl: null, date: r.updatedAt }))
     ];
+
+    // 1b. FOLLOWED-SERIES ARRIVALS — one dynamic SUMMARY entry, never per-issue (a chapter dump
+    // must be one bell line, not twelve). Counts file-backed arrivals since the user's
+    // lastSeenUpdatesAt marker (bounded by the Updates feed's 30-day window when the marker is
+    // absent or ancient); visiting /library/updates or clearing the bell stamps the marker, so
+    // the entry self-clears. Requested-series arrivals also notify via the request path above —
+    // the summary shape absorbs that overlap instead of double-listing issues.
+    try {
+        const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const seen = me?.lastSeenUpdatesAt && me.lastSeenUpdatesAt > windowStart ? me.lastSeenUpdatesAt : windowStart;
+        const followArrivalWhere = {
+            filePath: { not: null },
+            createdAt: { gt: seen },
+            series: {
+                follows: { some: { userId } },
+                ...(accessibleLibs === 'ALL' ? {} : { libraryId: { in: accessibleLibs } }),
+            },
+        };
+        const [arrivalCount, newestArrival] = await Promise.all([
+            prisma.issue.count({ where: followArrivalWhere }),
+            prisma.issue.findFirst({ where: followArrivalWhere, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { createdAt: true } }),
+        ]);
+        if (arrivalCount > 0) {
+            formatted.push({
+                id: 'follow_updates_alert',
+                type: 'follow_updates',
+                title: `${arrivalCount} New Issue${arrivalCount === 1 ? '' : 's'} In Your Follows`,
+                description: 'New arrivals in series you follow are waiting in Updates.',
+                imageUrl: null,
+                date: newestArrival?.createdAt || new Date(),
+            } as any);
+        }
+    } catch (e) {
+        Logger.log(`[Notifications API] Follow-arrivals summary failed: ${getErrorMessage(e)}`, 'warn');
+    }
 
     // 2. DYNAMIC ADMIN ALERTS
     // These do not use the 'notified' flag, they simply show up if there is work to be done.
@@ -174,7 +212,13 @@ export async function POST(request: Request) {
 
     if (!session || !userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { requestIds, trophyIds, reportIds } = await request.json();
+    const { requestIds, trophyIds, reportIds, followUpdatesSeen } = await request.json();
+
+    // Stamps the followed-arrivals marker (bell Clear button + visiting /library/updates) so the
+    // dynamic "N new issues in your follows" entry self-clears on the next poll.
+    if (followUpdatesSeen === true) {
+        await prisma.user.update({ where: { id: userId }, data: { lastSeenUpdatesAt: new Date() } });
+    }
 
     if (requestIds?.length > 0) {
         await prisma.request.updateMany({ where: { id: { in: requestIds }, userId }, data: { notified: true } });

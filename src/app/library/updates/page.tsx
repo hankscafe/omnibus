@@ -41,6 +41,13 @@ export default function UpdatesPage() {
   useEffect(() => {
     load();
     if (localStorage.getItem(UNREAD_KEY) === '1') setUnreadOnly(true);
+    // Visiting the page is "seeing" the arrivals: stamp the marker so the header bell's
+    // "N new issues in your follows" entry self-clears on its next poll. Fire-and-forget.
+    fetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followUpdatesSeen: true }),
+    }).catch(() => {});
   }, []);
 
   const toggleUnread = () => {

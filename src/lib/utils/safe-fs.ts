@@ -65,6 +65,37 @@ export async function moveFileSafe(src: string, dest: string): Promise<void> {
 }
 
 /**
+ * #199: operators on shared storage (NAS shares, mixed-uid setups) need the folders Omnibus creates
+ * to be writable by more than the container's own user. `UMASK` is the *arr-family convention: when
+ * it's set (octal — 000, 002, 022, ...), library folders this module creates or relocates are
+ * chmod'd to 0777 & ~UMASK. Relocated folders are the case a process umask alone can't cover:
+ * `fs.move` preserves the SOURCE's mode, so a folder born 0755 stays 0755 through every rename.
+ * UMASK unset (or invalid) returns null → no chmod anywhere, today's behavior byte-for-byte.
+ */
+export function libraryDirMode(): number | null {
+    const raw = (process.env.UMASK || '').trim();
+    if (!/^[0-7]{1,4}$/.test(raw)) return null;
+    return 0o777 & ~parseInt(raw, 8);
+}
+
+/**
+ * Best-effort mode normalization for a directory that already exists (typically one just moved into
+ * place, which kept its source mode). Failures are swallowed: SMB/FAT mounts routinely reject chmod,
+ * and the move/write itself is what matters.
+ */
+export async function applyLibraryDirMode(dir: string): Promise<void> {
+    const mode = libraryDirMode();
+    if (mode === null) return;
+    await fs.chmod(dir, mode).catch(() => {});
+}
+
+/** ensureDir + the UMASK-derived chmod above (a plain ensureDir when UMASK is unset). */
+export async function ensureLibraryDir(dir: string): Promise<void> {
+    await fs.ensureDir(dir);
+    await applyLibraryDirMode(dir);
+}
+
+/**
  * Relocate the contents of `srcDir` into `destDir` WITHOUT ever overwriting. If `destDir` doesn't exist
  * this is a plain rename; if it exists, entries are merged one-by-one (recursing into subdirectories),
  * and any entry that already exists at the destination is LEFT IN PLACE (counted as a conflict) instead
@@ -78,16 +109,18 @@ export async function safeRelocateFolder(srcDir: string, destDir: string, librar
     // Same location (case-insensitive) — nothing to do.
     if (path.normalize(srcDir).toLowerCase() === path.normalize(destDir).toLowerCase()) return { conflicts };
 
-    // Fast path: nothing at the destination → a plain, non-destructive move.
+    // Fast path: nothing at the destination → a plain, non-destructive move. The moved folder kept
+    // its source mode, so normalize it (and the parent we may have just created) per UMASK (#199).
     if (!(await fs.pathExists(destDir))) {
-        await fs.ensureDir(path.dirname(destDir));
+        await ensureLibraryDir(path.dirname(destDir));
         await fs.move(srcDir, destDir, { overwrite: false });
+        await applyLibraryDirMode(destDir);
         return { conflicts };
     }
 
     // Destination exists → merge entry-by-entry, recursing into colliding subdirectories.
     const mergeInto = async (from: string, to: string): Promise<void> => {
-        await fs.ensureDir(to);
+        await ensureLibraryDir(to);
         for (const entry of await fs.readdir(from)) {
             const src = path.join(from, entry);
             const dst = path.join(to, entry);

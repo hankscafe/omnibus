@@ -290,11 +290,66 @@ async fn require_internal_auth(
     Ok(next.run(req).await)
 }
 
+/// Parse an octal UMASK env value ("000", "002", "0022", ...). None = unset/invalid → leave the
+/// process umask alone (today's behavior). Shared shape with the Node side (instrumentation.ts).
+#[cfg_attr(not(unix), allow(dead_code))] // only the unix build applies it; tests run everywhere
+fn parse_umask(raw: &str) -> Option<u32> {
+    let t = raw.trim();
+    if t.is_empty() || t.len() > 4 || !t.chars().all(|c| ('0'..='7').contains(&c)) {
+        return None;
+    }
+    u32::from_str_radix(t, 8).ok()
+}
+
+/// #199: honor the *arr-convention UMASK env var before anything touches disk, so every file and
+/// folder the engine creates (converted CBZs, embedded archives, folder covers, backups) gets the
+/// operator's chosen default modes. The engine container runs as root; without this its new entries
+/// are 0755/0644 — read-only for every other account on shared storage.
+#[cfg(unix)]
+fn apply_umask_from_env() {
+    if let Some(mask) = std::env::var("UMASK").ok().as_deref().and_then(parse_umask) {
+        // SAFETY: umask(2) only swaps the process file-mode creation mask; no memory is involved.
+        // The cast looks redundant on linux-gnu (mode_t = u32) but mode_t is u16 elsewhere (musl, mac).
+        #[allow(clippy::unnecessary_cast)]
+        unsafe { libc::umask(mask as libc::mode_t) };
+        log::info!(
+            "[boot] UMASK={:03o} applied — new files default to {:o}, new folders to {:o}",
+            mask, 0o666 & !mask, 0o777 & !mask
+        );
+    }
+}
+
+#[cfg(test)]
+mod umask_tests {
+    use super::parse_umask;
+
+    #[test]
+    fn parses_valid_octal_with_whitespace() {
+        assert_eq!(parse_umask("000"), Some(0));
+        assert_eq!(parse_umask("002"), Some(0o2));
+        assert_eq!(parse_umask("022"), Some(0o22));
+        assert_eq!(parse_umask("0022"), Some(0o22));
+        assert_eq!(parse_umask(" 077 "), Some(0o77));
+    }
+
+    #[test]
+    fn rejects_unset_and_garbage() {
+        assert_eq!(parse_umask(""), None);
+        assert_eq!(parse_umask("   "), None);
+        assert_eq!(parse_umask("8"), None);   // not octal
+        assert_eq!(parse_umask("abc"), None);
+        assert_eq!(parse_umask("00000"), None); // longer than a mode
+        assert_eq!(parse_umask("0o22"), None);
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     // Installs the global logger: prints to stdout as before AND mirrors lines to the Node app's
     // unified logger (drained by a task spawned in `run`). RUST_LOG still controls verbosity.
     log_forward::init();
+    #[cfg(unix)]
+    apply_umask_from_env();
 
     // Fail fast on a missing/empty DATABASE_URL (parity with Node/Prisma's `env("DATABASE_URL")`,
     // which refuses to start). Silently falling back to a hardcoded localhost DB would mask a

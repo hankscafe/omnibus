@@ -63,6 +63,11 @@ hex = "0.4"
 chrono = "0.4"
 sevenz-rust2 = "0.21.3"
 
+# umask(2) for the *arr-convention UMASK env var (#199) — POSIX-only by nature, so the dep and its
+# call sites are cfg(unix)-gated and Windows dev builds stay libc-free.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # test-util enables tokio's paused-clock (`start_paused`) for the rate-limiter tests.
 tokio = { version = "1.35", features = ["full", "test-util"] }

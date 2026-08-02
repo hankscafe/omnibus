@@ -7,7 +7,7 @@ import path from 'path';
 // the test actually proves the non-destructive behavior (the whole point of the data-loss fix).
 vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
-import { safeRelocateFolder, cleanupEmptyDirs, moveFileSafe } from '@/lib/utils/safe-fs';
+import { safeRelocateFolder, cleanupEmptyDirs, moveFileSafe, libraryDirMode, ensureLibraryDir, applyLibraryDirMode } from '@/lib/utils/safe-fs';
 
 let root: string;
 
@@ -120,6 +120,102 @@ describe('moveFileSafe', () => {
         // No sneaky copy behind the failure — source intact, destination untouched.
         expect(await fs.pathExists(src)).toBe(true);
         expect(await fs.pathExists(dest)).toBe(false);
+    });
+});
+
+// #199: UMASK-derived folder modes. The env var is the *arr convention for shared-storage setups
+// where the container's 0755 default leaves new/relocated folders read-only for other accounts.
+describe('UMASK library dir modes (#199)', () => {
+    beforeEach(() => { delete process.env.UMASK; });
+    afterEach(() => { delete process.env.UMASK; });
+
+    it('libraryDirMode derives 0777 & ~UMASK; unset or invalid → null', () => {
+        expect(libraryDirMode()).toBeNull(); // unset = feature off, today's behavior
+        process.env.UMASK = '000';
+        expect(libraryDirMode()).toBe(0o777);
+        process.env.UMASK = '002';
+        expect(libraryDirMode()).toBe(0o775);
+        process.env.UMASK = '0022';
+        expect(libraryDirMode()).toBe(0o755);
+        process.env.UMASK = ' 022 '; // docker env values arrive with stray whitespace
+        expect(libraryDirMode()).toBe(0o755);
+        for (const bad of ['', '   ', '8', 'abc', '00000', '0o22']) {
+            process.env.UMASK = bad;
+            expect(libraryDirMode()).toBeNull();
+        }
+    });
+
+    it('ensureLibraryDir creates the dir and chmods it to the derived mode', async () => {
+        process.env.UMASK = '000';
+        const chmodSpy = vi.spyOn(fs, 'chmod').mockResolvedValue(undefined as never);
+        const dir = path.join(root, 'made');
+
+        await ensureLibraryDir(dir);
+
+        expect(await fs.pathExists(dir)).toBe(true);
+        expect(chmodSpy).toHaveBeenCalledWith(dir, 0o777);
+    });
+
+    it('never chmods when UMASK is unset — today\'s behavior byte-for-byte', async () => {
+        const chmodSpy = vi.spyOn(fs, 'chmod');
+        const src = path.join(root, 'srcU');
+        const dest = path.join(root, 'groupU', 'destU');
+        await fs.ensureDir(src);
+        await fs.writeFile(path.join(src, 'A.cbz'), 'a');
+
+        await ensureLibraryDir(path.join(root, 'plain'));
+        await applyLibraryDirMode(dest);
+        await safeRelocateFolder(src, dest, root);
+
+        expect(chmodSpy).not.toHaveBeenCalled();
+        expect(await fs.readFile(path.join(dest, 'A.cbz'), 'utf8')).toBe('a');
+    });
+
+    it('relocation normalizes the moved folder AND its new parent (fs.move keeps the source mode)', async () => {
+        process.env.UMASK = '022';
+        const chmodSpy = vi.spyOn(fs, 'chmod').mockResolvedValue(undefined as never);
+        const src = path.join(root, 'srcV');
+        const dest = path.join(root, 'groupV', 'destV');
+        await fs.ensureDir(src);
+        await fs.writeFile(path.join(src, 'A.cbz'), 'a');
+
+        await safeRelocateFolder(src, dest, root);
+
+        expect(chmodSpy).toHaveBeenCalledWith(path.dirname(dest), 0o755);
+        expect(chmodSpy).toHaveBeenCalledWith(dest, 0o755);
+        expect(await fs.readFile(path.join(dest, 'A.cbz'), 'utf8')).toBe('a');
+    });
+
+    it('a rejected chmod (SMB/FAT mounts) never breaks the move', async () => {
+        process.env.UMASK = '000';
+        vi.spyOn(fs, 'chmod').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }) as never);
+        const src = path.join(root, 'srcW');
+        const dest = path.join(root, 'groupW', 'destW');
+        await fs.ensureDir(src);
+        await fs.writeFile(path.join(src, 'A.cbz'), 'a');
+
+        const { conflicts } = await safeRelocateFolder(src, dest, root);
+
+        expect(conflicts).toBe(0);
+        expect(await fs.readFile(path.join(dest, 'A.cbz'), 'utf8')).toBe('a');
+        expect(await fs.pathExists(src)).toBe(false);
+    });
+
+    it('merge path normalizes the existing destination folders too', async () => {
+        process.env.UMASK = '002';
+        const chmodSpy = vi.spyOn(fs, 'chmod').mockResolvedValue(undefined as never);
+        const src = path.join(root, 'srcM');
+        const dest = path.join(root, 'destM');
+        await fs.ensureDir(src);
+        await fs.ensureDir(dest);
+        await fs.writeFile(path.join(src, 'A.cbz'), 'srcA');
+        await fs.writeFile(path.join(dest, 'B.cbz'), 'destB');
+
+        await safeRelocateFolder(src, dest, root);
+
+        expect(chmodSpy).toHaveBeenCalledWith(dest, 0o775);
+        expect(await fs.readFile(path.join(dest, 'A.cbz'), 'utf8')).toBe('srcA');
+        expect(await fs.readFile(path.join(dest, 'B.cbz'), 'utf8')).toBe('destB');
     });
 });
 

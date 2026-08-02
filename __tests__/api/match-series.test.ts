@@ -101,7 +101,8 @@ vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: vi.fn() } }));
 vi.mock('@/lib/utils/safe-fs', () => ({
     safeRelocateFolder: mocks.safeRelocateFolder,
     moveFileSafe: mocks.moveFileSafe,
-    cleanupEmptyDirs: vi.fn()
+    cleanupEmptyDirs: vi.fn(),
+    ensureLibraryDir: vi.fn() // #199 UMASK-aware mkdir — a no-op here, the real thing is unit-tested in safe-fs.test.ts
 }));
 
 const createReq = (body: any) => new Request('http://localhost/api/library/match-series', {

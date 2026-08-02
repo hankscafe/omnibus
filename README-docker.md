@@ -98,6 +98,12 @@ services:
       - OMNIBUS_WATCHED_DIR=/data/watched
       - OMNIBUS_AWAITING_MATCH_DIR=/data/unmatched
 
+      # OPTIONAL: default file-permission mask for everything Omnibus creates (the *arr convention).
+      # On NAS/shared storage, new folders are otherwise 0755 and read-only for your other accounts.
+      # 000 = world-writable (0777 folders), 002 = group-writable (0775). Also normalizes folders the
+      # Smart Matcher relocates. Set the SAME value on the engine service below. Unset = no change.
+      # - UMASK=002
+
     volumes:
       # REQUIRED: Persistent storage for Database, Logs, Backups, Cache, and Uploaded Images
       - /path/to/your/nas/config:/config
@@ -145,6 +151,9 @@ services:
       - OMNIBUS_CACHE_DIR=/config/cache
       - OMNIBUS_WATCHED_DIR=/data/watched
       - OMNIBUS_AWAITING_MATCH_DIR=/data/unmatched
+
+      # OPTIONAL: match the web app's UMASK (see above) so both containers create files the same way.
+      # - UMASK=002
     # No ports exposed to the host: only the web container reaches the engine internally.
     # Publishing 8000 would expose the DB-/filesystem-mutating engine API to your LAN.
     volumes:

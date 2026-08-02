@@ -48,6 +48,9 @@ services:
       OMNIBUS_CACHE_DIR: /config/cache
       OMNIBUS_WATCHED_DIR: /data/watched
       OMNIBUS_AWAITING_MATCH_DIR: /data/unmatched
+      # Optional (*arr convention): default permission mask for files/folders the engine creates.
+      # One UMASK value in your .env feeds both services. Empty/unset = unchanged defaults.
+      UMASK: ${UMASK:-}
     # No host port: the web container reaches the engine at http://omnibus-engine:8000 over the
     # compose network. Publishing 8000 would expose the DB-/filesystem-mutating engine API to the LAN.
     # The engine scans/converts/embeds files on disk AND shares the SQLite DB, so it MUST share the
@@ -86,6 +89,12 @@ services:
       OMNIBUS_LOGS_DIR: /config/logs
       OMNIBUS_WATCHED_DIR: /data/watched
       OMNIBUS_AWAITING_MATCH_DIR: /data/unmatched
+      # Optional (*arr convention): default permission mask for everything Omnibus creates. On
+      # NAS/shared storage new folders are otherwise 0755 — read-only for other accounts. 000 =
+      # world-writable (0777 folders), 002 = group-writable (0775). Also normalizes folders the
+      # Smart Matcher relocates. Set the same value on the engine service (one .env entry feeds
+      # both). Empty/unset = unchanged defaults.
+      UMASK: ${UMASK:-}
     ports:
       - "3000:3000"
     # Shares the SAME config + data volumes as omnibus-engine so both containers see the files

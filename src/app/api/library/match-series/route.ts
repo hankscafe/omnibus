@@ -18,7 +18,7 @@ import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
-import { safeRelocateFolder, moveFileSafe } from '@/lib/utils/safe-fs';
+import { safeRelocateFolder, moveFileSafe, ensureLibraryDir } from '@/lib/utils/safe-fs';
 import { countArchivePages } from '@/lib/utils/archive-pages';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { findLocalCoverBasename } from '@/lib/utils/cover-plan';
@@ -167,7 +167,8 @@ export async function POST(request: Request) {
     const newFolderPath = path.join(targetLib.path, ...folderParts).replace(/\\/g, '/');
 
     const pubDir = path.dirname(newFolderPath);
-    if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
+    // ensureLibraryDir = mkdir + the operator's UMASK-derived folder mode (#199 read-only folders).
+    if (!fs.existsSync(pubDir)) await ensureLibraryDir(pubDir);
 
     // Cover precedence: an admin can supply a custom cover in the Smart Matcher editor (hasNewCustomCover);
     // otherwise an already-custom series keeps its cover (keepExistingCustomCover) — a manual re-match must
@@ -254,7 +255,7 @@ export async function POST(request: Request) {
     let activeFolderPath = oldFolderPath;
     if (isFile) {
         if (!fs.existsSync(newFolderPath)) {
-            await fs.promises.mkdir(newFolderPath, { recursive: true });
+            await ensureLibraryDir(newFolderPath);
         }
         activeFolderPath = newFolderPath;
         const targetFilePath = path.join(newFolderPath, path.basename(oldFolderPath));

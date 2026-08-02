@@ -1769,6 +1769,7 @@ dependencies = [
  "hex",
  "image",
  "jwalk",
+ "libc",
  "log",
  "pbkdf2 0.12.2",
  "quick-xml",

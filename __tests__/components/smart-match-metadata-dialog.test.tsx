@@ -1,0 +1,138 @@
+// #199 duplicate guard: the matcher's "use the comic's own cover art" toggle returns the archive's
+// OWN first page as the issue cover. Embedding that back into the file duplicates page 0 — the
+// engine's insert-cover is insert-only by design (never replaces). Provenance is decided in the
+// dialog (issueCoverFromArchive) and enforced by the page-side gate (shouldEmbedIssueCover):
+// genuine uploads embed, the comic's own art never does.
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import SmartMatchMetadataDialog, { shouldEmbedIssueCover } from '@/components/smart-match-metadata-dialog';
+
+const toast = vi.fn();
+vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast }) }));
+
+const ARCHIVE_DATA_URL = 'data:image/jpeg;base64,AQID'; // FileReader base64 of the Blob [1,2,3] below
+const UPLOAD_DATA_URL = 'data:image/png;base64,CQkJ';   // FileReader base64 of the File [9,9,9] below
+
+const baseProps = {
+    open: true,
+    onOpenChange: vi.fn(),
+    folderPattern: '{Publisher}/{Series} ({Year})',
+    showIssueCover: true,
+    archiveFilePath: '/library/Unmatched/One-Shot 001.cbz',
+};
+
+describe('shouldEmbedIssueCover (#199 gate)', () => {
+    it('embeds a genuine upload, honoring the page-level embed toggle', () => {
+        expect(shouldEmbedIssueCover({ coverImageBase64: UPLOAD_DATA_URL }, true)).toBe(true);
+        expect(shouldEmbedIssueCover({ coverImageBase64: UPLOAD_DATA_URL }, false)).toBe(false);
+    });
+
+    it('never embeds an archive-sourced cover, even with the embed toggle on', () => {
+        expect(shouldEmbedIssueCover({ coverImageBase64: ARCHIVE_DATA_URL, coverFromArchive: true }, true)).toBeUndefined();
+        expect(shouldEmbedIssueCover({ coverImageBase64: ARCHIVE_DATA_URL, coverFromArchive: true }, false)).toBeUndefined();
+    });
+
+    it('never embeds when no cover was chosen', () => {
+        expect(shouldEmbedIssueCover(undefined, true)).toBeUndefined();
+        expect(shouldEmbedIssueCover({}, true)).toBeUndefined();
+    });
+});
+
+describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true,
+            blob: async () => new Blob([Uint8Array.from([1, 2, 3])], { type: 'image/jpeg' }),
+        }));
+    });
+
+    it('the archive cover saves with issueCoverFromArchive: true', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+
+        // The dialog pulls the archive's first page for the preview…
+        await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(ARCHIVE_DATA_URL));
+        // …and the admin opts in without uploading anything.
+        fireEvent.click(screen.getByRole('switch', { name: /use the comic/i }));
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+            issueCoverImageBase64: ARCHIVE_DATA_URL,
+            issueCoverFromArchive: true,
+        }));
+    });
+
+    it('an uploaded image saves WITHOUT the archive flag (still an embed candidate)', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+        await waitFor(() => expect(screen.getByAltText('Issue cover')).toBeTruthy());
+
+        const file = new File([Uint8Array.from([9, 9, 9])], 'cover.png', { type: 'image/png' });
+        fireEvent.change(screen.getByLabelText(/upload your own/i), { target: { files: [file] } });
+        // Uploading flips the opt-in on by itself, and the upload wins over the archive art.
+        await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(UPLOAD_DATA_URL));
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        const override = onSave.mock.calls[0][0];
+        expect(override.issueCoverImageBase64).toBe(UPLOAD_DATA_URL);
+        expect(override.issueCoverFromArchive).toBeUndefined();
+    });
+
+    it('"Use the archive\'s cover instead" reverts an upload back to archive provenance', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+        await waitFor(() => expect(screen.getByAltText('Issue cover')).toBeTruthy());
+        const file = new File([Uint8Array.from([9, 9, 9])], 'cover.png', { type: 'image/png' });
+        fireEvent.change(screen.getByLabelText(/upload your own/i), { target: { files: [file] } });
+        await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(UPLOAD_DATA_URL));
+
+        fireEvent.click(screen.getByRole('button', { name: /use the archive.s cover instead/i }));
+        await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(ARCHIVE_DATA_URL));
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+            issueCoverImageBase64: ARCHIVE_DATA_URL,
+            issueCoverFromArchive: true,
+        }));
+    });
+
+    it('reopening an archive-sourced cover keeps provenance even when the re-fetch fails', async () => {
+        (fetch as any).mockResolvedValue({ ok: false, status: 415 });
+        const onSave = vi.fn();
+        const SAVED = 'data:image/jpeg;base64,U0FWRUQ=';
+        render(<SmartMatchMetadataDialog {...baseProps} initialIssueCover={SAVED} initialIssueCoverFromArchive onSave={onSave} />);
+
+        // The failed re-render falls back to the previously-saved image (never the upload slot).
+        await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(SAVED));
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+            issueCoverImageBase64: SAVED,
+            issueCoverFromArchive: true,
+        }));
+    });
+
+    it('reopening an uploaded cover stays an upload', async () => {
+        const onSave = vi.fn();
+        const SAVED = 'data:image/png;base64,VVBMT0FE';
+        render(<SmartMatchMetadataDialog {...baseProps} initialIssueCover={SAVED} onSave={onSave} />);
+        await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(SAVED));
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        const override = onSave.mock.calls[0][0];
+        expect(override.issueCoverImageBase64).toBe(SAVED);
+        expect(override.issueCoverFromArchive).toBeUndefined();
+    });
+
+    it('opt-in off sends no issue cover and no flag', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+        await waitFor(() => expect(screen.getByAltText('Issue cover')).toBeTruthy());
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        const override = onSave.mock.calls[0][0];
+        expect(override.issueCoverImageBase64).toBeUndefined();
+        expect(override.issueCoverFromArchive).toBeUndefined();
+    });
+});

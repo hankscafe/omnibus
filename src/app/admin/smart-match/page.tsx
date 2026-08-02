@@ -16,7 +16,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview } from "@/components/smart-match-metadata-dialog"
+import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover } from "@/components/smart-match-metadata-dialog"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
 // Auto-scan results (the ComicVine/Metron match suggestions) are kept in sessionStorage so a page
@@ -98,7 +98,7 @@ export default function SmartMatchPage() {
 
     const [exactIssueId, setExactIssueId] = useState("");
     const [exactIssueNumber, setExactIssueNumber] = useState("");
-    const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string, coverImageBase64?: string }>>({});
+    const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string, coverImageBase64?: string, coverFromArchive?: boolean }>>({});
     // Issue #189 follow-up: whether picked issue covers are ALSO baked into the archive as page 0
     // on Accept (default on, remembered). One switch governs every cover picked on this page.
     const [embedIssueCovers, setEmbedIssueCovers] = useState(true);
@@ -433,8 +433,9 @@ export default function SmartMatchPage() {
             exactIssueId: issueOv.issueId || undefined,
             exactIssueNumber: issueOv.issueNumber || undefined,
             issueCoverImageBase64: issueOv.coverImageBase64 || undefined,
-            // Issue #189 follow-up: bake the cover into the archive as page 0 (engine insert-only).
-            issueCoverEmbed: issueOv.coverImageBase64 ? embedIssueCovers : undefined
+            // Issue #189 follow-up: bake the cover into the archive as page 0 (engine insert-only) —
+            // genuine uploads only; the comic's own art is already in there (#199 duplicate guard).
+            issueCoverEmbed: shouldEmbedIssueCover(issueOv, embedIssueCovers)
         };
     };
 
@@ -740,6 +741,8 @@ export default function SmartMatchPage() {
                     issueNumber: prev[target.id]?.issueNumber || "",
                     issueId: prev[target.id]?.issueId || "",
                     coverImageBase64: override.issueCoverImageBase64,
+                    // #199: archive-sourced covers are display-only — Accept must never embed them.
+                    coverFromArchive: override.issueCoverFromArchive,
                 }
             }));
         }
@@ -1396,6 +1399,7 @@ export default function SmartMatchPage() {
                 showIssueCover={!!metaEditorTarget?.isRawFile}
                 archiveFilePath={metaEditorTarget?.isRawFile ? metaEditorTarget.folderPath : undefined}
                 initialIssueCover={metaEditorTarget ? issueOverrides[metaEditorTarget.id]?.coverImageBase64 : undefined}
+                initialIssueCoverFromArchive={metaEditorTarget ? issueOverrides[metaEditorTarget.id]?.coverFromArchive : undefined}
                 onSave={handleMetaSave}
             />
 

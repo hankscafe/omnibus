@@ -23,6 +23,10 @@ export interface SmartMatchOverride {
   coverImageBase64?: string
   /** A data-URL issue cover (loose files only); written to the issue's cover + locked on import. */
   issueCoverImageBase64?: string
+  /** True when issueCoverImageBase64 came from INSIDE the archive (the comic's own first page), not
+   *  an upload. Such covers must never be embedded back into the file — the engine's insert-cover
+   *  is insert-only (never replaces), so re-inserting the comic's own page duplicates it (#199). */
+  issueCoverFromArchive?: boolean
   writeToFile?: boolean
   locked?: boolean
 }
@@ -55,6 +59,8 @@ interface Props {
   archiveFilePath?: string
   /** Current issue cover data URL (from the item's issue override), to re-edit. */
   initialIssueCover?: string
+  /** Whether initialIssueCover was archive-sourced, so a reopen keeps its provenance (#199). */
+  initialIssueCoverFromArchive?: boolean
   onSave: (override: SmartMatchOverride) => void
 }
 
@@ -82,9 +88,19 @@ export function buildFolderPreview(
   return out.split(/[/\\]/).map(p => p.trim()).filter(Boolean).join("/")
 }
 
+// #199 duplicate guard: only genuinely uploaded covers are embed candidates. A cover sourced from
+// inside the archive (the comic's own first page) must never be baked back in — the engine's
+// insert-cover is insert-only by design (never replaces), so re-inserting duplicates page 0.
+export function shouldEmbedIssueCover(
+  ov: { coverImageBase64?: string; coverFromArchive?: boolean } | undefined,
+  embedCoversEnabled: boolean,
+): boolean | undefined {
+  return ov?.coverImageBase64 && !ov.coverFromArchive ? embedCoversEnabled : undefined
+}
+
 export default function SmartMatchMetadataDialog({
   open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true,
-  showIssueCover = false, archiveFilePath, initialIssueCover, onSave,
+  showIssueCover = false, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive, onSave,
 }: Props) {
   const { toast } = useToast()
   const [name, setName] = useState("")
@@ -116,8 +132,10 @@ export default function SmartMatchMetadataDialog({
     setDescription(initialOverride?.description ?? seed?.description ?? "")
     setWriteToFile(initialOverride?.writeToFile ?? defaultWriteToFile)
     setCoverDataUrl(initialOverride?.coverImageBase64 ?? null)
-    // A previously-chosen issue cover means the opt-in was on; seed it back into the upload slot.
-    setIssueCoverDataUrl(initialIssueCover ?? null)
+    // A previously-chosen issue cover means the opt-in was on; seed it back into the slot it came
+    // from — the upload slot for real uploads only. An archive-sourced cover stays OUT of the upload
+    // slot so a re-save keeps its provenance and still refuses to embed it (#199).
+    setIssueCoverDataUrl(initialIssueCoverFromArchive ? null : (initialIssueCover ?? null))
     setUseArchiveCover(!!initialIssueCover)
     // Intentionally seed on open only — editing fields shouldn't reset them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,6 +149,9 @@ export default function SmartMatchMetadataDialog({
     }
     let cancelled = false
     const controller = new AbortController()
+    // If the archive render fails on a REOPEN of a previously-saved archive cover (engine hiccup,
+    // CBR 415), fall back to that saved image — Save must not silently drop the admin's choice (#199).
+    const fallback = initialIssueCoverFromArchive ? (initialIssueCover ?? null) : null
     setArchiveCoverDataUrl(null); setArchiveCoverLoading(true)
     fetch(`/api/library/archive-cover?path=${encodeURIComponent(archiveFilePath)}`, { signal: controller.signal })
       .then(async res => {
@@ -143,11 +164,11 @@ export default function SmartMatchMetadataDialog({
           reader.readAsDataURL(blob)
         })
       })
-      .then(dataUrl => { if (!cancelled) setArchiveCoverDataUrl(dataUrl) })
-      .catch(() => { if (!cancelled) setArchiveCoverDataUrl(null) })
+      .then(dataUrl => { if (!cancelled) setArchiveCoverDataUrl(dataUrl ?? fallback) })
+      .catch(() => { if (!cancelled) setArchiveCoverDataUrl(fallback) })
       .finally(() => { if (!cancelled) setArchiveCoverLoading(false) })
     return () => { cancelled = true; controller.abort() }
-  }, [open, showIssueCover, archiveFilePath])
+  }, [open, showIssueCover, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive])
 
   const preview = buildFolderPreview(folderPattern, { name, year, publisher, universe, seriesGroup })
 
@@ -167,6 +188,8 @@ export default function SmartMatchMetadataDialog({
   }
 
   const handleSave = () => {
+    // Opt-in only: uploaded image wins, else the archive cover; off → the provider supplies it.
+    const issueCover = useArchiveCover ? (issueCoverDataUrl || archiveCoverDataUrl || undefined) : undefined
     onSave({
       name: name.trim(),
       year: year.trim(),
@@ -175,8 +198,10 @@ export default function SmartMatchMetadataDialog({
       seriesGroup: seriesGroup.trim(),
       description,
       coverImageBase64: coverDataUrl || undefined,
-      // Opt-in only: uploaded image wins, else the archive cover; off → the provider supplies it.
-      issueCoverImageBase64: useArchiveCover ? (issueCoverDataUrl || archiveCoverDataUrl || undefined) : undefined,
+      issueCoverImageBase64: issueCover,
+      // No upload in play → the image IS the archive's own first page; flag it so Accept never
+      // embeds it back into the file (#199 duplicate guard).
+      issueCoverFromArchive: issueCover && !issueCoverDataUrl ? true : undefined,
       writeToFile,
       locked: true,
     })

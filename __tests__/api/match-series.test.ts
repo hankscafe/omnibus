@@ -211,6 +211,56 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         });
     });
 
+    it('persists the #199 ComicInfo defaults: lists as JSON arrays, validated numbers, two-way B&W', async () => {
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Caravan',
+            metadataId: '4050-1',
+            name: 'Caravan', year: 2009, publisher: 'Sergio Bonelli Editore',
+            writer: 'A. Writer, B. Writer', penciller: '', inker: 'C. Inker',
+            genre: 'Sci-Fi , Western,, ', tags: 'ninja',
+            imprint: 'Vertigo', languageISO: 'it', ageRating: 'Mature 17+',
+            communityRating: '7.3', alternateCount: 'six', storyArcNumber: '2',
+            blackAndWhite: true,
+        }));
+        expect(res.status).toBe(200);
+
+        const data = mocks.createSeries.mock.calls[0][0].data;
+        expect(data).toMatchObject({
+            writers: JSON.stringify(['A. Writer', 'B. Writer']), // comma text → JSON array string
+            inker: JSON.stringify(['C. Inker']),
+            genres: JSON.stringify(['Sci-Fi', 'Western']),       // stray commas/whitespace dropped
+            tags: JSON.stringify(['ninja']),
+            artists: null,            // explicitly-empty penciller clears the column
+            imprint: 'Vertigo',
+            languageISO: 'it',
+            ageRating: 'Mature 17+',
+            communityRating: 5,       // clamped to ComicInfo's 0-5 range
+            alternateCount: null,     // garbage number → null, never NaN
+            storyArcNumber: '2',
+            blackAndWhite: true,
+        });
+    });
+
+    it('clears B&W to null when the switch is off — never stores a false "No" claim', async () => {
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Caravan', metadataId: '4050-1', name: 'Caravan', year: 2009,
+            blackAndWhite: false,
+        }));
+        expect(res.status).toBe(200);
+        expect(mocks.createSeries.mock.calls[0][0].data.blackAndWhite).toBeNull();
+    });
+
+    it('leaves every ComicInfo default column untouched when the dialog was never used', async () => {
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Caravan', metadataId: '4050-1', name: 'Caravan', year: 2009,
+        }));
+        expect(res.status).toBe(200);
+        const data = mocks.createSeries.mock.calls[0][0].data;
+        for (const k of ['writers', 'artists', 'inker', 'imprint', 'tags', 'ageRating', 'communityRating', 'alternateCount', 'blackAndWhite']) {
+            expect(data).not.toHaveProperty(k);
+        }
+    });
+
     it('should drop an empty {SeriesGroup} segment when no group is supplied (no literal token, no empty tier)', async () => {
         mocks.findManySettings.mockResolvedValue([
             { key: 'folder_naming_pattern', value: '{SeriesGroup}/{Series} ({Year})' }

@@ -21,6 +21,14 @@ const baseProps = {
     archiveFilePath: '/library/Unmatched/One-Shot 001.cbz',
 };
 
+// #199 tabbed layout: inactive Radix tab content is unmounted, and TabsTrigger activates on
+// mousedown (a bare click event never switches) — so open tabs with the full sequence.
+const openTab = (name: RegExp) => {
+    const trigger = screen.getByRole('tab', { name });
+    fireEvent.mouseDown(trigger);
+    fireEvent.click(trigger);
+};
+
 describe('shouldEmbedIssueCover (#199 gate)', () => {
     it('embeds a genuine upload, honoring the page-level embed toggle', () => {
         expect(shouldEmbedIssueCover({ coverImageBase64: UPLOAD_DATA_URL }, true)).toBe(true);
@@ -50,6 +58,7 @@ describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
     it('the archive cover saves with issueCoverFromArchive: true', async () => {
         const onSave = vi.fn();
         render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+        openTab(/covers/i);
 
         // The dialog pulls the archive's first page for the preview…
         await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(ARCHIVE_DATA_URL));
@@ -66,6 +75,7 @@ describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
     it('an uploaded image saves WITHOUT the archive flag (still an embed candidate)', async () => {
         const onSave = vi.fn();
         render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+        openTab(/covers/i);
         await waitFor(() => expect(screen.getByAltText('Issue cover')).toBeTruthy());
 
         const file = new File([Uint8Array.from([9, 9, 9])], 'cover.png', { type: 'image/png' });
@@ -82,6 +92,7 @@ describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
     it('"Use the archive\'s cover instead" reverts an upload back to archive provenance', async () => {
         const onSave = vi.fn();
         render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+        openTab(/covers/i);
         await waitFor(() => expect(screen.getByAltText('Issue cover')).toBeTruthy());
         const file = new File([Uint8Array.from([9, 9, 9])], 'cover.png', { type: 'image/png' });
         fireEvent.change(screen.getByLabelText(/upload your own/i), { target: { files: [file] } });
@@ -102,6 +113,7 @@ describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
         const onSave = vi.fn();
         const SAVED = 'data:image/jpeg;base64,U0FWRUQ=';
         render(<SmartMatchMetadataDialog {...baseProps} initialIssueCover={SAVED} initialIssueCoverFromArchive onSave={onSave} />);
+        openTab(/covers/i);
 
         // The failed re-render falls back to the previously-saved image (never the upload slot).
         await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(SAVED));
@@ -117,6 +129,7 @@ describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
         const onSave = vi.fn();
         const SAVED = 'data:image/png;base64,VVBMT0FE';
         render(<SmartMatchMetadataDialog {...baseProps} initialIssueCover={SAVED} onSave={onSave} />);
+        openTab(/covers/i);
         await waitFor(() => expect(screen.getByAltText('Issue cover').getAttribute('src')).toBe(SAVED));
         fireEvent.click(screen.getByRole('button', { name: /save details/i }));
 
@@ -128,11 +141,70 @@ describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
     it('opt-in off sends no issue cover and no flag', async () => {
         const onSave = vi.fn();
         render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+        openTab(/covers/i);
         await waitFor(() => expect(screen.getByAltText('Issue cover')).toBeTruthy());
         fireEvent.click(screen.getByRole('button', { name: /save details/i }));
 
         const override = onSave.mock.calls[0][0];
         expect(override.issueCoverImageBase64).toBeUndefined();
         expect(override.issueCoverFromArchive).toBeUndefined();
+    });
+});
+
+// #199 (concept by CapitanoNemo78): the tabbed ComicInfo default fields. Strings ride the
+// undefined-means-untouched contract (empty → undefined); the B&W switch is a real two-way boolean.
+describe('SmartMatchMetadataDialog ComicInfo defaults (#199)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true,
+            blob: async () => new Blob([Uint8Array.from([1, 2, 3])], { type: 'image/jpeg' }),
+        }));
+    });
+
+    it('saves General-tab defaults trimmed, leaves untouched fields undefined, and always sends the B&W boolean', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+
+        fireEvent.change(screen.getByLabelText('Publisher Imprint'), { target: { value: '  Vertigo  ' } });
+        fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'it' } });
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        const override = onSave.mock.calls[0][0];
+        expect(override.imprint).toBe('Vertigo'); // trimmed
+        expect(override.languageISO).toBe('it');
+        expect(override.format).toBeUndefined();  // empty stays untouched
+        expect(override.writer).toBeUndefined();
+        expect(override.blackAndWhite).toBe(false); // boolean always present when the dialog saves
+    });
+
+    it('Credits-tab fields save as comma-separated text; Details-tab switch flips B&W true', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} onSave={onSave} />);
+
+        openTab(/credits/i);
+        fireEvent.change(screen.getByLabelText('Writer'), { target: { value: 'Scott Snyder, James Tynion IV' } });
+
+        openTab(/details/i);
+        fireEvent.click(screen.getByRole('switch', { name: /black and white/i }));
+
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        const override = onSave.mock.calls[0][0];
+        expect(override.writer).toBe('Scott Snyder, James Tynion IV');
+        expect(override.blackAndWhite).toBe(true);
+    });
+
+    it('reopening seeds every default field from the saved override', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps}
+            initialOverride={{ writer: 'W. Riter', imprint: 'Vertigo', blackAndWhite: true }} onSave={onSave} />);
+
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        const override = onSave.mock.calls[0][0];
+        expect(override.writer).toBe('W. Riter');
+        expect(override.imprint).toBe('Vertigo');
+        expect(override.blackAndWhite).toBe(true);
     });
 });

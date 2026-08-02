@@ -7,12 +7,67 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload, Loader2 } from "lucide-react"
 
+// Full ComicInfo.xml AgeRating enum (anansi-project schema) — a Select, so only valid values ship.
+const AGE_RATING_OPTIONS = [
+  "Unknown", "Adults Only 18+", "Early Childhood", "Everyone", "Everyone 10+", "G",
+  "Kids to Adults", "M", "MA15+", "Mature 17+", "PG", "R18+", "Rating Pending", "Teen", "X18+",
+]
+const UNSET = "__unset__"
+
+// #199 (concept by CapitanoNemo78): the free-text ComicInfo fields the Smart Matcher applies as
+// series-wide defaults to every issue on match. "List" fields hold plain comma-separated text here;
+// the API splits them into JSON array strings server-side (the Issue.writers convention).
+export interface ComicInfoDefaults {
+  imprint?: string
+  format?: string
+  languageISO?: string
+  ageRating?: string
+  writer?: string
+  penciller?: string
+  inker?: string
+  colorist?: string
+  letterer?: string
+  coverArtist?: string
+  editor?: string
+  translator?: string
+  genre?: string
+  tags?: string
+  characters?: string
+  teams?: string
+  locations?: string
+  mainCharacterOrTeam?: string
+  storyArc?: string
+  storyArcNumber?: string
+  alternateSeries?: string
+  alternateNumber?: string
+  alternateCount?: string
+  communityRating?: string
+  gtin?: string
+  notes?: string
+  scanInformation?: string
+  review?: string
+  /** Two-way by design (not in COMIC_INFO_DEFAULT_KEYS): true → <BlackAndWhite>Yes</>, false →
+   *  clears back to unset. "No" is never claimed — absence reads as Unknown. */
+  blackAndWhite?: boolean
+}
+
+// Exported so the Smart Matcher page can spread every default field into the match-series payload
+// without re-listing all ~28 keys by hand. blackAndWhite is handled separately (boolean semantics).
+export const COMIC_INFO_DEFAULT_KEYS = [
+  "imprint", "format", "languageISO", "ageRating", "writer", "penciller", "inker", "colorist",
+  "letterer", "coverArtist", "editor", "translator", "genre", "tags", "characters", "teams",
+  "locations", "mainCharacterOrTeam", "storyArc", "storyArcNumber", "alternateSeries",
+  "alternateNumber", "alternateCount", "communityRating", "gtin", "notes", "scanInformation", "review",
+] as const
+
 // The metadata an admin can pin to an unmatched item before accepting it. Stored per-item on the
 // Smart Matcher page and merged into the /api/library/match-series request on Accept.
-export interface SmartMatchOverride {
+export interface SmartMatchOverride extends ComicInfoDefaults {
   name?: string
   year?: string
   publisher?: string
@@ -98,6 +153,18 @@ export function shouldEmbedIssueCover(
   return ov?.coverImageBase64 && !ov.coverFromArchive ? embedCoversEnabled : undefined
 }
 
+// A plain labeled text input — the many one-line ComicInfo fields across the Credits/Story & Tags/
+// Details tabs would otherwise repeat the same Label+Input markup ~25 times.
+function TextField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const id = "smf-" + label.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+  return (
+    <div className="grid gap-1.5">
+      <Label htmlFor={id} className="text-xs">{label}</Label>
+      <Input id={id} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="bg-background border-border h-9" />
+    </div>
+  )
+}
+
 export default function SmartMatchMetadataDialog({
   open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true,
   showIssueCover = false, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive, onSave,
@@ -119,6 +186,11 @@ export default function SmartMatchMetadataDialog({
   // Opt-in (default off): on → the issue cover is the comic's own art (uploaded or archive), locked
   // from auto-sync; off → the metadata provider supplies the issue cover (today's behavior).
   const [useArchiveCover, setUseArchiveCover] = useState(false)
+  // #199 ComicInfo defaults (Credits/Story & Tags/Details tabs) — plain strings, comma-separated
+  // for the list-type tags; the API splits them server-side. B&W is a real boolean (see interface).
+  const [fields, setFields] = useState<ComicInfoDefaults>({})
+  const setField = (k: keyof ComicInfoDefaults) => (v: string) => setFields(f => ({ ...f, [k]: v }))
+  const [blackAndWhite, setBlackAndWhite] = useState(false)
 
   // Re-seed each time the dialog opens (a new target / fresh override). Prefer the existing override,
   // then the suggestion seed, then blank.
@@ -137,6 +209,8 @@ export default function SmartMatchMetadataDialog({
     // slot so a re-save keeps its provenance and still refuses to embed it (#199).
     setIssueCoverDataUrl(initialIssueCoverFromArchive ? null : (initialIssueCover ?? null))
     setUseArchiveCover(!!initialIssueCover)
+    setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, initialOverride?.[k] ?? ""])) as ComicInfoDefaults)
+    setBlackAndWhite(initialOverride?.blackAndWhite ?? false)
     // Intentionally seed on open only — editing fields shouldn't reset them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -197,6 +271,11 @@ export default function SmartMatchMetadataDialog({
       universe: universe.trim(),
       seriesGroup: seriesGroup.trim(),
       description,
+      // #199 ComicInfo defaults: trimmed, empty → undefined (the undefined-means-untouched contract,
+      // same as universe/seriesGroup on the page side)…
+      ...(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, (fields[k] || "").trim() || undefined])) as Partial<ComicInfoDefaults>),
+      // …except the B&W switch, which is deliberately two-way: false must CLEAR a mistaken Yes.
+      blackAndWhite,
       coverImageBase64: coverDataUrl || undefined,
       issueCoverImageBase64: issueCover,
       // No upload in play → the image IS the archive's own first page; flag it so Accept never
@@ -210,16 +289,29 @@ export default function SmartMatchMetadataDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] flex flex-col bg-background border-border rounded-xl">
+      <DialogContent className="sm:max-w-[640px] max-h-[90vh] flex flex-col bg-background border-border rounded-xl">
         <DialogHeader className="shrink-0">
           <DialogTitle>Edit Match Metadata</DialogTitle>
           <DialogDescription>
-            Fill in the details that build the folder name{targetLabel ? ` for “${targetLabel}”` : ""}. These are
-            applied when you Accept the match and kept (the series is locked from auto-sync).
+            Fill in the ComicInfo details{targetLabel ? ` for “${targetLabel}”` : ""}. These are applied to every
+            issue when you Accept the match (the series is locked from auto-sync).
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 overflow-y-auto grid gap-4 py-2 pr-3">
+        {/* #199 (concept by CapitanoNemo78): the full ComicInfo default set, tabbed so General stays
+            as light as the old single-scroll dialog. Folder preview + write-file switch live OUTSIDE
+            the tabs — they apply regardless of which tab is open. */}
+        <Tabs defaultValue="general" className="flex-1 min-h-0 flex flex-col">
+          <TabsList className="shrink-0 w-full">
+            <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="credits">Credits</TabsTrigger>
+            <TabsTrigger value="story">Story &amp; Tags</TabsTrigger>
+            <TabsTrigger value="details">Details</TabsTrigger>
+            <TabsTrigger value="covers">Covers</TabsTrigger>
+          </TabsList>
+
+          <div className="flex-1 min-h-0 overflow-y-auto pr-3 pt-3">
+            <TabsContent value="general" className="grid gap-4 mt-0">
           <div className="grid gap-1.5">
             <Label className="text-xs">Series Name</Label>
             <Input value={name} onChange={e => setName(e.target.value)} className="bg-background border-border h-9" />
@@ -247,11 +339,93 @@ export default function SmartMatchMetadataDialog({
             </div>
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <TextField label="Publisher Imprint" value={fields.imprint || ""} onChange={setField("imprint")} placeholder="e.g. Vertigo" />
+            <TextField label="Format" value={fields.format || ""} onChange={setField("format")} placeholder="TPB, HC, Web, Digital…" />
+            <TextField label="Language" value={fields.languageISO || ""} onChange={setField("languageISO")} placeholder="en, it, ja…" />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label className="text-xs">Age Rating</Label>
+            <Select value={fields.ageRating || UNSET} onValueChange={v => setField("ageRating")(v === UNSET ? "" : v)}>
+              <SelectTrigger className="bg-background border-border h-9 w-full"><SelectValue placeholder="Not set" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>Not set</SelectItem>
+                {AGE_RATING_OPTIONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="grid gap-1.5">
             <Label className="text-xs">Summary / Description</Label>
             <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={4} className="bg-background border-border" />
           </div>
+            </TabsContent>
 
+            <TabsContent value="credits" className="grid gap-3 mt-0">
+              <p className="text-[11px] text-muted-foreground -mt-1">
+                Comma-separated names, applied to every issue in this series unless an issue already has its own.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <TextField label="Writer" value={fields.writer || ""} onChange={setField("writer")} />
+                <TextField label="Penciller" value={fields.penciller || ""} onChange={setField("penciller")} />
+                <TextField label="Inker" value={fields.inker || ""} onChange={setField("inker")} />
+                <TextField label="Colorist" value={fields.colorist || ""} onChange={setField("colorist")} />
+                <TextField label="Letterer" value={fields.letterer || ""} onChange={setField("letterer")} />
+                <TextField label="Cover Artist" value={fields.coverArtist || ""} onChange={setField("coverArtist")} />
+                <TextField label="Editor" value={fields.editor || ""} onChange={setField("editor")} />
+                <TextField label="Translator" value={fields.translator || ""} onChange={setField("translator")} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="story" className="grid gap-3 mt-0">
+              <p className="text-[11px] text-muted-foreground -mt-1">
+                Comma-separated values, applied to every issue in this series unless an issue already has its own.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <TextField label="Genre" value={fields.genre || ""} onChange={setField("genre")} placeholder="Science-Fiction, Superhero…" />
+                <TextField label="Tags" value={fields.tags || ""} onChange={setField("tags")} placeholder="ninja, school life…" />
+                <TextField label="Characters" value={fields.characters || ""} onChange={setField("characters")} />
+                <TextField label="Teams" value={fields.teams || ""} onChange={setField("teams")} />
+                <TextField label="Locations" value={fields.locations || ""} onChange={setField("locations")} />
+                <TextField label="Main Character / Team" value={fields.mainCharacterOrTeam || ""} onChange={setField("mainCharacterOrTeam")} />
+                <TextField label="Story Arc" value={fields.storyArc || ""} onChange={setField("storyArc")} />
+                <TextField label="Story Arc Number" value={fields.storyArcNumber || ""} onChange={setField("storyArcNumber")} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-border">
+                <TextField label="Alternate Series" value={fields.alternateSeries || ""} onChange={setField("alternateSeries")} />
+                <TextField label="Alternate Number" value={fields.alternateNumber || ""} onChange={setField("alternateNumber")} />
+                <TextField label="Alternate Count" value={fields.alternateCount || ""} onChange={setField("alternateCount")} placeholder="e.g. 6" />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="details" className="grid gap-3 mt-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Community Rating</Label>
+                  <Input type="number" min={0} max={5} step={0.1} value={fields.communityRating || ""}
+                    onChange={e => setField("communityRating")(e.target.value)} placeholder="0.0 - 5.0" className="bg-background border-border h-9" />
+                </div>
+                <TextField label="GTIN" value={fields.gtin || ""} onChange={setField("gtin")} placeholder="ISBN / ISSN / EAN" />
+              </div>
+
+              <div className="flex items-center gap-3 bg-muted/40 p-2.5 rounded-lg border border-border">
+                <Switch id="sm-bw" checked={blackAndWhite} onCheckedChange={setBlackAndWhite} />
+                <Label htmlFor="sm-bw" className="cursor-pointer text-xs">Black and White</Label>
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Notes</Label>
+                <Textarea value={fields.notes || ""} onChange={e => setField("notes")(e.target.value)} rows={3} className="bg-background border-border" />
+              </div>
+              <TextField label="Scan Information" value={fields.scanInformation || ""} onChange={setField("scanInformation")} />
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Review</Label>
+                <Textarea value={fields.review || ""} onChange={e => setField("review")(e.target.value)} rows={3} className="bg-background border-border" />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="covers" className="grid gap-4 mt-0">
           {/* Series cover — written to <folder>/cover.jpg + locked on import. */}
           <div className="grid gap-1.5">
             <Label className="text-xs flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Series Cover</Label>
@@ -334,9 +508,12 @@ export default function SmartMatchMetadataDialog({
               </div>
             </div>
           )}
+            </TabsContent>
+          </div>
+        </Tabs>
 
-          {/* Live folder-path preview — exactly mirrors the path match-series will create. */}
-          <div className="grid gap-1.5">
+        {/* Live folder-path preview — exactly mirrors the path match-series will create. */}
+        <div className="grid gap-1.5 shrink-0">
             <Label className="text-xs flex items-center gap-1.5 text-muted-foreground">
               <FolderTree className="w-3.5 h-3.5" /> Resulting folder
             </Label>
@@ -345,19 +522,18 @@ export default function SmartMatchMetadataDialog({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 bg-muted/40 p-3 rounded-lg border border-border mt-1">
-            <Switch id="sm-write-file" checked={writeToFile} onCheckedChange={setWriteToFile} />
-            <div className="grid gap-0.5">
-              <Label htmlFor="sm-write-file" className="cursor-pointer font-semibold flex items-center gap-1.5">
-                {writeToFile ? <FileText className="w-3.5 h-3.5" /> : <FileX className="w-3.5 h-3.5" />}
-                Write changes to ComicInfo.xml
-              </Label>
-              <p className="text-[11px] text-muted-foreground">
-                {writeToFile
-                  ? "Series Group, Universe and Description are embedded into the comic file(s) after the match."
-                  : "Kept in Omnibus only; files are left untouched."}
-              </p>
-            </div>
+        <div className="flex items-center gap-3 bg-muted/40 p-3 rounded-lg border border-border mt-1 shrink-0">
+          <Switch id="sm-write-file" checked={writeToFile} onCheckedChange={setWriteToFile} />
+          <div className="grid gap-0.5">
+            <Label htmlFor="sm-write-file" className="cursor-pointer font-semibold flex items-center gap-1.5">
+              {writeToFile ? <FileText className="w-3.5 h-3.5" /> : <FileX className="w-3.5 h-3.5" />}
+              Write changes to ComicInfo.xml
+            </Label>
+            <p className="text-[11px] text-muted-foreground">
+              {writeToFile
+                ? "All the fields above are embedded into the comic file(s) after the match."
+                : "Kept in Omnibus only; files are left untouched."}
+            </p>
           </div>
         </div>
 

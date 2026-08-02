@@ -16,7 +16,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover } from "@/components/smart-match-metadata-dialog"
+import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
 // Auto-scan results (the ComicVine/Metron match suggestions) are kept in sessionStorage so a page
@@ -429,6 +429,13 @@ export default function SmartMatchPage() {
                 coverImageBase64: meta.coverImageBase64 || undefined,
                 writeToFile: meta.writeToFile,
                 lockMetadata: true,
+                // #199 ComicInfo defaults (Credits/Story & Tags/Details tabs) — series-wide values
+                // embedded into every issue's ComicInfo.xml. Strings keep the undefined-means-
+                // untouched contract (same as universe above)…
+                ...Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, meta[k] || undefined])),
+                // …but the B&W switch is two-way by design: false clears a mistaken Yes back to
+                // unset (the route stores null, never a false "No" claim).
+                blackAndWhite: !!meta.blackAndWhite,
             } : {}),
             exactIssueId: issueOv.issueId || undefined,
             exactIssueNumber: issueOv.issueNumber || undefined,

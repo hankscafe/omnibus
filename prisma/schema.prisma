@@ -156,6 +156,42 @@ model Series {
   status          String?
   genres          String?  // JSON array string (same convention as Issue.genres) — Metron series genres / CV volume concepts (issue #180)
   bookType        String?  // 'Print' | 'OneShot' | 'TPB' | 'GN' (Mylar booktype values); null = unknown
+
+  // --- Smart Matcher ComicInfo defaults (#199, concept by CapitanoNemo78): series-wide values the
+  // engine embeds into every issue's ComicInfo.xml. The first block MIRRORS an Issue column of the
+  // same name and is a fallback ONLY when the issue itself has no value (the `universe` contract);
+  // the second block has no per-issue equivalent and is always emitted from Series, like Publisher.
+  // All JSON-array fields use the Issue.writers convention (JSON string array).
+  writers         String?  // JSON array; ComicInfo <Writer> fallback
+  artists         String?  // JSON array; ComicInfo <Penciller> fallback
+  coverArtists    String?  // JSON array; ComicInfo <CoverArtist> fallback
+  colorists       String?  // JSON array; ComicInfo <Colorist> fallback
+  letterers       String?  // JSON array; ComicInfo <Letterer> fallback
+  characters      String?  // JSON array; ComicInfo <Characters> fallback
+  teams           String?  // JSON array; ComicInfo <Teams> fallback
+  locations       String?  // JSON array; ComicInfo <Locations> fallback
+  storyArcs       String?  // JSON array; ComicInfo <StoryArc> fallback
+
+  inker           String?  // JSON array; ComicInfo <Inker>
+  editor          String?  // JSON array; ComicInfo <Editor>
+  translator      String?  // JSON array; ComicInfo <Translator>
+  imprint         String?  // ComicInfo <Imprint>
+  tags            String?  // JSON array; ComicInfo <Tags>
+  format          String?  // ComicInfo <Format> (TPB, HC, Web, Digital…)
+  languageISO     String?  // ComicInfo <LanguageISO>
+  ageRating       String?  // ComicInfo <AgeRating> (schema enum; validated in the dialog only)
+  communityRating Float?   // ComicInfo <CommunityRating>, clamped 0-5 at the API
+  blackAndWhite   Boolean? // ComicInfo <BlackAndWhite>; true = Yes, null = Unknown ("No" is never claimed)
+  gtin            String?  // ComicInfo <GTIN> (ISBN/ISSN/EAN)
+  notes           String?  // ComicInfo <Notes>
+  scanInformation String?  // ComicInfo <ScanInformation>
+  review          String?  // ComicInfo <Review>
+  mainCharacterOrTeam String? // ComicInfo <MainCharacterOrTeam>
+  alternateSeries String?  // ComicInfo <AlternateSeries>
+  alternateNumber String?  // ComicInfo <AlternateNumber>
+  alternateCount  Int?     // ComicInfo <AlternateCount>
+  storyArcNumber  String?  // ComicInfo <StoryArcNumber>
+
   coverUrl        String?
   remoteCoverUrl  String?  // Original ComicVine/Metron cover URL (coverUrl becomes a local path after caching)
   seriesJsonWritten Boolean @default(false) // Omnibus owns the series.json in this folder; foreign files are never overwritten

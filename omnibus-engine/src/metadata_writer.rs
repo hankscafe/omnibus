@@ -49,12 +49,27 @@ fn clean_json_array(raw: Option<&str>) -> String {
 
 pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<(i32, i32, i32)> {
     // isManga is CAST for the Any driver — SQLite's BOOLEAN decltype has no Any mapping.
+    // #199 ComicInfo defaults: the s.* mirror columns (series_writers, …) are the Smart Matcher's
+    // series-wide values — build_comic_info_xml uses them only when the issue's own column is empty.
+    // CASTs follow the Any-driver rules (src/db.rs): BOOLEAN → INTEGER read as i64, and the numeric
+    // Float/Int defaults → TEXT so both backends deliver one portable type.
     let base = r#"SELECT i.id, i."filePath", i.number, i.name as issue_name, i.description as issue_desc,
                i.writers, i.artists, i.characters, i."coverArtists", i.colorists, i.letterers, i.teams, i.locations,
                i."releaseDate", i.universe as issue_universe,
                i.genres, i."storyArcs", i."metadataId" as issue_meta_id, i."metadataSource" as issue_meta_source,
                s.id as series_id, s.name as series_name, s.publisher, s.year, s."folderPath",
-               s.universe as series_universe, s."seriesGroup" as series_group, CAST(s."isManga" AS INTEGER) AS "isManga", s."metadataId" as series_meta_id, s."metadataSource" as series_meta_source
+               s.universe as series_universe, s."seriesGroup" as series_group, CAST(s."isManga" AS INTEGER) AS "isManga", s."metadataId" as series_meta_id, s."metadataSource" as series_meta_source,
+               s.genres as series_genres,
+               s.writers as series_writers, s.artists as series_artists, s."coverArtists" as series_cover_artists,
+               s.colorists as series_colorists, s.letterers as series_letterers, s.characters as series_characters,
+               s.teams as series_teams, s.locations as series_locations, s."storyArcs" as series_story_arcs,
+               s.inker as series_inker, s.editor as series_editor, s.translator as series_translator,
+               s.imprint, s.tags as series_tags, s.format, s."languageISO", s."ageRating",
+               CAST(s."communityRating" AS TEXT) AS "communityRatingText",
+               CAST(s."blackAndWhite" AS INTEGER) AS "blackAndWhiteInt",
+               s.gtin, s.notes, s."scanInformation", s.review,
+               s."mainCharacterOrTeam", s."alternateSeries", s."alternateNumber",
+               CAST(s."alternateCount" AS TEXT) AS "alternateCountText", s."storyArcNumber"
         FROM "Issue" i
         JOIN "Series" s ON i."seriesId" = s.id
         WHERE LOWER(i."filePath") LIKE '%.cbz'"#;
@@ -185,26 +200,68 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
         .or_else(|| g("series_universe").filter(|s| !s.is_empty()))
         .unwrap_or_default();
 
-    let writers = clean_json_array(g("writers").as_deref());
-    let artists = clean_json_array(g("artists").as_deref());
-    let characters = clean_json_array(g("characters").as_deref());
-    let cover_artists = clean_json_array(g("coverArtists").as_deref());
-    let colorists = clean_json_array(g("colorists").as_deref());
-    let letterers = clean_json_array(g("letterers").as_deref());
-    let teams = clean_json_array(g("teams").as_deref());
-    let locations = clean_json_array(g("locations").as_deref());
+    // #199: the issue's own value wins when non-empty; otherwise the Smart Matcher's series-wide
+    // default fills in (same contract as `universe` above) — the admin's default applies until an
+    // issue gains its own provider/manual credits.
+    let paired = |issue_col: &str, series_col: &str| -> String {
+        let iv = clean_json_array(g(issue_col).as_deref());
+        if !iv.is_empty() { iv } else { clean_json_array(g(series_col).as_deref()) }
+    };
+    let writers = paired("writers", "series_writers");
+    let artists = paired("artists", "series_artists");
+    let characters = paired("characters", "series_characters");
+    let cover_artists = paired("coverArtists", "series_cover_artists");
+    let colorists = paired("colorists", "series_colorists");
+    let letterers = paired("letterers", "series_letterers");
+    let teams = paired("teams", "series_teams");
+    let locations = paired("locations", "series_locations");
     let summary = strip_html(&g("issue_desc").unwrap_or_default());
 
     let mut genre_list = parse_json_array(g("genres").as_deref());
+    if genre_list.is_empty() {
+        genre_list = parse_json_array(g("series_genres").as_deref());
+    }
     if is_manga && !genre_list.iter().any(|x| x == "Manga") {
         genre_list.push("Manga".to_string());
     }
     let genres = genre_list.join(", ");
 
-    let story_arcs = parse_json_array(g("storyArcs").as_deref())
-        .into_iter().filter(|a| a != "NONE").collect::<Vec<_>>().join(", ");
+    let mut story_arc_list = parse_json_array(g("storyArcs").as_deref());
+    if story_arc_list.is_empty() {
+        story_arc_list = parse_json_array(g("series_story_arcs").as_deref());
+    }
+    let story_arcs = story_arc_list.into_iter().filter(|a| a != "NONE").collect::<Vec<_>>().join(", ");
 
     let series_group = g("series_group").unwrap_or_default();
+
+    // Series-only ComicInfo defaults (#199, no per-issue equivalent) — always taken straight from
+    // Series, like Publisher. Set once in the Smart Matcher's General/Credits/Story & Tags/Details tabs.
+    let inker = clean_json_array(g("series_inker").as_deref());
+    let editor = clean_json_array(g("series_editor").as_deref());
+    let translator = clean_json_array(g("series_translator").as_deref());
+    let tags = clean_json_array(g("series_tags").as_deref());
+    let imprint = g("imprint").unwrap_or_default();
+    let format = g("format").unwrap_or_default();
+    let language_iso = g("languageISO").unwrap_or_default();
+    let age_rating = g("ageRating").unwrap_or_default();
+    let community_rating = g("communityRatingText").unwrap_or_default();
+    let gtin = g("gtin").unwrap_or_default();
+    let notes = g("notes").unwrap_or_default();
+    let scan_information = g("scanInformation").unwrap_or_default();
+    let review = g("review").unwrap_or_default();
+    let main_character_or_team = g("mainCharacterOrTeam").unwrap_or_default();
+    let alternate_series = g("alternateSeries").unwrap_or_default();
+    let alternate_number = g("alternateNumber").unwrap_or_default();
+    let alternate_count = g("alternateCountText").unwrap_or_default();
+    let story_arc_number = g("storyArcNumber").unwrap_or_default();
+    // CAST to INTEGER in the SELECT (Any driver, the isManga trick); a NULL (never set) reads as
+    // None → "Unknown". The matcher only ever stores true or null, so "No" is never claimed.
+    let black_and_white = row.try_get::<Option<i64>, _>("blackAndWhiteInt").unwrap_or(None);
+    let black_and_white_tag = match black_and_white {
+        Some(v) if v != 0 => "Yes",
+        Some(_) => "No",
+        None => "Unknown",
+    };
 
     // <Volume> = series start year (blank when unknown/0). <Year>/<Month>/<Day> from releaseDate, year falling back to Volume.
     let volume = if year != 0 { year.to_string() } else { String::new() };
@@ -265,6 +322,9 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
 
     let manga_tag = if is_manga { "YesAndRightToLeft" } else { "No" };
 
+    // Tag order follows the anansi-project ComicInfo schema listing (#199 widened the set from ~21
+    // to the full complement). Consumers match by name, so the order is cosmetic — but keeping the
+    // schema's order makes diffs against other tools' output readable.
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -272,25 +332,44 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
   <Title>{}</Title>
   <Number>{}</Number>
   <Volume>{}</Volume>
+  <AlternateSeries>{}</AlternateSeries>
+  <AlternateNumber>{}</AlternateNumber>
+  <AlternateCount>{}</AlternateCount>
   <Summary>{}</Summary>
+  <Notes>{}</Notes>
   <Year>{}</Year>
   <Month>{}</Month>
   <Day>{}</Day>
-  <Publisher>{}</Publisher>
-  <Universe>{}</Universe>
-  <Genre>{}</Genre>
-  <StoryArc>{}</StoryArc>
-  <SeriesGroup>{}</SeriesGroup>
   <Writer>{}</Writer>
   <Penciller>{}</Penciller>
+  <Inker>{}</Inker>
   <Colorist>{}</Colorist>
   <Letterer>{}</Letterer>
   <CoverArtist>{}</CoverArtist>
+  <Editor>{}</Editor>
+  <Translator>{}</Translator>
+  <Publisher>{}</Publisher>
+  <Imprint>{}</Imprint>
+  <Universe>{}</Universe>
+  <Genre>{}</Genre>
+  <Tags>{}</Tags>
+  <Web>{}</Web>
+  <LanguageISO>{}</LanguageISO>
+  <Format>{}</Format>
+  <BlackAndWhite>{}</BlackAndWhite>
+  <Manga>{}</Manga>
   <Characters>{}</Characters>
   <Teams>{}</Teams>
   <Locations>{}</Locations>
-  <Web>{}</Web>
-  <Manga>{}</Manga>
+  <MainCharacterOrTeam>{}</MainCharacterOrTeam>
+  <ScanInformation>{}</ScanInformation>
+  <StoryArc>{}</StoryArc>
+  <StoryArcNumber>{}</StoryArcNumber>
+  <SeriesGroup>{}</SeriesGroup>
+  <AgeRating>{}</AgeRating>
+  <CommunityRating>{}</CommunityRating>
+  <Review>{}</Review>
+  <GTIN>{}</GTIN>
   <ComicVineVolumeId>{}</ComicVineVolumeId>
   <ComicVineIssueId>{}</ComicVineIssueId>
   <MetronId>{}</MetronId>
@@ -300,23 +379,42 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
         escape_xml(&issue_name),
         escape_xml(&number),
         volume,
+        escape_xml(&alternate_series),
+        escape_xml(&alternate_number),
+        escape_xml(&alternate_count),
         escape_xml(&summary),
+        escape_xml(&notes),
         y, m, d,
-        escape_xml(&publisher),
-        escape_xml(&universe),
-        escape_xml(&genres),
-        escape_xml(&story_arcs),
-        escape_xml(&series_group),
         escape_xml(&writers),
         escape_xml(&artists),
+        escape_xml(&inker),
         escape_xml(&colorists),
         escape_xml(&letterers),
         escape_xml(&cover_artists),
+        escape_xml(&editor),
+        escape_xml(&translator),
+        escape_xml(&publisher),
+        escape_xml(&imprint),
+        escape_xml(&universe),
+        escape_xml(&genres),
+        escape_xml(&tags),
+        escape_xml(&web_url),
+        escape_xml(&language_iso),
+        escape_xml(&format),
+        black_and_white_tag,
+        manga_tag,
         escape_xml(&characters),
         escape_xml(&teams),
         escape_xml(&locations),
-        escape_xml(&web_url),
-        manga_tag,
+        escape_xml(&main_character_or_team),
+        escape_xml(&scan_information),
+        escape_xml(&story_arcs),
+        escape_xml(&story_arc_number),
+        escape_xml(&series_group),
+        escape_xml(&age_rating),
+        escape_xml(&community_rating),
+        escape_xml(&review),
+        escape_xml(&gtin),
         cv_vol_id,
         cv_issue_id,
         metron_id,
@@ -650,6 +748,120 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // #199: the full ComicInfo default set — issue-wins pairing, series-only tags, and the B&W
+    // tri-state — proven end-to-end through the real embed job against a file-backed SQLite +
+    // real cbz (the round-trip test's fixture pattern).
+    #[tokio::test]
+    async fn embed_emits_full_comicinfo_defaults_with_issue_wins_pairing() {
+        let base = std::env::temp_dir().join(format!("omnibus_ci199_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cbz = base.join("Caravan 001.cbz");
+        {
+            let f = File::create(&cbz).unwrap();
+            let mut zw = ZipWriter::new(f);
+            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.finish().unwrap();
+        }
+
+        let db_file = base.join("ci.db");
+        File::create(&db_file).unwrap();
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+
+        for ddl in [
+            r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, publisher TEXT, year INTEGER,
+                "folderPath" TEXT, universe TEXT, "seriesGroup" TEXT, "isManga" INTEGER DEFAULT 0,
+                "metadataId" TEXT, "metadataSource" TEXT, genres TEXT,
+                writers TEXT, artists TEXT, "coverArtists" TEXT, colorists TEXT, letterers TEXT,
+                characters TEXT, teams TEXT, locations TEXT, "storyArcs" TEXT,
+                inker TEXT, editor TEXT, translator TEXT, imprint TEXT, tags TEXT, format TEXT,
+                "languageISO" TEXT, "ageRating" TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
+                gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT, "mainCharacterOrTeam" TEXT,
+                "alternateSeries" TEXT, "alternateNumber" TEXT, "alternateCount" INTEGER, "storyArcNumber" TEXT)"#,
+            r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
+                name TEXT, description TEXT, "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
+                writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
+                letterers TEXT, teams TEXT, locations TEXT, "metadataId" TEXT, "metadataSource" TEXT)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
+        }
+
+        // series.json export off — this test is about the ComicInfo.xml alone.
+        sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ('export_series_json', 'false')"#)
+            .execute(&db.pool).await.unwrap();
+
+        sqlx::query(
+            r#"INSERT INTO "Series" (id, name, publisher, year, "metadataId", "metadataSource",
+                   writers, artists, inker, editor, translator, imprint, tags, format, "languageISO",
+                   "ageRating", "communityRating", "blackAndWhite", gtin, notes, "scanInformation",
+                   review, "mainCharacterOrTeam", "alternateSeries", "alternateNumber", "alternateCount",
+                   "storyArcNumber", genres, "storyArcs")
+               VALUES ('s199', 'Caravan', 'Sergio Bonelli Editore', 2009, '111', 'COMICVINE',
+                   '["Series Writer"]', '["Series Artist"]', '["Ink Person"]', '["Ed Itor"]', '["Trans Lator"]',
+                   'Vertigo', '["ninja","school life"]', 'TPB', 'it',
+                   'Mature 17+', 4.5, 1, '9781234567890', 'Some notes', 'Scanned by X',
+                   'A review', 'Batman', 'Alt Series', '7A', 6,
+                   '2', '["Sci-Fi"]', '["Big Arc"]')"#,
+        ).execute(&db.pool).await.unwrap();
+
+        let cbz_str = cbz.to_string_lossy().replace('\\', "/");
+        // The issue has its OWN writers (must win) but no artists (series default must fill in).
+        sqlx::query(
+            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, writers, "metadataId", "metadataSource")
+               VALUES ('i199', 's199', $1, '1', '["Issue Writer"]', '900', 'COMICVINE')"#,
+        ).bind(&cbz_str).execute(&db.pool).await.unwrap();
+
+        let (ok, fail, sj) = process_embed_job(
+            db.clone(),
+            EmbedRequest { series_id: Some("s199".to_string()), issue_ids: None },
+        ).await.expect("embed job");
+        assert_eq!((ok, fail, sj), (1, 0, 0), "one embed, series.json export disabled");
+
+        let xml = read_comicinfo_from_zip(&cbz).unwrap().expect("ComicInfo.xml embedded");
+        // Pairing: the issue's writers win; the blank artists fall back to the series default.
+        assert!(xml.contains("<Writer>Issue Writer</Writer>"), "issue value must win:\n{xml}");
+        assert!(xml.contains("<Penciller>Series Artist</Penciller>"), "series default must fill:\n{xml}");
+        // Issue-empty genre/arc fall back to the series values too.
+        assert!(xml.contains("<Genre>Sci-Fi</Genre>"));
+        assert!(xml.contains("<StoryArc>Big Arc</StoryArc>"));
+        // Series-only tags.
+        assert!(xml.contains("<Inker>Ink Person</Inker>"));
+        assert!(xml.contains("<Editor>Ed Itor</Editor>"));
+        assert!(xml.contains("<Translator>Trans Lator</Translator>"));
+        assert!(xml.contains("<Imprint>Vertigo</Imprint>"));
+        assert!(xml.contains("<Tags>ninja, school life</Tags>"));
+        assert!(xml.contains("<Format>TPB</Format>"));
+        assert!(xml.contains("<LanguageISO>it</LanguageISO>"));
+        assert!(xml.contains("<AgeRating>Mature 17+</AgeRating>"));
+        assert!(xml.contains("<CommunityRating>4.5</CommunityRating>"));
+        assert!(xml.contains("<BlackAndWhite>Yes</BlackAndWhite>"));
+        assert!(xml.contains("<GTIN>9781234567890</GTIN>"));
+        assert!(xml.contains("<Notes>Some notes</Notes>"));
+        assert!(xml.contains("<ScanInformation>Scanned by X</ScanInformation>"));
+        assert!(xml.contains("<Review>A review</Review>"));
+        assert!(xml.contains("<MainCharacterOrTeam>Batman</MainCharacterOrTeam>"));
+        assert!(xml.contains("<AlternateSeries>Alt Series</AlternateSeries>"));
+        assert!(xml.contains("<AlternateNumber>7A</AlternateNumber>"));
+        assert!(xml.contains("<AlternateCount>6</AlternateCount>"));
+        assert!(xml.contains("<StoryArcNumber>2</StoryArcNumber>"));
+
+        // Unset B&W reads back as Unknown — never a false "No" claim.
+        sqlx::query(r#"UPDATE "Series" SET "blackAndWhite" = NULL WHERE id = 's199'"#)
+            .execute(&db.pool).await.unwrap();
+        let (ok2, _, _) = process_embed_job(
+            db.clone(),
+            EmbedRequest { series_id: Some("s199".to_string()), issue_ids: None },
+        ).await.expect("embed job 2");
+        assert_eq!(ok2, 1);
+        let xml2 = read_comicinfo_from_zip(&cbz).unwrap().unwrap();
+        assert!(xml2.contains("<BlackAndWhite>Unknown</BlackAndWhite>"), "unset must read Unknown:\n{xml2}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

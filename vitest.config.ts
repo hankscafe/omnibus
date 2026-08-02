@@ -15,6 +15,11 @@ export default defineConfig({
     // per run) AND lost fidelity: axios silently switches to its XHR adapter under jsdom (see the
     // header of __tests__/integration/qbit-live.test.ts).
     environment: 'node',
+    // POOL NOTE (beta.016): `npm test` pins --pool=forks. The threads pool hard-crashes on
+    // Windows (0xC0000005 access violation, measured 2026-08-02 — a native dep is not
+    // thread-safe here). Forks with the DEFAULT heap is green since the jsdom purge; the old
+    // 8GB --max-old-space-size flag is gone. Do not switch to threads without re-testing on
+    // Windows.
     // Replaces ~99 per-file beforeEach(vi.clearAllMocks) blocks. This is mockClear (call history
     // only) — implementations like setup-global's mockResolvedValue defaults survive every test.
     clearMocks: true,

@@ -46,6 +46,7 @@ vi.mock('fs-extra', () => ({
 }));
 
 import { POST } from '@/app/api/library/update/route';
+import { COMIC_INFO_DEFAULT_KEYS } from '@/lib/utils/comicinfo-fields';
 
 const PATH = '/lib/DC/Batman (2020)';
 
@@ -106,6 +107,44 @@ describe('POST /api/library/update — no-op saves are inert (issue #194 (f), se
         expect(data.description).toBe('my curated synopsis');
         expect(data.hasCustomMetadata).toBe(true);
         expect(mocks.queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('#199: a ComicInfo-default change engages the lock and persists converted values', async () => {
+        const res = await POST(req(editorBody({
+            writer: 'A. Writer, B. Writer', imprint: 'Vertigo', blackAndWhite: true, communityRating: '7',
+        })));
+        const json = await res.json();
+
+        expect(json.changed).toBe(true);
+        const data = mocks.seriesUpdate.mock.calls[0][0].data;
+        expect(data.writers).toBe(JSON.stringify(['A. Writer', 'B. Writer']));
+        expect(data.imprint).toBe('Vertigo');
+        expect(data.blackAndWhite).toBe(true);
+        expect(data.communityRating).toBe(5); // clamped
+        expect(data.hasCustomMetadata).toBe(true);
+        expect(mocks.queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('#199: the editor sending every field EMPTY over an unset record is still a no-op', async () => {
+        // The series editor sends all ~28 keys unconditionally ("" = clear) plus blackAndWhite:false.
+        // Over a record that never had them set, that must not count as a change — or every plain
+        // description-only save would lock the series and rewrite every archive.
+        const empties = Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, '']));
+        const res = await POST(req(editorBody({ ...empties, blackAndWhite: false })));
+        const json = await res.json();
+
+        expect(json.changed).toBe(false);
+        expect(mocks.seriesUpdate).not.toHaveBeenCalled();
+        expect(mocks.queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('#199: clearing a stored ComicInfo default counts as a change and stores null', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ ...record(), imprint: 'Vertigo' });
+        const res = await POST(req(editorBody({ imprint: '' })));
+        const json = await res.json();
+
+        expect(json.changed).toBe(true);
+        expect(mocks.seriesUpdate.mock.calls[0][0].data.imprint).toBeNull();
     });
 
     it('an identity-only change never locks (year corrected, narrative untouched)', async () => {

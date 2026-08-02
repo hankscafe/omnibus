@@ -454,7 +454,8 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
     let series = match sqlx::query(
         // seriesJsonWritten is CAST for the Any driver — SQLite's BOOLEAN decltype has no mapping.
         r#"SELECT name, publisher, status, description, year, "cvId", "metadataSource", "metadataId",
-                  "folderPath", "bookType", "remoteCoverUrl", "coverUrl", CAST("seriesJsonWritten" AS INTEGER) AS "seriesJsonWritten"
+                  "folderPath", "bookType", "remoteCoverUrl", "coverUrl", imprint, "ageRating",
+                  CAST("seriesJsonWritten" AS INTEGER) AS "seriesJsonWritten"
            FROM "Series" WHERE id = $1"#,
     )
     .bind(series_id)
@@ -560,6 +561,9 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
 
     let publisher: Option<String> = series.try_get::<Option<String>, _>("publisher").unwrap_or(None).filter(|s| !s.is_empty());
     let book_type: Option<String> = series.try_get("bookType").unwrap_or(None);
+    // #199: the Mylar 1.0.2 spec has always had these slots; now the Series columns can fill them.
+    let imprint: Option<String> = series.try_get::<Option<String>, _>("imprint").unwrap_or(None).filter(|s| !s.is_empty());
+    let age_rating: Option<String> = series.try_get::<Option<String>, _>("ageRating").unwrap_or(None).filter(|s| !s.is_empty());
 
     // Mylar series.json schema v1.0.2. Unknown values are null, never "": Komga ignores nulls
     // but chokes on blanks. https://github.com/mylar3/mylar3/wiki/series.json-schema-(version-1.0.2)
@@ -568,7 +572,7 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
         "metadata": {
             "type": "comicSeries",
             "publisher": publisher,
-            "imprint": serde_json::Value::Null,
+            "imprint": imprint,
             "name": name,
             "comicid": comicid,
             "year": year,
@@ -576,7 +580,7 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
             "description_formatted": Some(description_formatted).filter(|s| !s.is_empty()),
             "volume": serde_json::Value::Null,
             "booktype": book_type.filter(|s| !s.is_empty()).unwrap_or_else(|| "Print".to_string()),
-            "age_rating": serde_json::Value::Null,
+            "age_rating": age_rating,
             "collects": serde_json::Value::Null,
             "comic_image": comic_image,
             "total_issues": total_issues,

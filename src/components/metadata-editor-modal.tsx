@@ -7,8 +7,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
 import { Loader2, FileText, FileX, AlertTriangle, Lock, Unlock } from "lucide-react"
+import { COMIC_INFO_DEFAULT_KEYS, COLUMN_TO_LIST_FIELD, type ComicInfoDefaults } from "@/lib/utils/comicinfo-fields"
+import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
 
 export interface MetadataEditorSeries {
   currentPath: string
@@ -63,6 +66,12 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
   // editor surfaces it and offers the unlock so a wrongly-locked row can heal (issue #194 (f)).
   const [locked, setLocked] = useState(false)
   const [unlocking, setUnlocking] = useState(false)
+  // #199 ComicInfo defaults (series mode only) — comma text for list fields, split server-side.
+  // Unlike the matcher dialog, the editor loads authoritative values first, so it sends every
+  // field on save and an emptied field is an explicit clear (same contract as description).
+  const [fields, setFields] = useState<ComicInfoDefaults>({})
+  const setField = (k: keyof ComicInfoDefaults) => (v: string) => setFields(f => ({ ...f, [k]: v }))
+  const [blackAndWhite, setBlackAndWhite] = useState(false)
 
   // Load current values + the global write-to-file default whenever the dialog opens.
   useEffect(() => {
@@ -106,6 +115,18 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
           universe: s.universe ?? series.universe ?? "",
           seriesGroup: s.seriesGroup ?? series.seriesGroup ?? "",
         })
+        // #199: seed the ComicInfo defaults — list columns arrive as parsed arrays (joined back to
+        // comma text for editing), scalars/numbers as display strings, B&W as the boolean.
+        const ci = s.comicInfo || {}
+        const seeded: Record<string, string> = {}
+        for (const [column, field] of Object.entries(COLUMN_TO_LIST_FIELD)) seeded[field] = joinArr(ci[column])
+        for (const k of ["imprint", "format", "languageISO", "ageRating", "gtin", "notes", "scanInformation", "review", "mainCharacterOrTeam", "storyArcNumber", "alternateSeries", "alternateNumber"]) {
+          seeded[k] = ci[k] ?? ""
+        }
+        seeded.alternateCount = ci.alternateCount != null ? String(ci.alternateCount) : ""
+        seeded.communityRating = ci.communityRating != null ? String(ci.communityRating) : ""
+        setFields(seeded as ComicInfoDefaults)
+        setBlackAndWhite(ci.blackAndWhite === true)
         setLoading(false)
         return
       }
@@ -172,6 +193,10 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
             description: form.description,
             universe: form.universe,
             seriesGroup: form.seriesGroup,
+            // #199 ComicInfo defaults — sent unconditionally: the form was loaded from the
+            // authoritative record, so an emptied field is an explicit clear (like description).
+            ...Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, (fields[k] ?? "").trim()])),
+            blackAndWhite,
             lockMetadata: true,
             writeToFile,
           }),
@@ -272,6 +297,42 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
     </div>
   )
 
+  // Shared between the series (tabbed, #199) and issue layouts.
+  const lockBanner = locked && (
+    <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/40 p-3 rounded-lg shrink-0">
+      <div className="grid gap-0.5 flex-1 min-w-[14rem]">
+        <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+          <Lock className="w-3.5 h-3.5" /> Manual-edits lock is on
+        </span>
+        <p className="text-[11px] text-muted-foreground">
+          {mode === "issue"
+            ? "Provider syncs and auto-enrichment preserve these fields. Remove the lock to let Refresh Metadata refill them from the provider."
+            : "Provider syncs preserve this series' description and related fields. Remove the lock to let metadata refreshes update them again."}
+        </p>
+      </div>
+      <Button size="sm" variant="outline" disabled={unlocking} onClick={handleUnlock}
+        className="border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0">
+        {unlocking ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Unlock className="w-4 h-4 mr-2" />} Remove Lock
+      </Button>
+    </div>
+  )
+  const writeToggle = (
+    <div className="flex items-center gap-3 bg-muted/40 p-3 rounded-lg border border-border mt-1 shrink-0">
+      <Switch id="meta-write-file" checked={writeToFile} onCheckedChange={setWriteToFile} />
+      <div className="grid gap-0.5">
+        <Label htmlFor="meta-write-file" className="cursor-pointer font-semibold flex items-center gap-1.5">
+          {writeToFile ? <FileText className="w-3.5 h-3.5" /> : <FileX className="w-3.5 h-3.5" />}
+          Write changes to ComicInfo.xml
+        </Label>
+        <p className="text-[11px] text-muted-foreground">
+          {writeToFile
+            ? "Edits are embedded into the comic file(s)."
+            : "Edits are kept in Omnibus only; files are left untouched."}
+        </p>
+      </div>
+    </div>
+  )
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[640px] max-h-[90vh] flex flex-col bg-background border-border rounded-xl">
@@ -298,93 +359,95 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
                 : "This issue’s details couldn’t be read, so editing is disabled to avoid overwriting existing data. Please try again."}
             </p>
           </div>
+        ) : mode === "series" ? (
+          /* #199: series mode is tabbed — the same shared tab bodies as the Smart Matcher dialog,
+             so the two surfaces can't drift. Lock banner + write toggle sit outside the scroll. */
+          <Tabs defaultValue="general" className="flex-1 min-h-0 flex flex-col">
+            <TabsList className="shrink-0 w-full">
+              <TabsTrigger value="general">General</TabsTrigger>
+              <TabsTrigger value="credits">Credits</TabsTrigger>
+              <TabsTrigger value="story">Story &amp; Tags</TabsTrigger>
+              <TabsTrigger value="details">Details</TabsTrigger>
+            </TabsList>
+
+            <div className="flex-1 min-h-0 overflow-y-auto pr-3 pt-3">
+              <TabsContent value="general" className="grid gap-4 mt-0">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Summary / Description</Label>
+                  <Textarea value={form.description || ""} onChange={e => set("description", e.target.value)} rows={5} className="bg-background border-border" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs">Series Group</Label>
+                    <Input value={form.seriesGroup || ""} onChange={e => set("seriesGroup", e.target.value)} placeholder="Umbrella folder for related series" className="bg-background border-border h-9" />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs">Universe</Label>
+                    <Input value={form.universe || ""} onChange={e => set("universe", e.target.value)} className="bg-background border-border h-9" />
+                  </div>
+                </div>
+                <ComicInfoGeneralExtras fields={fields} setField={setField} />
+              </TabsContent>
+
+              <TabsContent value="credits" className="grid gap-3 mt-0">
+                <ComicInfoCreditsFields fields={fields} setField={setField} />
+              </TabsContent>
+
+              <TabsContent value="story" className="grid gap-3 mt-0">
+                <ComicInfoStoryFields fields={fields} setField={setField} />
+              </TabsContent>
+
+              <TabsContent value="details" className="grid gap-3 mt-0">
+                <ComicInfoDetailsFields fields={fields} setField={setField} blackAndWhite={blackAndWhite} setBlackAndWhite={setBlackAndWhite} switchId="meta-bw" />
+              </TabsContent>
+            </div>
+
+            {lockBanner}
+            {writeToggle}
+          </Tabs>
         ) : (
           <div className="flex-1 min-h-0 overflow-y-auto grid gap-4 py-2 pr-3">
-            {mode === "issue" && (
-              <div className="grid grid-cols-3 gap-3">
-                <div className="grid gap-1.5">
-                  <Label className="text-xs">Number</Label>
-                  <Input value={form.number || ""} onChange={e => set("number", e.target.value)} className="bg-background border-border h-9" />
-                </div>
-                <div className="grid gap-1.5 col-span-2">
-                  <Label className="text-xs">Release Date</Label>
-                  <Input value={form.releaseDate || ""} onChange={e => set("releaseDate", e.target.value)} placeholder="YYYY-MM-DD" className="bg-background border-border h-9" />
-                </div>
-              </div>
-            )}
-
-            {mode === "issue" && (
+            <div className="grid grid-cols-3 gap-3">
               <div className="grid gap-1.5">
-                <Label className="text-xs">Title</Label>
-                <Input value={form.name || ""} onChange={e => set("name", e.target.value)} className="bg-background border-border h-9" />
+                <Label className="text-xs">Number</Label>
+                <Input value={form.number || ""} onChange={e => set("number", e.target.value)} className="bg-background border-border h-9" />
               </div>
-            )}
+              <div className="grid gap-1.5 col-span-2">
+                <Label className="text-xs">Release Date</Label>
+                <Input value={form.releaseDate || ""} onChange={e => set("releaseDate", e.target.value)} placeholder="YYYY-MM-DD" className="bg-background border-border h-9" />
+              </div>
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label className="text-xs">Title</Label>
+              <Input value={form.name || ""} onChange={e => set("name", e.target.value)} className="bg-background border-border h-9" />
+            </div>
 
             <div className="grid gap-1.5">
               <Label className="text-xs">Summary / Description</Label>
-              <Textarea value={form.description || ""} onChange={e => set("description", e.target.value)} rows={mode === "series" ? 5 : 4} className="bg-background border-border" />
+              <Textarea value={form.description || ""} onChange={e => set("description", e.target.value)} rows={4} className="bg-background border-border" />
             </div>
 
-            {mode === "issue" && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {arrField("writers", "Writers")}
-                {arrField("artists", "Pencillers")}
-                {arrField("coverArtists", "Cover Artists")}
-                {arrField("colorists", "Colorists")}
-                {arrField("letterers", "Letterers")}
-                {arrField("characters", "Characters")}
-                {arrField("teams", "Teams")}
-                {arrField("locations", "Locations")}
-                {arrField("genres", "Genres")}
-                {arrField("storyArcs", "Story Arcs")}
-              </div>
-            )}
-
-            {mode === "series" && (
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Series Group</Label>
-                <Input value={form.seriesGroup || ""} onChange={e => set("seriesGroup", e.target.value)} placeholder="Umbrella folder for related series" className="bg-background border-border h-9" />
-              </div>
-            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {arrField("writers", "Writers")}
+              {arrField("artists", "Pencillers")}
+              {arrField("coverArtists", "Cover Artists")}
+              {arrField("colorists", "Colorists")}
+              {arrField("letterers", "Letterers")}
+              {arrField("characters", "Characters")}
+              {arrField("teams", "Teams")}
+              {arrField("locations", "Locations")}
+              {arrField("genres", "Genres")}
+              {arrField("storyArcs", "Story Arcs")}
+            </div>
 
             <div className="grid gap-1.5">
               <Label className="text-xs">Universe / Imprint</Label>
               <Input value={form.universe || ""} onChange={e => set("universe", e.target.value)} className="bg-background border-border h-9" />
             </div>
 
-            {locked && (
-              <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/40 p-3 rounded-lg">
-                <div className="grid gap-0.5 flex-1 min-w-[14rem]">
-                  <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
-                    <Lock className="w-3.5 h-3.5" /> Manual-edits lock is on
-                  </span>
-                  <p className="text-[11px] text-muted-foreground">
-                    {mode === "issue"
-                      ? "Provider syncs and auto-enrichment preserve these fields. Remove the lock to let Refresh Metadata refill them from the provider."
-                      : "Provider syncs preserve this series' description and related fields. Remove the lock to let metadata refreshes update them again."}
-                  </p>
-                </div>
-                <Button size="sm" variant="outline" disabled={unlocking} onClick={handleUnlock}
-                  className="border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0">
-                  {unlocking ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Unlock className="w-4 h-4 mr-2" />} Remove Lock
-                </Button>
-              </div>
-            )}
-
-            <div className="flex items-center gap-3 bg-muted/40 p-3 rounded-lg border border-border mt-1">
-              <Switch id="meta-write-file" checked={writeToFile} onCheckedChange={setWriteToFile} />
-              <div className="grid gap-0.5">
-                <Label htmlFor="meta-write-file" className="cursor-pointer font-semibold flex items-center gap-1.5">
-                  {writeToFile ? <FileText className="w-3.5 h-3.5" /> : <FileX className="w-3.5 h-3.5" />}
-                  Write changes to ComicInfo.xml
-                </Label>
-                <p className="text-[11px] text-muted-foreground">
-                  {writeToFile
-                    ? "Edits are embedded into the comic file(s)."
-                    : "Edits are kept in Omnibus only; files are left untouched."}
-                </p>
-              </div>
-            </div>
+            {lockBanner}
+            {writeToggle}
           </div>
         )}
 

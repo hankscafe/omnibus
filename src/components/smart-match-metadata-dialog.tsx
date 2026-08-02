@@ -8,62 +8,17 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
+import { COMIC_INFO_DEFAULT_KEYS, type ComicInfoDefaults } from "@/lib/utils/comicinfo-fields"
+import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
 import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload, Loader2 } from "lucide-react"
 
-// Full ComicInfo.xml AgeRating enum (anansi-project schema) — a Select, so only valid values ship.
-const AGE_RATING_OPTIONS = [
-  "Unknown", "Adults Only 18+", "Early Childhood", "Everyone", "Everyone 10+", "G",
-  "Kids to Adults", "M", "MA15+", "Mature 17+", "PG", "R18+", "Rating Pending", "Teen", "X18+",
-]
-const UNSET = "__unset__"
-
-// #199 (concept by CapitanoNemo78): the free-text ComicInfo fields the Smart Matcher applies as
-// series-wide defaults to every issue on match. "List" fields hold plain comma-separated text here;
-// the API splits them into JSON array strings server-side (the Issue.writers convention).
-export interface ComicInfoDefaults {
-  imprint?: string
-  format?: string
-  languageISO?: string
-  ageRating?: string
-  writer?: string
-  penciller?: string
-  inker?: string
-  colorist?: string
-  letterer?: string
-  coverArtist?: string
-  editor?: string
-  translator?: string
-  genre?: string
-  tags?: string
-  characters?: string
-  teams?: string
-  locations?: string
-  mainCharacterOrTeam?: string
-  storyArc?: string
-  storyArcNumber?: string
-  alternateSeries?: string
-  alternateNumber?: string
-  alternateCount?: string
-  communityRating?: string
-  gtin?: string
-  notes?: string
-  scanInformation?: string
-  review?: string
-  /** Two-way by design (not in COMIC_INFO_DEFAULT_KEYS): true → <BlackAndWhite>Yes</>, false →
-   *  clears back to unset. "No" is never claimed — absence reads as Unknown. */
-  blackAndWhite?: boolean
-}
-
-// Exported so the Smart Matcher page can spread every default field into the match-series payload
-// without re-listing all ~28 keys by hand. blackAndWhite is handled separately (boolean semantics).
-export const COMIC_INFO_DEFAULT_KEYS = [
-  "imprint", "format", "languageISO", "ageRating", "writer", "penciller", "inker", "colorist",
-  "letterer", "coverArtist", "editor", "translator", "genre", "tags", "characters", "teams",
-  "locations", "mainCharacterOrTeam", "storyArc", "storyArcNumber", "alternateSeries",
-  "alternateNumber", "alternateCount", "communityRating", "gtin", "notes", "scanInformation", "review",
-] as const
+// #199 ComicInfo defaults: the field list + types live in the shared lib module (the API routes
+// import it too) and the tab bodies come from the shared component module — the series metadata
+// editor renders the same ones, so the two surfaces can't drift. Re-exported so existing
+// consumers (the Smart Matcher page, tests) keep this import path.
+export { COMIC_INFO_DEFAULT_KEYS } from "@/lib/utils/comicinfo-fields"
+export type { ComicInfoDefaults } from "@/lib/utils/comicinfo-fields"
 
 // The metadata an admin can pin to an unmatched item before accepting it. Stored per-item on the
 // Smart Matcher page and merged into the /api/library/match-series request on Accept.
@@ -151,18 +106,6 @@ export function shouldEmbedIssueCover(
   embedCoversEnabled: boolean,
 ): boolean | undefined {
   return ov?.coverImageBase64 && !ov.coverFromArchive ? embedCoversEnabled : undefined
-}
-
-// A plain labeled text input — the many one-line ComicInfo fields across the Credits/Story & Tags/
-// Details tabs would otherwise repeat the same Label+Input markup ~25 times.
-function TextField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
-  const id = "smf-" + label.toLowerCase().replace(/[^a-z0-9]+/g, "-")
-  return (
-    <div className="grid gap-1.5">
-      <Label htmlFor={id} className="text-xs">{label}</Label>
-      <Input id={id} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="bg-background border-border h-9" />
-    </div>
-  )
 }
 
 export default function SmartMatchMetadataDialog({
@@ -339,22 +282,7 @@ export default function SmartMatchMetadataDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <TextField label="Publisher Imprint" value={fields.imprint || ""} onChange={setField("imprint")} placeholder="e.g. Vertigo" />
-            <TextField label="Format" value={fields.format || ""} onChange={setField("format")} placeholder="TPB, HC, Web, Digital…" />
-            <TextField label="Language" value={fields.languageISO || ""} onChange={setField("languageISO")} placeholder="en, it, ja…" />
-          </div>
-
-          <div className="grid gap-1.5">
-            <Label className="text-xs">Age Rating</Label>
-            <Select value={fields.ageRating || UNSET} onValueChange={v => setField("ageRating")(v === UNSET ? "" : v)}>
-              <SelectTrigger className="bg-background border-border h-9 w-full"><SelectValue placeholder="Not set" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={UNSET}>Not set</SelectItem>
-                {AGE_RATING_OPTIONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
+          <ComicInfoGeneralExtras fields={fields} setField={setField} />
 
           <div className="grid gap-1.5">
             <Label className="text-xs">Summary / Description</Label>
@@ -363,66 +291,15 @@ export default function SmartMatchMetadataDialog({
             </TabsContent>
 
             <TabsContent value="credits" className="grid gap-3 mt-0">
-              <p className="text-[11px] text-muted-foreground -mt-1">
-                Comma-separated names, applied to every issue in this series unless an issue already has its own.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <TextField label="Writer" value={fields.writer || ""} onChange={setField("writer")} />
-                <TextField label="Penciller" value={fields.penciller || ""} onChange={setField("penciller")} />
-                <TextField label="Inker" value={fields.inker || ""} onChange={setField("inker")} />
-                <TextField label="Colorist" value={fields.colorist || ""} onChange={setField("colorist")} />
-                <TextField label="Letterer" value={fields.letterer || ""} onChange={setField("letterer")} />
-                <TextField label="Cover Artist" value={fields.coverArtist || ""} onChange={setField("coverArtist")} />
-                <TextField label="Editor" value={fields.editor || ""} onChange={setField("editor")} />
-                <TextField label="Translator" value={fields.translator || ""} onChange={setField("translator")} />
-              </div>
+              <ComicInfoCreditsFields fields={fields} setField={setField} />
             </TabsContent>
 
             <TabsContent value="story" className="grid gap-3 mt-0">
-              <p className="text-[11px] text-muted-foreground -mt-1">
-                Comma-separated values, applied to every issue in this series unless an issue already has its own.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <TextField label="Genre" value={fields.genre || ""} onChange={setField("genre")} placeholder="Science-Fiction, Superhero…" />
-                <TextField label="Tags" value={fields.tags || ""} onChange={setField("tags")} placeholder="ninja, school life…" />
-                <TextField label="Characters" value={fields.characters || ""} onChange={setField("characters")} />
-                <TextField label="Teams" value={fields.teams || ""} onChange={setField("teams")} />
-                <TextField label="Locations" value={fields.locations || ""} onChange={setField("locations")} />
-                <TextField label="Main Character / Team" value={fields.mainCharacterOrTeam || ""} onChange={setField("mainCharacterOrTeam")} />
-                <TextField label="Story Arc" value={fields.storyArc || ""} onChange={setField("storyArc")} />
-                <TextField label="Story Arc Number" value={fields.storyArcNumber || ""} onChange={setField("storyArcNumber")} />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-border">
-                <TextField label="Alternate Series" value={fields.alternateSeries || ""} onChange={setField("alternateSeries")} />
-                <TextField label="Alternate Number" value={fields.alternateNumber || ""} onChange={setField("alternateNumber")} />
-                <TextField label="Alternate Count" value={fields.alternateCount || ""} onChange={setField("alternateCount")} placeholder="e.g. 6" />
-              </div>
+              <ComicInfoStoryFields fields={fields} setField={setField} />
             </TabsContent>
 
             <TabsContent value="details" className="grid gap-3 mt-0">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="grid gap-1.5">
-                  <Label className="text-xs">Community Rating</Label>
-                  <Input type="number" min={0} max={5} step={0.1} value={fields.communityRating || ""}
-                    onChange={e => setField("communityRating")(e.target.value)} placeholder="0.0 - 5.0" className="bg-background border-border h-9" />
-                </div>
-                <TextField label="GTIN" value={fields.gtin || ""} onChange={setField("gtin")} placeholder="ISBN / ISSN / EAN" />
-              </div>
-
-              <div className="flex items-center gap-3 bg-muted/40 p-2.5 rounded-lg border border-border">
-                <Switch id="sm-bw" checked={blackAndWhite} onCheckedChange={setBlackAndWhite} />
-                <Label htmlFor="sm-bw" className="cursor-pointer text-xs">Black and White</Label>
-              </div>
-
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Notes</Label>
-                <Textarea value={fields.notes || ""} onChange={e => setField("notes")(e.target.value)} rows={3} className="bg-background border-border" />
-              </div>
-              <TextField label="Scan Information" value={fields.scanInformation || ""} onChange={setField("scanInformation")} />
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Review</Label>
-                <Textarea value={fields.review || ""} onChange={e => setField("review")(e.target.value)} rows={3} className="bg-background border-border" />
-              </div>
+              <ComicInfoDetailsFields fields={fields} setField={setField} blackAndWhite={blackAndWhite} setBlackAndWhite={setBlackAndWhite} switchId="sm-bw" />
             </TabsContent>
 
             <TabsContent value="covers" className="grid gap-4 mt-0">

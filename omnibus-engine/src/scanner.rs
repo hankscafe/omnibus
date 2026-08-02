@@ -50,6 +50,28 @@ struct ScanComicInfo {
     teams: Option<String>,
     locations: Option<String>,
     story_arc: Option<String>,
+    // #199 series-default tags (read-side): values the writer embeds from the Series columns come
+    // back at scan, so a wipe/rebuild keeps them and pre-tagged libraries contribute them (5H).
+    // PascalCase rename_all covers most; the two all-caps tags need explicit renames.
+    tags: Option<String>,
+    editor: Option<String>,
+    translator: Option<String>,
+    imprint: Option<String>,
+    format: Option<String>,
+    #[serde(rename = "LanguageISO")]
+    language_iso: Option<String>,
+    age_rating: Option<String>,
+    community_rating: Option<String>,
+    black_and_white: Option<String>,
+    #[serde(rename = "GTIN")]
+    gtin: Option<String>,
+    scan_information: Option<String>,
+    review: Option<String>,
+    main_character_or_team: Option<String>,
+    alternate_series: Option<String>,
+    alternate_number: Option<String>,
+    alternate_count: Option<String>,
+    story_arc_number: Option<String>,
 }
 
 struct DerivedMeta {
@@ -397,6 +419,149 @@ fn series_json_fill_blanks_sql() -> &'static str {
            publisher   = COALESCE(NULLIF(NULLIF(publisher, ''), 'Other'), $4, publisher),
            year        = COALESCE(NULLIF(year, 0), $5, year)
        WHERE id = $6"#
+}
+
+/// #199 read-side (5H): the series-default values a single file's ComicInfo carries, converted to
+/// the Series column shapes. Fill-blank only — see the 5H step.
+#[derive(Default)]
+struct ComicInfoSeriesDefaults {
+    imprint: Option<String>,
+    tags_json: Option<String>,
+    format: Option<String>,
+    language_iso: Option<String>,
+    age_rating: Option<String>,
+    community_rating: Option<f64>,
+    black_and_white: Option<bool>,
+    gtin: Option<String>,
+    notes: Option<String>,
+    scan_information: Option<String>,
+    review: Option<String>,
+    main_character_or_team: Option<String>,
+    alternate_series: Option<String>,
+    alternate_number: Option<String>,
+    alternate_count: Option<i32>,
+    story_arc_number: Option<String>,
+    inker_json: Option<String>,
+    editor_json: Option<String>,
+    translator_json: Option<String>,
+}
+
+impl ComicInfoSeriesDefaults {
+    fn has_any(&self) -> bool {
+        self.imprint.is_some() || self.tags_json.is_some() || self.format.is_some()
+            || self.language_iso.is_some() || self.age_rating.is_some()
+            || self.community_rating.is_some() || self.black_and_white.is_some()
+            || self.gtin.is_some() || self.notes.is_some() || self.scan_information.is_some()
+            || self.review.is_some() || self.main_character_or_team.is_some()
+            || self.alternate_series.is_some() || self.alternate_number.is_some()
+            || self.alternate_count.is_some() || self.story_arc_number.is_some()
+            || self.inker_json.is_some() || self.editor_json.is_some() || self.translator_json.is_some()
+    }
+}
+
+fn comicinfo_series_defaults(info: &ScanComicInfo) -> ComicInfoSeriesDefaults {
+    let text = |s: &Option<String>| s.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let list = |s: &Option<String>| -> Option<String> {
+        let j = crate::watched_sync::split_to_json(s.as_deref());
+        if j == "[]" { None } else { Some(j) }
+    };
+    // Per-file tagger fingerprints must not become the series-level note — Mylar/ComicTagger stamp
+    // every file's <Notes> with scrape provenance, which is per-issue noise, not series curation.
+    let notes = text(&info.notes).filter(|v| {
+        let lower = v.to_lowercase();
+        !(lower.contains("comictagger") || lower.contains("scraped") || lower.starts_with("issue id"))
+    });
+    ComicInfoSeriesDefaults {
+        imprint: text(&info.imprint),
+        tags_json: list(&info.tags),
+        format: text(&info.format),
+        language_iso: text(&info.language_iso),
+        age_rating: text(&info.age_rating),
+        community_rating: text(&info.community_rating)
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(0.0, 5.0)),
+        // Yes/No only; Unknown (or garbage) stays NULL so a false claim is never invented.
+        black_and_white: text(&info.black_and_white).and_then(|v| match v.to_ascii_lowercase().as_str() {
+            "yes" => Some(true),
+            "no" => Some(false),
+            _ => None,
+        }),
+        gtin: text(&info.gtin),
+        notes,
+        scan_information: text(&info.scan_information),
+        review: text(&info.review),
+        main_character_or_team: text(&info.main_character_or_team),
+        alternate_series: text(&info.alternate_series),
+        alternate_number: text(&info.alternate_number),
+        alternate_count: text(&info.alternate_count).and_then(|v| v.parse::<i32>().ok()),
+        story_arc_number: text(&info.story_arc_number),
+        inker_json: list(&info.inker),
+        editor_json: list(&info.editor),
+        translator_json: list(&info.translator),
+    }
+}
+
+/// #199 read-side (5H): series with at least one file-backed issue and ANY blank ComicInfo-default
+/// column — candidates for the fill. $1 = libraryId. Most libraries match broadly (few files carry
+/// every tag), so the fill reads ONE small archive entry per candidate series, bounded-parallel.
+fn comicinfo_defaults_candidates_sql() -> &'static str {
+    r#"SELECT s.id AS sid,
+              (SELECT i."filePath" FROM "Issue" i
+                WHERE i."seriesId" = s.id AND i."filePath" IS NOT NULL AND i."filePath" <> ''
+                ORDER BY i.number LIMIT 1) AS fp
+       FROM "Series" s
+       WHERE s."libraryId" = $1 AND (
+             s.imprint IS NULL OR s.imprint = ''
+          OR s.tags IS NULL OR s.tags = '' OR s.tags = '[]'
+          OR s.format IS NULL OR s.format = ''
+          OR s."languageISO" IS NULL OR s."languageISO" = ''
+          OR s."ageRating" IS NULL OR s."ageRating" = ''
+          OR s."communityRating" IS NULL
+          OR s."blackAndWhite" IS NULL
+          OR s.gtin IS NULL OR s.gtin = ''
+          OR s.notes IS NULL OR s.notes = ''
+          OR s."scanInformation" IS NULL OR s."scanInformation" = ''
+          OR s.review IS NULL OR s.review = ''
+          OR s."mainCharacterOrTeam" IS NULL OR s."mainCharacterOrTeam" = ''
+          OR s."alternateSeries" IS NULL OR s."alternateSeries" = ''
+          OR s."alternateNumber" IS NULL OR s."alternateNumber" = ''
+          OR s."alternateCount" IS NULL
+          OR s."storyArcNumber" IS NULL OR s."storyArcNumber" = ''
+          OR s.inker IS NULL OR s.inker = '' OR s.inker = '[]'
+          OR s.editor IS NULL OR s.editor = '' OR s.editor = '[]'
+          OR s.translator IS NULL OR s.translator = '' OR s.translator = '[]')"#
+}
+
+/// Fill-only UPDATE for the 5H defaults: each column takes the file's value only when blank, the
+/// trailing self-reference keeps it untouched when the file offers nothing either (the 5F pattern).
+/// blackAndWhite is interpolated as a literal (true/false/NULL, engine-derived — never user text):
+/// Postgres types the column boolean and the Any driver has no portable bool bind (see db.rs).
+fn comicinfo_defaults_fill_sql(bw_literal: &str) -> String {
+    format!(
+        r#"UPDATE "Series" SET
+           imprint = COALESCE(NULLIF(imprint, ''), $1, imprint),
+           tags = COALESCE(NULLIF(NULLIF(tags, ''), '[]'), $2, tags),
+           format = COALESCE(NULLIF(format, ''), $3, format),
+           "languageISO" = COALESCE(NULLIF("languageISO", ''), $4, "languageISO"),
+           "ageRating" = COALESCE(NULLIF("ageRating", ''), $5, "ageRating"),
+           "communityRating" = COALESCE("communityRating", $6),
+           gtin = COALESCE(NULLIF(gtin, ''), $7, gtin),
+           notes = COALESCE(NULLIF(notes, ''), $8, notes),
+           "scanInformation" = COALESCE(NULLIF("scanInformation", ''), $9, "scanInformation"),
+           review = COALESCE(NULLIF(review, ''), $10, review),
+           "mainCharacterOrTeam" = COALESCE(NULLIF("mainCharacterOrTeam", ''), $11, "mainCharacterOrTeam"),
+           "alternateSeries" = COALESCE(NULLIF("alternateSeries", ''), $12, "alternateSeries"),
+           "alternateNumber" = COALESCE(NULLIF("alternateNumber", ''), $13, "alternateNumber"),
+           "alternateCount" = COALESCE("alternateCount", $14),
+           "storyArcNumber" = COALESCE(NULLIF("storyArcNumber", ''), $15, "storyArcNumber"),
+           inker = COALESCE(NULLIF(NULLIF(inker, ''), '[]'), $16, inker),
+           editor = COALESCE(NULLIF(NULLIF(editor, ''), '[]'), $17, editor),
+           translator = COALESCE(NULLIF(NULLIF(translator, ''), '[]'), $18, translator),
+           "blackAndWhite" = COALESCE("blackAndWhite", {bw})
+       WHERE id = $19"#,
+        bw = bw_literal
+    )
 }
 
 fn restamp_credit_complete_sql() -> &'static str {
@@ -2031,6 +2196,86 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         Err(e) => log::warn!("[Scan] Credit-complete re-stamp failed: {:?}", e),
     }
 
+    // ---------------------------------------------------------
+    // 5H. COMICINFO SERIES DEFAULTS FROM FILES (#199 read-side)
+    // ---------------------------------------------------------
+    // The #199 series-wide ComicInfo defaults (imprint, ageRating, tags, credits-only-on-series, …)
+    // are embedded into every issue's ComicInfo.xml by the writer but previously had no read path —
+    // a DB wipe/rebuild lost them and pre-tagged foreign libraries never contributed them. The
+    // fields are series-wide by definition, so ONE file speaks for the series: read one file-backed
+    // issue's ComicInfo per candidate series (bounded-parallel, one small archive entry each) and
+    // fill BLANK columns only — a provider, manual, or earlier value always wins.
+    let ci_candidates = sqlx::query(comicinfo_defaults_candidates_sql())
+        .bind(&library_id)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap_or_default();
+
+    if !ci_candidates.is_empty() {
+        let ci_sem = Arc::new(Semaphore::new(cfg.scan_workers));
+        let mut ci_set: JoinSet<Option<(String, ComicInfoSeriesDefaults)>> = JoinSet::new();
+        for row in ci_candidates {
+            let sid: String = row.get("sid");
+            let Some(fp) = row.try_get::<Option<String>, _>("fp").unwrap_or(None) else { continue };
+            let sem = ci_sem.clone();
+            ci_set.spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                tokio::task::spawn_blocking(move || {
+                    parse_comic_info(Path::new(&fp)).map(|info| (sid, comicinfo_series_defaults(&info)))
+                })
+                .await
+                .ok()
+                .flatten()
+            });
+        }
+        // GATHER the archive reads, then FLUSH chunked (the 5F pattern).
+        let mut ci_updates: Vec<(String, ComicInfoSeriesDefaults)> = Vec::new();
+        while let Some(res) = ci_set.join_next().await {
+            let Ok(Some((sid, d))) = res else { continue };
+            if d.has_any() {
+                ci_updates.push((sid, d));
+            }
+        }
+        let mut ci_filled = 0;
+        for chunk in ci_updates.chunks(WRITE_CHUNK) {
+            let Some(mut tx) = begin_write_tx(&db, "5H comicinfo defaults").await else { continue };
+            let mut n = 0;
+            for (sid, d) in chunk {
+                let bw = match d.black_and_white { Some(true) => "true", Some(false) => "false", None => "NULL" };
+                if sqlx::query(&comicinfo_defaults_fill_sql(bw))
+                    .bind(&d.imprint)
+                    .bind(&d.tags_json)
+                    .bind(&d.format)
+                    .bind(&d.language_iso)
+                    .bind(&d.age_rating)
+                    .bind(d.community_rating)
+                    .bind(&d.gtin)
+                    .bind(&d.notes)
+                    .bind(&d.scan_information)
+                    .bind(&d.review)
+                    .bind(&d.main_character_or_team)
+                    .bind(&d.alternate_series)
+                    .bind(&d.alternate_number)
+                    .bind(d.alternate_count)
+                    .bind(&d.story_arc_number)
+                    .bind(&d.inker_json)
+                    .bind(&d.editor_json)
+                    .bind(&d.translator_json)
+                    .bind(sid)
+                    .execute(&mut *tx)
+                    .await
+                    .is_ok()
+                {
+                    n += 1;
+                }
+            }
+            if tx.commit().await.is_ok() { ci_filled += n; }
+        }
+        if ci_filled > 0 {
+            log::info!("[Scan] Filled series ComicInfo defaults from file metadata for {} series (fill-blank only, #199).", ci_filled);
+        }
+    }
+
     // A big scan appends thousands of WAL frames; SQLite's passive auto-checkpoint often can't
     // drain them while the Node app keeps read snapshots open, and every reader slows as the WAL
     // grows (issue #183). Reclaim it now that the write burst is over. TRUNCATE waits on the
@@ -2240,6 +2485,73 @@ mod tests {
     }
 
     // ==== Discussion #177: trust embedded file metadata (Mylar-migrated libraries). ====
+
+    // #199 read-side: the two all-caps serde renames (LanguageISO, GTIN) are the regression risk —
+    // PascalCase alone would derive LanguageIso/Gtin and silently read nothing.
+    #[test]
+    fn parse_comicinfo_reads_199_series_default_tags() {
+        let xml = r#"<?xml version="1.0"?>
+<ComicInfo>
+  <Series>X</Series>
+  <Imprint>Vertigo</Imprint>
+  <Tags>ninja, school life</Tags>
+  <Editor>Ed One</Editor>
+  <Translator>Tr One</Translator>
+  <Format>TPB</Format>
+  <LanguageISO>it</LanguageISO>
+  <AgeRating>Mature 17+</AgeRating>
+  <CommunityRating>4.5</CommunityRating>
+  <BlackAndWhite>Yes</BlackAndWhite>
+  <GTIN>9781234567890</GTIN>
+  <ScanInformation>Scanned by X</ScanInformation>
+  <Review>Great</Review>
+  <MainCharacterOrTeam>Batman</MainCharacterOrTeam>
+  <AlternateSeries>Alt</AlternateSeries>
+  <AlternateNumber>7A</AlternateNumber>
+  <AlternateCount>6</AlternateCount>
+  <StoryArcNumber>2</StoryArcNumber>
+</ComicInfo>"#;
+        let info: ScanComicInfo = quick_xml::de::from_str(xml).expect("parse 199 tags");
+        assert_eq!(info.language_iso.as_deref(), Some("it"));
+        assert_eq!(info.gtin.as_deref(), Some("9781234567890"));
+        assert_eq!(info.imprint.as_deref(), Some("Vertigo"));
+        assert_eq!(info.age_rating.as_deref(), Some("Mature 17+"));
+
+        let d = comicinfo_series_defaults(&info);
+        assert_eq!(d.tags_json.as_deref(), Some(r#"["ninja","school life"]"#));
+        assert_eq!(d.editor_json.as_deref(), Some(r#"["Ed One"]"#));
+        assert_eq!(d.translator_json.as_deref(), Some(r#"["Tr One"]"#));
+        assert_eq!(d.community_rating, Some(4.5));
+        assert_eq!(d.black_and_white, Some(true));
+        assert_eq!(d.alternate_count, Some(6));
+        assert_eq!(d.story_arc_number.as_deref(), Some("2"));
+        assert!(d.has_any());
+    }
+
+    #[test]
+    fn comicinfo_series_defaults_validation_and_junk_notes() {
+        let info = ScanComicInfo {
+            black_and_white: Some("Unknown".to_string()),
+            community_rating: Some("9.9".to_string()),
+            alternate_count: Some("six".to_string()),
+            notes: Some("Tagged with ComicTagger 1.6 using info from Comic Vine".to_string()),
+            ..Default::default()
+        };
+        let d = comicinfo_series_defaults(&info);
+        assert_eq!(d.black_and_white, None, "Unknown never becomes a stored claim");
+        assert_eq!(d.community_rating, Some(5.0), "clamped to ComicInfo's 0-5 range");
+        assert_eq!(d.alternate_count, None, "garbage int stays unset");
+        assert_eq!(d.notes, None, "tagger fingerprints never become the series note");
+
+        let info2 = ScanComicInfo {
+            black_and_white: Some("No".to_string()),
+            notes: Some("A real curated note".to_string()),
+            ..Default::default()
+        };
+        let d2 = comicinfo_series_defaults(&info2);
+        assert_eq!(d2.black_and_white, Some(false), "an explicit foreign No is honored");
+        assert_eq!(d2.notes.as_deref(), Some("A real curated note"));
+    }
 
     #[test]
     fn parse_comic_info_reads_rar_archives() {
@@ -2802,9 +3114,13 @@ mod tests {
             .execute(&db.pool).await.unwrap();
         sqlx::query(
             r#"INSERT INTO "Series" (id, "folderPath", name, year, publisher, "metadataId", "metadataSource",
-                   "matchState", "cvId", "libraryId", description, status, "bookType", genres)
+                   "matchState", "cvId", "libraryId", description, status, "bookType", genres,
+                   imprint, "ageRating", "communityRating", "blackAndWhite", tags, editor, "languageISO",
+                   "storyArcNumber", notes)
                VALUES ('rt_series', $1, 'Batman', 2011, 'DC Comics', '796', 'COMICVINE',
-                   'MATCHED', 796, 'rt_lib', 'The Dark Knight returns.', 'Ended', 'Print', '["Crime","Super-Hero"]')"#,
+                   'MATCHED', 796, 'rt_lib', 'The Dark Knight returns.', 'Ended', 'Print', '["Crime","Super-Hero"]',
+                   'Black Label', 'Mature 17+', 4.5, 1, '["noir"]', '["Mark Doyle"]', 'en',
+                   '2', 'Curated series note')"#,
         )
         .bind(&folder_str)
         .execute(&db.pool).await.unwrap();
@@ -2835,6 +3151,9 @@ mod tests {
         let sj: serde_json::Value = serde_json::from_str(&sj_raw).unwrap();
         assert_eq!(sj["metadata"]["comicid"], 796);
         assert_eq!(sj["metadata"]["status"], "Ended");
+        // #199: the Mylar-spec slots now carry the Series defaults instead of hardcoded nulls.
+        assert_eq!(sj["metadata"]["imprint"], "Black Label");
+        assert_eq!(sj["metadata"]["age_rating"], "Mature 17+");
         // publication_run derives from Issue.releaseDate — the Phase 2 round-trip feeding this file.
         assert_eq!(sj["metadata"]["publication_run"], "May 2012 - May 2012");
 
@@ -2864,6 +3183,26 @@ mod tests {
         assert_eq!(s.get::<Option<String>, _>("bookType").as_deref(), Some("Print"));
         // Series genres re-aggregate from the issues' ComicInfo (scan 5E).
         assert_eq!(s.get::<Option<String>, _>("genres").as_deref(), Some(r#"["Crime","Super-Hero"]"#));
+
+        // #199 read-side (5H): the series-wide ComicInfo defaults ALSO survive the wipe — the embed
+        // wrote them into the file's ComicInfo, the rescan read them back, and fill-blank restored
+        // the columns. This is the durability half of the beta.012 feature.
+        let ci = sqlx::query(
+            r#"SELECT imprint, "ageRating", CAST("communityRating" AS TEXT) AS cr,
+                      CAST("blackAndWhite" AS INTEGER) AS bw, tags, editor, "languageISO",
+                      "storyArcNumber", notes
+               FROM "Series" WHERE "libraryId" = 'rt_lib'"#,
+        )
+        .fetch_one(&db.pool).await.expect("rebuilt series ComicInfo defaults");
+        assert_eq!(ci.get::<Option<String>, _>("imprint").as_deref(), Some("Black Label"));
+        assert_eq!(ci.get::<Option<String>, _>("ageRating").as_deref(), Some("Mature 17+"));
+        assert_eq!(ci.get::<Option<String>, _>("cr").as_deref(), Some("4.5"));
+        assert_eq!(ci.get::<Option<i64>, _>("bw"), Some(1));
+        assert_eq!(ci.get::<Option<String>, _>("tags").as_deref(), Some(r#"["noir"]"#));
+        assert_eq!(ci.get::<Option<String>, _>("editor").as_deref(), Some(r#"["Mark Doyle"]"#));
+        assert_eq!(ci.get::<Option<String>, _>("languageISO").as_deref(), Some("en"));
+        assert_eq!(ci.get::<Option<String>, _>("storyArcNumber").as_deref(), Some("2"));
+        assert_eq!(ci.get::<Option<String>, _>("notes").as_deref(), Some("Curated series note"));
 
         // -- 5. The issue came back identical, from its own ComicInfo.
         let series_id: String = s.get("id");

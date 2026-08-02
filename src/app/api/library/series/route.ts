@@ -292,6 +292,41 @@ export async function GET(request: Request) {
       hasCustomCover: (seriesRecord as any)?.hasCustomCover || false,
       // Manual-edits lock state — the metadata editor shows it and offers the unlock (issue #194 (f)).
       hasCustomMetadata: (seriesRecord as any)?.hasCustomMetadata || false,
+      // #199 ComicInfo defaults for the series editor: raw scalars, list columns as parsed arrays
+      // (the editor joins them for display), blackAndWhite as the tri-state boolean|null.
+      comicInfo: {
+        imprint: (seriesRecord as any)?.imprint || null,
+        format: (seriesRecord as any)?.format || null,
+        languageISO: (seriesRecord as any)?.languageISO || null,
+        ageRating: (seriesRecord as any)?.ageRating || null,
+        communityRating: (seriesRecord as any)?.communityRating ?? null,
+        blackAndWhite: (seriesRecord as any)?.blackAndWhite ?? null,
+        gtin: (seriesRecord as any)?.gtin || null,
+        notes: (seriesRecord as any)?.notes || null,
+        scanInformation: (seriesRecord as any)?.scanInformation || null,
+        review: (seriesRecord as any)?.review || null,
+        mainCharacterOrTeam: (seriesRecord as any)?.mainCharacterOrTeam || null,
+        alternateSeries: (seriesRecord as any)?.alternateSeries || null,
+        alternateNumber: (seriesRecord as any)?.alternateNumber || null,
+        alternateCount: (seriesRecord as any)?.alternateCount ?? null,
+        storyArcNumber: (seriesRecord as any)?.storyArcNumber || null,
+        // genres also lives top-level (older consumers); duplicated here so the editor's seed →
+        // save round-trip can't clear a provider-synced value it never displayed.
+        genres: safeParse((seriesRecord as any)?.genres),
+        writers: safeParse((seriesRecord as any)?.writers),
+        artists: safeParse((seriesRecord as any)?.artists),
+        coverArtists: safeParse((seriesRecord as any)?.coverArtists),
+        colorists: safeParse((seriesRecord as any)?.colorists),
+        letterers: safeParse((seriesRecord as any)?.letterers),
+        characters: safeParse((seriesRecord as any)?.characters),
+        teams: safeParse((seriesRecord as any)?.teams),
+        locations: safeParse((seriesRecord as any)?.locations),
+        storyArcs: safeParse((seriesRecord as any)?.storyArcs),
+        inker: safeParse((seriesRecord as any)?.inker),
+        editor: safeParse((seriesRecord as any)?.editor),
+        translator: safeParse((seriesRecord as any)?.translator),
+        tags: safeParse((seriesRecord as any)?.tags),
+      },
       downloadedIssues, 
       missingIssues,
       duplicates: duplicatesList

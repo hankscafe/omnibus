@@ -12,6 +12,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { safeRelocateFolder } from '@/lib/utils/safe-fs';
+import { comicInfoDefaultsUpdateFragment } from '@/lib/utils/comicinfo-fields';
 
 export async function POST(request: Request) {
   try {
@@ -22,8 +23,13 @@ export async function POST(request: Request) {
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     const userId = (session?.user as any)?.id || 'System';
 
+    const body = await request.json();
     const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType, seriesGroup,
-            description, universe, writeToFile, lockMetadata, clearCustomMetadata } = await request.json();
+            description, universe, writeToFile, lockMetadata, clearCustomMetadata } = body;
+    // #199 ComicInfo defaults from the series editor's Credits/Story & Tags/Details tabs — the
+    // shared fragment (also used by match-series) converts + validates them; absent keys touch
+    // nothing, so callers that never send these fields (Edit Info modal, scripts) are unaffected.
+    const comicInfoFrag = comicInfoDefaultsUpdateFragment(body);
 
     // Unlock (issue #194 (f), series side): clears the manual-edits lock so provider syncs may
     // refresh this series' narrative fields again. Mirrors the per-issue unlock; nothing else in
@@ -125,7 +131,11 @@ export async function POST(request: Request) {
         narrativeChanged =
             (description !== undefined && norm(description) !== norm(existingRecord.description)) ||
             (universe !== undefined && norm(universe) !== norm(existingRecord.universe)) ||
-            (seriesGroup !== undefined && norm(seriesGroup) !== norm(existingRecord.seriesGroup));
+            (seriesGroup !== undefined && norm(seriesGroup) !== norm(existingRecord.seriesGroup)) ||
+            // #199: a changed ComicInfo default is manual curation too — it engages the lock and
+            // defeats the no-op guard. Stored and new values share the same conversion (the shared
+            // fragment wrote both), so plain normalized comparison is exact.
+            Object.entries(comicInfoFrag).some(([col, v]) => norm(v) !== norm((existingRecord as any)[col]));
         identityChanged =
             cleanName !== existingRecord.name ||
             parsedYear !== existingRecord.year ||
@@ -171,6 +181,7 @@ export async function POST(request: Request) {
                 ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
                 ...(description !== undefined ? { description: description || null } : {}),
                 ...(universe !== undefined ? { universe: universe || null } : {}),
+                ...comicInfoFrag,
                 // Only the rich metadata editor locks the series against auto-sync — and only
                 // when a narrative field actually changed; identity-only and no-op saves leave
                 // sync behavior unchanged (the basic Edit Info modal never sends lockMetadata).

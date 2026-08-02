@@ -19,16 +19,7 @@ import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 import { safeRelocateFolder, moveFileSafe, ensureLibraryDir } from '@/lib/utils/safe-fs';
-
-// #199 ComicInfo defaults: list-type dialog fields (comma-separated text) mapped to their Series
-// column, which stores a JSON array string — the Issue.writers convention. The dialog key is the
-// ComicInfo tag name camelCased; the column is the (sometimes differently pluralized) DB name.
-const LIST_FIELD_TO_COLUMN: Record<string, string> = {
-    writer: 'writers', penciller: 'artists', inker: 'inker', colorist: 'colorists', letterer: 'letterers',
-    coverArtist: 'coverArtists', editor: 'editor', translator: 'translator', genre: 'genres', tags: 'tags',
-    characters: 'characters', teams: 'teams', locations: 'locations', storyArc: 'storyArcs',
-};
-const splitArr = (s: string): string[] => (s || '').split(',').map(t => t.trim()).filter(Boolean);
+import { comicInfoDefaultsUpdateFragment } from '@/lib/utils/comicinfo-fields';
 import { countArchivePages } from '@/lib/utils/archive-pages';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { findLocalCoverBasename } from '@/lib/utils/cover-plan';
@@ -41,13 +32,7 @@ export async function POST(request: Request) {
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     const req = (await request.json()) as any;
     const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber,
-            universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64, issueCoverEmbed,
-            // #199 ComicInfo defaults from the Smart Matcher's General/Credits/Story & Tags/Details
-            // tabs — series-wide values the engine embeds into every issue's ComicInfo.xml (the
-            // issue's own value wins when present; see metadata_writer.rs). List-type fields arrive
-            // via LIST_FIELD_TO_COLUMN off `req` directly.
-            imprint, format, languageISO, ageRating, communityRating, blackAndWhite, gtin, notes, scanInformation, review,
-            mainCharacterOrTeam, storyArcNumber, alternateSeries, alternateNumber, alternateCount } = req;
+            universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64, issueCoverEmbed } = req;
 
     const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
     const targetSource = metadataSource || 'COMICVINE';
@@ -229,34 +214,10 @@ export async function POST(request: Request) {
         ...(universe !== undefined ? { universe: universe || null } : {}),
         ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
         ...(description !== undefined ? { description: description || null } : {}),
-        // #199 ComicInfo defaults — same undefined-means-untouched contract as universe above.
-        // List-type fields: comma-separated dialog text stored as a JSON array string.
-        ...Object.fromEntries(
-            Object.entries(LIST_FIELD_TO_COLUMN)
-                .filter(([field]) => req[field] !== undefined)
-                .map(([field, column]) => [column, req[field] ? JSON.stringify(splitArr(req[field])) : null])
-        ),
-        ...(imprint !== undefined ? { imprint: imprint || null } : {}),
-        ...(format !== undefined ? { format: format || null } : {}),
-        ...(languageISO !== undefined ? { languageISO: languageISO || null } : {}),
-        ...(ageRating !== undefined ? { ageRating: ageRating || null } : {}),
-        ...(gtin !== undefined ? { gtin: gtin || null } : {}),
-        ...(notes !== undefined ? { notes: notes || null } : {}),
-        ...(scanInformation !== undefined ? { scanInformation: scanInformation || null } : {}),
-        ...(review !== undefined ? { review: review || null } : {}),
-        ...(mainCharacterOrTeam !== undefined ? { mainCharacterOrTeam: mainCharacterOrTeam || null } : {}),
-        ...(storyArcNumber !== undefined ? { storyArcNumber: storyArcNumber || null } : {}),
-        ...(alternateSeries !== undefined ? { alternateSeries: alternateSeries || null } : {}),
-        ...(alternateNumber !== undefined ? { alternateNumber: alternateNumber || null } : {}),
-        // Numbers are validated server-side: garbage stores null rather than NaN, and the rating
-        // clamps to ComicInfo's 0-5 range instead of trusting the client.
-        ...(alternateCount !== undefined
-            ? { alternateCount: Number.isFinite(parseInt(alternateCount, 10)) ? parseInt(alternateCount, 10) : null } : {}),
-        ...(communityRating !== undefined
-            ? { communityRating: Number.isFinite(parseFloat(communityRating)) ? Math.min(5, Math.max(0, parseFloat(communityRating))) : null } : {}),
-        // The B&W switch is two-way by design: true stores true (<BlackAndWhite>Yes</>), anything
-        // else clears to null/unset — a false "No" claim is never stored.
-        ...(blackAndWhite !== undefined ? { blackAndWhite: blackAndWhite === true ? true : null } : {}),
+        // #199 ComicInfo defaults — the shared fragment (also used by the series editor's
+        // library/update) applies the undefined-means-untouched contract, list-to-JSON-array
+        // conversion, number validation, and the two-way B&W semantics in one place.
+        ...comicInfoDefaultsUpdateFragment(req),
         ...(lockMetadata ? { hasCustomMetadata: true } : {})
     };
 

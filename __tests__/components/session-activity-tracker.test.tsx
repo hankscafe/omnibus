@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/session-activity-tracker.test.tsx
 //
 // With the jwt callback no longer counting ambient session reads as activity, this tracker is
@@ -21,7 +22,6 @@ vi.mock('next-auth/react', () => ({
 
 describe('Component: SessionActivityTracker', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.useFakeTimers();
         mocks.update.mockResolvedValue(null);
         mocks.useSession.mockReturnValue({

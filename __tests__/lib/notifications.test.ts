@@ -1,7 +1,10 @@
+// beta.014: this file tests the REAL module — undo setup-global's suite-wide mock.
+vi.unmock('@/lib/notifications');
 // __tests__/lib/notifications.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SystemNotifier } from '@/lib/notifications';
 import axios from 'axios';
+import { loggerLog } from '../helpers/setup-global';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -16,14 +19,9 @@ vi.mock('axios');
 vi.mock('@/lib/db', () => ({
     prisma: { systemSetting: { findMany: mocks.findManySettings } }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/discord', () => ({ DiscordNotifier: { sendAlert: mocks.discordSend } }));
 vi.mock('@/lib/mailer', () => ({ Mailer: { sendAlert: mocks.mailerSend } }));
 
 describe('Communications: System Notifier', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should dispatch a Pushover alert and log the debug trace if configured', async () => {
         mocks.findManySettings.mockResolvedValueOnce([
@@ -43,7 +41,7 @@ describe('Communications: System Notifier', () => {
         );
 
         // Assert our new debug log was triggered
-        expect(mocks.log).toHaveBeenCalledWith(
+        expect(loggerLog).toHaveBeenCalledWith(
             expect.stringContaining("[Pushover Debug] Dispatching 'comic_available' alert."),
             'debug'
         );

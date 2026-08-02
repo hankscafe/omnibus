@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/settings-tabs.test.tsx
 //
 // Settings reorganization Phase 1: the 3,400-line settings monolith becomes 8 tab components
@@ -76,7 +77,6 @@ const mkBag = (overrides: Record<string, any> = {}) => ({
 });
 
 describe('Settings tabs (Phase 1 reorganization)', () => {
-    beforeEach(() => vi.clearAllMocks());
 
     it('MetadataTab renders provider credentials and writes through setConfig', () => {
         const bag = mkBag();

@@ -16,7 +16,6 @@ import { decryptSettingRow } from '@/lib/db';
 // prowlarr_key, …) came back as the raw encrypted blob — "the API key won't save / doesn't work".
 describe('db: SystemSetting decrypt-on-read extension', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.decryptSecret.mockImplementation(async (v: string) => `PLAIN(${v})`);
     });
 

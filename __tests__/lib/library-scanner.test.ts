@@ -18,11 +18,9 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('File System: Library Scanner (engine forwarder)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         process.env.NEXTAUTH_SECRET = 'test-secret';
         mocks.engineFetch.mockResolvedValue({ ok: true, status: 200 });
         vi.stubGlobal('fetch', mocks.engineFetch);

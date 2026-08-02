@@ -36,7 +36,6 @@ const seriesRow = (id: string, name: string) => ({
 
 describe('GET /api/library/recent', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { id: 'u1', role: 'ADMIN' } });
         mocks.getAccessibleLibraryIds.mockResolvedValue('ALL');
     });

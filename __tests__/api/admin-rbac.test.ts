@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/admin/config/route';
+import { makePostJson } from '../helpers/request';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
@@ -13,9 +14,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('next-auth/next', () => ({
     getServerSession: mocks.getServerSession
 }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({
-    getAuthOptions: vi.fn().mockResolvedValue({})
-}));
 
 // 3. Mock the Database & Dependencies
 vi.mock('@/lib/db', () => ({
@@ -25,19 +23,12 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn() } }));
 vi.mock('@/lib/queue', () => ({ syncSchedules: vi.fn().mockResolvedValue(true) }));
 
-const createReq = (body: any) => new Request('http://localhost/api/admin/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-});
+const createReq = makePostJson('http://localhost/api/admin/config');
 
 describe('Security: RBAC Admin API Route', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         // Simulate that initial setup is complete so RBAC is strictly enforced
         mocks.findUniqueSetting.mockResolvedValue({ value: 'true' });
     });

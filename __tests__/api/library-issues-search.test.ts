@@ -21,21 +21,16 @@ vi.mock('next-auth/next', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } })
 }));
 
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({
-    getAuthOptions: vi.fn().mockResolvedValue({})
-}));
 
 vi.mock('@/lib/library-access', () => ({
     getAccessibleLibraryIds: vi.fn().mockResolvedValue('ALL')
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 const req = (q: string) => new Request(`http://localhost/api/library/issues?limit=5&q=${encodeURIComponent(q)}`);
 
 describe('API Route: /api/library/issues search (provider-aware contains)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.issueFindMany.mockResolvedValue([]);
         mocks.seriesFindMany.mockResolvedValue([]);
     });

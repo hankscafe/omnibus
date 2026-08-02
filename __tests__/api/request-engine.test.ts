@@ -12,7 +12,6 @@ vi.mock('@/lib/automation', () => ({
     searchAndDownload: vi.fn().mockResolvedValue(undefined), 
     processAutomationQueue: vi.fn() 
 }))
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 vi.mock('@/lib/trophy-evaluator', () => ({ evaluateTrophies: vi.fn().mockResolvedValue(true) }));
 vi.mock('@/lib/manga-detector', () => ({ detectManga: vi.fn().mockResolvedValue(false) }));
 
@@ -27,7 +26,6 @@ vi.mock('@/lib/db', () => ({
 
 describe('API: Request Engine boundary', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (prisma.user.findUnique as any).mockResolvedValue({ id: 'user-1' });
         (prisma.systemSetting.findUnique as any).mockResolvedValue({ value: 'dummy-key' });
     });

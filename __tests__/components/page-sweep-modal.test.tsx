@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/page-sweep-modal.test.tsx
 //
 // Issue #189 Phase 3: the sweep modal's three phases. Scan walks candidates in batches and lands
@@ -65,7 +66,6 @@ function mockApis({ enqueueOk = true, runStatus = 'RUNNING' } = {}) {
 
 describe('Page sweep modal (issue #189 Phase 3)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mockApis();
     });
 

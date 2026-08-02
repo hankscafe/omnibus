@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // #199 duplicate guard: the matcher's "use the comic's own cover art" toggle returns the archive's
 // OWN first page as the issue cover. Embedding that back into the file duplicates page 0 — the
 // engine's insert-cover is insert-only by design (never replaces). Provenance is decided in the
@@ -6,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import SmartMatchMetadataDialog, { shouldEmbedIssueCover } from '@/components/smart-match-metadata-dialog';
+import { openTab } from '../helpers/radix';
 
 const toast = vi.fn();
 vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast }) }));
@@ -21,13 +23,6 @@ const baseProps = {
     archiveFilePath: '/library/Unmatched/One-Shot 001.cbz',
 };
 
-// #199 tabbed layout: inactive Radix tab content is unmounted, and TabsTrigger activates on
-// mousedown (a bare click event never switches) — so open tabs with the full sequence.
-const openTab = (name: RegExp) => {
-    const trigger = screen.getByRole('tab', { name });
-    fireEvent.mouseDown(trigger);
-    fireEvent.click(trigger);
-};
 
 describe('shouldEmbedIssueCover (#199 gate)', () => {
     it('embeds a genuine upload, honoring the page-level embed toggle', () => {
@@ -48,7 +43,6 @@ describe('shouldEmbedIssueCover (#199 gate)', () => {
 
 describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
             ok: true,
             blob: async () => new Blob([Uint8Array.from([1, 2, 3])], { type: 'image/jpeg' }),
@@ -155,7 +149,6 @@ describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
 // undefined-means-untouched contract (empty → undefined); the B&W switch is a real two-way boolean.
 describe('SmartMatchMetadataDialog ComicInfo defaults (#199)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
             ok: true,
             blob: async () => new Blob([Uint8Array.from([1, 2, 3])], { type: 'image/jpeg' }),

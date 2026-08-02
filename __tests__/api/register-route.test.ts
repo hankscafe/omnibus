@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/auth/register/route';
+import { discordSendAlert } from '../helpers/setup-global';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -30,8 +31,6 @@ vi.mock('@/lib/db', () => ({
 }));
 
 vi.mock('bcryptjs', () => ({ default: { hash: mocks.hash } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/discord', () => ({ DiscordNotifier: { sendAlert: mocks.sendDiscord } }));
 vi.mock('@/lib/mailer', () => ({ Mailer: { sendAlert: mocks.sendEmail } }));
 
 // Helper to create a fake NextRequest
@@ -42,9 +41,6 @@ const createReq = (body: any) => new Request('http://localhost/api/auth/register
 });
 
 describe('API Route: POST /api/auth/register', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should reject a weak password', async () => {
         const req = createReq({ username: 'TestUser', email: 'test@test.com', password: 'weak' });
@@ -104,7 +100,7 @@ describe('API Route: POST /api/auth/register', () => {
         expect(mocks.userUpdate).not.toHaveBeenCalled();
         
         // Assert Discord and Email alerts WERE sent to the admins
-        expect(mocks.sendDiscord).toHaveBeenCalled();
+        expect(discordSendAlert).toHaveBeenCalled();
         expect(mocks.sendEmail).toHaveBeenCalled();
     });
 });

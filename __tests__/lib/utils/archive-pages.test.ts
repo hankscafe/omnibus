@@ -7,7 +7,6 @@ import AdmZip from 'adm-zip';
 
 // Logger writes to disk/console; stub it. Everything else runs against REAL archives in a temp dir —
 // the whole point is proving the fast central-directory count agrees with what the reader serves.
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 import { countArchivePages, isPageCountable, isEngineCountable } from '@/lib/utils/archive-pages';
 

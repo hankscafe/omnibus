@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Shared FollowBell (Beta C): controlled + optimistic. Click reports the new state to the parent
 // immediately and POSTs the EXPLICIT follow value (a double-click can't invert intent); a failed
 // request rolls the parent back. Click never bubbles — the bell lives inside navigating cards.
@@ -10,7 +11,6 @@ vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast }) }));
 
 describe('FollowBell', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true }) }));
     });
 

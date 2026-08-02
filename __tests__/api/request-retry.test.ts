@@ -38,7 +38,6 @@ vi.mock('@/lib/engine', () => ({
     ENGINE_URL: 'http://engine',
     engineHeaders: (extra?: Record<string, string>) => extra || {},
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 function retryRequest(id = 'req_1') {
     return POST(new NextRequest('http://localhost/api/request/retry', {
@@ -50,7 +49,6 @@ function retryRequest(id = 'req_1') {
 
 describe('API Route: Request Retry (engine recovery search)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.stubGlobal('fetch', mocks.fetch);
         mocks.userFindUnique.mockResolvedValue({ id: 'user_1', role: 'ADMIN' });
         // A lost link: no downloadLink at all → falls straight through to the recovery search.

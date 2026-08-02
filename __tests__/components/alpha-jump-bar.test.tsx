@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/alpha-jump-bar.test.tsx
 //
 // Beta E: the floating letter rail. Letters with no series are rendered dimmed and unclickable;

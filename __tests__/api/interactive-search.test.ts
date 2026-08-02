@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
     engineFetch: vi.fn()
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 const createReq = (query: string, extra: Record<string, string> = {}) => {
     const params = new URLSearchParams({ q: query, ...extra });
@@ -20,7 +19,6 @@ const createReq = (query: string, extra: Record<string, string> = {}) => {
 
 describe('API Route: Interactive Search (/api/search/interactive)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         process.env.NEXTAUTH_SECRET = 'test-secret';
         vi.stubGlobal('fetch', mocks.engineFetch);
     });

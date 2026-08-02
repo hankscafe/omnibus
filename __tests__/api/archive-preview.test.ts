@@ -46,7 +46,6 @@ vi.mock('@/lib/engine', () => ({
     ENGINE_URL: 'http://engine',
     engineHeaders: (extra?: Record<string, string>) => extra || {},
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 function makeEntry(entryName: string, data = 'page-bytes') {
     return { entryName, isDirectory: false, getData: () => Buffer.from(data) };
@@ -58,7 +57,6 @@ function request(query: string) {
 
 describe('API Route: Smart Matcher archive preview', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getToken.mockResolvedValue({ id: 'admin_1', role: 'ADMIN' });
         mocks.libraryFindMany.mockResolvedValue([{ path: '/data/comics' }]);
         mocks.fsExistsSync.mockReturnValue(true);

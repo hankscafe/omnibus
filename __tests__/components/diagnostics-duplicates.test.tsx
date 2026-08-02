@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/diagnostics-duplicates.test.tsx
 //
 // Issue #196: the Duplicate Resolver pre-marked a REAL comic for deletion when crossed records put
@@ -61,7 +62,6 @@ async function openDuplicatesTab() {
 
 describe('Duplicate Resolver mispair guard (issue #196)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         fetchMock.mockImplementation(async (url: string, init?: any) => {
             if (url === '/api/admin/diagnostics') {
                 const body = JSON.parse(init?.body || '{}');

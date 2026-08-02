@@ -20,9 +20,6 @@ vi.mock('@/lib/db', () => ({
     prisma: { issue: { findUnique: mocks.issueFindUnique, update: mocks.issueUpdate } }
 }));
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: async () => ({}) }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.auditLog } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/utils/paths', () => ({ CONFIG_DIR: '/cfg' }));
 vi.mock('@/lib/pages/insert-cover-core', () => ({ embedUploadedCoverIntoArchive: mocks.embedCore }));
 vi.mock('fs', () => ({
@@ -40,7 +37,6 @@ const postReq = (body: any) => new Request('http://localhost/api/library/issue/c
 });
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.getServerSession.mockResolvedValue({ user: { role: 'ADMIN', id: 'admin1' } });
     mocks.issueFindUnique.mockResolvedValue({ id: 'i1', number: '3', filePath: '/data/x.cbz', series: { name: 'S' } });
     mocks.issueUpdate.mockResolvedValue({});

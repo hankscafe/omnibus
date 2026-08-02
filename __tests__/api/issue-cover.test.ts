@@ -63,7 +63,6 @@ vi.mock('@/lib/engine', () => ({
     ENGINE_URL: 'http://engine:8080',
     engineHeaders: (h?: Record<string, string>) => ({ ...(h || {}) }),
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 const req = (qs: string) => new NextRequest(`http://localhost/api/library/cover?${qs}`);
 const ARCHIVE = '/data/comics/Saga (2012)/Saga 001.cbz';
@@ -71,7 +70,6 @@ const FOLDER = '/data/comics/Saga (2012)';
 
 describe('API Route: issue first-page covers (?issueId=)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.stubGlobal('fetch', mocks.fetch);
         resetLibraryRootsCache(); // roots are cached module-wide (issue #183); isolate each case
         mocks.libraryFindMany.mockResolvedValue([{ path: '/data/comics' }]);

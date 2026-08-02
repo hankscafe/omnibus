@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/home-shelves.test.tsx
 //
 // Home shelves refresh wiring (2026-07-25 worklist items 1+3): both shelves must re-fetch when

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/admin/config/route';
+import { loggerLog, auditLog } from '../helpers/setup-global';
 
 // Settings-save response contract (2026-07-28 field repro on the dev box): once the settings
 // transaction commits, NOTHING after it may stall or fail the response. With Redis down, the old
@@ -18,7 +19,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -29,8 +29,6 @@ vi.mock('@/lib/db', () => ({
 
 // The real queue module dials Redis at import time — never load it in a unit test.
 vi.mock('@/lib/queue', () => ({ syncSchedules: mocks.syncSchedules }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.auditLog } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log, setLevel: vi.fn() } }));
 vi.mock('@/lib/encryption', () => ({
     encryptSecret: vi.fn(async (v: string) => v),
     decryptSecret: vi.fn(async (v: string) => v),
@@ -45,12 +43,11 @@ const mockReq = (body: any) => ({
 
 describe('Settings save: the response never waits on (or fails from) post-commit work', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });
         mocks.settingFindUnique.mockResolvedValue({ key: 'setup_complete', value: 'true' });
         mocks.transaction.mockImplementation(async (fn: any) =>
             fn({ systemSetting: { upsert: mocks.settingUpsert } }));
-        mocks.auditLog.mockResolvedValue(undefined);
+        auditLog.mockResolvedValue(undefined);
         mocks.syncSchedules.mockResolvedValue(undefined);
     });
 
@@ -79,16 +76,16 @@ describe('Settings save: the response never waits on (or fails from) post-commit
         expect(res.status).toBe(200);
         // Give the detached rejection a microtask to reach its .catch logger.
         await new Promise(r => setTimeout(r, 0));
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('ECONNREFUSED'), 'error');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('ECONNREFUSED'), 'error');
     });
 
     it('a failed audit write cannot turn a committed save into a 500', async () => {
-        mocks.auditLog.mockRejectedValue(new Error('audit table locked'));
+        auditLog.mockRejectedValue(new Error('audit table locked'));
 
         const res = await POST(mockReq({ settings: { test_key: 'v' } }));
 
         expect(res.status).toBe(200);
         expect(mocks.settingUpsert).toHaveBeenCalled();
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('audit table locked'), 'error');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('audit table locked'), 'error');
     });
 });

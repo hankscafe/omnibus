@@ -24,15 +24,13 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: async () => ({}) }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: mocks.queueAdd } }));
 vi.mock('@/lib/engine', () => ({ ENGINE_URL: 'http://engine:8000', engineHeaders: (h: any = {}) => h }));
 
 import { POST as enqueuePOST, GET as statusGET } from '@/app/api/library/issue/pages/sweep/route';
 import { POST as scanPOST } from '@/app/api/library/issue/pages/sweep/scan/route';
 import { POST as cancelPOST } from '@/app/api/library/issue/pages/sweep/cancel/route';
+import { auditLog } from '../helpers/setup-global';
 
 const fetchMock = vi.fn();
 global.fetch = fetchMock as any;
@@ -45,7 +43,6 @@ const sourceIssue = () => ({
 });
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.getServerSession.mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
     mocks.settingFindUnique.mockResolvedValue(null);
     mocks.settingUpsert.mockResolvedValue({});
@@ -83,7 +80,7 @@ describe('POST /pages/sweep (enqueue)', () => {
             { issueId: 'i3', entryName: 'yy.jpg', label: 'Series #3' },
         ]);
         expect(opts.jobId).toMatch(/^PAGE_SWEEP_.+_0$/);
-        expect(mocks.audit).toHaveBeenCalledWith('PAGE_SWEEP_STARTED', expect.objectContaining({ matchedFiles: 2 }), 'admin1');
+        expect(auditLog).toHaveBeenCalledWith('PAGE_SWEEP_STARTED', expect.objectContaining({ matchedFiles: 2 }), 'admin1');
     });
 
     it('refuses a second sweep while one is running with a fresh heartbeat', async () => {

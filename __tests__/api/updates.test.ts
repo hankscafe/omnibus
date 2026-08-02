@@ -9,9 +9,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
 
 vi.mock('next-auth/next', () => ({ getServerSession: vi.fn() }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('@/lib/library-access', () => ({ getAccessibleLibraryIds: vi.fn() }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -33,7 +31,6 @@ const dbIssue = (id: string, over: Record<string, any> = {}) => ({
 
 describe('API: /api/library/updates (GET)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getServerSession as any).mockResolvedValue({ user: { id: 'u1', role: 'USER' } });
         (getAccessibleLibraryIds as any).mockResolvedValue('ALL');
         (prisma.issue.findMany as any).mockResolvedValue([]);

@@ -1,3 +1,5 @@
+// beta.014: this file tests the REAL module — undo setup-global's suite-wide mock.
+vi.unmock('@/app/api/auth/[...nextauth]/options');
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // 1. Hoist our mocks AND set environment variables BEFORE imports evaluate
@@ -36,13 +38,9 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/encryption', () => ({ decrypt2FA: mocks.decrypt2FA }));
 
 describe('Security: NextAuth OIDC Single Sign-On', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should auto-approve new SSO users if oidc_auto_approve is enabled', async () => {
         // Simulate DB settings: OIDC is ON, Auto-Approve is ON

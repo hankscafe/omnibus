@@ -33,9 +33,6 @@ vi.mock('fs-extra', () => ({
 }));
 
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.session }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn().mockResolvedValue({}) }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn().mockResolvedValue(true) } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/utils/paths', () => ({
     WATCHED_DIR: '/watched',
     UNMATCHED_DIR: '/unmatched',
@@ -86,7 +83,6 @@ const writtenBytes = (needle: string) => {
 
 describe('API Route: /api/admin/upload (single-shot + chunked)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.files.clear();
         sweepSessions(Date.now() + 60_000); // module-level session map must not leak across tests
         mocks.session.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });
@@ -190,7 +186,6 @@ describe('API Route: /api/admin/upload (single-shot + chunked)', () => {
 
 describe('Truncated-body enforcement (field bug 2026-07-27 round 2: ~10MiB cutoffs accepted as success)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.files.clear();
         sweepSessions(Date.now() + 60_000);
         mocks.session.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });
@@ -234,7 +229,6 @@ describe('Truncated-body enforcement (field bug 2026-07-27 round 2: ~10MiB cutof
 
 describe('Direct-to-request import (2026-07-27: gated-request uploads must never detour to Smart Matcher)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.files.clear();
         sweepSessions(Date.now() + 60_000);
         mocks.session.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });

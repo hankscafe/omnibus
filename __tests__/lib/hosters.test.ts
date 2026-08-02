@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HosterEngine } from '@/lib/hosters';
 import axios from 'axios';
+import { loggerLog } from '../helpers/setup-global';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -13,12 +14,8 @@ vi.mock('axios');
 vi.mock('@/lib/db', () => ({
     prisma: { hosterAccount: { findFirst: mocks.findFirstHoster } }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Download Pipeline: Hoster Engine', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should resolve Pixeldrain links, attach Premium API headers, and trace debug logs', async () => {
         mocks.findFirstHoster.mockResolvedValueOnce({ apiKey: 'premium_key_123', isActive: true });
@@ -31,11 +28,11 @@ describe('Download Pipeline: Hoster Engine', () => {
         expect(result.headers?.Authorization).toContain('Basic ');
 
         // NEW: Assert our new debug logs traced the execution
-        expect(mocks.log).toHaveBeenCalledWith(
+        expect(loggerLog).toHaveBeenCalledWith(
             expect.stringContaining('[Hoster Engine] Attempting to resolve pixeldrain link...'),
             'info'
         );
-        expect(mocks.log).toHaveBeenCalledWith(
+        expect(loggerLog).toHaveBeenCalledWith(
             expect.stringContaining('[Pixeldrain Debug] Performing HEAD request to verify file availability'),
             'debug'
         );

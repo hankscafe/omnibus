@@ -31,9 +31,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: async () => ({}) }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/engine', () => ({ ENGINE_URL: 'http://engine:8000', engineHeaders: (h: any = {}) => h }));
 vi.mock('fs', () => ({
     existsSync: mocks.fsExistsSync,
@@ -41,6 +38,8 @@ vi.mock('fs', () => ({
 }));
 
 import { POST } from '@/app/api/library/issue/pages/route';
+import { auditLog } from '../helpers/setup-global';
+import { makePostJson } from '../helpers/request';
 
 const fetchMock = vi.fn();
 global.fetch = fetchMock as any;
@@ -52,9 +51,7 @@ const row = () => ({
     series: { name: 'Series' },
 });
 
-const req = (body: any) => new Request('http://localhost/api/library/issue/pages', {
-    method: 'POST', body: JSON.stringify(body),
-});
+const req = makePostJson('http://localhost/api/library/issue/pages');
 
 // Engine fetch mock: entries listing + remove call, overridable per test. The engine always
 // echoes new_file_path (same path for in-place CBZ rewrites, a sibling .cbz for RAR/7z repacks).
@@ -71,7 +68,6 @@ function mockEngine({ pages = PAGES, removeStatus = 200, removeBody = { new_page
 }
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.getServerSession.mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
     mocks.issueFindUnique.mockResolvedValue(row());
     mocks.fsExistsSync.mockReturnValue(true);
@@ -117,7 +113,7 @@ describe('POST /api/library/issue/pages — removal + index fixups (issue #189)'
         const touched = mocks.bookmarkUpdate.mock.calls.map(c => c[0].where.id);
         expect(touched).not.toContain('bm-zero');
         expect(mocks.transaction).toHaveBeenCalledTimes(1);
-        expect(mocks.audit).toHaveBeenCalledWith('REMOVE_PAGES',
+        expect(auditLog).toHaveBeenCalledWith('REMOVE_PAGES',
             expect.objectContaining({ issueId: 'i1', removedCount: 2, newPageCount: 3 }), 'admin1');
     });
 
@@ -134,7 +130,7 @@ describe('POST /api/library/issue/pages — removal + index fixups (issue #189)'
             where: { id: 'i1' },
             data: { pageCount: 4, filePath: '/comics/S/S 001.cbz' },
         });
-        expect(mocks.audit).toHaveBeenCalledWith('REMOVE_PAGES',
+        expect(auditLog).toHaveBeenCalledWith('REMOVE_PAGES',
             expect.objectContaining({ convertedTo: '/comics/S/S 001.cbz' }), 'admin1');
     });
 

@@ -29,7 +29,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: async () => ({}) }));
 vi.mock('@/lib/library-access', () => ({
     getAccessibleLibraryIds: async () => 'ALL',
     canAccessLibraryId: () => true,
@@ -38,8 +37,6 @@ vi.mock('@/lib/metadata/metadata-cache', () => ({ cachedCvGet: mocks.cachedCvGet
 vi.mock('@/lib/metadata/providers/metron', () => ({
     MetronProvider: class { getIssueDetails = mocks.metronGetIssueDetails; }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
 vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: mocks.queueAdd } }));
 vi.mock('@/lib/utils/sanitize', () => ({ sanitizeDescription: (s: unknown) => s, providerWikiBase: () => null }));
 vi.mock('@/lib/utils/paths', () => ({ CONFIG_DIR: '/config' }));
@@ -57,6 +54,7 @@ vi.mock('fs', () => {
 });
 
 import { GET, PATCH } from '@/app/api/library/issue/route';
+import { auditLog } from '../helpers/setup-global';
 
 // A populated, unlocked row: three narrative fields hold data (name, description, writers).
 const row = () => ({
@@ -83,7 +81,6 @@ const patchReq = (body: any) => new Request('http://localhost/api/library/issue'
 });
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.getServerSession.mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
     mocks.settingFindUnique.mockResolvedValue(null);
     mocks.issueFindUnique.mockResolvedValue(row());
@@ -100,7 +97,7 @@ describe('PATCH /api/library/issue — no-op saves touch nothing (issue #194 (f)
         expect(mocks.issueUpdate).not.toHaveBeenCalled();
         expect(mocks.queueAdd).not.toHaveBeenCalled();
         // The no-op is still audited (forensics), flagged as changed: false.
-        expect(mocks.audit).toHaveBeenCalledWith('UPDATE_ISSUE_METADATA',
+        expect(auditLog).toHaveBeenCalledWith('UPDATE_ISSUE_METADATA',
             expect.objectContaining({ changed: false, wroteToFile: false }), 'admin1');
     });
 
@@ -130,7 +127,7 @@ describe('PATCH /api/library/issue — dirty saves write only what changed', () 
         expect('description' in data).toBe(false);
         expect('writers' in data).toBe(false);
         expect(mocks.queueAdd).toHaveBeenCalledTimes(1);
-        expect(mocks.audit).toHaveBeenCalledWith('UPDATE_ISSUE_METADATA',
+        expect(auditLog).toHaveBeenCalledWith('UPDATE_ISSUE_METADATA',
             expect.objectContaining({ changedFields: ['name'] }), 'admin1');
     });
 
@@ -186,7 +183,7 @@ describe('PATCH /api/library/issue — unlock (clearCustomMetadata)', () => {
             data: { hasCustomMetadata: false, matchState: 'MATCHED' },
         });
         expect(mocks.queueAdd).not.toHaveBeenCalled();
-        expect(mocks.audit).toHaveBeenCalledWith('RESTORE_ISSUE_DEFAULTS',
+        expect(auditLog).toHaveBeenCalledWith('RESTORE_ISSUE_DEFAULTS',
             expect.objectContaining({ issueId: 'i1', scope: 'single' }), 'admin1');
     });
 });

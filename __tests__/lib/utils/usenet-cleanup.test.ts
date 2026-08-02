@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { deleteUsenetSource, isStrictSubPath } from '@/lib/utils/usenet-cleanup';
 import fs from 'fs-extra';
+import { loggerLog } from '../../helpers/setup-global';
 
 // Issue #198: the guard matrix here is the safety story for a feature whose whole job is deleting
 // user files — every refusal branch gets pinned.
@@ -21,7 +22,6 @@ vi.mock('@/lib/db', () => ({
     prisma: { library: { findMany: mocks.findManyLibraries } }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 // Identity mapping — resolution behavior itself is path-resolver's own test surface.
 vi.mock('@/lib/utils/path-resolver', () => ({ resolveRemotePath: vi.fn(async (p: string) => p) }));
@@ -35,7 +35,6 @@ const baseOpts = {
 
 describe('Usenet Cleanup: deleteUsenetSource (issue #198)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.remove).mockResolvedValue(undefined as any);
         mocks.findManyLibraries.mockResolvedValue([{ path: '/library/comics' }]);
@@ -46,7 +45,7 @@ describe('Usenet Cleanup: deleteUsenetSource (issue #198)', () => {
 
         expect(result).toBe(true);
         expect(fs.remove).toHaveBeenCalledWith('/nzbget/comics/COMIC 001 (2026)');
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Deleted imported usenet download'), 'info');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Deleted imported usenet download'), 'info');
     });
 
     it('refuses torrent client types — deleting a torrent payload breaks seeding', async () => {
@@ -61,7 +60,7 @@ describe('Usenet Cleanup: deleteUsenetSource (issue #198)', () => {
 
         expect(result).toBe(false);
         expect(fs.remove).not.toHaveBeenCalled();
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('not strictly inside'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('not strictly inside'), 'warn');
     });
 
     it('refuses a source that resolved outside the client root', async () => {
@@ -104,7 +103,7 @@ describe('Usenet Cleanup: deleteUsenetSource (issue #198)', () => {
         expect(result).toBe(false);
         expect(fs.remove).not.toHaveBeenCalled();
         // Nothing to warn about — the files being gone is the desired end state.
-        expect(mocks.log).not.toHaveBeenCalledWith(expect.stringContaining('Refusing'), 'warn');
+        expect(loggerLog).not.toHaveBeenCalledWith(expect.stringContaining('Refusing'), 'warn');
     });
 
     it('never throws when the delete fails (read-only mount) — the import already succeeded', async () => {
@@ -113,7 +112,7 @@ describe('Usenet Cleanup: deleteUsenetSource (issue #198)', () => {
         const result = await deleteUsenetSource(baseOpts);
 
         expect(result).toBe(false);
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('EACCES'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('EACCES'), 'warn');
     });
 });
 

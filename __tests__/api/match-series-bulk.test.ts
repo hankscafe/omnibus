@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('next-auth/jwt', () => ({ getToken: mocks.getToken }));
 vi.mock('@/app/api/library/match-series/route', () => ({ POST: mocks.singlePost }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 const req = (body: any) => new NextRequest('http://localhost/api/library/match-series/bulk', {
     method: 'POST',
@@ -29,7 +28,6 @@ const item = (folder: string) => ({ oldFolderPath: folder, metadataId: '42', met
 
 describe('API Route: bulk match accept (/api/library/match-series/bulk)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getToken.mockResolvedValue({ role: 'ADMIN', id: 'admin_1' });
         mocks.singlePost.mockResolvedValue(new Response(JSON.stringify({ success: true, conflicts: 0 }), { status: 200 }));
     });

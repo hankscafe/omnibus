@@ -49,9 +49,6 @@ global.fetch = vi.fn().mockResolvedValue({
 });
 
 describe('API Route: GET /api/v1/stats', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should return 401 Unauthorized if the API key is invalid', async () => {
         mocks.validateApiKey.mockResolvedValueOnce({ valid: false, error: 'Invalid API Key' });

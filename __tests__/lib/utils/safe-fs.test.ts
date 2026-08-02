@@ -5,7 +5,6 @@ import path from 'path';
 
 // Logger writes to disk/console; stub it. Everything else uses the REAL filesystem in a temp dir so
 // the test actually proves the non-destructive behavior (the whole point of the data-loss fix).
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 import { safeRelocateFolder, cleanupEmptyDirs, moveFileSafe, libraryDirMode, ensureLibraryDir, applyLibraryDirMode } from '@/lib/utils/safe-fs';
 

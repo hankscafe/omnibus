@@ -35,7 +35,6 @@ vi.mock('adm-zip', () => {
     };
 });
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 function makeEntry(entryName: string, data = 'raw_page_bytes') {
     return { entryName, isDirectory: false, getData: () => Buffer.from(data) };
@@ -48,7 +47,6 @@ function request(issueId = 'issue_1', pageIndex = '0') {
 
 describe('API Route: OPDS-PSE page serving', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.validateApiKey.mockResolvedValue({ valid: true, user: { id: 'user_1', role: 'ADMIN' } });
         mocks.issueFindUnique.mockResolvedValue({
             id: 'issue_1',
@@ -94,12 +92,24 @@ describe('API Route: OPDS-PSE page serving', () => {
         expect(res.status).toBe(200);
         // Natural sort puts page2 before page10, ComicInfo.xml is filtered → index 0 = page2.jpg.
         expect(res.headers.get('content-type')).toBe('image/jpeg');
+        // Pages are content-addressed by issue+index — clients may cache them forever (ported from
+        // the retired opds-streaming suite, beta.014).
+        expect(res.headers.get('cache-control')).toContain('immutable');
         expect(Buffer.from(await res.arrayBuffer()).toString()).toBe('two');
+    });
+
+    it('serves .png entries with the matching content type (local fallback)', async () => {
+        mocks.zipGetEntries.mockReturnValue([makeEntry('cover.png', 'png_bytes')]);
+        const res = await request('issue_1', '0');
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toBe('image/png');
     });
 
     it('returns 404 for an out-of-bounds page index (engine down → local bounds check)', async () => {
         const res = await request('issue_1', '5');
         expect(res.status).toBe(404);
+        expect(await res.text()).toBe('Page Not Found'); // exact body, ported from the retired suite
     });
 
     it('returns 404 for a non-numeric page index without calling the engine', async () => {

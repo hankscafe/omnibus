@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/admin/diagnostics/route';
+import { loggerLog } from '../helpers/setup-global';
 
 const mocks = vi.hoisted(() => ({
     libraryFindMany: vi.fn(),
@@ -20,14 +21,8 @@ vi.mock('next-auth/next', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } })
 }));
 
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn() } }));
 
 describe('API Route: System Diagnostics', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('SECURITY: should block directory traversal attempts when deleting orphans', async () => {
         mocks.libraryFindMany.mockResolvedValue([{ path: '/data/comics' }]);
@@ -46,7 +41,7 @@ describe('API Route: System Diagnostics', () => {
 
         expect(data.success).toBe(true); // Fails open to the client, but doesn't actually delete
         expect(mocks.fsRemove).not.toHaveBeenCalled(); // The actual physical deletion MUST be blocked
-        expect(mocks.log).toHaveBeenCalledWith(
+        expect(loggerLog).toHaveBeenCalledWith(
             expect.stringContaining('Blocked unauthorized path deletion'),
             'warn'
         );

@@ -16,9 +16,6 @@ vi.mock('@/lib/queue', () => ({
 }));
 
 describe('Core Logic: Automation (engine handoff)', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     describe('searchAndDownload()', () => {
         it('should enqueue a SEARCH_AND_DOWNLOAD job with the full request payload', async () => {

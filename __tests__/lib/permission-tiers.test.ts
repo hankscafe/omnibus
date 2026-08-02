@@ -23,11 +23,8 @@ describe('permission-tiers', () => {
       expect(tierFromUser({ role: 'ADMIN', canRequest: false, canDownload: false })).toBe('Admin');
     });
 
-    it('derives the matching tier from a user\'s flags', () => {
-      for (const t of PERMISSION_TIERS) {
-        expect(tierFromUser({ role: 'USER', ...t.flags })).toBe(t.name);
-      }
-    });
+    // (beta.014: the spread-a-tier's-own-flags-back-in case was deleted — tierFromUser is a find()
+    // over the same table, so that assertion was true by construction and could never fail.)
 
     it('treats missing flags as false → Civilian', () => {
       expect(tierFromUser({ role: 'USER' })).toBe('Civilian');

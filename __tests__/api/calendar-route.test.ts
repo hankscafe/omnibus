@@ -13,11 +13,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('@/lib/db', () => ({
     prisma: { issue: { findMany: mocks.findManyIssues } }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/library-access', () => ({
     getAccessibleLibraryIds: vi.fn().mockResolvedValue('ALL'),
 }));
@@ -45,7 +43,6 @@ const weekReq = () => new Request('http://localhost/api/calendar?weekOffset=0');
 
 describe('API Route: GET /api/calendar (tracked-series week view)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { id: 'u1', role: 'ADMIN' } });
     });
 
@@ -109,7 +106,6 @@ describe('API Route: GET /api/calendar (tracked-series week view)', () => {
 // dashboard/widget consumer.
 describe('API Route: GET /api/calendar scope contract', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { id: 'u1', role: 'ADMIN' } });
         mocks.findManyIssues.mockResolvedValue([]);
     });

@@ -55,7 +55,6 @@ describe('library-access', () => {
   });
 
   describe('getAccessibleLibraryIds', () => {
-    beforeEach(() => vi.clearAllMocks());
     it('returns ALL for admins without touching the database', async () => {
       const res = await getAccessibleLibraryIds('u1', 'ADMIN');
       expect(res).toBe('ALL');

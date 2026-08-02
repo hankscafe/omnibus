@@ -7,11 +7,10 @@ import { GET, POST } from '@/app/api/notifications/route';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
+import { makePostJson } from '../helpers/request';
 
 vi.mock('next-auth/next', () => ({ getServerSession: vi.fn() }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('@/lib/library-access', () => ({ getAccessibleLibraryIds: vi.fn() }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -29,7 +28,6 @@ const followEntry = (list: any[]) => list.find((n: any) => n.type === 'follow_up
 
 describe('API: /api/notifications follow-arrivals summary (GET)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getServerSession as any).mockResolvedValue({ user: { id: 'u1', role: 'USER' } });
         (getAccessibleLibraryIds as any).mockResolvedValue('ALL');
         (prisma.request.findMany as any).mockResolvedValue([]);
@@ -101,14 +99,11 @@ describe('API: /api/notifications follow-arrivals summary (GET)', () => {
 
 describe('API: /api/notifications marker stamp (POST)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getServerSession as any).mockResolvedValue({ user: { id: 'u1', role: 'USER' } });
         (prisma.user.update as any).mockResolvedValue({});
     });
 
-    const req = (body: any) => new Request('http://localhost/api/notifications', {
-        method: 'POST', body: JSON.stringify(body),
-    });
+    const req = makePostJson('http://localhost/api/notifications');
 
     it('stamps lastSeenUpdatesAt when followUpdatesSeen is true', async () => {
         const before = Date.now();

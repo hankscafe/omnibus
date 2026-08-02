@@ -6,10 +6,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST, GET } from '@/app/api/library/follow/route';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
+import { makePostJson } from '../helpers/request';
 
 vi.mock('next-auth/next', () => ({ getServerSession: vi.fn() }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn().mockResolvedValue({}) }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -19,14 +18,10 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-const req = (body: any) => new Request('http://localhost/api/library/follow', {
-    method: 'POST',
-    body: JSON.stringify(body),
-});
+const req = makePostJson('http://localhost/api/library/follow');
 
 describe('API: /api/library/follow (POST toggle)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getServerSession as any).mockResolvedValue({ user: { id: 'u1' } });
         (prisma.seriesFollow.create as any).mockResolvedValue({});
         (prisma.seriesFollow.delete as any).mockResolvedValue({});
@@ -92,7 +87,6 @@ describe('API: /api/library/follow (POST toggle)', () => {
 
 describe('API: /api/library/follow (bulk + GET, Beta C)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getServerSession as any).mockResolvedValue({ user: { id: 'u1' } });
         (prisma.seriesFollow.createMany as any).mockResolvedValue({ count: 0 });
         (prisma.seriesFollow.deleteMany as any).mockResolvedValue({ count: 2 });

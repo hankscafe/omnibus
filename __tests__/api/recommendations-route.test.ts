@@ -44,7 +44,6 @@ const candidate = (id: string) => ({
 
 describe('GET /api/recommendations', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { id: 'u1', role: 'USER' } });
         mocks.getAccessibleLibraryIds.mockResolvedValue('ALL');
         mocks.seriesFindMany.mockResolvedValue([candidate('c1'), candidate('c2')]);

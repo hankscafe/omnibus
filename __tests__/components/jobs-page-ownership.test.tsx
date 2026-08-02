@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/jobs-page-ownership.test.tsx
 //
 // Settings reorganization Phase 3: one owner per setting. The Jobs page used to WRITE
@@ -35,7 +36,6 @@ const configResponse = (settings: { key: string, value: string }[]) => ({
 
 describe('Jobs page: schedule-only ownership (Phase 3)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         fetchMock.mockImplementation(async (url: string, init?: any) => {
             if (url === '/api/admin/config' && (!init || !init.method || init.method === 'GET')) {
                 return configResponse([

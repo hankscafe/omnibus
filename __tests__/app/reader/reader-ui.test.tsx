@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/app/reader/reader-ui.test.tsx
 import '@testing-library/jest-dom';
 import React from 'react';
@@ -36,7 +37,6 @@ window.HTMLElement.prototype.releasePointerCapture = vi.fn();
 
 describe('Component: Reader UI', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
 
         // Mock API responses for pages and progress
         global.fetch = vi.fn().mockImplementation((url: string) => {

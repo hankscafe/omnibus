@@ -67,8 +67,6 @@ vi.mock('@/lib/api-client', () => ({
 vi.mock('@/lib/health-checker', () => ({ runSystemHealthCheck: mocks.runSystemHealthCheck }));
 vi.mock('@/lib/download-clients', () => ({ DownloadService: { addDownload: mocks.addDownload, downloadDirectFile: mocks.downloadDirectFile } }));
 vi.mock('@/lib/automation', () => ({ searchAndDownload: mocks.searchAndDownload }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 
 // Mock the mailer for the digest
 vi.mock('@/lib/mailer', () => ({
@@ -106,7 +104,6 @@ describe('Cron: BullMQ Worker Router', () => {
     let originalSetTimeout: typeof setTimeout;
 
     beforeEach(() => {
-        vi.clearAllMocks();
         (globalThis as any).omnibusWorker = null;
         process.env.NEXTAUTH_SECRET = 'test-secret';
 

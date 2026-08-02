@@ -33,8 +33,6 @@ vi.mock('@/lib/db', () => ({
         $transaction: mocks.transaction,
     }
 }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.auditLog } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/utils/paths', () => ({ CONFIG_DIR: '/cfg' }));
 vi.mock('@/lib/engine', () => ({ ENGINE_URL: 'http://engine:8000', engineHeaders: (h: any) => h }));
 vi.mock('fs', () => ({
@@ -44,6 +42,7 @@ vi.mock('fs', () => ({
 }));
 
 import { embedUploadedCoverIntoArchive } from '@/lib/pages/insert-cover-core';
+import { auditLog } from '../helpers/setup-global';
 
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
 
@@ -57,7 +56,6 @@ const baseIssue = {
 const engineOk = (body: any) => ({ ok: true, status: 200, json: async () => body }) as any;
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.issueFindUnique.mockResolvedValue(baseIssue);
     mocks.existsSync.mockReturnValue(true);
     mocks.readFile.mockResolvedValue(JPEG_MAGIC);
@@ -112,7 +110,7 @@ describe('embedUploadedCoverIntoArchive (issue #189 follow-up)', () => {
             where: { id: 'i1' },
             data: { pageCount: 11 },
         });
-        expect(mocks.auditLog).toHaveBeenCalledWith('EMBED_ISSUE_COVER', expect.objectContaining({ issueId: 'i1' }), 'admin1');
+        expect(auditLog).toHaveBeenCalledWith('EMBED_ISSUE_COVER', expect.objectContaining({ issueId: 'i1' }), 'admin1');
     });
 
     it('follows a RAR→CBZ repack by updating filePath and reporting the conversion', async () => {

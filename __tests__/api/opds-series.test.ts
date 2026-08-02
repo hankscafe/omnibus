@@ -22,7 +22,6 @@ vi.mock('@/lib/db', () => ({
         issue: { update: mocks.updateIssue },
     }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/library-access', () => ({
     getAccessibleLibraryIds: vi.fn().mockResolvedValue(null), // null = admin/full access
     canAccessLibraryId: vi.fn().mockReturnValue(true),
@@ -48,7 +47,6 @@ const baseSeries = (issues: any[]) => ({
 
 describe('API Route: OPDS Series Feed (/api/opds/series/[id])', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.validateApiKey.mockResolvedValue({ valid: true, user: { id: 'u1', role: 'ADMIN' } } as any);
         mocks.updateIssue.mockResolvedValue({});
     });

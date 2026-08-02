@@ -8,9 +8,6 @@ const mocks = vi.hoisted(() => ({
     log: vi.fn()
 }));
 
-vi.mock('@/lib/logger', () => ({
-    Logger: { log: mocks.log }
-}));
 
 // Mock Axios to instantly intercept ComicVine HTTP requests
 vi.mock('axios', () => ({
@@ -42,9 +39,6 @@ vi.mock('adm-zip', () => {
 });
 
 describe('Core Logic: ComicInfo.xml Extractor', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should return null if the file is not a valid archive extension', async () => {
         const result = await parseComicInfo('/library/comic.pdf');

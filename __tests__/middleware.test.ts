@@ -13,9 +13,6 @@ vi.mock('next-auth/jwt', () => ({
 }));
 
 describe('Security: Next.js Front-Door Middleware', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     // Helper to easily generate incoming requests
     const createReq = (pathname: string) => {

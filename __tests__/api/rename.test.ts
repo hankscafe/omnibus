@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/library/rename/route';
 import { NextRequest } from 'next/server';
 import path from 'path';
+import { auditLog } from '../helpers/setup-global';
 
 const mocks = vi.hoisted(() => ({
     seriesFindMany: vi.fn(),
@@ -46,10 +47,7 @@ vi.mock('next-auth/next', () => ({ getServerSession: vi.fn().mockResolvedValue(m
 vi.mock('next-auth', () => ({ getServerSession: vi.fn().mockResolvedValue(mocks.mockSession) }));
 vi.mock('next-auth/jwt', () => ({ getToken: vi.fn().mockResolvedValue(mocks.mockSession.user) }));
 vi.mock('@/lib/auth', () => ({ getAuthSession: vi.fn().mockResolvedValue(mocks.mockSession) }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.auditLog } }));
 vi.mock('@/lib/engine', () => ({
     ENGINE_URL: 'http://engine',
     engineHeaders: (extra?: Record<string, string>) => extra || {},
@@ -58,7 +56,6 @@ vi.mock('@/lib/engine', () => ({
 
 describe('API Route: Bulk Library Renamer', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         // Default: engine offload unavailable → the route falls back to the local rename loop.
         mocks.engineFetchLong.mockRejectedValue(new Error('engine unavailable'));
         // The route now resolves the manga pattern BEFORE the engine offload, so every path reads
@@ -97,7 +94,7 @@ describe('API Route: Bulk Library Renamer', () => {
         expect(mocks.seriesFindMany).not.toHaveBeenCalled();
         expect(mocks.fsMove).not.toHaveBeenCalled();
         // The audit entry still records the engine-reported counts.
-        expect(mocks.auditLog).toHaveBeenCalledWith('BULK_RENAME_FILES', expect.objectContaining({ filesRenamed: 7, conflicts: 1 }), 'admin_1');
+        expect(auditLog).toHaveBeenCalledWith('BULK_RENAME_FILES', expect.objectContaining({ filesRenamed: 7, conflicts: 1 }), 'admin_1');
     });
 
     // 2026-07-25 worklist item 8: the manga file pattern existed but the standardize path leaked it

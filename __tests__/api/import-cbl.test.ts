@@ -22,13 +22,8 @@ vi.mock('next-auth/next', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } })
 }));
 
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('API Route: CBL Import', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should parse XML and map ComicRack items to local issues', async () => {
         const mockXml = `<?xml version="1.0"?>

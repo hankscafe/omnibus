@@ -65,7 +65,6 @@ vi.mock('next-auth/next', () => ({ getServerSession: vi.fn().mockResolvedValue(m
 vi.mock('next-auth', () => ({ getServerSession: vi.fn().mockResolvedValue(mocks.mockSession) }));
 vi.mock('next-auth/jwt', () => ({ getToken: vi.fn().mockResolvedValue(mocks.mockSession.user) }));
 vi.mock('@/lib/auth', () => ({ getAuthSession: vi.fn().mockResolvedValue(mocks.mockSession) }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
 // CRITICAL FIX: Treat AdmZip as a class so 'new AdmZip()' executes correctly
 vi.mock('adm-zip', () => {
@@ -88,11 +87,9 @@ vi.mock('sharp', () => {
     };
 });
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('API Route: Reader Image Serving', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.libraryFindMany.mockResolvedValue([{ path: '/data/comics' }]);
         mocks.fsExistsSync.mockReturnValue(true);
         mocks.fsStatSync.mockReturnValue({ mtimeMs: 12345, size: 50000 });

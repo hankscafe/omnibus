@@ -1,6 +1,7 @@
 // __tests__/lib/metadata/metron.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
+import { loggerLog } from '../../helpers/setup-global';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -12,14 +13,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: { systemSetting: { findMany: mocks.findManySettings } }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/utils/system-flags', () => ({ logApiUsage: vi.fn() }));
 
 describe('Metadata Pipeline: Metron.Cloud Provider', () => {
     let provider: MetronProvider;
 
     beforeEach(() => {
-        vi.clearAllMocks();
         // Provide mock credentials
         mocks.findManySettings.mockResolvedValue([
             { key: 'metron_user', value: 'test_user' },
@@ -71,7 +70,7 @@ describe('Metadata Pipeline: Metron.Cloud Provider', () => {
         const results = await provider.searchSeries('Batman', 1);
 
         expect(results).toHaveLength(1);
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Rate Limit Hit'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Rate Limit Hit'), 'warn');
         
         // Assert it waited 2 seconds (1 sec from header + 1 sec buffer) before retrying
         expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2000);

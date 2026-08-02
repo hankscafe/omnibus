@@ -16,8 +16,6 @@ vi.mock('@/lib/db', () => ({
     prisma: { user: { findUnique: mocks.userFindUnique, updateMany: mocks.userUpdateMany } }
 }));
 vi.mock('bcryptjs', () => ({ default: { hash: mocks.hash } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn() } }));
 
 // Unique IP per request so the per-IP limiter never accumulates across tests in this file.
 let ipCounter = 0;
@@ -31,7 +29,6 @@ describe('Security: Password Reset Confirmation', () => {
     const TEST_SECRET = 'super_secure_test_secret_key_1234567890';
 
     beforeEach(() => {
-        vi.clearAllMocks();
         process.env.NEXTAUTH_SECRET = TEST_SECRET;
         mocks.userFindUnique.mockResolvedValue({ sessionVersion: 3 });
         mocks.userUpdateMany.mockResolvedValue({ count: 1 });

@@ -14,10 +14,8 @@ vi.mock('@/lib/automation', () => ({
     searchAndDownload: vi.fn().mockResolvedValue(undefined),
     processAutomationQueue: vi.fn()
 }));
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 vi.mock('@/lib/trophy-evaluator', () => ({ evaluateTrophies: vi.fn().mockResolvedValue(true) }));
 vi.mock('@/lib/manga-detector', () => ({ detectManga: vi.fn().mockResolvedValue(false) }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock('@/lib/metadata-fetcher', () => ({ syncSeriesMetadata: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@/lib/metadata/providers/metron-cover', () => ({ getMetronCover: vi.fn().mockResolvedValue(null) }));
 vi.mock('@/lib/metadata/metadata-cache', () => ({
@@ -42,7 +40,6 @@ vi.mock('@/lib/db', () => ({
 
 describe('API: request auto-follow (POST)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getToken as any).mockResolvedValue({ id: 'user-1', role: 'USER', name: 'Reader' });
         (prisma.user.findUnique as any).mockResolvedValue({ id: 'user-1', role: 'USER', canRequest: true, autoApproveRequests: true });
         (prisma.systemSetting.findUnique as any).mockImplementation(async ({ where }: any) => ({ key: where.key, value: 'dummy' }));

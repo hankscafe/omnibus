@@ -20,11 +20,9 @@ vi.mock('fs', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Security: Static Uploads API', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         process.env.OMNIBUS_CONFIG_DIR = '/app/config';
     });
 

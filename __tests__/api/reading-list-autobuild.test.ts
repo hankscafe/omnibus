@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { POST } from '@/app/api/reading-lists/auto-build/route';
 import axios from 'axios';
+import { makePostJson } from '../helpers/request';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -15,7 +16,6 @@ const mocks = vi.hoisted(() => ({
 
 // 2. Mock Dependencies
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -26,7 +26,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 // Mock Axios for both ComicVine and Metron
 vi.mock('axios');
@@ -37,17 +36,12 @@ vi.mock('@/lib/api-client', async () => {
     return { apiClient: { get: axios.get } };
 });
 
-const createReq = (body: any) => new Request('http://localhost/api/reading-lists/auto-build', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-});
+const createReq = makePostJson('http://localhost/api/reading-lists/auto-build');
 
 describe('Data Processing: Reading List Auto-Builder', () => {
     let originalSetTimeout: typeof setTimeout;
 
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } });
         
         // Bypass rate limit delays

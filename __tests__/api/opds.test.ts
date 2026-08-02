@@ -8,14 +8,8 @@ vi.mock('@/lib/api-auth', () => ({
 }));
 
 // 2. Mock the Logger
-vi.mock('@/lib/logger', () => ({
-    Logger: { log: vi.fn() }
-}));
 
 describe('API Route: OPDS Root Catalog', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should reject unauthorized requests with a 401 and Basic Auth challenge', async () => {
         // Simulate a bad API key

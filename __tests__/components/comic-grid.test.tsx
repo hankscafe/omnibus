@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/comic-grid.test.tsx
 import '@testing-library/jest-dom';
 import React from 'react';
@@ -26,7 +27,6 @@ window.HTMLElement.prototype.releasePointerCapture = vi.fn();
 
 describe('Component: ComicGrid', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
 
         global.fetch = vi.fn(async (url: string) => {
             if (url.includes('/api/library/ids')) {

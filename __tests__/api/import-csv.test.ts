@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
 
 // 2. Mock Dependencies
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -24,7 +23,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 /**
  * FIX: Instead of a real Request object which hangs on .formData() in JSDOM,
@@ -45,7 +43,6 @@ const createMockReq = (csvContent: string, listName: string) => {
 
 describe('Data Processing: CSV Reading List Importer', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         // Mock the session for every test
         mocks.getServerSession.mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } });
         

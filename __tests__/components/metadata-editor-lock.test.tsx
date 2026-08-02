@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/metadata-editor-lock.test.tsx
 //
 // Issue #194 (f): the metadata editor now surfaces the manual-edits lock (hasCustomMetadata)
@@ -58,9 +59,6 @@ const renderModal = () => render(
 );
 
 describe('Metadata editor lock affordance (issue #194 (f))', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('shows the lock notice for a locked issue and unlocks via clearCustomMetadata', async () => {
         mockFetch(issueDetail({ hasCustomMetadata: true }), { success: true, unlocked: true });
@@ -132,9 +130,6 @@ const renderSeriesModal = () => render(
 );
 
 describe('Metadata editor lock affordance — series mode (issue #194 (f))', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('shows the lock notice for a locked series and unlocks via clearCustomMetadata', async () => {
         mockSeriesFetch({ hasCustomMetadata: true }, { success: true, unlocked: true });

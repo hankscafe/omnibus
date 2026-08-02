@@ -3,6 +3,8 @@ import { Importer } from '@/lib/importer';
 import fs from 'fs-extra';
 // Import the queue so we can assert against the mock
 import { omnibusQueue } from '@/lib/queue';
+import { loggerLog } from '../helpers/setup-global';
+import { notifierSendAlert } from '../helpers/setup-global';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -59,8 +61,6 @@ vi.mock('@/lib/queue', () => ({
     }
 }));
 
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: mocks.sendAlert } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/utils/path-resolver', () => ({ resolveRemotePath: vi.fn((path) => path) }));
 vi.mock('@/lib/download-clients', () => ({ DownloadService: { getAllActiveDownloads: mocks.getAllActiveDownloads } }));
 
@@ -74,7 +74,6 @@ vi.mock('axios');
 
 describe('File System: Importer Engine', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         
         mocks.findManySettings.mockResolvedValue([
             { key: 'download_path', value: '/downloads' },
@@ -142,7 +141,7 @@ describe('File System: Importer Engine', () => {
         expect(mocks.createIssue).toHaveBeenCalled();
         
         // Assert it sent the "Comic Available" notification
-        expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.any(Object));
+        expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.any(Object));
 
         // Assert the dynamic BullMQ deduplication logic was triggered correctly
         expect(omnibusQueue.add).toHaveBeenCalledWith(
@@ -179,7 +178,7 @@ describe('File System: Importer Engine', () => {
             data: expect.objectContaining({ status: 'COMPLETED' })
         }));
         expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), expect.any(Object));
-        expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+        expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
             title: expect.stringContaining('2 Files')
         }));
     });
@@ -203,7 +202,7 @@ describe('File System: Importer Engine', () => {
         expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ status: 'COMPLETED' })
         }));
-        expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+        expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
             title: expect.stringContaining('1 Files')
         }));
     });
@@ -262,7 +261,7 @@ describe('File System: Importer Engine', () => {
 
         expect(result).toBe(false);
         // The reason must be the REAL one — not a path-mapping/permissions red herring.
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('could not be split'), 'error');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('could not be split'), 'error');
         expect(mocks.updateRequest).not.toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ status: 'COMPLETED' })
         }));

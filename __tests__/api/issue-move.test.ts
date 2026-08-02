@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('@/lib/db', () => ({
     prisma: {
         issue: { findMany: mocks.issueFindMany, update: mocks.issueUpdate },
@@ -24,17 +23,15 @@ vi.mock('@/lib/db', () => ({
         library: { findUnique: mocks.libraryFindUnique, findFirst: mocks.libraryFindFirst },
     },
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.auditLog } }));
 vi.mock('fs-extra', () => ({ default: { ensureDir: mocks.ensureDir, pathExists: mocks.pathExists, move: mocks.move } }));
 
 import { POST } from '@/app/api/library/issue/move/route';
+import { makePostJson } from '../helpers/request';
 
-const req = (body: any) => new Request('http://x/api/library/issue/move', { method: 'POST', body: JSON.stringify(body) });
+const req = makePostJson('http://x/api/library/issue/move');
 
 describe('POST /api/library/issue/move', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { role: 'ADMIN', id: 'admin1' } });
         mocks.pathExists.mockResolvedValue(false);
     });

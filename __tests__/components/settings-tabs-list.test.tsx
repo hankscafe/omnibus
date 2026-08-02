@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/settings-tabs-list.test.tsx
 //
 // Phase 2 save-model polish: each settings tab trigger shows an amber "unsaved changes" dot

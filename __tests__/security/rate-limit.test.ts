@@ -1,10 +1,10 @@
 // __tests__/security/rate-limit.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { loggerLog } from '../helpers/setup-global';
 
 // 1. Mock Logger
 const mocks = vi.hoisted(() => ({ log: vi.fn() }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Security: Rate Limiter', () => {
     it('should completely block the 6th request, return a 429 response, and trace the debug log', () => {
@@ -27,7 +27,7 @@ describe('Security: Rate Limiter', () => {
         expect(blockedAttempt.response?.status).toBe(429);
 
         // Assert our new debug log was triggered for the lockout
-        expect(mocks.log).toHaveBeenCalledWith(
+        expect(loggerLog).toHaveBeenCalledWith(
             expect.stringContaining(`[Rate Limit Debug] Blocked request for identifier: ${ip}`),
             'debug'
         );

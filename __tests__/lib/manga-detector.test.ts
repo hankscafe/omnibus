@@ -18,7 +18,6 @@ vi.mock('@/lib/db', () => ({
 
 describe('Logic: Manga Detector', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         // Return an empty array so the detector falls back to its default publisher lists
         mocks.findManySettings.mockResolvedValue([]);
     });

@@ -27,8 +27,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: mocks.sendAlert } }));
 
 // Mock fs-extra (which the file uses instead of node:fs)
 vi.mock('fs-extra', () => ({
@@ -44,7 +42,6 @@ vi.mock('fs-extra', () => ({
 
 describe('System Health & Diagnostics', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         
         vi.stubGlobal('fetch', mocks.fetch);
         mocks.fetch.mockResolvedValue({

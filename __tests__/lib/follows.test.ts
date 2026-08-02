@@ -5,6 +5,7 @@
 // insert (no skipDuplicates).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { followSeries, followSeriesByCatalogId, backfillFollowsFromRequests, FOLLOW_BACKFILL_SENTINEL } from '@/lib/follows';
+import { loggerLog } from '../helpers/setup-global';
 
 const mocks = vi.hoisted(() => ({
     followUpsert: vi.fn(),
@@ -26,10 +27,8 @@ vi.mock('@/lib/db', () => ({
         systemSetting: { findUnique: mocks.settingFindUnique, create: mocks.settingCreate },
     }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.followUpsert.mockResolvedValue({});
     mocks.followFindMany.mockResolvedValue([]);
     mocks.followCreateMany.mockResolvedValue({ count: 0 });
@@ -51,7 +50,7 @@ describe('followSeries', () => {
         mocks.followUpsert.mockRejectedValue(new Error('db down'));
 
         await expect(followSeries('u1', 's1')).resolves.toBeUndefined();
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Auto-follow failed'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Auto-follow failed'), 'warn');
     });
 
     it('no-ops on missing ids', async () => {
@@ -89,7 +88,7 @@ describe('followSeriesByCatalogId', () => {
     it('never throws when the lookup fails', async () => {
         mocks.seriesFindUnique.mockRejectedValue(new Error('busy'));
         await expect(followSeriesByCatalogId('u1', 'COMICVINE', '4242')).resolves.toBeUndefined();
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('follow lookup failed'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('follow lookup failed'), 'warn');
     });
 });
 

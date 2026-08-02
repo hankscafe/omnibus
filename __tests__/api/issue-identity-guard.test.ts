@@ -6,6 +6,7 @@
 // the wrong cover.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { issueIdentityMismatch } from '@/lib/metadata/issue-identity';
+import { loggerLog, auditLog } from '../helpers/setup-global';
 
 const mocks = vi.hoisted(() => ({
     issueFindUnique: vi.fn(),
@@ -30,7 +31,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: async () => ({}) }));
 vi.mock('@/lib/library-access', () => ({
     getAccessibleLibraryIds: async () => 'ALL',
     canAccessLibraryId: () => true,
@@ -39,8 +39,6 @@ vi.mock('@/lib/metadata/metadata-cache', () => ({ cachedCvGet: mocks.cachedCvGet
 vi.mock('@/lib/metadata/providers/metron', () => ({
     MetronProvider: class { getIssueDetails = mocks.metronGetIssueDetails; }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
 vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: mocks.queueAdd } }));
 vi.mock('@/lib/utils/sanitize', () => ({ sanitizeDescription: (s: unknown) => s, providerWikiBase: () => null }));
 vi.mock('@/lib/utils', () => ({
@@ -87,13 +85,12 @@ const cvDetail = (volumeId: number, issueNumber: string) => ({
 });
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.getServerSession.mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
     mocks.settingFindUnique.mockImplementation(async ({ where }: any) =>
         where.key === 'cv_api_key' ? { value: 'k' } : null);
     mocks.issueFindUnique.mockResolvedValue(row());
     mocks.issueUpdate.mockResolvedValue({});
-    mocks.audit.mockResolvedValue(undefined);
+    auditLog.mockResolvedValue(undefined);
     mocks.fsExistsSync.mockReturnValue(false);
 });
 
@@ -143,7 +140,7 @@ describe('GET /api/library/issue — view-time enrichment guard', () => {
 
         expect(mocks.issueUpdate).not.toHaveBeenCalled();
         expect(json.description).toBe('db description');
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Skipping CV deep-fetch'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Skipping CV deep-fetch'), 'warn');
     });
 
     it('discards a CV payload for the wrong issue number', async () => {
@@ -195,7 +192,7 @@ describe('GET /api/library/issue — view-time enrichment guard', () => {
 
         expect(mocks.issueUpdate).not.toHaveBeenCalled();
         expect(json.description).toBe('db description');
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Skipping Metron deep-fetch'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Skipping Metron deep-fetch'), 'warn');
     });
 });
 
@@ -216,9 +213,9 @@ describe('DELETE /api/library/issue/cover-upload — cover-reset guard', () => {
         expect(mocks.issueUpdate).toHaveBeenCalledWith(expect.objectContaining({
             data: { coverUrl: null, hasCustomCover: false },
         }));
-        expect(mocks.audit).toHaveBeenCalledWith('RESET_ISSUE_COVER',
+        expect(auditLog).toHaveBeenCalledWith('RESET_ISSUE_COVER',
             expect.objectContaining({ restored: false }), 'admin1');
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Not restoring provider cover'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Not restoring provider cover'), 'warn');
     });
 
     it('restores the provider cover when the payload proves its identity', async () => {
@@ -231,7 +228,7 @@ describe('DELETE /api/library/issue/cover-upload — cover-reset guard', () => {
         expect(mocks.issueUpdate).toHaveBeenCalledWith(expect.objectContaining({
             data: { coverUrl: 'http://cv/img.jpg', hasCustomCover: false },
         }));
-        expect(mocks.audit).toHaveBeenCalledWith('RESET_ISSUE_COVER',
+        expect(auditLog).toHaveBeenCalledWith('RESET_ISSUE_COVER',
             expect.objectContaining({ restored: true }), 'admin1');
     });
 });

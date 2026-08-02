@@ -29,15 +29,12 @@ vi.mock('next-auth/next', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } })
 }));
 
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/automation', () => ({ processAutomationQueue: vi.fn().mockResolvedValue(true) }));
 
 global.fetch = vi.fn();
 
 describe('API Route: AniList Import', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         // Requester has the Request permission so auto-request-missing proceeds (gated in Phase 1).
         mocks.userFindUnique.mockResolvedValue({ role: 'ADMIN', canRequest: true });
     });

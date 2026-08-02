@@ -22,9 +22,6 @@ vi.mock('otplib', () => {
 });
 
 // 2. Prevent NextAuth options process.exit(1)
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({
-    getAuthOptions: vi.fn().mockResolvedValue({})
-}));
 
 // 3. Mock NextAuth session
 vi.mock('next-auth/next', () => ({
@@ -56,9 +53,6 @@ vi.mock('@/lib/encryption', () => ({
 }));
 
 // 7. Mock Audit Logger
-vi.mock('@/lib/audit-logger', () => ({
-    AuditLogger: { log: vi.fn().mockResolvedValue(true) }
-}));
 
 // 8. Mock QRCode
 vi.mock('qrcode', () => ({
@@ -68,9 +62,6 @@ vi.mock('qrcode', () => ({
 const VALID_BASE32_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
 
 describe('API: 2FA Security Boundary', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should reject requests without a valid session', async () => {
         (getServerSession as any).mockResolvedValueOnce(null);

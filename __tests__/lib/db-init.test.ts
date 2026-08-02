@@ -1,6 +1,7 @@
 // __tests__/lib/db-init.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { initDatabase } from '@/lib/db-init';
+import { loggerLog } from '../helpers/setup-global';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -38,11 +39,9 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log, setLevel: vi.fn() } }));
 
 describe('System: Database Initializer & Migrations', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.countSettings.mockResolvedValue(1); // Assume encryption key exists
         mocks.countLibraries.mockResolvedValue(1); // Assume libraries exist
     });
@@ -66,7 +65,7 @@ describe('System: Database Initializer & Migrations', () => {
         }));
         
         // Assert our new debug log was triggered
-        expect(mocks.log).toHaveBeenCalledWith(
+        expect(loggerLog).toHaveBeenCalledWith(
             expect.stringContaining('[DB Init Debug] Migrating legacy download client: Old qBit (qbit)'),
             'debug'
         );

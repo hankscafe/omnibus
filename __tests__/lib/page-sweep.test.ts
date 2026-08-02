@@ -21,11 +21,10 @@ vi.mock('@/lib/db', () => ({
         jobLog: { create: mocks.jobLogCreate },
     }
 }));
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: mocks.sendAlert } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/pages/remove-pages-core', () => ({ removePagesFromIssue: vi.fn() }));
 
 import { processPageSweepChunk, PageSweepJobData, PAGE_SWEEP_CHUNK, sweepIsActive, PAGE_SWEEP_STALE_MS } from '@/lib/pages/page-sweep';
+import { notifierSendAlert } from '../helpers/setup-global';
 
 const item = (n: number) => ({ issueId: `i${n}`, entryName: 'credits.jpg', label: `Series #${n}` });
 
@@ -42,11 +41,10 @@ const lastResultWrite = () => {
 };
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.settingFindUnique.mockResolvedValue(null); // no cancel flag
     mocks.settingUpsert.mockResolvedValue({});
     mocks.jobLogCreate.mockResolvedValue({});
-    mocks.sendAlert.mockResolvedValue(undefined);
+    notifierSendAlert.mockResolvedValue(undefined);
 });
 
 describe('processPageSweepChunk (issue #189 Phase 3)', () => {
@@ -85,7 +83,7 @@ describe('processPageSweepChunk (issue #189 Phase 3)', () => {
         expect(result.finishedAt).toBeGreaterThan(0);
         const summary = mocks.jobLogCreate.mock.calls.map(c => c[0].data).find(l => l.message?.includes('sweep finished'));
         expect(summary).toBeTruthy();
-        expect(mocks.sendAlert).toHaveBeenCalledWith('job_page_sweep', expect.objectContaining({ title: 'Page Sweep Finished' }));
+        expect(notifierSendAlert).toHaveBeenCalledWith('job_page_sweep', expect.objectContaining({ title: 'Page Sweep Finished' }));
     });
 
     it('collects failures without stopping the run', async () => {
@@ -124,7 +122,7 @@ describe('processPageSweepChunk (issue #189 Phase 3)', () => {
         expect(enqueueNext).not.toHaveBeenCalled();
         const result = lastResultWrite();
         expect(result.status).toBe('CANCELLED');
-        expect(mocks.sendAlert).toHaveBeenCalledWith('job_page_sweep', expect.objectContaining({ title: 'Page Sweep Cancelled' }));
+        expect(notifierSendAlert).toHaveBeenCalledWith('job_page_sweep', expect.objectContaining({ title: 'Page Sweep Cancelled' }));
     });
 
     it("a cancel flag for a DIFFERENT run doesn't stop this one", async () => {

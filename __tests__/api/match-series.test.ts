@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/library/match-series/route';
 import fs from 'fs';
 import axios from 'axios';
+import { makePostJson } from '../helpers/request';
 
 // 1. Hoist the mocks
 const mocks = vi.hoisted(() => ({
@@ -29,10 +30,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // 2. Mock Server Dependencies
-vi.mock('next/cache', () => ({
-    revalidatePath: vi.fn(),
-    revalidateTag: vi.fn()
-}));
 
 vi.mock('next-auth', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } })
@@ -42,13 +39,7 @@ vi.mock('next-auth/next', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'admin_1', role: 'ADMIN' } })
 }));
 
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({
-    getAuthOptions: vi.fn().mockResolvedValue({})
-}));
 
-vi.mock('@/lib/audit-logger', () => ({
-    AuditLogger: { log: vi.fn().mockResolvedValue(true) }
-}));
 
 // 3. Mock Database & App Dependencies
 vi.mock('@/lib/db', () => ({
@@ -85,9 +76,7 @@ vi.mock('fs', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
-vi.mock('@/lib/discord', () => ({ DiscordNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 
 vi.mock('@/lib/manga-detector', () => ({ detectManga: vi.fn().mockResolvedValue(false) }));
 
@@ -105,15 +94,10 @@ vi.mock('@/lib/utils/safe-fs', () => ({
     ensureLibraryDir: vi.fn() // #199 UMASK-aware mkdir — a no-op here, the real thing is unit-tested in safe-fs.test.ts
 }));
 
-const createReq = (body: any) => new Request('http://localhost/api/library/match-series', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-});
+const createReq = makePostJson('http://localhost/api/library/match-series');
 
 describe('API Route: Smart Matcher (/api/library/match-series)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         // clearAllMocks resets call history but NOT implementations — restore the fs.existsSync default
         // so a per-test mockImplementation can't leak into later tests.
         vi.mocked(fs.existsSync).mockReturnValue(true);

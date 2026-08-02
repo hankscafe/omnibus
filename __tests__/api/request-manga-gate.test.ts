@@ -19,10 +19,8 @@ vi.mock('@/lib/automation', () => ({
     searchAndDownload: vi.fn().mockResolvedValue(undefined),
     processAutomationQueue: vi.fn()
 }));
-vi.mock('@/lib/notifications', () => ({ SystemNotifier: { sendAlert: vi.fn().mockResolvedValue(true) } }));
 vi.mock('@/lib/trophy-evaluator', () => ({ evaluateTrophies: vi.fn().mockResolvedValue(true) }));
 vi.mock('@/lib/manga-detector', () => ({ detectManga: vi.fn().mockResolvedValue(false) }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock('@/lib/metadata-fetcher', () => ({ syncSeriesMetadata: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@/lib/db', () => ({
@@ -50,7 +48,6 @@ const issueRequest = (name = 'Naruto #700') => new NextRequest('http://localhost
 
 describe('API: request manga gate (POST)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getToken as any).mockResolvedValue({ id: 'admin-1', role: 'ADMIN', autoApproveRequests: true, name: 'Admin' });
         (prisma.user.findUnique as any).mockResolvedValue({ id: 'admin-1', role: 'ADMIN', canRequest: true, autoApproveRequests: true });
         (prisma.systemSetting.findUnique as any).mockImplementation(settingsByKey());
@@ -121,7 +118,6 @@ describe('API: request manga gate (POST)', () => {
 
 describe('API: request approval reuses the stored Series.isManga (PATCH)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (getToken as any).mockResolvedValue({ id: 'admin-1', role: 'ADMIN', name: 'Admin' });
         (prisma.systemSetting.findUnique as any).mockImplementation(settingsByKey());
         (prisma.request.update as any).mockResolvedValue({});

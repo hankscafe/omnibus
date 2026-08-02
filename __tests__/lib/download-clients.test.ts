@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DownloadService } from '@/lib/download-clients';
 import axios from 'axios';
 import FormData from 'form-data'; // <-- We import this so we can spy on it!
+import { loggerLog } from '../helpers/setup-global';
 
 // 1. Hoist the mocks safely
 const mocks = vi.hoisted(() => ({
@@ -28,9 +29,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({
-    Logger: { log: mocks.log }
-}));
 
 vi.mock('@/lib/importer', () => ({ Importer: {} }));
 
@@ -44,7 +42,6 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
     };
 
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.findManyHeaders.mockResolvedValue([]);
     });
 
@@ -85,7 +82,7 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
         expect(appendSpy).toHaveBeenCalledWith('category', 'comics');
         expect(appendSpy).toHaveBeenCalledWith('urls', magnet);
         
-        expect(mocks.log).toHaveBeenCalledWith(`[QBIT] SUCCESS: Added ${title}`, 'success');
+        expect(loggerLog).toHaveBeenCalledWith(`[QBIT] SUCCESS: Added ${title}`, 'success');
         
         // Clean up the spy so it doesn't affect other tests
         appendSpy.mockRestore();
@@ -115,7 +112,7 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
             DownloadService.addDownload(mockClient, 'magnet:?xt=123', 'Batman', 0, 0)
         ).rejects.toThrow(/banned this IP after failed login attempts/);
 
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('banned this IP'), 'error');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('banned this IP'), 'error');
     });
 
     it('rejects a "Fails." login body (wrong credentials come back as HTTP 200) instead of a misleading later 403', async () => {
@@ -184,7 +181,7 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
             DownloadService.addDownload(mockClient, 'magnet:?xt=123', 'Batman', 0, 0)
         ).rejects.toThrow('ECONNREFUSED');
 
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Failed: ECONNREFUSED'), 'error');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Failed: ECONNREFUSED'), 'error');
     });
 
     const delugeClient = { type: 'deluge', url: 'http://192.168.1.50:8112', user: 'admin', pass: 'deluge', category: 'comics' };
@@ -268,7 +265,6 @@ describe('Issue #197: Prowlarr NZB handoff fetches content instead of handing NZ
     const NZB_XML = '<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file/></nzb>';
 
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.findManyHeaders.mockResolvedValue([]);
         mocks.settingFindUnique.mockImplementation(({ where }: any) =>
             Promise.resolve(where.key === 'prowlarr_url' ? { key: 'prowlarr_url', value: 'http://192.168.2.210:9696' } : null));
@@ -295,7 +291,7 @@ describe('Issue #197: Prowlarr NZB handoff fetches content instead of handing NZ
 
         const rpc = mocks.axiosPost.mock.calls[0][1];
         expect(rpc.params[1]).toBe(PROWLARR_DL);
-        const warned = mocks.log.mock.calls.some(c => String(c[0]).toLowerCase().includes('html'));
+        const warned = loggerLog.mock.calls.some(c => String(c[0]).toLowerCase().includes('html'));
         expect(warned).toBe(true);
     });
 
@@ -315,7 +311,6 @@ describe('Issue #198: removeDownload reaches HISTORY items, not just the queue',
     // queue-scoped delete silently no-op'd — failed jobs' files lingered forever.
 
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.findManyHeaders.mockResolvedValue([]);
         mocks.settingFindUnique.mockResolvedValue(null);
     });

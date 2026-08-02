@@ -20,9 +20,6 @@ vi.mock('../../../src/lib/logger', () => ({
 }));
 
 describe('Utility: Path Resolver', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should return the original path if no mappings exist in the database', async () => {
         mocks.findUnique.mockResolvedValue(null);

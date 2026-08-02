@@ -1,6 +1,7 @@
 // __tests__/api/cover-upload.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST, DELETE } from '@/app/api/library/cover-upload/route';
+import { auditLog } from '../helpers/setup-global';
 
 const mocks = vi.hoisted(() => ({
     getToken: vi.fn(),
@@ -15,7 +16,6 @@ const mocks = vi.hoisted(() => ({
     remove: vi.fn(),
 }));
 
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 vi.mock('next-auth/jwt', () => ({ getToken: mocks.getToken }));
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -23,8 +23,6 @@ vi.mock('@/lib/db', () => ({
         series: { findFirst: mocks.findFirstSeries, update: mocks.updateSeries },
     }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
 // Keep the real isPathWithinRoots (the route uses it for containment now) while overriding UNMATCHED_DIR.
 vi.mock('@/lib/utils/paths', async (importOriginal) => ({ ...(await importOriginal() as any), UNMATCHED_DIR: '/unmatched' }));
 vi.mock('fs-extra', () => ({
@@ -43,7 +41,6 @@ const reqOf = (method: string, body: any) => new Request('http://localhost/api/l
 
 describe('API Route: Cover Upload (/api/library/cover-upload)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getToken.mockResolvedValue({ id: 'admin_1', role: 'ADMIN' });
         mocks.findManyLibraries.mockResolvedValue([{ path: '/comics' }]);
         mocks.findFirstSeries.mockResolvedValue({ id: 'series_1', name: 'Batman' });
@@ -52,7 +49,7 @@ describe('API Route: Cover Upload (/api/library/cover-upload)', () => {
         mocks.pathExists.mockResolvedValue(false);
         mocks.writeFile.mockResolvedValue(undefined);
         mocks.remove.mockResolvedValue(undefined);
-        mocks.audit.mockResolvedValue(true);
+        auditLog.mockResolvedValue(true);
     });
 
     it('rejects non-admins', async () => {

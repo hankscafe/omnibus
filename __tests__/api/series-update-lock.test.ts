@@ -34,12 +34,8 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: async () => ({}) }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: mocks.audit } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: mocks.queueAdd } }));
 vi.mock('@/lib/utils/safe-fs', () => ({ safeRelocateFolder: mocks.safeRelocateFolder }));
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 vi.mock('fs-extra', () => ({
     existsSync: mocks.fsExistsSync,
     default: { existsSync: mocks.fsExistsSync },
@@ -47,6 +43,8 @@ vi.mock('fs-extra', () => ({
 
 import { POST } from '@/app/api/library/update/route';
 import { COMIC_INFO_DEFAULT_KEYS } from '@/lib/utils/comicinfo-fields';
+import { auditLog } from '../helpers/setup-global';
+import { makePostJson } from '../helpers/request';
 
 const PATH = '/lib/DC/Batman (2020)';
 
@@ -67,12 +65,9 @@ const editorBody = (overrides: Record<string, any> = {}) => ({
     ...overrides,
 });
 
-const req = (body: any) => new Request('http://localhost/api/library/update', {
-    method: 'POST', body: JSON.stringify(body),
-});
+const req = makePostJson('http://localhost/api/library/update');
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.getServerSession.mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
     mocks.libraryFindMany.mockResolvedValue([{ id: 'L1', path: '/lib', isDefault: true, isManga: false }]);
     mocks.settingFindMany.mockResolvedValue([]); // default folder pattern
@@ -94,7 +89,7 @@ describe('POST /api/library/update — no-op saves are inert (issue #194 (f), se
         expect(json.changed).toBe(false);
         expect(mocks.seriesUpdate).not.toHaveBeenCalled();
         expect(mocks.queueAdd).not.toHaveBeenCalled();
-        expect(mocks.audit).toHaveBeenCalledWith('UPDATE_SERIES_METADATA',
+        expect(auditLog).toHaveBeenCalledWith('UPDATE_SERIES_METADATA',
             expect.objectContaining({ changed: false }), 'admin1');
     });
 
@@ -176,7 +171,7 @@ describe('POST /api/library/update — no-op saves are inert (issue #194 (f), se
             data: { hasCustomMetadata: false },
         });
         expect(mocks.queueAdd).not.toHaveBeenCalled();
-        expect(mocks.audit).toHaveBeenCalledWith('RESTORE_SERIES_DEFAULTS',
+        expect(auditLog).toHaveBeenCalledWith('RESTORE_SERIES_DEFAULTS',
             expect.objectContaining({ seriesName: 'Batman' }), 'admin1');
     });
 

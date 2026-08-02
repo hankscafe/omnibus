@@ -17,12 +17,8 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 describe('Communications: Email Mailer Engine', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should correctly parse templates and inject dynamic variables', async () => {
         // Mock a custom user-defined template in the database

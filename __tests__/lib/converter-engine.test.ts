@@ -32,11 +32,9 @@ vi.mock('fs-extra', () => ({
 vi.mock('child_process', () => ({ execFile: mocks.execFile, default: { execFile: mocks.execFile } }));
 vi.mock('adm-zip', () => ({ default: class AdmZipMock { extractAllTo() {} addLocalFile() {} writeZip() {} } }));
 vi.mock('sharp', () => ({ default: vi.fn() }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Converter: engine CBR conversion offload', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         vi.stubGlobal('fetch', mocks.fetch);
         mocks.fetch.mockRejectedValue(new Error('engine unavailable'));
         // Native CLI decoders unavailable in this environment.

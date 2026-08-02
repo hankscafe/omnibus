@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Profile "Updates" section (nav entries removed per Adam — the profile is the doorway to
 // /library/updates now). Pinned: renders the newest followed-series arrivals with unread count,
 // caps at 9, collapse toggle hides the grid and persists, empty feed shows the explainer, and
@@ -15,7 +16,6 @@ const item = (id: string, seriesName: string, isRead = false) => ({
 
 describe('ProfileUpdatesSection', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         localStorage.clear();
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
             ok: true,

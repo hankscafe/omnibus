@@ -24,14 +24,8 @@ vi.mock('next-auth/next', () => ({
     getServerSession: vi.fn().mockResolvedValue({ user: { id: 'user_1' } })
 }));
 
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
-vi.mock('@/lib/audit-logger', () => ({ AuditLogger: { log: vi.fn() } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('API Route: OPDS API Keys', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should generate a secure key, store its hash, and return the raw key only once', async () => {
         mocks.opdsKeyCreate.mockImplementation(async (args) => ({ id: 'key_123', ...args.data }));

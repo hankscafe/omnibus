@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'crypto';
 import { encryptSecret, decryptSecret, encrypt2FA, decrypt2FA, __resetEncryptionKeyCacheForTests } from '@/lib/encryption';
+import { loggerLog } from '../helpers/setup-global';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
@@ -15,9 +16,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({
-    Logger: { log: mocks.log }
-}));
 
 // Default deterministic key source (a DATABASE_ENCRYPTION_KEY row). getEncryptionKey() derives the
 // AES key as sha256(secret), so the test can reproduce it to hand-craft legacy v1 values.
@@ -37,7 +35,6 @@ function makeLegacyV1(plaintext: string): string {
 
 describe('Security: Credential Encryption Engine (AES-256-GCM)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         __resetEncryptionKeyCacheForTests();
         mocks.findUnique.mockResolvedValue({ value: TEST_SECRET });
         process.env.NEXTAUTH_SECRET = 'super_secure_test_secret_key_1234567890';
@@ -84,7 +81,7 @@ describe('Security: Credential Encryption Engine (AES-256-GCM)', () => {
         expect(tampered).not.toEqual(encrypted);
 
         await expect(decryptSecret(tampered)).rejects.toThrow('Decryption failed');
-        expect(mocks.log).toHaveBeenCalled();
+        expect(loggerLog).toHaveBeenCalled();
     });
 
     it('detects tampering: a corrupted auth tag fails to decrypt', async () => {
@@ -102,7 +99,7 @@ describe('Security: Credential Encryption Engine (AES-256-GCM)', () => {
         const tampered = encrypted?.slice(0, -8);
 
         await expect(decryptSecret(tampered!)).rejects.toThrow('Decryption failed');
-        expect(mocks.log).toHaveBeenCalled();
+        expect(loggerLog).toHaveBeenCalled();
     });
 
     it('still decrypts legacy v1 (AES-256-CBC) values written before the migration', async () => {

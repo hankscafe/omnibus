@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+// This file tests the REAL logger module — undo setup-global's suite-wide Logger mock (which
+// doesn't even export isoWeekKey) before the import resolves.
+vi.unmock('@/lib/logger');
 import { isoWeekKey } from '@/lib/logger';
 
 // The weekly rotation trigger keys off isoWeekKey(); a wrong week number would either roll too often or

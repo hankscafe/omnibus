@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // __tests__/components/page-manager-modal.test.tsx
 //
 // Issue #189 Phase 1: the Page Manager grid marks pages by entry NAME, refuses marking every
@@ -43,7 +44,6 @@ const cbrTarget = { issueId: 'i2', filePath: '/comics/S/S 002.cbr', label: 'Seri
 
 describe('Page Manager modal (issue #189)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mockFetch();
     });
 

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // #199 series-editor tabs: the post-match home of the ComicInfo defaults. These tests pin the
 // load → edit → save round-trip: values seed from the series API's comicInfo bag (list columns
 // joined to comma text), edits post through library/update with every field present (editor
@@ -6,19 +7,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import MetadataEditorModal from '@/components/metadata-editor-modal';
+import { openTab } from '../helpers/radix';
+import { ok } from '../helpers/fetch';
 
 const toast = vi.fn();
 vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast }) }));
 
-// Radix tabs: inactive content unmounts and TabsTrigger activates on mousedown — open with the
-// full event sequence (house rule from the beta.012 suite).
-const openTab = (name: RegExp) => {
-    const trigger = screen.getByRole('tab', { name });
-    fireEvent.mouseDown(trigger);
-    fireEvent.click(trigger);
-};
 
-const ok = (body: any) => Promise.resolve({ ok: true, json: async () => body });
 
 let captured: any = null;
 const seriesPayload = {
@@ -45,7 +40,6 @@ const baseProps = {
 
 describe('MetadataEditorModal series mode — ComicInfo defaults (#199)', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         captured = null;
         vi.stubGlobal('fetch', vi.fn((url: string, init?: any) => {
             if (String(url).startsWith('/api/admin/config')) return ok({ settings: [] });

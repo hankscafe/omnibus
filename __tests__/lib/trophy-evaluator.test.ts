@@ -22,12 +22,8 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Gamification: Trophy Evaluator', () => {
-    beforeEach(() => { 
-        vi.clearAllMocks(); 
-    });
 
     it('should exit early and save database calls if the user has already unlocked all trophies', async () => {
         // User already has trophy 't1'

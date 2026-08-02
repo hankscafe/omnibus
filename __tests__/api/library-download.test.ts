@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 
 // 2. Mock NextAuth
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
 // 3. Mock Prisma
 vi.mock('@/lib/db', () => ({
@@ -31,14 +30,12 @@ vi.mock('fs', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 const createReq = (filePath: string) =>
     new Request(`http://localhost/api/library/download?path=${encodeURIComponent(filePath)}`);
 
 describe('API Route: Library File Download Permissions', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.findManyLibraries.mockResolvedValue([{ path: '/library' }]);
     });
 

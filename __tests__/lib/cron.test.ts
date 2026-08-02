@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { initCronJobs } from '@/lib/cron';
+import { loggerLog } from '../helpers/setup-global';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
@@ -31,9 +32,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({
-    Logger: { log: mocks.log }
-}));
 
 // The 60s tick now runs the stuck-job heal first (issue #183); stub it so these download-checker
 // suites stay deterministic (job-heal has its own unit suite).
@@ -54,11 +52,9 @@ vi.mock('@/lib/queue', () => ({
     syncSchedules: vi.fn().mockResolvedValue(true)
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Cron Logic: Automated Download Checker', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         (globalThis as any)._cronInitialized = false;
         
         // Intercept setInterval to manually trigger the async callback loop during tests
@@ -150,7 +146,7 @@ describe('Cron Logic: Automated Download Checker', () => {
         expect(mocks.importRequest).toHaveBeenCalledWith('req_fuzzy');
 
         // NEW: Assert our new debug log traced the successful match ratio calculation
-        expect(mocks.log).toHaveBeenCalledWith(
+        expect(loggerLog).toHaveBeenCalledWith(
             expect.stringContaining('[Cron Debug] Match SUCCESS! Ratio:'),
             'debug'
         );

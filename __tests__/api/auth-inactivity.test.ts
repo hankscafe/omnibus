@@ -1,3 +1,5 @@
+// beta.014: this file tests the REAL module — undo setup-global's suite-wide mock.
+vi.unmock('@/app/api/auth/[...nextauth]/options');
 // __tests__/api/auth-inactivity.test.ts
 //
 // Admin auto-logout regression: the jwt callback used to refresh token.lastActive on EVERY run,
@@ -17,6 +19,7 @@ const mocks = vi.hoisted(() => {
 });
 
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { loggerLog } from '../helpers/setup-global';
 
 vi.mock('@/lib/db', () => ({
     prisma: {
@@ -24,7 +27,6 @@ vi.mock('@/lib/db', () => ({
         user: { findUnique: mocks.userFindUnique },
     }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 vi.mock('@/lib/encryption', () => ({ decrypt2FA: vi.fn() }));
 // The jwt callback reads the impersonation cookie; outside a request scope cookies() would throw.
 vi.mock('next/headers', () => ({
@@ -50,9 +52,6 @@ const getJwtCallback = async () => {
 };
 
 describe('Security: session inactivity window (jwt callback)', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('does NOT slide lastActive on an ambient session read (background refetch/poll)', async () => {
         const jwt = await getJwtCallback();
@@ -124,9 +123,6 @@ describe('Security: session inactivity window (jwt callback)', () => {
 // reads fail OPEN (token survives, check deferred one 5-minute cycle); reads that RESOLVE keep
 // their teeth — a missing user or a version mismatch still revokes.
 describe('Security: transient DB errors must not kill the session (jwt callback)', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     // Token whose lastSessionCheck is stale, so the 5-minute sessionVersion sweep MUST run.
     const sweepDueToken = (overrides: Record<string, any> = {}) => liveToken({
@@ -145,7 +141,7 @@ describe('Security: transient DB errors must not kill the session (jwt callback)
         expect(result.id).toBe('admin_1');
         // Deferred to the next 5-minute cycle — a struggling DB gets one probe per cycle, not one per fetch.
         expect(result.lastSessionCheck).toBeGreaterThan(staleCheck);
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('deferred'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('deferred'), 'warn');
     });
 
     it('still revokes when the read RESOLVES null (deleted account is not a transient error)', async () => {
@@ -181,6 +177,6 @@ describe('Security: transient DB errors must not kill the session (jwt callback)
         // Unchanged this round — the revert simply retries on the next callback run.
         expect(result.id).toBe('user_2');
         expect(result.isImpersonating).toBe(true);
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('deferred'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('deferred'), 'warn');
     });
 });

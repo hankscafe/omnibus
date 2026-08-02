@@ -14,9 +14,6 @@ vi.mock('@/lib/db', () => ({
 }));
 
 describe('healStuckJobs', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('issues NO write when nothing is stuck (the steady state, every 60s)', async () => {
         mocks.count.mockResolvedValue(0);

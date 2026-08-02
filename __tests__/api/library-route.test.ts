@@ -6,12 +6,13 @@ import { GET } from '@/app/api/library/route';
 const mocks = vi.hoisted(() => ({
     findManySeries: vi.fn(),
     countSeries: vi.fn(),
+    // Hoisted (not factory-inline) so the aggregate-counts test can override per test.
+    groupByIssue: vi.fn(),
     getServerSession: vi.fn()
 }));
 
 // 2. Mock NextAuth
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
 // 3. Mock Prisma
 vi.mock('@/lib/db', () => ({
@@ -21,7 +22,7 @@ vi.mock('@/lib/db', () => ({
             count: mocks.countSeries
         },
         issue: {
-            groupBy: vi.fn().mockResolvedValue([]),
+            groupBy: mocks.groupByIssue,
             findMany: vi.fn().mockResolvedValue([])
         },
         library: {
@@ -30,7 +31,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 
 const createReq = (queryParam: string, extraParams: string = '') => {
     // Inject the /library path prefix so the authorization passes
@@ -40,10 +40,61 @@ const createReq = (queryParam: string, extraParams: string = '') => {
 
 describe('API Route: Library Advanced Search', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.getServerSession.mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } });
         mocks.countSeries.mockResolvedValue(1);
         mocks.findManySeries.mockResolvedValue([{ id: '1', issues: [], favorites: [] }]);
+        mocks.groupByIssue.mockResolvedValue([]);
+    });
+
+    // Merged from the stalled near-duplicate __tests__/lib/library-route.test.ts (beta.014 suite
+    // refactor) — the three tests that file uniquely owned.
+    it('derives card counts from grouped aggregates instead of loading every issue row', async () => {
+        // The page no longer include-loads all issues; it counts downloaded + read issues per series
+        // via two groupBy aggregates. Verify the derived numbers: count = downloaded,
+        // unread = downloaded - read, progress = round(read / downloaded * 100).
+        mocks.findManySeries.mockResolvedValue([
+            { id: 's1', name: 'Batman', year: 2016, publisher: 'DC', coverUrl: '/cover.jpg', folderPath: '/x', favorites: [] }
+        ]);
+        mocks.groupByIssue
+            .mockResolvedValueOnce([{ seriesId: 's1', _count: { _all: 10 } }])  // downloaded
+            .mockResolvedValueOnce([{ seriesId: 's1', _count: { _all: 4 } }]);  // read/completed
+
+        const res = await GET(createReq('batman'));
+        const body = await res.json();
+        const series = body.series[0];
+
+        expect(series.count).toBe(10);
+        expect(series.unreadCount).toBe(6);
+        expect(series.progressPercentage).toBe(40);
+        expect(series.isPendingReq).toBe(false);
+    });
+
+    it('filters by series status for mass-monitor workflows (discussion #177)', async () => {
+        // Filter Ongoing series, select all, bulk-monitor — previously status had no filter at all.
+        await GET(new Request('http://localhost/api/library?path=/library&status=Ongoing'));
+
+        const queryArg = mocks.findManySeries.mock.calls[0][0].where;
+        expect(queryArg.AND).toEqual(
+            expect.arrayContaining([{ status: 'Ongoing' }])
+        );
+
+        // Unknown values are ignored (no injection into the where clause).
+        mocks.findManySeries.mockClear();
+        await GET(new Request('http://localhost/api/library?path=/library&status=Bogus'));
+        const arg2 = mocks.findManySeries.mock.calls[0][0].where;
+        const clauses = Array.isArray(arg2.AND) ? arg2.AND : [];
+        expect(clauses.some((c: any) => 'status' in c)).toBe(false);
+    });
+
+    it('should translate "writer: Name" into a strict writer query', async () => {
+        await GET(createReq('writer: tom king'));
+
+        const queryArg = mocks.findManySeries.mock.calls[0][0].where;
+        expect(queryArg.AND).toEqual(
+            expect.arrayContaining([
+                { issues: { some: { writers: { contains: 'tom king' } } } }
+            ])
+        );
     });
 
     it('should default to a broad OR search if no prefix is provided', async () => {
@@ -135,7 +186,6 @@ describe('API Route: Library Advanced Search', () => {
             expect(mocks.findManySeries.mock.calls[0][0].skip).toBe(37);
             expect(data.hasMore).toBe(true); // 37 + 24 < 100
 
-            vi.clearAllMocks();
             mocks.getServerSession.mockResolvedValue({ user: { id: 'user_1', role: 'ADMIN' } });
             mocks.countSeries.mockResolvedValue(50);
             mocks.findManySeries.mockResolvedValue([{ id: '2', issues: [], favorites: [] }]);

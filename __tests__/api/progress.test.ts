@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { POST } from '@/app/api/progress/route';
+import { makePostJson } from '../helpers/request';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
@@ -15,7 +16,6 @@ const mocks = vi.hoisted(() => ({
 
 // 2. Mock NextAuth
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
-vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn() }));
 
 // 3. Mock Prisma
 vi.mock('@/lib/db', () => ({
@@ -27,19 +27,12 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 // Prevent the trophy evaluator from running async during tests
 vi.mock('@/lib/trophy-evaluator', () => ({ evaluateTrophies: vi.fn().mockResolvedValue(true) }));
 
-const createReq = (body: any) => new Request('http://localhost/api/progress', {
-    method: 'POST',
-    body: JSON.stringify(body)
-});
+const createReq = makePostJson('http://localhost/api/progress');
 
 describe('API Route: Reading Progress Tracker', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should reject unauthenticated users', async () => {
         mocks.getServerSession.mockResolvedValueOnce(null);

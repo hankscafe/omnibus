@@ -49,14 +49,12 @@ vi.mock('fs', () => ({
     default: { existsSync: mocks.existsSync }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/utils/system-flags', () => ({ logApiUsage: vi.fn(), markSystemFlag: vi.fn() }));
 
 describe('Metadata Pipeline: ComicVine Sync Engine', () => {
     let originalSetTimeout: typeof setTimeout;
 
     beforeEach(() => {
-        vi.clearAllMocks();
 
         // Bypass all the 3-second API-ban delays in the fetcher to prevent 5000ms test timeouts
         originalSetTimeout = global.setTimeout;

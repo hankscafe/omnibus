@@ -4,6 +4,7 @@
 // the owned-series exclusion, and graceful degradation when a provider call throws.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { collectMissingArcSeries } from '@/lib/utils/arc-missing-series';
+import { loggerLog } from '../../helpers/setup-global';
 
 const mocks = vi.hoisted(() => ({
     seriesFindMany: vi.fn(),
@@ -17,13 +18,11 @@ vi.mock('@/lib/metadata/metadata-cache', () => ({ cachedCvGet: mocks.cachedCvGet
 vi.mock('@/lib/metadata/providers/metron', () => ({
     MetronProvider: class { searchSeries = mocks.searchSeries; }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 const cvIssue = (id: number, volumeId: number, volumeName: string) => ({ id, volume: { id: volumeId, name: volumeName } });
 
 describe('collectMissingArcSeries — ComicVine', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.seriesFindMany.mockResolvedValue([]);
     });
 
@@ -77,13 +76,12 @@ describe('collectMissingArcSeries — ComicVine', () => {
         const result = await collectMissingArcSeries([], ids, 'COMICVINE', 'key123');
 
         expect(result).toEqual([{ id: '300', name: 'X-Men', source: 'COMICVINE' }]);
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('volume batch lookup failed'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('volume batch lookup failed'), 'warn');
     });
 });
 
 describe('collectMissingArcSeries — Metron', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.seriesFindMany.mockResolvedValue([]);
     });
 
@@ -120,6 +118,6 @@ describe('collectMissingArcSeries — Metron', () => {
         const result = await collectMissingArcSeries(issuesList, [11, 13], 'METRON', null);
 
         expect(result).toEqual([{ id: '910', name: 'Carnage', source: 'METRON' }]);
-        expect(mocks.log).toHaveBeenCalledWith(expect.stringContaining('Metron series lookup failed'), 'warn');
+        expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('Metron series lookup failed'), 'warn');
     });
 });

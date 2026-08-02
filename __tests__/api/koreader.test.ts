@@ -28,7 +28,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 const createReq = (headers: Record<string, string>, body: any) => new Request('http://localhost/api/koreader/syncs/progress', {
     method: 'PUT',
@@ -37,9 +36,6 @@ const createReq = (headers: Record<string, string>, body: any) => new Request('h
 });
 
 describe('Integrations: KOReader Progress Sync', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     it('should reject requests that are missing the custom KOReader headers', async () => {
         const req = createReq({}, { document: 'book.cbz', percentage: 0.5 });

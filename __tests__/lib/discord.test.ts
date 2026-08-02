@@ -1,3 +1,5 @@
+// beta.014: this file tests the REAL module — undo setup-global's suite-wide mock.
+vi.unmock('@/lib/discord');
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DiscordNotifier } from '@/lib/discord';
 import axios from 'axios';
@@ -13,12 +15,8 @@ vi.mock('axios');
 vi.mock('@/lib/db', () => ({
     prisma: { discordWebhook: { findMany: mocks.findManyWebhooks } }
 }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: mocks.log } }));
 
 describe('Notifications: Discord Webhooks', () => {
-    beforeEach(() => { 
-        vi.clearAllMocks(); 
-    });
 
     it('should do nothing and exit cleanly if no webhooks are configured', async () => {
         mocks.findManyWebhooks.mockResolvedValueOnce([]); // Empty array = no webhooks

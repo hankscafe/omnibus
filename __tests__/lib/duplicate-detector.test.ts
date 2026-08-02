@@ -37,7 +37,6 @@ function setIssues(issues: ReturnType<typeof issue>[]) {
 }
 
 beforeEach(() => {
-    vi.clearAllMocks();
     mocks.existsSync.mockReturnValue(true);
     mocks.statSync.mockReturnValue({ size: 100 });
 });

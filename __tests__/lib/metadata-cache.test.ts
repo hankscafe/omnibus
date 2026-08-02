@@ -26,7 +26,6 @@ vi.mock('@/lib/db', () => ({
     }
 }));
 vi.mock('@/lib/api-client', () => ({ apiClient: { get: mocks.axiosGet } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/utils/system-flags', () => ({ logApiUsage: mocks.logApiUsage }));
 
 // Settings shape used across tests: cache on, default TTLs unless overridden.
@@ -78,7 +77,6 @@ describe('metadata-cache: read/write behavior', () => {
     const DETAIL_URL = 'https://metron.cloud/api/issue/5555/';
 
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.cacheUpsert.mockResolvedValue({});
     });
 
@@ -125,7 +123,6 @@ describe('metadata-cache: cachedCvGet contract', () => {
     const OPTS = { params: { api_key: 'SECRET', format: 'json', field_list: 'name' } };
 
     beforeEach(() => {
-        vi.clearAllMocks();
         mocks.cacheUpsert.mockResolvedValue({});
         mocks.axiosGet.mockResolvedValue({ status: 200, data: { results: { name: 'Spawn' } } });
     });

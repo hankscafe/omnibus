@@ -23,7 +23,6 @@ import axios from 'axios';
 
 // Mock ONLY the app plumbing download-clients drags in at import time — axios stays REAL.
 vi.mock('@/lib/db', () => ({ prisma: { customHeader: { findMany: vi.fn().mockResolvedValue([]) } } }));
-vi.mock('@/lib/logger', () => ({ Logger: { log: vi.fn() } }));
 vi.mock('@/lib/importer', () => ({ Importer: {} }));
 
 import { qbitAuthHeaders } from '@/lib/download-clients';

@@ -25,8 +25,9 @@ export async function GET(request: Request) {
 
   if (!id) return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
 
-  // --- FIX: Bumped cache key to v11 to flush generically named issues ("Issue #3") ---
-  const cacheKey = `meta_details_v12_${type}_${provider}_${id}`;
+  // --- FIX: Bumped cache key to v13 so cached Metron volume payloads (whose `issues` was always
+  // empty before the getSeriesIssues fix below) don't serve stale for another 24h ---
+  const cacheKey = `meta_details_v13_${type}_${provider}_${id}`;
   const cachedData = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
   
   if (cachedData?.value) {
@@ -99,8 +100,16 @@ export async function GET(request: Request) {
             };
         } else {
             const details = await metron.getSeriesDetails(id);
+            // getSeriesDetails never carries an issue list (no `issues` field on its return shape) -
+            // reading it made every volume-level issue lookup return ZERO candidates on Metron, most
+            // visibly the Smart Matcher's Issue Mapping cross-reference (#199 round 2, found by
+            // CapitanoNemo78). getSeriesIssues is the real per-issue list; map it to the same
+            // {id, issue_number, name} stub shape the ComicVine volume branch returns so every
+            // consumer of `issues` works the same on either provider. Soft-fail to [] - a Metron
+            // hiccup should degrade to today's behavior, not kill the whole detail view.
+            const seriesIssues = await metron.getSeriesIssues(id).catch(() => []);
             finalPayload = {
-                id: parseInt(details?.sourceId || "0"), 
+                id: parseInt(details?.sourceId || "0"),
                 name: details?.name,
                 volumeName: details?.name,
                 volumeId: parseInt(details?.sourceId || "0"),
@@ -110,8 +119,8 @@ export async function GET(request: Request) {
                 description: sanitizeDescription(details?.description, providerWikiBase('METRON')) || "No description available.",
                 siteUrl: `https://metron.cloud/series/${details?.sourceId}/`,
                 // Bypass strict TypeScript checking for these dynamic API fields
-                count: (details as any)?.issueCount || (details as any)?.count_of_issues || "?",
-                issues: (details as any)?.issues || [],
+                count: (details as any)?.issueCount || (details as any)?.count_of_issues || seriesIssues.length || "?",
+                issues: seriesIssues.map(i => ({ id: i.sourceId, issue_number: i.issueNumber, name: i.name })),
                 writers: [], artists: [], coverArtists: [], colorists: [], letterers: [],
                 characters: [], teams: [], locations: [], genres: [], storyArcs: [],
                 htmlDescription: sanitizeDescription(details?.description, providerWikiBase('METRON'))

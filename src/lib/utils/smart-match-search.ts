@@ -40,6 +40,32 @@ export function findIssueIdByNumber(rawIssues: any[] | undefined, issueNumber: s
     return hit?.id != null ? hit.id.toString() : ''
 }
 
+/**
+ * Resolves a provider's exact issue id from an admin-corrected issue number (#199 round 2:
+ * the auto cross-reference can bind the wrong issue inside a correctly-matched series, e.g.
+ * "4" extracted from "Nuova Serie 04" when the comic is #154). A non-empty rawIssues list is
+ * treated as authoritative (it came from the same volume-details call a fetch would repeat);
+ * only when no list is at hand — e.g. the match came from the auto-scan's lightweight
+ * suggestion — is the volume fetched for the real one. Returns '' when the number simply
+ * isn't in the volume; throws only when the fallback fetch itself fails.
+ */
+export async function resolveIssueIdByNumber(opts: {
+    issueNumber: string
+    rawIssues?: any[]
+    seriesMetadataId?: string | number
+    provider?: string
+}): Promise<string> {
+    if (opts.rawIssues && opts.rawIssues.length > 0) {
+        return findIssueIdByNumber(opts.rawIssues, opts.issueNumber)
+    }
+    if (!opts.seriesMetadataId) return ''
+    const provider = opts.provider || 'COMICVINE'
+    const res = await fetch(`/api/issue-details?id=${opts.seriesMetadataId}&type=volume&provider=${provider}`)
+    const data = await res.json()
+    if (!res.ok || data.error) throw new Error(data.error || "Couldn't load the series' issue list")
+    return findIssueIdByNumber(data.issues, opts.issueNumber)
+}
+
 /** Builds the stored suggestion from an /api/issue-details volume payload. */
 export function buildManualSuggestion(data: any, provider: string): ManualSuggestion {
     return {

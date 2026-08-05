@@ -147,6 +147,48 @@ describe('Smart Matcher — Search Match dialog', () => {
         await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Series Selected' })));
     });
 
+    it('re-resolves the exact issue id from a corrected number using the picked volume\'s own list', async () => {
+        await openSearchMatchDialog();
+        fireEvent.change(screen.getByPlaceholderText('e.g. The Amazing Spider-Man'), { target: { value: 'Conan & Dragonero' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Search$/ }));
+        fireEvent.click(await screen.findByText('Conan & Dragonero'));
+        await waitFor(() => expect(screen.getByDisplayValue('171893')).toBeTruthy());
+
+        // Right series, wrong issue: the admin corrects "1" → "2" and refreshes. The rawIssues list
+        // is authoritative, so no second /api/issue-details call is made.
+        fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '2' } });
+        fireEvent.click(screen.getByRole('button', { name: /Refresh from number/ }));
+
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Issue ID updated' })));
+        expect(screen.getByDisplayValue('171894')).toBeTruthy();
+        expect(detailCalls).toHaveLength(1);
+    });
+
+    it('falls back to one volume fetch when the match carries no issue list', async () => {
+        let detailHits = 0;
+        stubFetchRouter([
+            ['/api/admin/unmatched', () => ok([RAW_ITEM])],
+            ['/api/admin/config', () => ok({ settings: [{ key: 'primary_metadata_source', value: 'METRON' }] })],
+            ['/api/admin/sweep', () => ok({})],
+            ['/api/search', () => ok({ results: [SEARCH_RESULT], hasMore: false })],
+            // First call (the pick) returns a volume WITHOUT issues — the auto-scan-shaped case;
+            // the refresh's fallback fetch then returns the real list.
+            ['/api/issue-details', () => { detailHits++; return ok(detailHits === 1 ? { ...VOLUME_DETAILS, issues: [] } : VOLUME_DETAILS); }],
+        ]);
+        await openSearchMatchDialog();
+        fireEvent.change(screen.getByPlaceholderText('e.g. The Amazing Spider-Man'), { target: { value: 'Conan & Dragonero' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Search$/ }));
+        fireEvent.click(await screen.findByText('Conan & Dragonero'));
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Series Selected' })));
+
+        fireEvent.change(screen.getByPlaceholderText('e.g. 1'), { target: { value: '2' } });
+        fireEvent.click(screen.getByRole('button', { name: /Refresh from number/ }));
+
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Issue ID updated' })));
+        expect(detailHits).toBe(2);
+        expect(screen.getByDisplayValue('171894')).toBeTruthy();
+    });
+
     it('reports an empty search honestly and suggests the ID fallback', async () => {
         stubFetchRouter([
             ['/api/admin/unmatched', () => ok([RAW_ITEM])],

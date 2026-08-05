@@ -11,7 +11,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
 import { COMIC_INFO_DEFAULT_KEYS, type ComicInfoDefaults } from "@/lib/utils/comicinfo-fields"
 import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
-import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload, Loader2 } from "lucide-react"
+import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload, Loader2, RefreshCw } from "lucide-react"
+import { resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
 
 // #199 ComicInfo defaults: the field list + types live in the shared lib module (the API routes
 // import it too) and the tab bodies come from the shared component module — the series metadata
@@ -72,6 +73,20 @@ interface Props {
   /** Whether initialIssueCover was archive-sourced, so a reopen keeps its provenance (#199). */
   initialIssueCoverFromArchive?: boolean
   onSave: (override: SmartMatchOverride) => void
+  // #199 round 2, loose files only (showIssueCover): the auto cross-reference can bind the wrong
+  // issue within a correctly-matched series (e.g. "4" extracted when the comic is #154). The
+  // General tab shows the number, lets the admin fix it, and re-resolves the exact provider issue
+  // ID from it — reported back to the page so Accept binds the corrected issue.
+  /** Current issue number for the loose file (editable here). */
+  issueNumber?: string
+  /** Fires on every edit of the number field, keeping the page's Issue Mapping in sync. */
+  onIssueNumberChange?: (v: string) => void
+  /** Fires with the freshly-resolved exact issue ID after a successful refresh. */
+  onIssueIdChange?: (id: string) => void
+  /** The matched series' provider volume/series ID — needed to look up its issue list. */
+  seriesMetadataId?: string | number
+  /** COMICVINE or METRON — the provider seriesMetadataId belongs to. */
+  metadataSource?: string
 }
 
 // Mirrors the token substitution in /api/library/match-series EXACTLY so the preview matches the
@@ -111,8 +126,11 @@ export function shouldEmbedIssueCover(
 export default function SmartMatchMetadataDialog({
   open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true,
   showIssueCover = false, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive, onSave,
+  issueNumber, onIssueNumberChange, onIssueIdChange, seriesMetadataId, metadataSource,
 }: Props) {
   const { toast } = useToast()
+  // #199 round 2: set while "Refresh from number" is re-resolving the exact issue ID.
+  const [refreshingIssueId, setRefreshingIssueId] = useState(false)
   const [name, setName] = useState("")
   const [year, setYear] = useState("")
   const [publisher, setPublisher] = useState("")
@@ -204,6 +222,34 @@ export default function SmartMatchMetadataDialog({
     reader.readAsDataURL(file)
   }
 
+  // #199 round 2: re-resolve the exact provider issue ID from the (corrected) number above. Lean by
+  // design — it fixes the BINDING only; credits/title self-heal through the normal per-issue
+  // enrichment once the right ID is stored, so nothing else needs to happen here.
+  const handleRefreshIssueId = async () => {
+    if (!issueNumber || !issueNumber.trim()) {
+      toast({ title: "Enter the issue number first", description: "Refresh looks up the exact issue using this number.", variant: "destructive" })
+      return
+    }
+    if (!seriesMetadataId) {
+      toast({ title: "No series match yet", description: "This item isn't linked to a provider series yet — pick a match first.", variant: "destructive" })
+      return
+    }
+    setRefreshingIssueId(true)
+    try {
+      const id = await resolveIssueIdByNumber({ issueNumber, seriesMetadataId, provider: metadataSource })
+      if (!id) {
+        toast({ title: "No matching issue found", description: `Couldn't find issue #${issueNumber} for this series on the provider.`, variant: "destructive" })
+        return
+      }
+      onIssueIdChange?.(id)
+      toast({ title: "Issue re-matched", description: `Now bound to issue #${issueNumber} — Accept will import it as that issue.` })
+    } catch (e: any) {
+      toast({ title: "Couldn't re-resolve", description: e?.message || "Unknown error", variant: "destructive" })
+    } finally {
+      setRefreshingIssueId(false)
+    }
+  }
+
   const handleSave = () => {
     // Opt-in only: uploaded image wins, else the archive cover; off → the provider supplies it.
     const issueCover = useArchiveCover ? (issueCoverDataUrl || archiveCoverDataUrl || undefined) : undefined
@@ -255,6 +301,32 @@ export default function SmartMatchMetadataDialog({
 
           <div className="flex-1 min-h-0 overflow-y-auto pr-3 pt-3">
             <TabsContent value="general" className="grid gap-4 mt-0">
+          {/* #199 round 2 (loose files): fix a misrecognized issue number and re-resolve the exact
+              provider issue ID from it, without leaving the editor. */}
+          {showIssueCover && (
+            <div className="flex items-end gap-2 pb-4 border-b border-border">
+              <div className="grid gap-1.5 flex-1">
+                <Label htmlFor="sm-issue-number" className="text-[11px] uppercase tracking-wider text-muted-foreground font-bold">Issue Number</Label>
+                <Input
+                  id="sm-issue-number"
+                  value={issueNumber || ""}
+                  onChange={e => onIssueNumberChange?.(e.target.value)}
+                  placeholder="e.g. 154"
+                  className="bg-background border-border h-9"
+                />
+              </div>
+              <Button
+                type="button" size="sm" variant="outline" disabled={refreshingIssueId}
+                onClick={handleRefreshIssueId}
+                title="Wrong issue matched (right series, wrong number)? Fix the number, then re-resolve the exact issue ID from it."
+                className="shrink-0 h-9 border-primary/30 text-primary hover:bg-primary/10 font-bold"
+              >
+                {refreshingIssueId ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
+                Refresh from number
+              </Button>
+            </div>
+          )}
+
           <div className="grid gap-1.5">
             <Label className="text-xs">Series Name</Label>
             <Input value={name} onChange={e => setName(e.target.value)} className="bg-background border-border h-9" />

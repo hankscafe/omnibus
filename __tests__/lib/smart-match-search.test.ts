@@ -4,9 +4,10 @@
 // manual-match flow, the exact-ID lookup stays as the advanced fallback. Both paths resolve
 // through the same helpers pinned here — the ID sanitizer is the fallback's contract, and the
 // number normalization + cross-reference drive the Issue Mapping auto-fill for BOTH flows.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
     buildManualSuggestion, cleanProviderId, findIssueIdByNumber, normalizeIssueNumber,
+    resolveIssueIdByNumber,
 } from '../../src/lib/utils/smart-match-search';
 
 describe('cleanProviderId', () => {
@@ -76,5 +77,42 @@ describe('buildManualSuggestion', () => {
     });
     it('prefers id but accepts volumeId payloads', () => {
         expect(buildManualSuggestion({ ...payload, id: undefined, volumeId: 42 }, 'COMICVINE').id).toBe(42);
+    });
+});
+
+describe('resolveIssueIdByNumber (#199 round 2: right series, wrong issue)', () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const stubs = [
+        { id: '171893', issue_number: '1', name: 'A #1' },
+        { id: '171947', issue_number: '154', name: 'A #154' },
+    ];
+
+    it('treats a non-empty rawIssues list as authoritative — hit or miss, no fetch', async () => {
+        const fetchSpy = vi.fn();
+        vi.stubGlobal('fetch', fetchSpy);
+        await expect(resolveIssueIdByNumber({ issueNumber: '154', rawIssues: stubs })).resolves.toBe('171947');
+        await expect(resolveIssueIdByNumber({ issueNumber: '99', rawIssues: stubs, seriesMetadataId: 16180 })).resolves.toBe('');
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('falls back to one volume-details fetch when no list is at hand', async () => {
+        const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ issues: stubs }) });
+        vi.stubGlobal('fetch', fetchSpy);
+        await expect(resolveIssueIdByNumber({
+            issueNumber: '154', rawIssues: [], seriesMetadataId: 16180, provider: 'METRON',
+        })).resolves.toBe('171947');
+        expect(fetchSpy).toHaveBeenCalledWith('/api/issue-details?id=16180&type=volume&provider=METRON');
+    });
+
+    it('returns empty without fetching when there is no series id to look up', async () => {
+        const fetchSpy = vi.fn();
+        vi.stubGlobal('fetch', fetchSpy);
+        await expect(resolveIssueIdByNumber({ issueNumber: '5' })).resolves.toBe('');
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a fallback-fetch failure as a throw (callers toast it)', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'metron 429' }) }));
+        await expect(resolveIssueIdByNumber({ issueNumber: '5', seriesMetadataId: 1 })).rejects.toThrow('metron 429');
     });
 });

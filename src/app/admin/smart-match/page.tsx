@@ -16,7 +16,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import { buildManualSuggestion, cleanProviderId, findIssueIdByNumber } from "@/lib/utils/smart-match-search"
+import { buildManualSuggestion, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
@@ -107,6 +107,9 @@ export default function SmartMatchPage() {
     const [manualMatchId, setManualMatchId] = useState("");
     // Shared by both paths: set while a picked result / entered ID is resolving its full details.
     const [isManualMatching, setIsManualMatching] = useState(false);
+    // #199 round 2: re-resolving the Exact Issue ID from an admin-corrected Issue Number (the auto
+    // cross-reference can bind the wrong issue within an otherwise-correct series match).
+    const [isReresolvingIssueId, setIsReresolvingIssueId] = useState(false);
 
     const [exactIssueId, setExactIssueId] = useState("");
     const [exactIssueNumber, setExactIssueNumber] = useState("");
@@ -669,6 +672,38 @@ export default function SmartMatchPage() {
         resolveVolumeSelection(String(item.id), item.metadataSource || searchProvider);
     };
 
+    // #199 round 2: the admin corrected the Issue Number (right series, wrong issue bound) — look
+    // the exact issue ID back up from that number. The picked result's rawIssues are authoritative
+    // when present; an auto-scan-sourced match (no list) falls back to one volume-details fetch.
+    const handleReresolveIssueId = async () => {
+        if (!manualMatchTarget || !manualMatchResult) return;
+        const rawNumber = issueOverrides[manualMatchTarget.id]?.issueNumber ?? exactIssueNumber;
+        if (!rawNumber || !rawNumber.trim()) {
+            toast({ title: "Enter the issue number first", description: "Refresh looks up the exact issue using this number.", variant: "destructive" });
+            return;
+        }
+        setIsReresolvingIssueId(true);
+        try {
+            const newId = await resolveIssueIdByNumber({
+                issueNumber: rawNumber,
+                rawIssues: manualMatchResult.rawIssues,
+                seriesMetadataId: manualMatchResult.id,
+                provider: manualMatchResult.metadataSource || searchProvider,
+            });
+            if (!newId) {
+                toast({ title: "No matching issue found", description: `Couldn't find issue #${rawNumber} for this series on the provider.`, variant: "destructive" });
+                return;
+            }
+            setExactIssueId(newId);
+            setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueId: newId } }));
+            toast({ title: "Issue ID updated", description: `Re-matched to issue #${rawNumber}.` });
+        } catch (e: any) {
+            toast({ title: "Couldn't re-resolve", description: e.message, variant: "destructive" });
+        } finally {
+            setIsReresolvingIssueId(false);
+        }
+    };
+
     // ADVANCED fallback: the classic exact-provider-ID lookup, for admins who already have the id.
     const handleManualLookup = async () => {
         const cleanId = cleanProviderId(manualMatchId);
@@ -769,6 +804,10 @@ export default function SmartMatchPage() {
             publisher: seedSource.publisher,
             description: seedSource.description,
             image: seedSource.image,
+            // #199 round 2: carried so the dialog's own "Refresh from number" can re-resolve this
+            // issue's exact provider ID without a Search Match round-trip.
+            metadataId: seedSource.id,
+            metadataSource: seedSource.metadataSource || searchProvider,
         } : null);
         setMetaEditorOpen(true);
     };
@@ -1361,7 +1400,7 @@ export default function SmartMatchPage() {
                                     <FileText className="w-4 h-4" /> Issue Mapping (Auto-Filled)
                                 </h4>
                                 <p className="text-xs text-muted-foreground leading-tight">
-                                    Omnibus has extracted the issue numbers and cross-referenced them with the API to auto-fill exact Issue IDs. You can manually correct these below before applying.
+                                    Omnibus has extracted the issue numbers and cross-referenced them with the API to auto-fill exact Issue IDs. You can manually correct these below before applying — got the right series but the wrong issue? Fix the Issue Number, then hit &quot;Refresh from number&quot; to re-resolve the exact ID.
                                 </p>
                                 
                                 {/* Single Match View */}
@@ -1381,7 +1420,19 @@ export default function SmartMatchPage() {
                                                 />
                                             </div>
                                             <div className="space-y-1">
-                                                <Label className="text-[11px] text-muted-foreground uppercase">Exact Issue ID</Label>
+                                                <div className="flex items-center justify-between">
+                                                    <Label className="text-[11px] text-muted-foreground uppercase">Exact Issue ID</Label>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleReresolveIssueId}
+                                                        disabled={isReresolvingIssueId}
+                                                        className="text-[10px] font-bold text-primary hover:underline flex items-center gap-1 disabled:opacity-50"
+                                                        title="Wrong issue matched? Fix the Issue Number, then re-resolve the exact ID from it."
+                                                    >
+                                                        {isReresolvingIssueId ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                                        Refresh from number
+                                                    </button>
+                                                </div>
                                                 <Input
                                                     placeholder="Optional"
                                                     value={issueOverrides[manualMatchTarget.id]?.issueId ?? exactIssueId}
@@ -1501,6 +1552,22 @@ export default function SmartMatchPage() {
                 initialIssueCover={metaEditorTarget ? issueOverrides[metaEditorTarget.id]?.coverImageBase64 : undefined}
                 initialIssueCoverFromArchive={metaEditorTarget ? issueOverrides[metaEditorTarget.id]?.coverFromArchive : undefined}
                 onSave={handleMetaSave}
+                // #199 round 2 (loose files): the wrong issue can be bound within a correct series
+                // match — the dialog's General tab lets the admin fix the number and re-resolve the
+                // exact issue ID right there. Both stores stay in sync with the Issue Mapping picker.
+                issueNumber={metaEditorTarget?.isRawFile ? (issueOverrides[metaEditorTarget.id]?.issueNumber ?? extractIssueNumber(metaEditorTarget.name || '')) : undefined}
+                onIssueNumberChange={(v) => {
+                    if (!metaEditorTarget) return;
+                    setExactIssueNumber(v);
+                    setIssueOverrides(prev => ({ ...prev, [metaEditorTarget.id]: { ...prev[metaEditorTarget.id], issueNumber: v } }));
+                }}
+                onIssueIdChange={(id) => {
+                    if (!metaEditorTarget) return;
+                    setExactIssueId(id);
+                    setIssueOverrides(prev => ({ ...prev, [metaEditorTarget.id]: { ...prev[metaEditorTarget.id], issueId: id } }));
+                }}
+                seriesMetadataId={metaEditorSeed?.metadataId}
+                metadataSource={metaEditorSeed?.metadataSource}
             />
 
             {/* --- PAGE PREVIEW DIALOG: flip through an unmatched file before matching it --- */}

@@ -34,10 +34,16 @@ While I know AI-assisted ("vibe-coded") projects can sometimes be met with skept
 
 ---
 
-## Recent Highlights (July 2026)
+## Recent Highlights (August 2026)
 
 The last several releases added a lot. The biggest things to be aware of:
 
+* **Follow Your Series & The Updates Feed:** Every user can follow the series they care about — a bell button lives on the series page, library cards, the bulk-selection bar, calendar entries, and the Recently Added shelf. New issues arriving in followed series show up in a personal **Updates feed** (day-grouped, with unread tracking), in a collapsible Updates section on your profile, and as a one-line summary in the header notification bell. Following is personal curation — it never touches monitoring or downloads — and requesting a series follows it automatically.
+* **My Pull List:** The Release Calendar's new default tab shows upcoming releases for the series *you* follow — your personal pull list. The classic server-wide monitored view is unchanged, one tab over.
+* **Covers Load Light & Cache Hard:** Library views request right-sized WebP thumbnails (a 3 MB stored cover arrives as ~120 KB), rendered once and cached on disk server-side with proper ETags — a next-day refresh is a handful of 304s instead of re-downloading every cover. OPDS cover responses are byte-for-byte unchanged.
+* **ComicInfo Defaults Everywhere (Community!):** Set series-level defaults for the full ComicInfo tag set — imprint, age rating, language, credits, tags, and more — in a tabbed editor available in both the Smart Matcher and Edit Series Metadata. Values embed into `ComicInfo.xml`, scans read them back (so a wipe-and-rescan restores everything), and `series.json` carries imprint and age rating. Built for libraries the providers don't cover — concept and prototype by [CapitanoNemo78](https://github.com/CapitanoNemo78) in [#199](https://github.com/hankscafe/omnibus/issues/199).
+* **Search Match:** Manually matching an item in the Smart Matcher now starts with a name search — type the series, pick from a results list with covers — instead of hunting a ComicVine/Metron ID. The exact-ID lookup is still there for admins, one click deeper. ([#199](https://github.com/hankscafe/omnibus/issues/199))
+* **UMASK Support:** Both containers honor the standard `UMASK` environment variable (the *arr convention) so new library folders are writable on NAS/shared storage. Opt-in; unset keeps today's behavior.
 * **Comic Panel-Frame Navigation (Community!):** A comic-styled header redesign — the active page sits in a bold panel frame with an offset shadow, Admin lives in the avatar menu, and the whole button system picked up tactile press feedback and `prefers-reduced-motion` support. Contributed by [JoeJoeflyn](https://github.com/JoeJoeflyn) in [#186](https://github.com/hankscafe/omnibus/pull/186) — Omnibus' first merged community feature!
 * **Page Manager:** Preview any issue's pages on the series page, delete scanner junk or corrupted pages (CBR repack included), flag a bad page right from the reader mid-read, and sweep an entire series for flagged pages as a background job.
 * **Alphabet Jump Bar:** A Plex-style floating #/A–Z rail on alphabetically-sorted libraries — jump straight to a letter, watch the rail track your position as you scroll, with letters that have nothing under your current filters dimmed.
@@ -59,12 +65,13 @@ The last several releases added a lot. The biggest things to be aware of:
 ---
 
 ## Table of Contents
-- [Recent Highlights](#recent-highlights-july-2026)
+- [Recent Highlights](#recent-highlights-august-2026)
 - [About Omnibus](#about-omnibus)
 - [Features & Navigation](#features--navigation)
   - [Authentication & Security](#authentication--security)
   - [Homepage](#homepage)
   - [Library & Metadata](#library--metadata)
+  - [Follows & The Updates Feed](#follows--the-updates-feed)
   - [Manga Support](#manga-support)
   - [Series Page](#series-page)
   - [Web Reader](#web-reader)
@@ -169,6 +176,7 @@ A meticulously organized, highly performant view of your physical files, built t
 * **Per-Issue Credits & Genres:** Syncs capture writers, artists, characters, story arcs, and genres down to the individual issue. Metron users can opt in to a per-issue credit pass that's budgeted against Metron's daily API quota and resumes across syncs.
 * **Provider Response Cache (Opt-In):** A shared, database-backed cache for ComicVine/Metron responses with admin-tunable freshness windows and a size cap. Repeat lookups cost zero rate limit across both the app and the Rust engine, and an explicit "Refresh Metadata" always fetches live.
 * **In-App Metadata Editor:** Edit series-level and per-issue metadata (title, year, publisher, summary, creators, and more) right in the browser. Changes can optionally be written straight back into each archive's `ComicInfo.xml`, and a sync-lock keeps your manual edits from being overwritten by the next provider refresh.
+* **ComicInfo Defaults (Full Tag Set):** A tabbed editor — General / Credits / Story & Tags / Details — covers the complete ComicInfo schema: imprint, format, language, age rating, per-role credits, tags, story arcs, alternate series, community rating, black & white, and more. Available in both the Smart Matcher (set values at match time) and Edit Series Metadata (edit them any time after). Series-level values act as *defaults*: an issue's own provider or scanned data always wins, and the defaults fill the blanks. Scans read the tags back from files, so your values survive even a full database rebuild. Built for libraries the metadata providers don't cover.
 * **Series Groups & Universes:** Organize related runs with the `{SeriesGroup}` and `{UniverseName}` naming variables — perfect for shelving a multi-title crossover event or an entire publisher universe together.
 * **Cover Art Management:** Omnibus extracts a cover from the first page of each archive, lets you choose your preferred cover source, and allows admins to upload a custom cover for any series (locked so automated syncs never overwrite it).
 * **Advanced Search Syntax:** Use prefix modifiers in the search bar (e.g., `character:"Spider-Man"`, `team:"X-Men"`, `arc:"Secret Wars"`) to pinpoint exact crossovers and appearances across your entire collection.
@@ -182,6 +190,15 @@ A meticulously organized, highly performant view of your physical files, built t
 * **Smart Progress Badging:** Visual overlay indicators on covers to instantly show reading progress bars and how many unread issues remain in a series.
 * **Issue Grid & List Modes:** Toggle between a visual cover grid or a condensed list view to easily navigate massive collections.
 * **Alphabet Jump Bar:** On alphabetical sorts, a Plex-style floating #/A–Z rail appears along the right edge. Letters with no series under your current filters are dimmed; click a live letter to jump the infinite-scrolling list straight there, and the rail highlights your position as you scroll.
+
+### Follows & The Updates Feed
+Monitoring answers "what should the server download?" — following answers "what do *I* care about?" Every user curates their own slice of the library, and Omnibus keeps them posted as new issues land.
+
+* **Follow Anywhere:** A bell button on the series page, library grid and list cards, the bulk-selection bar (follow/unfollow a whole selection at once), calendar entries, and the Recently Added shelf. Following is per-user and never touches monitoring or downloads.
+* **Auto-Follow on Request:** Requesting a series follows it automatically — if you asked for it, you probably want to hear about it. Existing requests are backfilled as follows on first boot after upgrading.
+* **The Updates Feed:** A personal page showing which issues arrived in your followed series over the last 30 days — grouped by day, same-day arrivals clustered per series, with unread dots and a persisted unread-only filter.
+* **Profile Updates Section:** A collapsible section on your profile shows the latest arrivals at a glance with an unread badge, and links through to the full feed.
+* **Header Bell Summary:** New arrivals light the notification bell with a single summary line — "N New Issues In Your Follows" — that clears once you visit the feed. A 40-chapter manga dump is one line, never forty.
 
 ### Manga Support
 Manga is a first-class citizen, not an afterthought. Omnibus detects it, shelves it, names it, and filters it — your call how much of it you want to see.
@@ -298,6 +315,7 @@ Perfect for navigating the complex web of massive comic book crossover events or
 ### Release Calendar
 A centralized hub to track upcoming comic and manga releases so you never miss an issue. The calendar is split into two powerful views to help you manage your existing collection and discover new ongoing runs.
 
+* **My Pull List (New Default):** Your personal release calendar — upcoming releases for the series *you* follow, whether or not the server monitors them. Follow a series anywhere in the app and its releases appear here.
 * **Omnibus Tracked Series:** A personalized calendar displaying upcoming releases specifically for the series you already own and monitor.
   * **Tracked Series:** Automatically scans your monitored library items and groups upcoming issues by month and exact release day.
   * **Release-State Badges:** Every entry advances through three states as time passes — 🟣 **Unreleased** (release date is in the future), 🟠 **Released** (it's out, but not in your library yet), and 🟢 **In Library** (the file has landed on your disk). Paging back through past weeks shows exactly what you caught and what you missed.
@@ -334,6 +352,7 @@ A personalized space for each user on your server to manage their identity, trac
 </p>
 
 * **Personal Identity:** Customize your account by uploading a unique profile avatar and a custom hero banner for your user dashboard.
+* **Updates at a Glance:** A collapsible Updates section surfaces the newest arrivals in your followed series right on your profile, with an unread badge and a doorway to the full Updates feed.
 * **Reading Statistics:** Track your all-time reading habits. View your total issues read, estimated pages turned, and your most-read publishers or genres.
 * **UI Customization:** Set your own personal theme preferences (Dark mode, Light mode, or System default) plus five comic-inspired color themes — Vigilante Red, Krypton Green, Mutant Yellow, Symbiote, and Speedster — that re-accent the entire interface. These settings are tied to your account and persist across any device you log into.
 * **Account Security:** Safely update your password and view or revoke active login sessions across your different devices.
@@ -396,7 +415,7 @@ Settings are organized into **8 task-focused tabs** — Metadata, Library & File
 * **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, and Terabox. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
 * **Anna's Archive Search Source:** Search Anna's Archive (the shadow-library aggregator) as a first-class source alongside GetComics and your indexers. Use it in interactive search (no API key required — gated files drop to the manual queue) or prioritize it as an automated source (requires a premium API key plus a passing connection test). Includes a configurable mirror base URL with automatic failover as Anna's Archive rotates domains.
 * **Selectable Cloudflare Solver:** Route requests through a FlareSolverr, Byparr, **or** Trawl container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics, with a configurable solve timeout. A built-in circuit breaker detects a wedged/unresponsive solver (pausing solve attempts and raising a health-panel alert with the fix) instead of silently grinding every download into the manual queue. The download pipeline drives the solver the way battle-tested tools do — reusing solver sessions, streaming from the solver's landed URL, and resuming partial transfers — so gated links that used to need hand-holding now usually finish on their own. When a link still stays gated, Omnibus holds it for manual download — and you can hand the file back via Manual File Upload. A ready-to-uncomment `flaresolverr` service ships in the compose example below.
-* **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the AI misses, you can manually input a specific ComicVine Volume ID or Metron Series ID to force a perfect match. Includes bulk processing for whole folders at once, an inline metadata editor (Series Group / Universe and per-issue covers included), archive-extracted cover previews, and overwrite-safety guards so a re-match never clobbers existing files. And when an auto-scan matches everything, a one-click **Accept All** applies every suggestion in a single pass.
+* **Smart Matcher:** An AI-assisted tool that scans your "Unmatched" folders, queries your primary metadata provider (ComicVine or Metron), and suggests the correct linkage so you can clean up messy archives in seconds. If the auto-scan misses, **Search Match** lets you search the provider by name right in the matcher and pick the correct series from a results list — covers, publisher, year, and issue count included — with the classic exact-ID lookup one click deeper for admins who already have the ComicVine Volume ID or Metron Series ID. Includes bulk processing for whole folders at once, an inline metadata editor (Series Group / Universe, per-issue covers, and the full ComicInfo defaults tab set), archive-extracted cover previews, and overwrite-safety guards so a re-match never clobbers existing files. And when an auto-scan matches everything, a one-click **Accept All** applies every suggestion in a single pass.
 * **Match Confidence Modes & Background Sweep:** Choose how much matching automation you trust — **Trust** (auto-accept confident matches, with a tunable similarity threshold), **Confirm** (file IDs auto, suggestions need approval), **Auto** (only near-exact name matches), or **Custom** (fully manual). An hourly, ComicVine-budget-aware background sweep keeps retrying unmatched series so large imports finish matching themselves instead of stalling at the rate-limit wall — successful auto-matches light up the admin notification bell and a results card on the Smart Match page.
 * **Request Lifecycle Self-Healing:** Downloads that stall after repeated retries recover automatically, titles that aren't available on any source yet wait in a dedicated **Awaiting-Release** state (re-searched on a slow cadence, with per-request snooze) instead of counting as failures, and a periodic sweep revives dead requests — you never have to delete a request just to make it retry.
 * **Search Quality Controls:** GetComics results advertise their download size in interactive search; releases over 400MB automatically prefer third-party mirrors over GetComics' throttled servers (never excluded, just re-ordered); rate limits are respected with real backoff and a health-panel warning; and an opt-in accepts undated scene releases when nothing dated exists (a release *with* a matching year always wins). Bulk packs/collections can be allowed and even prioritized for faster library building.
@@ -642,7 +661,7 @@ Omnibus is built in the open, and it gets better every time someone sends a pull
 Special thanks to the people whose reports and hands-on testing turned into real fixes and features:
 
 * **[anacronismo](https://github.com/anacronismo)** — tracked down the cover-corruption bug and field-verified the repair tooling ([#194](https://github.com/hankscafe/omnibus/issues/194), [#196](https://github.com/hankscafe/omnibus/issues/196))
-* **[CapitanoNemo78](https://github.com/CapitanoNemo78)** — the request that became the Page Manager ([#189](https://github.com/hankscafe/omnibus/issues/189))
+* **[CapitanoNemo78](https://github.com/CapitanoNemo78)** — the request that became the Page Manager ([#189](https://github.com/hankscafe/omnibus/issues/189)), then the concept and working prototype behind the ComicInfo defaults editor and Search Match ([#199](https://github.com/hankscafe/omnibus/issues/199)), with same-day field testing throughout
 * **[misleadingrhino](https://github.com/misleadingrhino)** — a dozen bug reports in the project's formative months
 * **[lboyce](https://github.com/lboyce)** — a wave of metadata reports, including the credits-wipe find ([#179](https://github.com/hankscafe/omnibus/issues/179))
 * **[brando2021x](https://github.com/brando2021x)** — the database-deadlock report behind the v1.3.1 hotfix ([#195](https://github.com/hankscafe/omnibus/issues/195))

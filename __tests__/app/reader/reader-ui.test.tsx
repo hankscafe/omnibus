@@ -13,13 +13,16 @@ vi.mock('next/navigation', () => ({
     useRouter: () => ({ back: backMock, replace: vi.fn(), push: vi.fn() })
 }));
 
+// Hoisted spies so tests can assert toasts and vary the role (#199 in-reader tagging is admin-only).
+const toastMock = vi.hoisted(() => vi.fn());
+const sessionRole = vi.hoisted(() => ({ current: 'ADMIN' }));
 vi.mock('@/components/ui/use-toast', () => ({
-    useToast: () => ({ toast: vi.fn() })
+    useToast: () => ({ toast: toastMock })
 }));
 
 // The reader reads the session for the admin-only page-flagging affordance (issue #189 Phase 2).
 vi.mock('next-auth/react', () => ({
-    useSession: () => ({ data: { user: { role: 'ADMIN' } } })
+    useSession: () => ({ data: { user: { role: sessionRole.current } } })
 }));
 
 // Mock localforage to prevent indexedDB crash in JSDOM
@@ -142,7 +145,126 @@ describe('Component: Reader UI', () => {
         await waitFor(() => expect(screen.queryByText(/Review 1 flagged/i)).not.toBeInTheDocument());
 
         fireEvent.click(screen.getByRole('button', { name: /Close/i }));
-        expect(backMock).toHaveBeenCalled();
+        // Close is async since #199 round 2 (pending tags save before the exit) — nothing is
+        // pending here, so the exit follows on the next tick.
+        await waitFor(() => expect(backMock).toHaveBeenCalled());
         expect(screen.queryByText(/Manage Pages/i)).not.toBeInTheDocument();
+    });
+});
+describe('In-reader tagging (#199 round 2)', () => {
+    let patchBodies: any[] = [];
+    let issueGets = 0;
+
+    beforeEach(() => {
+        patchBodies = [];
+        issueGets = 0;
+        toastMock.mockClear();
+        backMock.mockClear();
+        sessionRole.current = 'ADMIN';
+
+        global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+            if (url.includes('/api/reader/pages')) {
+                return Promise.resolve({ ok: true, json: async () => ({ pages: ['page1.jpg', 'page2.jpg'] }) });
+            }
+            if (url.includes('/api/progress')) {
+                return Promise.resolve({ ok: true, json: async () => ({ currentPage: 0, isCompleted: false, bookmarks: [], issueId: 'issue-1' }) });
+            }
+            if (url.includes('/api/library/series')) {
+                return Promise.resolve({ json: async () => ({ isManga: false, downloadedIssues: [] }) });
+            }
+            if (url.includes('/api/library/issue')) {
+                if (options?.method === 'PATCH') {
+                    patchBodies.push(JSON.parse(options.body));
+                    return Promise.resolve({ ok: true, json: async () => ({ success: true, changed: true, wroteToFile: true }) });
+                }
+                issueGets++;
+                return Promise.resolve({ ok: true, json: async () => ({ characters: ['Groucho'], writers: [] }) });
+            }
+            return Promise.resolve({ ok: true, json: async () => ({}) });
+        });
+    });
+
+    const openReaderWithTagButton = async () => {
+        render(<ReaderPage />);
+        await waitFor(() => expect(screen.getByAltText(/^Page \d+$/)).toBeInTheDocument());
+        return await screen.findByRole('button', { name: /Add a character, team, location or credit/i });
+    };
+
+    it('accumulates, dedupes, and removes pending tags without saving anything', async () => {
+        const tagBtn = await openReaderWithTagButton();
+        fireEvent.click(tagBtn);
+        await screen.findByText('Add to This Issue');
+
+        const input = screen.getByPlaceholderText(/Add a character/i);
+        fireEvent.change(input, { target: { value: 'Dylan Dog' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        expect(await screen.findByText('Dylan Dog')).toBeInTheDocument();
+
+        // Same name again is a no-op…
+        fireEvent.change(input, { target: { value: 'Dylan Dog' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        expect(screen.getAllByText('Dylan Dog')).toHaveLength(1);
+
+        // …and the chip's X withdraws it. Nothing was written at any point.
+        fireEvent.click(screen.getByRole('button', { name: /Remove Dylan Dog/i }));
+        await waitFor(() => expect(screen.queryByText('Dylan Dog')).not.toBeInTheDocument());
+        expect(patchBodies).toHaveLength(0);
+        expect(screen.getByText(/Nothing added yet this session/i)).toBeInTheDocument();
+    });
+
+    it('saves on Close: additive merge into current values, then exits', async () => {
+        const tagBtn = await openReaderWithTagButton();
+        fireEvent.click(tagBtn);
+        await screen.findByText('Add to This Issue');
+        const input = screen.getByPlaceholderText(/Add a character/i);
+        fireEvent.change(input, { target: { value: 'Dylan Dog' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await screen.findByText('Dylan Dog');
+        // Escape on document reaches Radix's dismissable layer (closes the dialog); the reader's
+        // own Escape handler is guarded while the dialog is open, so nothing else happens.
+        fireEvent.keyDown(document, { key: 'Escape' });
+        await waitFor(() => expect(screen.queryByText('Add to This Issue')).not.toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole('button', { name: /^Close$/ }));
+
+        await waitFor(() => expect(patchBodies).toHaveLength(1));
+        // Fetched fresh, merged additively (existing name kept, no dupes), absent categories untouched.
+        expect(issueGets).toBe(1);
+        expect(patchBodies[0]).toEqual({ issueId: 'issue-1', characters: ['Groucho', 'Dylan Dog'] });
+        await waitFor(() => expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({ title: 'Tags saved' })));
+        await waitFor(() => expect(backMock).toHaveBeenCalled());
+    });
+
+    it('the Escape exit path saves pending tags too', async () => {
+        const tagBtn = await openReaderWithTagButton();
+        fireEvent.click(tagBtn);
+        await screen.findByText('Add to This Issue');
+        const input = screen.getByPlaceholderText(/Add a character/i);
+        fireEvent.change(input, { target: { value: 'Morgana' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await screen.findByText('Morgana');
+        fireEvent.keyDown(document, { key: 'Escape' }); // closes the tag dialog only (reader guard)
+        await waitFor(() => expect(screen.queryByText('Add to This Issue')).not.toBeInTheDocument());
+
+        fireEvent.keyDown(window, { key: 'Escape' }); // now exits the reader
+
+        await waitFor(() => expect(patchBodies).toHaveLength(1));
+        expect(patchBodies[0].characters).toContain('Morgana');
+        await waitFor(() => expect(backMock).toHaveBeenCalled());
+    });
+
+    it('closing with nothing pending writes nothing', async () => {
+        await openReaderWithTagButton();
+        fireEvent.click(screen.getByRole('button', { name: /^Close$/ }));
+        await waitFor(() => expect(backMock).toHaveBeenCalled());
+        expect(patchBodies).toHaveLength(0);
+        expect(issueGets).toBe(0);
+    });
+
+    it('hides the Tag button from non-admins', async () => {
+        sessionRole.current = 'USER';
+        render(<ReaderPage />);
+        await waitFor(() => expect(screen.getByAltText(/^Page \d+$/)).toBeInTheDocument());
+        expect(screen.queryByRole('button', { name: /Add a character, team, location or credit/i })).not.toBeInTheDocument();
     });
 });

@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, X, Loader2, Maximize, Minimize, BookOpen,
   Settings as SettingsIcon, SkipBack, SkipForward, CheckCircle2,
   Paintbrush, LayoutTemplate, MonitorPlay, Zap, ZoomIn, ZoomOut, Search, AlignHorizontalSpaceAround,
-  Sun, Bookmark, CloudDownload, Scissors, Flag
+  Sun, Bookmark, CloudDownload, Scissors, Flag, Tag, Plus
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import PageManagerModal from "@/components/page-manager-modal"
@@ -52,6 +52,84 @@ function ReaderContent() {
   const [pageManagerOpen, setPageManagerOpen] = useState(false);
   const exitAfterManagerRef = useRef(false);
   const managerAppliedRef = useRef(false);
+
+  // In-reader tagging (#199 round 2, concept by CapitanoNemo78; admin-only): note characters,
+  // teams, locations, and credits spotted while reading. Nothing saves per-tag — additions
+  // accumulate and are written ONCE on close via the existing PATCH /api/library/issue (which
+  // also queues the ComicInfo.xml embed), so a six-tag session costs one archive rewrite, not six.
+  // Categories map 1:1 onto the route's ARRAY_FIELDS whitelist — per-issue columns only, which is
+  // why inker/editor/translator (series-level in Omnibus) are not offered here.
+  const TAG_CATEGORY_LABELS = {
+    characters: 'Character', teams: 'Team', locations: 'Location',
+    writers: 'Writer', artists: 'Penciller', coverArtists: 'Cover Artist',
+    colorists: 'Colorist', letterers: 'Letterer',
+  } as const;
+  type TagCategory = keyof typeof TAG_CATEGORY_LABELS;
+  const emptyPendingTags = (): Record<TagCategory, string[]> => ({
+    characters: [], teams: [], locations: [], writers: [], artists: [],
+    coverArtists: [], colorists: [], letterers: [],
+  });
+  const [pendingTags, setPendingTags] = useState<Record<TagCategory, string[]>>(emptyPendingTags());
+  const [tagDialogOpen, setTagDialogOpen] = useState(false);
+  const [tagCategory, setTagCategory] = useState<TagCategory>('characters');
+  const [tagInput, setTagInput] = useState("");
+  const [isSavingTags, setIsSavingTags] = useState(false);
+  const pendingTagCount = Object.values(pendingTags).reduce((n, arr) => n + arr.length, 0);
+
+  const addPendingTag = () => {
+    const val = tagInput.trim();
+    if (!val) return;
+    setPendingTags(prev => prev[tagCategory].includes(val) ? prev : { ...prev, [tagCategory]: [...prev[tagCategory], val] });
+    setTagInput("");
+  };
+  const removePendingTag = (category: TagCategory, value: string) => {
+    setPendingTags(prev => ({ ...prev, [category]: prev[category].filter(v => v !== value) }));
+  };
+
+  // Merges each edited category's new names into the issue's CURRENT values (fetched fresh — the
+  // reader never loads full metadata) and saves through the metadata editor's endpoint: additive
+  // only, deduplicated, absent categories untouched. useCallback with pendingTags in the deps so
+  // the Escape-key handler below always closes over the latest pending set, never a stale one.
+  const savePendingTagsIfAny = useCallback(async () => {
+    if (!isAdmin || !issueId || pendingTagCount === 0) return;
+    setIsSavingTags(true);
+    try {
+      const res = await fetch(`/api/library/issue?id=${issueId}`, { headers: getAuthHeaders() });
+      const current = await res.json();
+      if (!res.ok || current.error) throw new Error(current.error || "Couldn't load current issue metadata");
+
+      const payload: Record<string, any> = { issueId };
+      (Object.keys(TAG_CATEGORY_LABELS) as TagCategory[]).forEach(cat => {
+        if (pendingTags[cat].length === 0) return;
+        const base: string[] = Array.isArray(current[cat]) ? current[cat] : [];
+        const merged = [...base];
+        pendingTags[cat].forEach(v => { if (!merged.includes(v)) merged.push(v); });
+        payload[cat] = merged;
+      });
+
+      const saveRes = await fetch('/api/library/issue', {
+        method: 'PATCH',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) throw new Error(saveData.error || "Save failed");
+
+      toast({
+        title: "Tags saved",
+        description: saveData.wroteToFile
+          ? "Saved to the library and embedded into the comic's ComicInfo.xml."
+          : "Saved to the library."
+      });
+      setPendingTags(emptyPendingTags());
+    } catch (e: any) {
+      toast({ title: "Couldn't save tags", description: e.message, variant: "destructive" });
+    } finally {
+      setIsSavingTags(false);
+    }
+    // TAG_CATEGORY_LABELS/emptyPendingTags are stable-shape locals, not reactive state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, issueId, pendingTagCount, pendingTags, toast]);
 
   // PWA Offline Caching State
   const [pageUrls, setPageUrls] = useState<Record<string, string>>({});
@@ -136,16 +214,19 @@ function ReaderContent() {
     });
   };
 
-  // Close intercept: flags pending → review them in the Page Manager first (explicit confirm
-  // lives there); the exit continues when the manager closes. No flags → plain exit.
-  const handleReaderClose = () => {
+  // Close intercept: pending tags save silently first (#199 round 2 — additive and non-destructive,
+  // so no review step needed; a failed save toasts but never traps the user in the reader). Flagged
+  // pages then go through the Page Manager for explicit confirm; the exit continues when the manager
+  // closes. No flags → plain exit. useCallback so the Escape handler always calls the current version.
+  const handleReaderClose = useCallback(async () => {
+    await savePendingTagsIfAny();
     if (isAdmin && issueId && filePath && flaggedPages.size > 0) {
       exitAfterManagerRef.current = true;
       setPageManagerOpen(true);
       return;
     }
     router.back();
-  };
+  }, [savePendingTagsIfAny, isAdmin, issueId, filePath, flaggedPages, router]);
 
   const handleManagerOpenChange = (open: boolean) => {
     setPageManagerOpen(open);
@@ -174,6 +255,7 @@ function ReaderContent() {
     setPrefsLoaded(false);
     setPages([]);
     setFlaggedPages(new Set());
+    setPendingTags(emptyPendingTags());
     setIssueId(null);
     
     Promise.all([
@@ -546,13 +628,15 @@ function ReaderContent() {
       if (isJumping) return;
       if (e.key === 'ArrowRight') { if (settings.readingMode === 'rtl') prevPage(); else nextPage(); }
       if (e.key === 'ArrowLeft') { if (settings.readingMode === 'rtl') nextPage(); else prevPage(); }
-      if (e.key === 'Escape') { if (isFullscreen) document.exitFullscreen(); else router.back(); }
+      // Escape with the tag dialog open belongs to the dialog (Radix closes it) — without this
+      // guard the same keypress would also save-and-exit the whole reader.
+      if (e.key === 'Escape') { if (tagDialogOpen) return; if (isFullscreen) document.exitFullscreen(); else handleReaderClose(); }
       if (e.key === '=' || e.key === '+') setZoomLevel(z => Math.min(z + 10, 300));
       if (e.key === '-') setZoomLevel(z => Math.max(z - 10, 50));
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [nextPage, prevPage, router, settings.readingMode, isFullscreen, isJumping]);
+  }, [nextPage, prevPage, router, settings.readingMode, isFullscreen, isJumping, handleReaderClose, tagDialogOpen]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
       if (zoomLevel === 100) return;
@@ -625,8 +709,8 @@ function ReaderContent() {
         onMouseLeave={() => setHoverTop(false)}
       >
         <div className="flex items-center gap-2">
-            <Button variant="ghost" className="text-white hover:bg-white/20 font-bold" onClick={handleReaderClose}>
-                <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Close</span>
+            <Button variant="ghost" className="text-white hover:bg-white/20 font-bold" onClick={handleReaderClose} disabled={isSavingTags}>
+                {isSavingTags ? <Loader2 className="w-5 h-5 md:mr-2 animate-spin" /> : <X className="w-5 h-5 md:mr-2" />} <span className="hidden md:inline">Close</span>
             </Button>
             
             {/* Zoom Controls */}
@@ -687,6 +771,23 @@ function ReaderContent() {
                     title="Review flagged pages in the Page Manager"
                 >
                     Review {flaggedPages.size} flagged
+                </Button>
+            )}
+            {isAdmin && issueId && (
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`relative text-white hover:bg-white/20 ${pendingTagCount > 0 ? 'text-primary' : ''}`}
+                    onClick={() => setTagDialogOpen(true)}
+                    disabled={isSavingTags}
+                    title="Add a character, team, location or credit spotted while reading (saved when you leave the reader)"
+                >
+                    {isSavingTags ? <Loader2 className="w-5 h-5 animate-spin" /> : <Tag className="w-5 h-5" />}
+                    {pendingTagCount > 0 && !isSavingTags && (
+                        <span className="absolute -top-1 -right-1 bg-primary text-primary-foreground text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                            {pendingTagCount}
+                        </span>
+                    )}
                 </Button>
             )}
             <Button variant="ghost" size="icon" className={`text-white hover:bg-white/20 ${isMarkedRead ? 'text-green-500' : ''}`} onClick={toggleReadStatus} title="Mark as Read">
@@ -1010,6 +1111,66 @@ function ReaderContent() {
                       </div>
 
                   </div>
+              </div>
+          </DialogContent>
+      </Dialog>
+
+      {/* ADD TAG MODAL (#199 round 2, admin-only): note characters/teams/locations/credits while
+          reading. Nothing saves here — additions accumulate for this session and are written on
+          Close via savePendingTagsIfAny (additive merge into the issue's current values + the
+          ComicInfo.xml embed, if enabled). */}
+      <Dialog open={tagDialogOpen} onOpenChange={setTagDialogOpen}>
+          <DialogContent className="sm:max-w-[425px] w-[95%] bg-background border-border rounded-xl">
+              <DialogHeader><DialogTitle className="text-xl font-black tracking-tight text-foreground">Add to This Issue</DialogTitle></DialogHeader>
+
+              <div className="grid gap-4 py-2">
+                  <p className="text-xs text-muted-foreground">
+                      Saved to the library when you close the reader — and embedded into the comic&apos;s ComicInfo.xml, if enabled. Like any manual edit, saving locks these fields so provider syncs won&apos;t overwrite them.
+                  </p>
+
+                  <div className="flex gap-2">
+                      <Select value={tagCategory} onValueChange={(v) => setTagCategory(v as TagCategory)}>
+                          <SelectTrigger className="w-[150px] h-10 text-xs bg-background border-border shrink-0"><SelectValue /></SelectTrigger>
+                          <SelectContent className="bg-popover border-border">
+                              {(Object.keys(TAG_CATEGORY_LABELS) as TagCategory[]).map(cat => (
+                                  <SelectItem key={cat} value={cat} className="focus:bg-primary/10 focus:text-primary">{TAG_CATEGORY_LABELS[cat]}</SelectItem>
+                              ))}
+                          </SelectContent>
+                      </Select>
+                      <Input
+                          autoFocus
+                          value={tagInput}
+                          onChange={e => setTagInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addPendingTag(); } }}
+                          placeholder={`Add a ${TAG_CATEGORY_LABELS[tagCategory].toLowerCase()}…`}
+                          className="flex-1 h-10 bg-background border-border"
+                      />
+                      <Button size="sm" className="h-10 shrink-0 bg-primary text-primary-foreground font-bold hover:bg-primary/90" onClick={addPendingTag} disabled={!tagInput.trim()} title="Add to this session's pending tags">
+                          <Plus className="w-4 h-4" />
+                      </Button>
+                  </div>
+
+                  {pendingTagCount > 0 ? (
+                      <div className="grid gap-3 max-h-[40vh] overflow-y-auto pr-1">
+                          {(Object.keys(TAG_CATEGORY_LABELS) as TagCategory[]).filter(cat => pendingTags[cat].length > 0).map(cat => (
+                              <div key={cat} className="grid gap-1.5">
+                                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">{TAG_CATEGORY_LABELS[cat]}</Label>
+                                  <div className="flex flex-wrap gap-1.5">
+                                      {pendingTags[cat].map(val => (
+                                          <span key={val} className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full bg-primary/10 text-primary text-xs font-semibold">
+                                              {val}
+                                              <button type="button" aria-label={`Remove ${val}`} onClick={() => removePendingTag(cat, val)} className="hover:bg-primary/20 rounded-full p-0.5">
+                                                  <X className="w-3 h-3" />
+                                              </button>
+                                          </span>
+                                      ))}
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  ) : (
+                      <p className="text-xs text-muted-foreground italic">Nothing added yet this session.</p>
+                  )}
               </div>
           </DialogContent>
       </Dialog>

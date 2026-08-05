@@ -16,6 +16,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
+import { buildManualSuggestion, cleanProviderId, findIssueIdByNumber } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
@@ -92,8 +93,19 @@ export default function SmartMatchPage() {
     const [loading, setLoading] = useState(true);
 
     const [manualMatchOpen, setManualMatchOpen] = useState(false);
-    const [manualMatchId, setManualMatchId] = useState("");
     const [manualMatchTarget, setManualMatchTarget] = useState<any>(null);
+    // Search-by-name is the PRIMARY manual-match flow (#199 round 2, concept by CapitanoNemo78):
+    // same /api/search the request flow uses, pick a result, done. The exact-ID lookup below stays
+    // as the advanced fallback for admins who already have the provider id.
+    const [manualSearchQuery, setManualSearchQuery] = useState("");
+    const [manualSearchResults, setManualSearchResults] = useState<any[]>([]);
+    const [manualSearchPage, setManualSearchPage] = useState(1);
+    const [hasMoreManualSearch, setHasMoreManualSearch] = useState(false);
+    const [isManualSearching, setIsManualSearching] = useState(false);
+    const [isManualSearchingMore, setIsManualSearchingMore] = useState(false);
+    const [idMatchOpen, setIdMatchOpen] = useState(false);
+    const [manualMatchId, setManualMatchId] = useState("");
+    // Shared by both paths: set while a picked result / entered ID is resolving its full details.
     const [isManualMatching, setIsManualMatching] = useState(false);
 
     const [exactIssueId, setExactIssueId] = useState("");
@@ -118,7 +130,7 @@ export default function SmartMatchPage() {
     // Accept All progress: null = idle, otherwise {done, total} across the chunked bulk calls.
     const [acceptAllProgress, setAcceptAllProgress] = useState<{ done: number; total: number } | null>(null);
     const [isBulkManualMatch, setIsBulkManualMatch] = useState(false);
-    // Guard: warn before a bulk Custom-ID applies the same series to multiple FOLDERS (which merges them).
+    // Guard: warn before a bulk manual match applies the same series to multiple FOLDERS (which merges them).
     const [mergeWarnOpen, setMergeWarnOpen] = useState(false);
     const [mergeWarnCount, setMergeWarnCount] = useState(0);
 
@@ -570,37 +582,21 @@ export default function SmartMatchPage() {
         }
     };
 
-    const handleManualLookup = async () => {
+    // Both manual-match paths (name search pick + exact-ID lookup) resolve here: fetch the volume's
+    // full details, store the suggestion, and cross-reference extracted issue numbers into exact
+    // provider issue IDs for the Issue Mapping section.
+    const resolveVolumeSelection = async (volumeId: string, provider: string) => {
         setIsManualMatching(true);
-        setManualMatchResult(null); // Reset previous searches
         try {
-            const cleanId = manualMatchId.replace('4050-', '').replace(/[^0-9a-zA-Z-]/g, '');
-            if (!cleanId) throw new Error("Invalid ID format");
-
-            Logger.log(`[Smart Match Debug] Manual lookup initiated for ID: ${cleanId} via ${searchProvider}`, 'debug');
-            
-            const res = await fetch(`/api/issue-details?id=${cleanId}&type=volume&provider=${searchProvider}`);
+            const res = await fetch(`/api/issue-details?id=${volumeId}&type=volume&provider=${provider}`);
             const data = await res.json();
 
             if (res.ok && data && !data.error) {
-                // FIX: Accurately parse the issue count from either API
-                const issueCount = data.count || data.count_of_issues || data.issue_count || data.issues?.length || "?";
-
-                const suggestionData = {
-                    id: data.id || data.volumeId,
-                    name: data.name,
-                    year: data.year,
-                    publisher: data.publisher,
-                    image: data.image,
-                    count: issueCount,
-                    description: data.description,
-                    metadataSource: searchProvider,
-                    rawIssues: data.issues || [] // Hold onto raw issues for cross-referencing IDs
-                };
+                const suggestionData = buildManualSuggestion(data, provider);
 
                 // Show preview instead of closing modal
                 setManualMatchResult(suggestionData);
-                
+
                 // AUTO-MAP: Extract issue numbers and match IDs
                 const newOverrides = { ...issueOverrides };
                 const itemsToMap = isBulkManualMatch ? Array.from(selectedItems) : (manualMatchTarget ? [manualMatchTarget.id] : []);
@@ -609,19 +605,12 @@ export default function SmartMatchPage() {
                     const item = unmatched.find(s => s.id === id);
                     if (item?.isRawFile) {
                         const extractedNum = extractIssueNumber(item.name);
-                        let matchedIssueId = "";
+                        const matchedIssueId = findIssueIdByNumber(suggestionData.rawIssues, extractedNum);
 
-                        // If the API provided the volume's issue list, try to find the exact ID match
-                        if (suggestionData.rawIssues?.length > 0) {
-                            const apiIssue = suggestionData.rawIssues.find((i: any) => {
-                                const apiNum = i.issue_number?.toString() || i.number?.toString();
-                                return apiNum?.replace(/^0+(?=\d)/, '') === extractedNum.replace(/^0+(?=\d)/, '');
-                            });
-                            if (apiIssue) matchedIssueId = apiIssue.id?.toString() || "";
-                        }
+                        // Merge instead of replace: a cover already picked for this item (and its
+                        // .010 provenance flag) must survive re-resolving the series match.
+                        newOverrides[id] = { ...newOverrides[id], issueNumber: extractedNum, issueId: matchedIssueId };
 
-                        newOverrides[id] = { issueNumber: extractedNum, issueId: matchedIssueId };
-                        
                         // Update individual states for single-match mode
                         if (!isBulkManualMatch) {
                             setExactIssueNumber(extractedNum);
@@ -631,10 +620,10 @@ export default function SmartMatchPage() {
                 });
 
                 setIssueOverrides(newOverrides);
-                toast({ title: "Volume Found", description: "Review the metadata and issue mappings, then click Apply Match." });
+                toast({ title: "Series Selected", description: "Review the metadata and issue mappings, then click Apply Match." });
 
             } else {
-                throw new Error(data.error || "Volume not found");
+                throw new Error(data.error || "Couldn't load series details");
             }
         } catch (e: any) {
             toast({ title: "Lookup Failed", description: e.message, variant: "destructive" });
@@ -643,7 +632,56 @@ export default function SmartMatchPage() {
         }
     };
 
-    // Applying ONE Custom ID to multiple FOLDERS assigns them all the same series, which merges them into
+    // PRIMARY: search the provider by series name — the same endpoint Fix Match and the request
+    // flow already use — and let the admin pick from a list instead of hunting provider IDs.
+    const handleManualSearch = async (loadMore = false) => {
+        if (manualSearchQuery.trim().length < 2) return;
+        const nextPage = loadMore ? manualSearchPage + 1 : 1;
+        if (!loadMore) { setIsManualSearching(true); setManualMatchResult(null); }
+        else setIsManualSearchingMore(true);
+
+        try {
+            Logger.log(`[Smart Match Debug] Manual search initiated for "${manualSearchQuery}" via ${searchProvider}`, 'debug');
+
+            const res = await fetch(`/api/search?q=${encodeURIComponent(manualSearchQuery)}&page=${nextPage}&provider=${searchProvider}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Search failed");
+
+            setManualSearchResults(prev => loadMore ? [...prev, ...(data.results || [])] : (data.results || []));
+            setHasMoreManualSearch(!!data.hasMore);
+            setManualSearchPage(nextPage);
+
+            if (!loadMore && (!data.results || data.results.length === 0)) {
+                toast({ title: "No results", description: `No series found for "${manualSearchQuery}". Try another spelling, or match by exact ID below.` });
+            }
+        } catch (e: any) {
+            toast({ title: "Search Failed", description: e.message, variant: "destructive" });
+        } finally {
+            setIsManualSearching(false);
+            setIsManualSearchingMore(false);
+        }
+    };
+
+    // A result row was picked — resolve it under ITS OWN provider (results keep their source, so a
+    // list searched on one provider stays selectable after the source dropdown changes).
+    const handleSelectSearchResult = (item: any) => {
+        if (isManualMatching) return;
+        resolveVolumeSelection(String(item.id), item.metadataSource || searchProvider);
+    };
+
+    // ADVANCED fallback: the classic exact-provider-ID lookup, for admins who already have the id.
+    const handleManualLookup = async () => {
+        const cleanId = cleanProviderId(manualMatchId);
+        if (!cleanId) {
+            toast({ title: "Lookup Failed", description: "Invalid ID format", variant: "destructive" });
+            return;
+        }
+        Logger.log(`[Smart Match Debug] Manual lookup initiated for ID: ${cleanId} via ${searchProvider}`, 'debug');
+        setManualMatchResult(null); // Reset previous searches
+        await resolveVolumeSelection(cleanId, searchProvider);
+    };
+
+    // Applying ONE manual match to multiple FOLDERS assigns them all the same series, which merges them into
     // a single series (match-series collapses duplicate metadataId). Warn first. Loose-file selections
     // (issues of one series, auto-mapped during lookup) are the intended bulk use and don't trigger it.
     const handleApplyManualMatch = () => {
@@ -693,7 +731,7 @@ export default function SmartMatchPage() {
                     return next;
                 });
             }
-            toast({ title: "Custom ID Applied", description: (sg || uni) ? "Matches + metadata set for selected items. Click 'Accept Selected' to save." : "Matches set for selected items. Click 'Accept Selected' to confirm and save." });
+            toast({ title: "Match Applied", description: (sg || uni) ? "Matches + metadata set for selected items. Click 'Accept Selected' to save." : "Matches set for selected items. Click 'Accept Selected' to confirm and save." });
         } else if (manualMatchTarget) {
             setSuggestions(prev => ({
                 ...prev,
@@ -833,27 +871,8 @@ export default function SmartMatchPage() {
                 </div>
             </div>
 
-            {/* METADATA PROVIDER QUICKLINKS */}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-3 pt-3 border-t border-border/40 text-xs text-muted-foreground">
-                <span className="font-medium">Need to find an ID? Search providers:</span>
-                <a 
-                    href="https://comicvine.gamespot.com/volumes/" 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    className="flex items-center gap-1 font-semibold text-primary hover:underline transition-colors"
-                >
-                    ComicVine Volumes <ExternalLink className="w-3 h-3 text-muted-foreground/70" />
-                </a>
-                <span className="text-border">|</span>
-                <a 
-                    href="https://metron.cloud/series/" 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    className="flex items-center gap-1 font-semibold text-primary hover:underline transition-colors"
-                >
-                    Metron Series <ExternalLink className="w-3 h-3 text-muted-foreground/70" />
-                </a>
-            </div>
+            {/* Provider quicklinks used to live here — Search Match made ID-hunting the exception,
+                so the ComicVine/Metron links moved into the dialog's exact-ID section. */}
 
             {/* BACKGROUND SWEEP STATUS (discussion #177) */}
             {sweepInfo && (
@@ -1030,11 +1049,16 @@ export default function SmartMatchPage() {
                                             setManualMatchOpen(true);
                                             setManualMatchResult(null);
                                             setManualMatchId("");
+                                            setManualSearchQuery("");
+                                            setManualSearchResults([]);
+                                            setManualSearchPage(1);
+                                            setHasMoreManualSearch(false);
+                                            setIdMatchOpen(false);
                                             setExactIssueId(issueOverrides[series.id]?.issueId || "");
                                             setExactIssueNumber(issueOverrides[series.id]?.issueNumber || "");
                                         }}
                                     >
-                                        <Search className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Custom ID</span>
+                                        <Search className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Search Match</span>
                                     </Button>
                                     <Button
                                         size="sm"
@@ -1091,11 +1115,16 @@ export default function SmartMatchPage() {
                                 setManualMatchOpen(true);
                                 setManualMatchResult(null);
                                 setManualMatchId("");
+                                setManualSearchQuery("");
+                                setManualSearchResults([]);
+                                setManualSearchPage(1);
+                                setHasMoreManualSearch(false);
+                                setIdMatchOpen(false);
                                 setBulkSeriesGroup("");
                                 setBulkUniverse("");
                             }}
                         >
-                            <Search className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Set Custom ID</span>
+                            <Search className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Search Match</span>
                         </Button>
                         <Button
                             size="sm"
@@ -1143,15 +1172,16 @@ export default function SmartMatchPage() {
                 confirmText="Start Review"
             />
 
-            {/* MANUAL MATCH DIALOG */}
+            {/* SEARCH MATCH DIALOG — search-by-name first (#199 round 2), exact-ID lookup as the
+                advanced fallback below it. Both paths resolve through resolveVolumeSelection. */}
             <Dialog open={manualMatchOpen} onOpenChange={setManualMatchOpen}>
                 <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col bg-background border-border rounded-xl w-[95%]">
                     <DialogHeader className="shrink-0">
-                        <DialogTitle>Manual Match</DialogTitle>
+                        <DialogTitle>Search Match</DialogTitle>
                         <DialogDescription>
                             {isBulkManualMatch
-                                ? `Enter the exact ID to apply to the ${selectedItems.size} selected items.`
-                                : `Enter the exact ID for ${manualMatchTarget?.name}.`}
+                                ? `Search for the series to apply to the ${selectedItems.size} selected items.`
+                                : `Search for the correct series for ${manualMatchTarget?.name}.`}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -1172,23 +1202,86 @@ export default function SmartMatchPage() {
                         )}
                         
                         <div className="space-y-2">
-                            <Label>{searchProvider === 'METRON' ? 'Metron Series ID (or Slug)' : 'ComicVine Volume ID'}</Label>
+                            <Label>Series Name</Label>
                             <div className="flex gap-2 items-start">
-                                <Input 
-                                    value={manualMatchId} 
-                                    onChange={(e) => setManualMatchId(e.target.value)} 
-                                    placeholder="e.g. 4050-12345 or 12746"
+                                <Input
+                                    value={manualSearchQuery}
+                                    onChange={(e) => setManualSearchQuery(e.target.value)}
+                                    placeholder="e.g. The Amazing Spider-Man"
                                     className="bg-background border-border flex-1"
-                                    onKeyDown={(e) => e.key === 'Enter' && manualMatchId && handleManualLookup()}
+                                    onKeyDown={(e) => e.key === 'Enter' && manualSearchQuery.trim() && handleManualSearch()}
                                 />
-                                <Button onClick={handleManualLookup} disabled={isManualMatching || !manualMatchId} className="shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 font-bold">
-                                    {isManualMatching ? <Loader2 className="w-4 h-4 animate-spin md:mr-2" /> : <Search className="w-4 h-4 md:mr-2" />} 
-                                    <span className="hidden md:inline">Look Up</span>
+                                <Button onClick={() => handleManualSearch()} disabled={isManualSearching || manualSearchQuery.trim().length < 2} className="shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 font-bold">
+                                    {isManualSearching ? <Loader2 className="w-4 h-4 animate-spin md:mr-2" /> : <Search className="w-4 h-4 md:mr-2" />}
+                                    <span className="hidden md:inline">Search</span>
                                 </Button>
                             </div>
-                            <p className="text-[11px] text-muted-foreground mt-1.5">
-                                Tip: Search on <a href="https://comicvine.gamespot.com/volumes/" target="_blank" rel="noreferrer" className="text-primary underline">ComicVine</a> or <a href="https://metron.cloud/series/" target="_blank" rel="noreferrer" className="text-primary underline">Metron</a> to find the correct volume/series ID.
-                            </p>
+
+                            {manualSearchResults.length > 0 && (
+                                <div className="mt-2 space-y-1.5 max-h-56 overflow-y-auto pr-1 border border-border rounded-lg p-2 bg-muted/20">
+                                    {manualSearchResults.map((item) => (
+                                        <button
+                                            key={`${item.metadataSource || searchProvider}-${item.id}`}
+                                            type="button"
+                                            disabled={isManualMatching}
+                                            onClick={() => handleSelectSearchResult(item)}
+                                            className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors disabled:opacity-50 ${manualMatchResult?.id === item.id ? 'bg-primary/10 border border-primary/40' : 'border border-transparent hover:bg-muted'}`}
+                                        >
+                                            <div className="w-8 h-11 shrink-0 rounded bg-muted border border-border overflow-hidden">
+                                                {item.image ? <img src={item.image} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-3 h-3 m-auto mt-3.5 text-muted-foreground/50" />}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-xs font-bold text-foreground truncate">{item.name}</p>
+                                                <p className="text-[10px] text-muted-foreground truncate">{item.publisher || 'Unknown'} • {item.year || '????'} • {item.count || 0} issues</p>
+                                            </div>
+                                            {isManualMatching && manualMatchResult?.id === item.id && <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />}
+                                            {!isManualMatching && manualMatchResult?.id === item.id && <Check className="w-4 h-4 text-primary shrink-0" />}
+                                        </button>
+                                    ))}
+                                    {hasMoreManualSearch && (
+                                        <div className="pt-1 flex justify-center">
+                                            <Button variant="secondary" size="sm" onClick={() => handleManualSearch(true)} disabled={isManualSearchingMore} className="font-bold">
+                                                {isManualSearchingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                                                Load more
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* ADVANCED: the classic exact-provider-ID lookup, kept for admins who already
+                            have the id (or a series the name search can't surface). */}
+                        <div className="space-y-2">
+                            <button
+                                type="button"
+                                onClick={() => setIdMatchOpen(o => !o)}
+                                className="text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                            >
+                                <ChevronRight className={`w-3.5 h-3.5 transition-transform ${idMatchOpen ? 'rotate-90' : ''}`} />
+                                Match by exact provider ID
+                            </button>
+                            {idMatchOpen && (
+                                <div className="space-y-2 pl-4 border-l-2 border-border ml-1.5">
+                                    <Label className="text-xs">{searchProvider === 'METRON' ? 'Metron Series ID (or Slug)' : 'ComicVine Volume ID'}</Label>
+                                    <div className="flex gap-2 items-start">
+                                        <Input
+                                            value={manualMatchId}
+                                            onChange={(e) => setManualMatchId(e.target.value)}
+                                            placeholder="e.g. 4050-12345 or 12746"
+                                            className="bg-background border-border flex-1"
+                                            onKeyDown={(e) => e.key === 'Enter' && manualMatchId && handleManualLookup()}
+                                        />
+                                        <Button onClick={handleManualLookup} disabled={isManualMatching || !manualMatchId} variant="outline" className="shrink-0 border-primary/30 text-primary hover:bg-primary/10 font-bold">
+                                            {isManualMatching ? <Loader2 className="w-4 h-4 animate-spin md:mr-2" /> : <Search className="w-4 h-4 md:mr-2" />}
+                                            <span className="hidden md:inline">Look Up</span>
+                                        </Button>
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-1.5">
+                                        Tip: find IDs on <a href="https://comicvine.gamespot.com/volumes/" target="_blank" rel="noreferrer" className="text-primary underline">ComicVine</a> or <a href="https://metron.cloud/series/" target="_blank" rel="noreferrer" className="text-primary underline">Metron</a>.
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
                         {/* --- NEW: SERIES PREVIEW --- */}

@@ -308,7 +308,12 @@ export class MetronProvider implements IMetadataProvider {
         const credits = issue.credits || [];
 
         const writers = credits.filter((c: any) => hasRole(c.role, 'writer')).map((c: any) => extractName(c.creator));
-        const artists = credits.filter((c: any) => hasRole(c.role, 'artist') || hasRole(c.role, 'penciller') || hasRole(c.role, 'inker')).map((c: any) => extractName(c.creator));
+        // #199 Call-3 Beta A: inkers get their own bucket now that Issue has an inker column —
+        // ComicInfo separates <Penciller> and <Inker>, and double-filing would double-credit on embed.
+        const artists = credits.filter((c: any) => hasRole(c.role, 'artist') || hasRole(c.role, 'penciller')).map((c: any) => extractName(c.creator));
+        const inker = credits.filter((c: any) => hasRole(c.role, 'inker')).map((c: any) => extractName(c.creator));
+        const editor = credits.filter((c: any) => hasRole(c.role, 'editor')).map((c: any) => extractName(c.creator));
+        const translator = credits.filter((c: any) => hasRole(c.role, 'translator')).map((c: any) => extractName(c.creator));
         const coverArtists = credits.filter((c: any) => hasRole(c.role, 'cover')).map((c: any) => extractName(c.creator));
         const colorists = credits.filter((c: any) => hasRole(c.role, 'color')).map((c: any) => extractName(c.creator));
         const letterers = credits.filter((c: any) => hasRole(c.role, 'letter')).map((c: any) => extractName(c.creator));
@@ -372,6 +377,9 @@ export class MetronProvider implements IMetadataProvider {
             coverArtists: Array.from(new Set(coverArtists)).filter(Boolean) as string[],
             colorists: Array.from(new Set(colorists)).filter(Boolean) as string[],
             letterers: Array.from(new Set(letterers)).filter(Boolean) as string[],
+            inker: Array.from(new Set(inker)).filter(Boolean) as string[],
+            editor: Array.from(new Set(editor)).filter(Boolean) as string[],
+            translator: Array.from(new Set(translator)).filter(Boolean) as string[],
             characters: characters.filter(Boolean) as string[],
             teams: teams.filter(Boolean) as string[],
             storyArcs: storyArcs.filter(Boolean) as string[],

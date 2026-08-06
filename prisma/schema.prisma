@@ -250,6 +250,11 @@ model Issue {
   storyArcs       String?
   teams           String?
   locations       String?
+  // #199 Call-3 Beta A: the last three ComicInfo credit roles gain per-issue slots (JSON arrays,
+  // the writers convention). The Series columns of the same names stay as embed-time fallbacks.
+  inker           String?  // JSON array; ComicInfo <Inker>
+  editor          String?  // JSON array; ComicInfo <Editor>
+  translator      String?  // JSON array; ComicInfo <Translator>
   hasCustomMetadata Boolean @default(false)
   hasCustomCover  Boolean @default(false) // Admin set a custom issue cover (in the Smart Matcher); sync must not overwrite coverUrl
 

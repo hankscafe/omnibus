@@ -392,6 +392,10 @@ struct IssueFileMeta {
     teams: Option<String>,
     locations: Option<String>,
     story_arcs: Option<String>,
+    // #199 Call-3 Beta A: the last three credit roles gained per-issue columns.
+    inker: Option<String>,
+    editor: Option<String>,
+    translator: Option<String>,
 }
 
 /// Match state a scanned file's issue row carries (discussion #182, local-first ingest): an issue
@@ -581,20 +585,9 @@ fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
         let j = crate::watched_sync::split_to_json(s.as_deref());
         if j == "[]" { None } else { Some(j) }
     };
-    // Penciller + Inker merge into the artists bucket (parity with metadata-extractor.ts), deduped
-    // preserving first-seen order.
-    let artists = {
-        let mut v: Vec<String> = Vec::new();
-        for s in [&i.penciller, &i.inker].into_iter().flatten() {
-            for part in s.split(',') {
-                let t = part.trim();
-                if !t.is_empty() && !v.iter().any(|x| x == t) {
-                    v.push(t.to_string());
-                }
-            }
-        }
-        if v.is_empty() { None } else { serde_json::to_string(&v).ok() }
-    };
+    // #199 Call-3 Beta A: Penciller and Inker are separate buckets now that Issue has an inker
+    // column (parity with parseComicVineCredits' split) — the old Penciller+Inker merge would
+    // double-credit inkers on the next embed.
     IssueFileMeta {
         name: text(&i.title),
         description: text(&i.summary),
@@ -605,7 +598,7 @@ fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
         ),
         genres: list(&i.genre),
         writers: list(&i.writer),
-        artists,
+        artists: list(&i.penciller),
         cover_artists: list(&i.cover_artist),
         colorists: list(&i.colorist),
         letterers: list(&i.letterer),
@@ -613,6 +606,9 @@ fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
         teams: list(&i.teams),
         locations: list(&i.locations),
         story_arcs: list(&i.story_arc),
+        inker: list(&i.inker),
+        editor: list(&i.editor),
+        translator: list(&i.translator),
     }
 }
 
@@ -1139,9 +1135,9 @@ async fn exec_issue_insert(
     sqlx::query(&format!(
         r#"INSERT INTO "Issue"
            (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
-            name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs",
+            name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator,
             "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, {now}, {now})"#,
+           VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, {now}, {now})"#,
         now = db.now_expr()
     ))
     .bind(&row.issue_id)
@@ -1165,6 +1161,9 @@ async fn exec_issue_insert(
     .bind(&row.fm.teams)
     .bind(&row.fm.locations)
     .bind(&row.fm.story_arcs)
+    .bind(&row.fm.inker)
+    .bind(&row.fm.editor)
+    .bind(&row.fm.translator)
     .execute(&mut *conn)
     .await
     .map(|_| ())
@@ -2713,8 +2712,10 @@ mod tests {
         assert_eq!(m.description.as_deref(), Some("A killer strikes on holidays."));
         assert_eq!(m.genres.as_deref(), Some(r#"["Crime","Super-Hero"]"#));
         assert_eq!(m.writers.as_deref(), Some(r#"["Jeph Loeb"]"#));
-        // Penciller + Inker merge into artists, deduped, first-seen order.
-        assert_eq!(m.artists.as_deref(), Some(r#"["Tim Sale","Someone Else"]"#));
+        // Call-3 Beta A: Penciller and Inker are separate buckets now — the old merge would
+        // double-credit inkers once the embed emits a real <Inker> tag from the issue.
+        assert_eq!(m.artists.as_deref(), Some(r#"["Tim Sale"]"#));
+        assert_eq!(m.inker.as_deref(), Some(r#"["Tim Sale","Someone Else"]"#));
         assert_eq!(m.cover_artists.as_deref(), Some(r#"["Tim Sale"]"#));
         assert_eq!(m.colorists.as_deref(), Some(r#"["Gregory Wright"]"#));
         assert_eq!(m.letterers.as_deref(), Some(r#"["Richard Starkings"]"#));
@@ -2722,6 +2723,8 @@ mod tests {
         assert_eq!(m.teams.as_deref(), Some(r#"["GCPD"]"#));
         assert_eq!(m.locations.as_deref(), Some(r#"["Gotham City"]"#));
         assert_eq!(m.story_arcs.as_deref(), Some(r#"["The Long Halloween"]"#));
+        // Editor/Translator flow per-issue too (blank here → None, pinned below).
+        assert!(m.editor.is_none() && m.translator.is_none());
 
         // Absent fields stay None — never a literal '[]' (the provider-sync fill policies key on NULL).
         let empty = issue_file_meta(Some(&ScanComicInfo::default()));
@@ -3099,7 +3102,8 @@ mod tests {
                 "matchState" TEXT, number TEXT, status TEXT, "filePath" TEXT, "pageCount" INTEGER DEFAULT 0,
                 name TEXT, description TEXT, "releaseDate" TEXT, genres TEXT, writers TEXT, artists TEXT,
                 "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT, teams TEXT, locations TEXT,
-                "storyArcs" TEXT, universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
+                "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,
+                universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
                 "coverUrl" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
@@ -3127,12 +3131,12 @@ mod tests {
         sqlx::query(
             r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status,
                    "filePath", "pageCount", name, description, "releaseDate", genres, writers, artists,
-                   "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs")
+                   "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker)
                VALUES ('rt_issue', 'rt_series', '900001', 'COMICVINE', 'DEEP_SYNCED', '5', 'DOWNLOADED',
                    $1, 3, 'Night of the Owls', 'A conspiracy of owls.', '2012-05-09', '["Crime","Super-Hero"]',
                    '["Scott Snyder"]', '["Greg Capullo"]', '["Greg Capullo"]', '["FCO Plascencia"]',
                    '["Richard Starkings"]', '["Batman"]', '["Court of Owls"]', '["Gotham City"]',
-                   '["Night of the Owls"]')"#,
+                   '["Night of the Owls"]', '["Jonathan Glapion"]')"#,
         )
         .bind(&cbz_str)
         .execute(&db.pool).await.unwrap();
@@ -3209,7 +3213,7 @@ mod tests {
         let i = sqlx::query(
             r#"SELECT number, "matchState", "metadataId", "metadataSource", status, "pageCount",
                       name, description, "releaseDate", genres, writers, artists, "coverArtists",
-                      colorists, letterers, characters, teams, locations, "storyArcs"
+                      colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator
                FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(&series_id)
@@ -3225,7 +3229,15 @@ mod tests {
         assert_eq!(i.get::<Option<String>, _>("description").as_deref(), Some("A conspiracy of owls."));
         assert_eq!(i.get::<Option<String>, _>("genres").as_deref(), Some(r#"["Crime","Super-Hero"]"#));
         assert_eq!(i.get::<Option<String>, _>("writers").as_deref(), Some(r#"["Scott Snyder"]"#));
+        // Call-3 Beta A: the split holds through the loop — pencillers stay clean of inkers…
         assert_eq!(i.get::<Option<String>, _>("artists").as_deref(), Some(r#"["Greg Capullo"]"#));
+        // …the issue's own inker round-trips via its <Inker> tag…
+        assert_eq!(i.get::<Option<String>, _>("inker").as_deref(), Some(r#"["Jonathan Glapion"]"#));
+        // …and the series-default editor comes back ON THE ISSUE too: ComicInfo is per-file, so the
+        // embedded <Editor> fallback reads back as the issue's own value. Understood + accepted —
+        // the file genuinely lists that editor, and the next embed emits the identical XML.
+        assert_eq!(i.get::<Option<String>, _>("editor").as_deref(), Some(r#"["Mark Doyle"]"#));
+        assert_eq!(i.get::<Option<String>, _>("translator"), None::<String>);
         assert_eq!(i.get::<Option<String>, _>("coverArtists").as_deref(), Some(r#"["Greg Capullo"]"#));
         assert_eq!(i.get::<Option<String>, _>("colorists").as_deref(), Some(r#"["FCO Plascencia"]"#));
         assert_eq!(i.get::<Option<String>, _>("letterers").as_deref(), Some(r#"["Richard Starkings"]"#));

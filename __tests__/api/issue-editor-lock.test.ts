@@ -198,3 +198,46 @@ describe('GET /api/library/issue — lock state exposure', () => {
         expect(json.hasCustomMetadata).toBe(true);
     });
 });
+
+describe('PATCH /api/library/issue - per-issue inker/editor/translator (#199 Call-3 Beta A)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.getServerSession.mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
+        mocks.settingFindUnique.mockResolvedValue({ key: 'metadata_write_comicinfo', value: 'true' });
+        mocks.issueFindUnique.mockResolvedValue({ ...row(), inker: null, editor: null, translator: null });
+        mocks.issueUpdate.mockResolvedValue({});
+    });
+
+    it('accepts the three new credit arrays and stores them as JSON', async () => {
+        const res = await PATCH(patchReq({
+            issueId: 'i1',
+            inker: ['Jonathan Glapion'],
+            editor: ['Devin Lewis'],
+            translator: ['Anna Rossi'],
+        }));
+        const data = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(data.changedFields).toEqual(expect.arrayContaining(['inker', 'editor', 'translator']));
+        expect(mocks.issueUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({
+                inker: '["Jonathan Glapion"]',
+                editor: '["Devin Lewis"]',
+                translator: '["Anna Rossi"]',
+            }),
+        }));
+    });
+
+    it('leaves the new fields untouched when absent from a partial payload (reader-tagging contract)', async () => {
+        mocks.issueFindUnique.mockResolvedValue({ ...row(), inker: '["Kept Inker"]', editor: null, translator: null });
+        const res = await PATCH(patchReq({ issueId: 'i1', characters: ['Dylan Dog'] }));
+        const data = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(data.changedFields).toEqual(['characters']);
+        const written = mocks.issueUpdate.mock.calls[0][0].data;
+        expect(written).not.toHaveProperty('inker');
+        expect(written).not.toHaveProperty('editor');
+        expect(written).not.toHaveProperty('translator');
+    });
+});

@@ -91,6 +91,9 @@ export async function GET(request: Request) {
                 coverArtists: details.coverArtists || [],
                 colorists: details.colorists || [],
                 letterers: details.letterers || [],
+                inkers: details.inker || [],
+                editors: details.editor || [],
+                translators: details.translator || [],
                 characters: details.characters || [],
                 teams: details.teams || [],
                 locations: details.locations || [],
@@ -152,7 +155,7 @@ export async function GET(request: Request) {
 
         const rawHtml = issueData.description || issueData.deck || "";
         const cleanHtml = sanitizeDescription(rawHtml, providerWikiBase('COMICVINE'));
-        const { writers, artists, coverArtists, colorists, letterers, characters, genres, storyArcs, teams, locations } = parseComicVineCredits(
+        const { writers, artists, coverArtists, colorists, letterers, inkers, editors, translators, characters, genres, storyArcs, teams, locations } = parseComicVineCredits(
             issueData.person_credits, 
             issueData.character_credits, 
             issueData.concepts, 
@@ -191,6 +194,9 @@ export async function GET(request: Request) {
           coverArtists: coverArtists.slice(0, 10),
           colorists: colorists.slice(0, 10),
           letterers: letterers.slice(0, 5),
+          inkers: inkers.slice(0, 10),
+          editors: editors.slice(0, 5),
+          translators: translators.slice(0, 5),
           characters: characters.slice(0, 20),
           teams: teams.slice(0, 10),
           locations: locations.slice(0, 10),

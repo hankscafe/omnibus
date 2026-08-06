@@ -46,7 +46,7 @@ interface Props {
   onSaved?: (result?: any) => void
 }
 
-const ARRAY_FIELDS = ["writers", "artists", "coverArtists", "colorists", "letterers", "characters", "teams", "locations", "genres", "storyArcs"] as const
+const ARRAY_FIELDS = ["writers", "artists", "coverArtists", "colorists", "letterers", "inker", "editor", "translator", "characters", "teams", "locations", "genres", "storyArcs"] as const
 
 const joinArr = (v: any): string => (Array.isArray(v) ? v.filter(Boolean).join(", ") : (typeof v === "string" ? v : ""))
 const splitArr = (s: string): string[] => (s || "").split(",").map(t => t.trim()).filter(Boolean)
@@ -153,6 +153,9 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
           coverArtists: joinArr(detail.coverArtists),
           colorists: joinArr(detail.colorists),
           letterers: joinArr(detail.letterers),
+          inker: joinArr(detail.inker),
+          editor: joinArr(detail.editor),
+          translator: joinArr(detail.translator),
           characters: joinArr(detail.characters),
           teams: joinArr(detail.teams),
           locations: joinArr(detail.locations),
@@ -431,9 +434,12 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {arrField("writers", "Writers")}
               {arrField("artists", "Pencillers")}
+              {arrField("inker", "Inkers")}
               {arrField("coverArtists", "Cover Artists")}
               {arrField("colorists", "Colorists")}
               {arrField("letterers", "Letterers")}
+              {arrField("editor", "Editors")}
+              {arrField("translator", "Translators")}
               {arrField("characters", "Characters")}
               {arrField("teams", "Teams")}
               {arrField("locations", "Locations")}

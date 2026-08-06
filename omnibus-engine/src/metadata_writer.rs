@@ -55,6 +55,7 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
     // Float/Int defaults → TEXT so both backends deliver one portable type.
     let base = r#"SELECT i.id, i."filePath", i.number, i.name as issue_name, i.description as issue_desc,
                i.writers, i.artists, i.characters, i."coverArtists", i.colorists, i.letterers, i.teams, i.locations,
+               i.inker, i.editor, i.translator,
                i."releaseDate", i.universe as issue_universe,
                i.genres, i."storyArcs", i."metadataId" as issue_meta_id, i."metadataSource" as issue_meta_source,
                s.id as series_id, s.name as series_name, s.publisher, s.year, s."folderPath",
@@ -234,11 +235,13 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
 
     let series_group = g("series_group").unwrap_or_default();
 
+    // #199 Call-3 Beta A: inker/editor/translator gained per-issue columns — same issue-wins
+    // pairing as the other credits (the Series value stays as the fill-blanks default).
+    let inker = paired("inker", "series_inker");
+    let editor = paired("editor", "series_editor");
+    let translator = paired("translator", "series_translator");
     // Series-only ComicInfo defaults (#199, no per-issue equivalent) — always taken straight from
     // Series, like Publisher. Set once in the Smart Matcher's General/Credits/Story & Tags/Details tabs.
-    let inker = clean_json_array(g("series_inker").as_deref());
-    let editor = clean_json_array(g("series_editor").as_deref());
-    let translator = clean_json_array(g("series_translator").as_deref());
     let tags = clean_json_array(g("series_tags").as_deref());
     let imprint = g("imprint").unwrap_or_default();
     let format = g("format").unwrap_or_default();
@@ -790,7 +793,8 @@ mod tests {
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
                 name TEXT, description TEXT, "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
                 writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
-                letterers TEXT, teams TEXT, locations TEXT, "metadataId" TEXT, "metadataSource" TEXT)"#,
+                letterers TEXT, teams TEXT, locations TEXT, inker TEXT, editor TEXT, translator TEXT,
+                "metadataId" TEXT, "metadataSource" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }
@@ -814,10 +818,11 @@ mod tests {
         ).execute(&db.pool).await.unwrap();
 
         let cbz_str = cbz.to_string_lossy().replace('\\', "/");
-        // The issue has its OWN writers (must win) but no artists (series default must fill in).
+        // The issue has its OWN writers and inker (must win) but no artists/editor/translator
+        // (series defaults must fill in) — Call-3 Beta A made the last three credits paired too.
         sqlx::query(
-            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, writers, "metadataId", "metadataSource")
-               VALUES ('i199', 's199', $1, '1', '["Issue Writer"]', '900', 'COMICVINE')"#,
+            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, writers, inker, "metadataId", "metadataSource")
+               VALUES ('i199', 's199', $1, '1', '["Issue Writer"]', '["Issue Inker"]', '900', 'COMICVINE')"#,
         ).bind(&cbz_str).execute(&db.pool).await.unwrap();
 
         let (ok, fail, sj) = process_embed_job(
@@ -833,8 +838,10 @@ mod tests {
         // Issue-empty genre/arc fall back to the series values too.
         assert!(xml.contains("<Genre>Sci-Fi</Genre>"));
         assert!(xml.contains("<StoryArc>Big Arc</StoryArc>"));
-        // Series-only tags.
-        assert!(xml.contains("<Inker>Ink Person</Inker>"));
+        // Paired credits (Call-3 Beta A): the issue's own inker wins; blank editor/translator
+        // fall back to the series defaults.
+        assert!(xml.contains("<Inker>Issue Inker</Inker>"), "issue inker must win:\n{xml}");
+        assert!(!xml.contains("Ink Person"), "series inker default must NOT override the issue's own:\n{xml}");
         assert!(xml.contains("<Editor>Ed Itor</Editor>"));
         assert!(xml.contains("<Translator>Trans Lator</Translator>"));
         assert!(xml.contains("<Imprint>Vertigo</Imprint>"));

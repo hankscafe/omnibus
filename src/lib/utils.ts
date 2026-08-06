@@ -34,6 +34,9 @@ export function parseComicVineCredits(
   const coverArtists: string[] = [];
   const colorists: string[] = [];
   const letterers: string[] = [];
+  const inkers: string[] = [];
+  const editors: string[] = [];
+  const translators: string[] = [];
   const characters: string[] = [];
   const genres: string[] = [];
   const storyArcs: string[] = [];
@@ -44,7 +47,13 @@ export function parseComicVineCredits(
     person_credits.forEach(p => {
       const role = (p.role || '').toLowerCase();
       if (role.includes('writer') || role.includes('script') || role.includes('plot') || role.includes('story')) writers.push(p.name);
-      if (role.includes('pencil') || role.includes('ink') || role.includes('artist') || role.includes('illustrator')) artists.push(p.name);
+      // #199 Call-3 Beta A: inkers moved from the Penciller bucket to their own — ComicInfo separates
+      // <Penciller> and <Inker>, and since the Issue table now has an inker column, filing ink roles
+      // under Penciller would double-credit them on the next embed.
+      if (role.includes('pencil') || role.includes('artist') || role.includes('illustrator')) artists.push(p.name);
+      if (role.includes('ink')) inkers.push(p.name);
+      if (role.includes('edit')) editors.push(p.name);
+      if (role.includes('translat')) translators.push(p.name);
       if (role.includes('cover')) coverArtists.push(p.name);
       if (role.includes('color')) colorists.push(p.name);
       if (role.includes('letter')) letterers.push(p.name);
@@ -81,6 +90,9 @@ export function parseComicVineCredits(
     coverArtists: [...new Set(coverArtists)],
     colorists: [...new Set(colorists)],
     letterers: [...new Set(letterers)],
+    inkers: [...new Set(inkers)],
+    editors: [...new Set(editors)],
+    translators: [...new Set(translators)],
     characters: [...new Set(characters)],
     genres: [...new Set(genres)],
     storyArcs: [...new Set(storyArcs)],

@@ -26,6 +26,9 @@ export interface MetadataIssue {
     coverArtists?: string[];
     colorists?: string[];
     letterers?: string[];
+    inker?: string[];
+    editor?: string[];
+    translator?: string[];
     storyArcs?: string[];
     teams?: string[];
     locations?: string[];

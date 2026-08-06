@@ -707,6 +707,9 @@ async fn fetch_comicvine(
             let characters_val = merge_credit_json(existing_col("characters"), &credits.characters, is_locked, file_priority);
             let teams_val = merge_credit_json(existing_col("teams"), &credits.teams, is_locked, file_priority);
             let locations_val = merge_credit_json(existing_col("locations"), &credits.locations, is_locked, file_priority);
+            let inker_val = merge_credit_json(existing_col("inker"), &credits.inkers, is_locked, file_priority);
+            let editor_val = merge_credit_json(existing_col("editor"), &credits.editors, is_locked, file_priority);
+            let translator_val = merge_credit_json(existing_col("translator"), &credits.translators, is_locked, file_priority);
 
             let res = if let PairTarget::Update { row_id, cross_series, .. } = &target {
                 if heal_id {
@@ -718,13 +721,14 @@ async fn fetch_comicvine(
                 // rewrote number and could turn row "1" into a second "4").
                 let q = sqlx::query(
                     r#"UPDATE "Issue" SET "seriesId"=$1, "metadataId"=$2, "metadataSource"='COMICVINE', name=$3, "releaseDate"=$4, description=$5, "coverUrl"=$6, "matchState"=$16, genres=$7,
-                       writers=$8, artists=$9, "coverArtists"=$10, colorists=$11, letterers=$12, characters=$13, teams=$14, locations=$15 WHERE id=$17"#,
+                       writers=$8, artists=$9, "coverArtists"=$10, colorists=$11, letterers=$12, characters=$13, teams=$14, locations=$15, inker=$18, editor=$19, translator=$20 WHERE id=$17"#,
                 )
                 .bind(series_id).bind(&cv_id_str).bind(&name_val).bind(&release_val)
                 .bind(&desc_val).bind(&cover_val).bind(&genres_val)
                 .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
                 .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
                 .bind(match_state_val).bind(row_id)
+                .bind(&inker_val).bind(&editor_val).bind(&translator_val)
                 .execute(&db.pool).await;
                 if q.is_ok() {
                     claimed.insert(row_id.clone());
@@ -744,14 +748,15 @@ async fn fetch_comicvine(
                 let q = sqlx::query(&format!(
                     r#"INSERT INTO "Issue"
                        (id, "seriesId", "metadataId", "metadataSource", number, status, name, "releaseDate", description, "coverUrl", "matchState", genres,
-                        writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "createdAt", "updatedAt")
-                       VALUES ($1,$2,$3,'COMICVINE',$4,'WANTED',$5,$6,$7,$8,'MATCHED',$9,$10,$11,$12,$13,$14,$15,$16,$17, {now}, {now})"#,
+                        writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, inker, editor, translator, "createdAt", "updatedAt")
+                       VALUES ($1,$2,$3,'COMICVINE',$4,'WANTED',$5,$6,$7,$8,'MATCHED',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20, {now}, {now})"#,
                     now = db.now_expr()
                 ))
                 .bind(&new_id).bind(series_id).bind(&cv_id_str).bind(&issue_num)
                 .bind(&name_val).bind(&release_val).bind(&cv_desc).bind(&cv_cover).bind(&genres_val)
                 .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
                 .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&locations_val)
+                .bind(&inker_val).bind(&editor_val).bind(&translator_val)
                 .execute(&db.pool).await;
                 if q.is_ok() { inserted_nums.push(issue_num.clone()); }
                 q
@@ -1455,14 +1460,18 @@ async fn metron_detail_credit_pass(
         let characters_val = merge_credit_json(col("characters"), &credits.characters, false, file_priority);
         let teams_val = merge_credit_json(col("teams"), &credits.teams, false, file_priority);
         let story_arcs_val = merge_credit_json(col("storyArcs"), &credits.story_arcs, false, file_priority);
+        let inker_val = merge_credit_json(col("inker"), &credits.inkers, false, file_priority);
+        let editor_val = merge_credit_json(col("editor"), &credits.editors, false, file_priority);
+        let translator_val = merge_credit_json(col("translator"), &credits.translators, false, file_priority);
 
         let res = sqlx::query(
             r#"UPDATE "Issue" SET writers=$1, artists=$2, "coverArtists"=$3, colorists=$4, letterers=$5,
-               characters=$6, teams=$7, "storyArcs"=$8, "matchState"='DEEP_SYNCED' WHERE id=$9"#,
+               characters=$6, teams=$7, "storyArcs"=$8, inker=$10, editor=$11, translator=$12, "matchState"='DEEP_SYNCED' WHERE id=$9"#,
         )
         .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
         .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&story_arcs_val)
         .bind(&issue_id)
+        .bind(&inker_val).bind(&editor_val).bind(&translator_val)
         .execute(&db.pool).await;
 
         if let Err(e) = res {
@@ -1576,6 +1585,10 @@ pub(crate) struct CvIssueCredits {
     pub locations: Vec<String>,
     /// Metron detail only — CV's list items don't carry story_arc_credits.
     pub story_arcs: Vec<String>,
+    // #199 Call-3 Beta A: the last three credit roles gained per-issue columns.
+    pub inkers: Vec<String>,
+    pub editors: Vec<String>,
+    pub translators: Vec<String>,
 }
 
 fn push_unique(vec: &mut Vec<String>, name: &str) {
@@ -1614,7 +1627,12 @@ pub(crate) fn cv_issue_credits(item: &serde_json::Value) -> CvIssueCredits {
             let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
             let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if role.contains("writer") || role.contains("script") || role.contains("plot") || role.contains("story") { push_unique(&mut c.writers, name); }
-            if role.contains("pencil") || role.contains("ink") || role.contains("artist") || role.contains("illustrator") { push_unique(&mut c.artists, name); }
+            // #199 Call-3 Beta A: inkers split out of the Penciller bucket (parity with Node's
+            // parseComicVineCredits) — double-filing would double-credit them on the next embed.
+            if role.contains("pencil") || role.contains("artist") || role.contains("illustrator") { push_unique(&mut c.artists, name); }
+            if role.contains("ink") { push_unique(&mut c.inkers, name); }
+            if role.contains("edit") { push_unique(&mut c.editors, name); }
+            if role.contains("translat") { push_unique(&mut c.translators, name); }
             if role.contains("cover") { push_unique(&mut c.cover_artists, name); }
             if role.contains("color") { push_unique(&mut c.colorists, name); }
             if role.contains("letter") { push_unique(&mut c.letterers, name); }
@@ -1646,7 +1664,11 @@ pub(crate) fn metron_issue_credits(item: &serde_json::Value) -> CvIssueCredits {
             };
             let has = |needle: &str| roles.iter().any(|r| r.contains(needle));
             if has("writer") { push_unique(&mut c.writers, name); }
-            if has("artist") || has("penciller") || has("inker") { push_unique(&mut c.artists, name); }
+            // #199 Call-3 Beta A: inker split (parity with Node's MetronProvider.getIssueDetails).
+            if has("artist") || has("penciller") { push_unique(&mut c.artists, name); }
+            if has("inker") { push_unique(&mut c.inkers, name); }
+            if has("editor") { push_unique(&mut c.editors, name); }
+            if has("translator") { push_unique(&mut c.translators, name); }
             if has("cover") { push_unique(&mut c.cover_artists, name); }
             if has("color") { push_unique(&mut c.colorists, name); }
             if has("letter") { push_unique(&mut c.letterers, name); }
@@ -2047,8 +2069,12 @@ mod tests {
         // Role taxonomy is exact parity with Node parseComicVineCredits (utils.ts); a duplicated
         // name across matching roles ("writer" + "script") dedups within the bucket.
         assert_eq!(c.writers, vec!["Chip Zdarsky"]);
-        // Multi-role strings ("penciler, inker") land the person once in the artists bucket.
+        // Call-3 Beta A: "penciler, inker" lands the person in BOTH buckets — penciller work stays
+        // in artists, ink work now files under the issue's own inker column.
         assert_eq!(c.artists, vec!["Marco Checchetto"]);
+        assert_eq!(c.inkers, vec!["Marco Checchetto"]);
+        assert_eq!(c.editors, vec!["Devin Lewis"]);
+        assert!(c.translators.is_empty());
         assert_eq!(c.cover_artists, vec!["John Romita Jr."]);
         assert_eq!(c.colorists, vec!["Frank Martin"]);
         assert_eq!(c.letterers, vec!["Clayton Cowles"]);
@@ -2083,15 +2109,17 @@ mod tests {
 
         let c = metron_issue_credits(&issue);
         assert_eq!(c.writers, vec!["Chip Zdarsky"]);
-        // Penciller + Inker land the person once in the artists bucket (dedup).
+        // Call-3 Beta A: Penciller stays in artists, Inker files under the issue's own column.
         assert_eq!(c.artists, vec!["Marco Checchetto"]);
+        assert_eq!(c.inkers, vec!["Marco Checchetto"]);
+        assert_eq!(c.editors, vec!["Devin Lewis"]);
+        assert!(c.translators.is_empty());
         assert_eq!(c.cover_artists, vec!["John Romita Jr."]);
         assert_eq!(c.colorists, vec!["Frank Martin"]);
         assert_eq!(c.letterers, vec!["Clayton Cowles"]);
         assert_eq!(c.characters, vec!["Daredevil", "Kingpin"]);
         assert_eq!(c.teams, vec!["The Hand"]);
         assert_eq!(c.story_arcs, vec!["Devil's Reign"]);
-        // Editors have no DB column — never bucketed.
         assert!(!c.writers.contains(&"Devin Lewis".to_string()));
 
         // Bodyless/creditless payload (e.g. after a 404-guard slip) parses to all-empty, which

@@ -50,6 +50,9 @@ export async function GET(request: Request) {
     const parsedStoryArcs = safeParse((issue as any).storyArcs); 
     const parsedTeams = safeParse((issue as any).teams);
     const parsedLocations = safeParse((issue as any).locations);
+    const parsedInker = safeParse((issue as any).inker);
+    const parsedEditor = safeParse((issue as any).editor);
+    const parsedTranslator = safeParse((issue as any).translator);
 
     const needsDeepFetch = issue.metadataId &&
                            !issue.metadataId.startsWith('unmatched_') &&
@@ -175,10 +178,10 @@ export async function GET(request: Request) {
                         Logger.log(`[Issue API] Skipping CV deep-fetch for issue ${issue.id} (#${issue.number}): stored metadataId ${issue.metadataId} ${mismatch}.`, 'warn');
                     }
                     if (deepData && !mismatch) {
-                        const { writers, artists, coverArtists, colorists, letterers, characters, genres, storyArcs, teams, locations } = parseComicVineCredits(
-                            deepData.person_credits, 
-                            deepData.character_credits, 
-                            deepData.concepts, 
+                        const { writers, artists, coverArtists, colorists, letterers, inkers, editors, translators, characters, genres, storyArcs, teams, locations } = parseComicVineCredits(
+                            deepData.person_credits,
+                            deepData.character_credits,
+                            deepData.concepts,
                             deepData.story_arc_credits,
                             deepData.team_credits,
                             deepData.location_credits
@@ -197,6 +200,9 @@ export async function GET(request: Request) {
                         const finalStoryArcs = mergedArcs.length > 0 ? mergedArcs : ["NONE"];
                         const finalTeams = mergeList(teams, parsedTeams);
                         const finalLocations = mergeList(locations, parsedLocations);
+                        const finalInker = mergeList(inkers, parsedInker);
+                        const finalEditor = mergeList(editors, parsedEditor);
+                        const finalTranslator = mergeList(translators, parsedTranslator);
 
                         await prisma.issue.update({
                             where: { id: issue.id },
@@ -206,9 +212,12 @@ export async function GET(request: Request) {
                                 coverArtists: JSON.stringify(finalCoverArtists),
                                 colorists: JSON.stringify(finalColorists),
                                 letterers: JSON.stringify(finalLetterers),
+                                inker: JSON.stringify(finalInker),
+                                editor: JSON.stringify(finalEditor),
+                                translator: JSON.stringify(finalTranslator),
                                 characters: JSON.stringify(finalCharacters),
-                                genres: JSON.stringify(finalGenres), 
-                                storyArcs: JSON.stringify(finalStoryArcs), 
+                                genres: JSON.stringify(finalGenres),
+                                storyArcs: JSON.stringify(finalStoryArcs),
                                 teams: JSON.stringify(finalTeams),
                                 locations: JSON.stringify(finalLocations),
                                 description: newDescription,
@@ -228,6 +237,9 @@ export async function GET(request: Request) {
                             coverArtists: finalCoverArtists,
                             colorists: finalColorists,
                             letterers: finalLetterers,
+                            inker: finalInker,
+                            editor: finalEditor,
+                            translator: finalTranslator,
                             characters: finalCharacters,
                             genres: finalGenres,
                             storyArcs: finalStoryArcs,
@@ -254,6 +266,9 @@ export async function GET(request: Request) {
         coverArtists: parsedCoverArtists,
         colorists: parsedColorists,
         letterers: parsedLetterers,
+        inker: parsedInker,
+        editor: parsedEditor,
+        translator: parsedTranslator,
         characters: parsedCharacters,
         genres: parsedGenres,
         storyArcs: parsedStoryArcs,
@@ -305,7 +320,7 @@ export async function PATCH(request: Request) {
         }
 
         // Multi-value fields arrive from the editor as arrays; persisted as JSON strings.
-        const ARRAY_FIELDS = ['writers', 'artists', 'coverArtists', 'colorists', 'letterers', 'characters', 'genres', 'storyArcs', 'teams', 'locations'];
+        const ARRAY_FIELDS = ['writers', 'artists', 'coverArtists', 'colorists', 'letterers', 'inker', 'editor', 'translator', 'characters', 'genres', 'storyArcs', 'teams', 'locations'];
         const SCALAR_FIELDS = ['number', 'name', 'description', 'releaseDate', 'universe'];
 
         // number is the identity anchor (issue #194): it may be corrected, never blanked.

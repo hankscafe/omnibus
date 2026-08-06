@@ -833,6 +833,9 @@ export const Importer = {
          const letterersStr = xmlMeta?.letterers?.length ? JSON.stringify(xmlMeta.letterers) : null;
          const teamsStr = xmlMeta?.teams?.length ? JSON.stringify(xmlMeta.teams) : null;
          const locationsStr = xmlMeta?.locations?.length ? JSON.stringify(xmlMeta.locations) : null;
+         const inkerStr = xmlMeta?.inker?.length ? JSON.stringify(xmlMeta.inker) : null;
+         const editorStr = xmlMeta?.editor?.length ? JSON.stringify(xmlMeta.editor) : null;
+         const translatorStr = xmlMeta?.translator?.length ? JSON.stringify(xmlMeta.translator) : null;
 
          const allSeriesIssues = await prisma.issue.findMany({
              where: { seriesId: series.id }
@@ -859,6 +862,9 @@ export const Importer = {
                      letterers: (existingIssue as any).letterers && (existingIssue as any).letterers !== "[]" ? (existingIssue as any).letterers : letterersStr,
                      teams: (existingIssue as any).teams && (existingIssue as any).teams !== "[]" ? (existingIssue as any).teams : teamsStr,
                      locations: (existingIssue as any).locations && (existingIssue as any).locations !== "[]" ? (existingIssue as any).locations : locationsStr,
+                     inker: (existingIssue as any).inker && (existingIssue as any).inker !== "[]" ? (existingIssue as any).inker : inkerStr,
+                     editor: (existingIssue as any).editor && (existingIssue as any).editor !== "[]" ? (existingIssue as any).editor : editorStr,
+                     translator: (existingIssue as any).translator && (existingIssue as any).translator !== "[]" ? (existingIssue as any).translator : translatorStr,
                      metadataId: existingIssue.metadataId?.startsWith('unmatched') ? targetMetaId : existingIssue.metadataId,
                      metadataSource: existingIssue.metadataSource === 'LOCAL' ? targetMetaSource : existingIssue.metadataSource,
                      matchState: existingIssue.matchState === 'UNMATCHED' ? matchState : existingIssue.matchState
@@ -884,7 +890,10 @@ export const Importer = {
                      colorists: coloristsStr,
                      letterers: letterersStr,
                      teams: teamsStr,
-                     locations: locationsStr
+                     locations: locationsStr,
+                     inker: inkerStr,
+                     editor: editorStr,
+                     translator: translatorStr
                  } as any
              });
          }

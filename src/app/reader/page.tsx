@@ -57,17 +57,17 @@ function ReaderContent() {
   // teams, locations, and credits spotted while reading. Nothing saves per-tag — additions
   // accumulate and are written ONCE on close via the existing PATCH /api/library/issue (which
   // also queues the ComicInfo.xml embed), so a six-tag session costs one archive rewrite, not six.
-  // Categories map 1:1 onto the route's ARRAY_FIELDS whitelist — per-issue columns only, which is
-  // why inker/editor/translator (series-level in Omnibus) are not offered here.
+  // Categories map 1:1 onto the route's ARRAY_FIELDS whitelist — all eleven ComicInfo credit and
+  // appearance roles since inker/editor/translator gained per-issue columns (Call-3 Beta A).
   const TAG_CATEGORY_LABELS = {
     characters: 'Character', teams: 'Team', locations: 'Location',
-    writers: 'Writer', artists: 'Penciller', coverArtists: 'Cover Artist',
-    colorists: 'Colorist', letterers: 'Letterer',
+    writers: 'Writer', artists: 'Penciller', inker: 'Inker', coverArtists: 'Cover Artist',
+    colorists: 'Colorist', letterers: 'Letterer', editor: 'Editor', translator: 'Translator',
   } as const;
   type TagCategory = keyof typeof TAG_CATEGORY_LABELS;
   const emptyPendingTags = (): Record<TagCategory, string[]> => ({
-    characters: [], teams: [], locations: [], writers: [], artists: [],
-    coverArtists: [], colorists: [], letterers: [],
+    characters: [], teams: [], locations: [], writers: [], artists: [], inker: [],
+    coverArtists: [], colorists: [], letterers: [], editor: [], translator: [],
   });
   const [pendingTags, setPendingTags] = useState<Record<TagCategory, string[]>>(emptyPendingTags());
   const [tagDialogOpen, setTagDialogOpen] = useState(false);

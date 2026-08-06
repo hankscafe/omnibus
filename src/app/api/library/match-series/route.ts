@@ -14,7 +14,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getServerSession } from 'next-auth/next';
 import { omnibusQueue } from '@/lib/queue';
-import { extractIssueNumber } from '@/lib/utils/issue-parser';
+import { extractIssueNumber, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
@@ -338,6 +338,9 @@ export async function POST(request: Request) {
                 }
                 
                 if (issueNumStr) {
+                    // Issue #200: a raw "½" is length 1 and would pad to "0½" — normalize first so
+                    // filenames and the DB row both say "0.5".
+                    issueNumStr = normalizeFractionNumbers(issueNumStr);
                     let formattedNum = issueNumStr;
                     if (!issueNumStr.includes('.') && issueNumStr.length === 1) formattedNum = `0${issueNumStr}`;
                     

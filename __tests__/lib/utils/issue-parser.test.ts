@@ -1,7 +1,7 @@
 // __tests__/lib/utils/issue-parser.test.ts
 // Removed X of Y testing since hasn't been implemented yet
 import { describe, it, expect } from 'vitest';
-import { extractIssueNumber, isSameIssue, parseIssueRange } from '@/lib/utils/issue-parser';
+import { extractIssueNumber, isSameIssue, parseIssueRange, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 
 describe('Utility: Issue Number Parser', () => {
     describe('isSameIssue()', () => {
@@ -104,5 +104,36 @@ describe('Utility: Issue Number Parser', () => {
             expect(parseIssueRange('Batman Vol 1 TPB')).toBeNull();
             expect(parseIssueRange('Crossed (2008-2010)')).toBeNull();
         });
+    });
+});
+// Issue #200 (anacronismo): ComicVine numbers half-issues with Unicode vulgar fractions
+// ("X-Men (1991) #½ - Thrall"). Every layer must treat "½" and "0.5" as the same number, and
+// the extractor must parse "#½" instead of defaulting to "1" (which collided with the real #1).
+// Parity: omnibus-engine metadata.rs normalize_fraction_numbers / is_same_issue + scanner tests.
+describe('Vulgar fraction issue numbers (#200)', () => {
+    it('normalizeFractionNumbers rewrites fractions as decimals, merging glued integers', () => {
+        expect(normalizeFractionNumbers('½')).toBe('0.5');
+        expect(normalizeFractionNumbers('1½')).toBe('1.5');   // Wizard #1½ is a real comic
+        expect(normalizeFractionNumbers('¼')).toBe('0.25');
+        expect(normalizeFractionNumbers('¾')).toBe('0.75');
+        expect(normalizeFractionNumbers('X-Men #½ (1998)')).toBe('X-Men #0.5 (1998)');
+        expect(normalizeFractionNumbers('no fractions 12.5')).toBe('no fractions 12.5');
+    });
+
+    it('isSameIssue equates the fraction with its decimal forms', () => {
+        expect(isSameIssue('½', '0.5')).toBe(true);
+        expect(isSameIssue('½', '.5')).toBe(true);
+        expect(isSameIssue('½', '½')).toBe(true);
+        expect(isSameIssue('1½', '1.5')).toBe(true);
+        expect(isSameIssue('¼', '0.25')).toBe(true);
+        expect(isSameIssue('½', '1')).toBe(false);
+        expect(isSameIssue('½', '0.25')).toBe(false);
+    });
+
+    it('extractIssueNumber parses fraction filenames instead of defaulting to 1', () => {
+        expect(extractIssueNumber('X-Men #½ (1998).cbz')).toBe('0.5');
+        expect(extractIssueNumber('X-Men #½ (1998).cbz', 'X-Men')).toBe('0.5');
+        expect(extractIssueNumber('Wizard #1½.cbz')).toBe('1.5');
+        expect(extractIssueNumber('Gen13 #¾ (1994).cbz')).toBe('0.75'); // that one exists too
     });
 });

@@ -16,7 +16,7 @@
   [![Docker Image Size](https://img.shields.io/docker/image-size/hankscafe/omnibus/latest.svg?style=for-the-badge&logo=docker)](https://hub.docker.com/r/hankscafe/omnibus)
   [![License](https://img.shields.io/github/license/hankscafe/omnibus?style=for-the-badge&color=green)](https://github.com/hankscafe/omnibus/blob/main/LICENSE)
   [![GitHub Stars](https://img.shields.io/github/stars/hankscafe/omnibus?style=for-the-badge&logo=github&color=yellow)](https://github.com/hankscafe/omnibus/stargazers)
-  [![Discord](https://img.shields.io/discord/1483588541341503500?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/FBnzdBZP)
+  [![Discord](https://img.shields.io/discord/1483588541341503500?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/YDf9bqRgpQ)
 
 </div>
 
@@ -672,4 +672,4 @@ Special thanks to the people whose reports and hands-on testing turned into real
 
 True to its vibe-coded roots, Omnibus is built with heavy AI assistance: **Claude (Anthropic)** for code review, debugging, and refactoring, and **Gemini** as technical collaborator and project advisor.
 
-Want to see your name here? [Open an issue](https://github.com/hankscafe/omnibus/issues), send a PR, or come say hi in the [Discord](https://discord.gg/FBnzdBZP).
+Want to see your name here? [Open an issue](https://github.com/hankscafe/omnibus/issues), send a PR, or come say hi in the [Discord](https://discord.gg/YDf9bqRgpQ).

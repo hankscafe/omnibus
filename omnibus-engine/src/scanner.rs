@@ -978,6 +978,10 @@ fn strip_series_prefix(file_name: &str, series: &str) -> Option<String> {
 }
 
 fn issue_number_from_filename(file_name: &str, series_hint: Option<&str>) -> String {
+    // Issue #200: "#½" must parse as "#0.5" instead of falling through every digit rule to the
+    // "1" default. Normalized once here (idempotent through the recursive hint call below).
+    let normalized = crate::metadata::normalize_fraction_numbers(file_name);
+    let file_name = normalized.as_str();
     // 2026-07-25 worklist item 9 (Kaiju No. 8): digits that belong to the TITLE must not be read as
     // issue numbers. When the caller knows the series, its name is stripped as a prefix first; a
     // filename that IS just the series name parses as a one-shot ("1") instead of the title digit.
@@ -2841,6 +2845,11 @@ mod tests {
     fn issue_number_markers() {
         assert_eq!(issue_number_from_filename("Spider-Man #15.cbz", None), "15");
         assert_eq!(issue_number_from_filename("Series #0.5.cbz", None), "0.5");
+        // Issue #200: fraction filenames parse instead of defaulting to "1" (which collided a
+        // renamed half-issue with the real #1). Parity with the Node #200 extractor tests.
+        assert_eq!(issue_number_from_filename("X-Men #½ (1998).cbz", None), "0.5");
+        assert_eq!(issue_number_from_filename("X-Men #½ (1998).cbz", Some("X-Men")), "0.5");
+        assert_eq!(issue_number_from_filename("Wizard #1½.cbz", None), "1.5");
         assert_eq!(issue_number_from_filename("Chapter 7.cbz", None), "7");
         assert_eq!(issue_number_from_filename("Vol 3.cbz", None), "3");
         assert_eq!(issue_number_from_filename("007.cbz", None), "7");

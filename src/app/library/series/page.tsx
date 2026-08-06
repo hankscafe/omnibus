@@ -519,10 +519,13 @@ function SeriesContent() {
             toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
             return;
         }
-        let compositeName = `${seriesInfo.name} #${issue.parsedNum}`;
-        if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${issue.parsedNum}`)) {
+        // Issue #200: parsedNum is NaN→null for anything parseFloat can't read (a "½" pre-fix, an
+        // "Annual" forever) — fall back to the raw stored number so a request never says "#null".
+        const reqNum = (issue.parsedNum ?? issue.number ?? '').toString();
+        let compositeName = `${seriesInfo.name} #${reqNum}`;
+        if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${reqNum}`)) {
             compositeName += `: ${issue.name}`;
-        } else if (issue.name && issue.name.includes(`#${issue.parsedNum}`)) {
+        } else if (issue.name && issue.name.includes(`#${reqNum}`)) {
             compositeName = issue.name;
         }
 
@@ -538,7 +541,7 @@ function SeriesContent() {
                   year: seriesInfo.year || new Date().getFullYear().toString(),
                   publisher: seriesInfo.publisher || "Unknown",
                   image: issue.coverUrl || seriesInfo.cover,
-                  issueNumber: issue.parsedNum?.toString(),
+                  issueNumber: reqNum || undefined,
                   metadataSource: seriesInfo.metadataSource
               })
           });

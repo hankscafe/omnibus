@@ -10,7 +10,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
-import { extractIssueNumber } from '@/lib/utils/issue-parser';
+import { extractIssueNumber, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeDescription, providerWikiBase } from '@/lib/utils/sanitize';
 import { safeParse } from '@/lib/utils/safe-parse';
@@ -237,10 +237,14 @@ export async function GET(request: Request) {
             }
 
             const formatted = {
-                id: issue.id, 
+                id: issue.id,
                 cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
-                name: issue.name || `${seriesRecord.name} #${issue.number}`, 
-                parsedNum: parseFloat(issue.number), 
+                name: issue.name || `${seriesRecord.name} #${issue.number}`,
+                // Issue #200: normalize vulgar fractions ("½" → 0.5) or parseFloat yields NaN,
+                // which serializes to null and turned half-issue requests into "#null" searches.
+                // The raw number rides along so the page can always fall back to a real string.
+                parsedNum: parseFloat(normalizeFractionNumbers(issue.number)),
+                number: issue.number,
                 fullPath: issue.filePath,
                 coverUrl: finalIssueCoverUrl, 
                 writers: safeParse(issue.writers), 

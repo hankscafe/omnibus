@@ -16,6 +16,7 @@ import { syncSeriesMetadata } from '@/lib/metadata-fetcher';
 import { AuditLogger } from '@/lib/audit-logger';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
+import { normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 import { omnibusQueue } from '@/lib/queue';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { followSeries, followSeriesByCatalogId } from '@/lib/follows';
@@ -329,8 +330,9 @@ export async function POST(request: NextRequest) {
           select: { number: true }
       });
 
+      // Issue #200: normalize vulgar fractions ("½" → 0.5) so half-issues count as owned/skippable.
       const ownedIssueNumbers = new Set(existingLibraryIssues.map(i => {
-           const match = i.number.match(/(-?\d+(?:\.\d+)?)/);
+           const match = normalizeFractionNumbers(i.number).match(/(-?\d+(?:\.\d+)?)/);
            return match ? parseFloat(match[1]) : NaN;
        }).filter(n => !isNaN(n)));
 
@@ -339,14 +341,17 @@ export async function POST(request: NextRequest) {
           const issues = await metron.getSeriesIssues(resolvedCvId.toString());
           
           for (const issue of issues) {
-              const parsedIssueNum = parseFloat(issue.issueNumber || (issue as any).issue || "");
-              if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) continue; 
+              // Issue #200: providers number half-issues "½" — normalize before parsing/naming so
+              // the stored search name says "#0.5" (what release names actually use), never "#½".
+              const normNum = normalizeFractionNumbers(issue.issueNumber || (issue as any).issue || "");
+              const parsedIssueNum = parseFloat(normNum);
+              if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) continue;
 
               const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : year;
-              let searchName = `${name} #${issue.issueNumber}`;
-              if (issue.name && issue.name !== name && !issue.name.includes(`#${issue.issueNumber}`)) {
+              let searchName = `${name} #${normNum}`;
+              if (issue.name && issue.name !== name && !issue.name.includes(`#${normNum}`)) {
                   searchName += `: ${issue.name}`;
-              } else if (issue.name && issue.name.includes(`#${issue.issueNumber}`)) {
+              } else if (issue.name && issue.name.includes(`#${normNum}`)) {
                   searchName = issue.name;
               }
               const isReleased = isReleasedYet(issue.releaseDate, issue.releaseDate);
@@ -393,14 +398,17 @@ export async function POST(request: NextRequest) {
           const issues = cvRes.data.results || [];
 
           for (const issue of issues) {
-            const parsedIssueNum = parseFloat(issue.issue_number);
-            if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) continue; 
+            // Issue #200: CV numbers half-issues "½" (X-Men (1991) "Thrall") — normalize before
+            // parsing/naming so the stored search name says "#0.5", never "#½".
+            const normNum = normalizeFractionNumbers(String(issue.issue_number ?? ""));
+            const parsedIssueNum = parseFloat(normNum);
+            if (!isNaN(parsedIssueNum) && ownedIssueNumbers.has(parsedIssueNum)) continue;
 
             const issueYear = (issue.store_date || issue.cover_date || year || "").split('-')[0];
-            let searchName = `${name} #${issue.issue_number}`;
-            if (issue.name && issue.name !== name && !issue.name.includes(`#${issue.issue_number}`)) {
+            let searchName = `${name} #${normNum}`;
+            if (issue.name && issue.name !== name && !issue.name.includes(`#${normNum}`)) {
                 searchName += `: ${issue.name}`;
-            } else if (issue.name && issue.name.includes(`#${issue.issue_number}`)) {
+            } else if (issue.name && issue.name.includes(`#${normNum}`)) {
                 searchName = issue.name;
             }
             const isReleased = isReleasedYet(issue.store_date, issue.cover_date);

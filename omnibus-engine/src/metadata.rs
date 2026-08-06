@@ -1811,6 +1811,25 @@ fn parse_date_ms(s: &str) -> Option<i64> {
 
 /// Leading-zero / decimal / suffix-aware issue comparison (parity with isSameIssue in the Node code).
 /// Captures an optional leading negative sign natively: "-1" and "1" are NOT the same issue.
+/// Issue #200: ComicVine numbers half-issues with Unicode vulgar fractions ("½"), invisible to
+/// every digit-based rule. Rewrite them as decimals — merged with a glued preceding integer, so
+/// "1½" reads 1.5 — before any parse or comparison. Parity twin: issue-parser.ts
+/// normalizeFractionNumbers. Conservative set: the three fractions comic numbering actually uses.
+pub(crate) fn normalize_fraction_numbers(s: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(\d+)?([½¼¾])").unwrap());
+    re.replace_all(s, |c: &regex::Captures| {
+        let int = c.get(1).map(|m| m.as_str()).unwrap_or("0");
+        let frac = match c.get(2).map(|m| m.as_str()) {
+            Some("½") => ".5",
+            Some("¼") => ".25",
+            Some("¾") => ".75",
+            _ => "",
+        };
+        format!("{int}{frac}")
+    }).into_owned()
+}
+
 pub(crate) fn is_same_issue(a: &str, b: &str) -> bool {
     fn parse_issue(s: &str) -> (f64, String) {
         static RE: OnceLock<Regex> = OnceLock::new();
@@ -1831,8 +1850,8 @@ pub(crate) fn is_same_issue(a: &str, b: &str) -> bool {
             None => (0.0, t.to_uppercase()),
         }
     }
-    let (n1, s1) = parse_issue(a);
-    let (n2, s2) = parse_issue(b);
+    let (n1, s1) = parse_issue(&normalize_fraction_numbers(a));
+    let (n2, s2) = parse_issue(&normalize_fraction_numbers(b));
     n1 == n2 && s1 == s2
 }
 
@@ -1972,6 +1991,28 @@ mod tests {
         assert!(is_same_issue("-2.5", "-2.50"));
         assert!(!is_same_issue("-1", "1"));
         assert!(is_same_issue("-1A", "-001a"));
+    }
+
+    #[test]
+    fn is_same_issue_handles_vulgar_fractions() {
+        // Issue #200: CV numbers half-issues "½" (X-Men (1991) "Thrall"); files say "0.5".
+        // Mirrors the Node #200 block in issue-parser.test.ts.
+        assert!(is_same_issue("½", "0.5"));
+        assert!(is_same_issue("½", ".5"));
+        assert!(is_same_issue("½", "½"));
+        assert!(is_same_issue("1½", "1.5"));
+        assert!(is_same_issue("¼", "0.25"));
+        assert!(!is_same_issue("½", "1"));
+        assert!(!is_same_issue("½", "0.25"));
+    }
+
+    #[test]
+    fn normalize_fraction_numbers_rewrites_decimals() {
+        assert_eq!(normalize_fraction_numbers("½"), "0.5");
+        assert_eq!(normalize_fraction_numbers("1½"), "1.5"); // Wizard #1½ is a real comic
+        assert_eq!(normalize_fraction_numbers("¾"), "0.75");
+        assert_eq!(normalize_fraction_numbers("X-Men #½ (1998)"), "X-Men #0.5 (1998)");
+        assert_eq!(normalize_fraction_numbers("no fractions 12.5"), "no fractions 12.5");
     }
 
     // ==== Issue #194 (c1): number-anchored pairing resolver ====

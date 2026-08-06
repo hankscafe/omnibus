@@ -26,7 +26,7 @@ For a small, obvious fix (a typo, a broken link, a one-line bug), the issue itse
 
 For anything larger like a new feature, a refactor, a change to how something works I'm going to want to talk about the *how* before you build it. Put your proposed approach in the issue, or start a thread in [GitHub Discussions](https://github.com/hankscafe/omnibus/discussions) for bigger design questions, and wait for a maintainer to give it a thumbs-up before you invest real time. This is the single best way to make sure your effort ends in a merged PR rather than a declined one.
 
-If you'd rather ask a quick question, share a status update, or just talk through an idea, the **[Omnibus Discord](https://discord.gg/FBnzdBZP)** is the fastest way to reach us.
+If you'd rather ask a quick question, share a status update, or just talk through an idea, the **[Omnibus Discord](https://discord.gg/YDf9bqRgpQ)** is the fastest way to reach us.
 
 ## Submitting a pull request
 
@@ -96,7 +96,7 @@ Every PR is read and considered on its merits: does it fix a real problem, does 
 
 ## Contact
 
-- **[Discord](https://discord.gg/FBnzdBZP)** — questions, status updates, quick chats, or just saying hi. The fastest way to reach the team.
+- **[Discord](https://discord.gg/YDf9bqRgpQ)** — questions, status updates, quick chats, or just saying hi. The fastest way to reach the team.
 - **[GitHub Issues](https://github.com/hankscafe/omnibus/issues)** — bug reports and feature requests.
 - **[GitHub Discussions](https://github.com/hankscafe/omnibus/discussions)** — bigger design conversations and open-ended questions.
 

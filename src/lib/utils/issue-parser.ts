@@ -1,14 +1,25 @@
 // src/lib/utils/issue-parser.ts
-// NOTE (Node<->Rust parity): isSameIssue mirrors omnibus-engine/src/metadata.rs::is_same_issue and
-// extractIssueNumber mirrors omnibus-engine/src/scanner.rs::issue_number_from_filename. The automated
+// NOTE (Node<->Rust parity): isSameIssue mirrors omnibus-engine/src/metadata.rs::is_same_issue,
+// extractIssueNumber mirrors omnibus-engine/src/scanner.rs::issue_number_from_filename, and
+// normalizeFractionNumbers mirrors metadata.rs::normalize_fraction_numbers. The automated
 // search/scan path runs the Rust copies; interactive/import runs these. Keep the two sides in sync.
 import { Logger } from '@/lib/logger';
 
+// Issue #200: ComicVine numbers half-issues with Unicode vulgar fractions ("½", X-Men (1991)'s
+// "Thrall"), which no digit-based rule can see. Rewrite them as decimals — merged with a glued
+// preceding integer, so Wizard-era "1½" reads 1.5 — before any parse or comparison. Conservative
+// set on purpose: these three are the fractions comic numbering actually uses.
+const VULGAR_FRACTIONS: Record<string, string> = { '½': '.5', '¼': '.25', '¾': '.75' };
+
+export function normalizeFractionNumbers(s: string): string {
+    return s.replace(/(\d+)?([½¼¾])/g, (_, int, frac) => (int || '0') + VULGAR_FRACTIONS[frac]);
+}
+
 export function isSameIssue(num1: string | number, num2: string | number): boolean {
     // 1. Regex updated to capture optional leading negative sign natively
-    const regex = /^(-?)0*(\d*(?:\.\d+)?)(.*)$/; 
-    const m1 = String(num1).trim().match(regex);
-    const m2 = String(num2).trim().match(regex);
+    const regex = /^(-?)0*(\d*(?:\.\d+)?)(.*)$/;
+    const m1 = normalizeFractionNumbers(String(num1).trim()).match(regex);
+    const m2 = normalizeFractionNumbers(String(num2).trim()).match(regex);
          
     if (!m1 || !m2) return String(num1).toUpperCase() === String(num2).toUpperCase();
     
@@ -40,6 +51,10 @@ function stripSeriesPrefix(filename: string, seriesName: string): string | null 
 }
 
 export function extractIssueNumber(filename: string, seriesName?: string): string {
+    // Issue #200: "#½" must parse as "#0.5", not fall through every digit rule to the "1" default
+    // (which collided a renamed half-issue with the real #1). Normalized once here — the recursive
+    // series-hint call below re-normalizes harmlessly (idempotent).
+    filename = normalizeFractionNumbers(filename);
     // 2026-07-25 worklist item 9 (Kaiju No. 8): digits that belong to the TITLE must not be read as
     // issue numbers. When the caller knows the series, its name is stripped as a prefix first; a
     // filename that IS just the series name parses as a one-shot ("1") instead of the title digit.

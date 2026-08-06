@@ -96,3 +96,105 @@ describe('MetadataEditorModal series mode — ComicInfo defaults (#199)', () => 
         expect(captured.imprint).toBe(''); // the route stores '' as null = cleared
     });
 });
+
+// #199 Call-3 Beta C: issue mode wears the same four tabs, rendered from the SAME shared bodies
+// through the plural-key adapter. These tests pin the load -> edit -> save loop across tabs
+// (field state survives Radix unmounting inactive tab content) and the tri-state B&W contract.
+describe('MetadataEditorModal issue mode - tabbed per-issue editor (#199 Call-3 Beta C)', () => {
+    let patched: any = null;
+    const issueDetail = {
+        number: '154', name: 'La Signora Dei Lupi', releaseDate: '2026-03-01', universe: '',
+        description: 'Dragonero issue.', hasCustomMetadata: false,
+        writers: ['Luca Enoch'], artists: ['Giuseppe Matteoni'], coverArtists: [], colorists: [], letterers: [],
+        inker: ['Ink Uno'], editor: [], translator: ['Trad Uno'],
+        characters: ['Ian Aranill'], teams: [], locations: [], genres: ['Fantasy'], storyArcs: [],
+        tags: ['bonelli'], mainCharacterOrTeam: 'Dragonero', alternateSeries: '', alternateNumber: '19B',
+        alternateCount: null, storyArcNumber: '', gtin: '9791234567897', notes: '', scanInformation: '',
+        review: '', blackAndWhite: false, communityRating: 4,
+    };
+    const issueProps = {
+        open: true,
+        onOpenChange: vi.fn(),
+        mode: 'issue' as const,
+        issue: { id: 'i154', seriesName: 'Dragonero', number: '154' },
+    };
+
+    beforeEach(() => {
+        patched = null;
+        vi.stubGlobal('fetch', vi.fn((url: string, init?: any) => {
+            if (String(url).startsWith('/api/admin/config')) return ok({ settings: [] });
+            if (String(url).startsWith('/api/library/issue') && init?.method === 'PATCH') {
+                patched = JSON.parse(init.body);
+                return ok({ success: true, changed: true, wroteToFile: true });
+            }
+            if (String(url).startsWith('/api/library/issue')) return ok(issueDetail);
+            return ok({});
+        }));
+    });
+
+    it('renders the four tabs and seeds every tab body from the issue API', async () => {
+        render(<MetadataEditorModal {...issueProps} />);
+
+        // General
+        await waitFor(() => expect((screen.getByLabelText('Title', { selector: 'input' }) as HTMLInputElement).value).toBe('La Signora Dei Lupi'));
+        expect((screen.getByLabelText('Number', { selector: 'input' }) as HTMLInputElement).value).toBe('154');
+
+        // Credits: the shared bodies read through the plural-key adapter.
+        openTab(/credits/i);
+        expect((screen.getByLabelText('Writer') as HTMLInputElement).value).toBe('Luca Enoch');
+        expect((screen.getByLabelText('Penciller') as HTMLInputElement).value).toBe('Giuseppe Matteoni');
+        expect((screen.getByLabelText('Inker') as HTMLInputElement).value).toBe('Ink Uno');
+        expect((screen.getByLabelText('Translator') as HTMLInputElement).value).toBe('Trad Uno');
+
+        openTab(/story/i);
+        expect((screen.getByLabelText('Tags') as HTMLInputElement).value).toBe('bonelli');
+        expect((screen.getByLabelText('Alternate Number') as HTMLInputElement).value).toBe('19B');
+
+        openTab(/details/i);
+        expect((screen.getByLabelText('GTIN') as HTMLInputElement).value).toBe('9791234567897');
+        // Tri-state control: the loaded explicit "No" is pressed — no two-way B&W switch here
+        // (the write-to-file switch below the tabs is a different control and stays).
+        expect(screen.queryByRole('switch', { name: /black and white/i })).toBeNull();
+        expect(screen.getByRole('button', { name: 'No' }).getAttribute('aria-pressed')).toBe('true');
+        expect(screen.getByRole('button', { name: 'Unknown' }).getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('saves every field across tabs - edits apply, unmounted-tab values round-trip, B&W stays an explicit No', async () => {
+        render(<MetadataEditorModal {...issueProps} />);
+        await waitFor(() => expect((screen.getByLabelText('Number', { selector: 'input' }) as HTMLInputElement).value).toBe('154'));
+
+        openTab(/credits/i);
+        fireEvent.change(screen.getByLabelText('Inker'), { target: { value: 'Ink Uno, Ink Due' } });
+        openTab(/general/i); // credits content unmounts; state must survive in the form
+
+        fireEvent.click(screen.getByRole('button', { name: /save metadata/i }));
+        await waitFor(() => expect(patched).not.toBeNull());
+
+        expect(patched.issueId).toBe('i154');
+        expect(patched.inker).toEqual(['Ink Uno', 'Ink Due']);      // the edit, split server-shape
+        expect(patched.writers).toEqual(['Luca Enoch']);            // untouched arrays round-trip
+        expect(patched.tags).toEqual(['bonelli']);
+        expect(patched.gtin).toBe('9791234567897');                 // untouched scalars round-trip
+        expect(patched.alternateNumber).toBe('19B');
+        expect(patched.communityRating).toBe('4');                  // route parses/clamps
+        expect(patched.blackAndWhite).toBe(false);                  // explicit No preserved, not nulled
+    });
+
+    it('the tri-state control drives blackAndWhite to null (Unknown) and true (Yes)', async () => {
+        render(<MetadataEditorModal {...issueProps} />);
+        await waitFor(() => expect((screen.getByLabelText('Number', { selector: 'input' }) as HTMLInputElement).value).toBe('154'));
+
+        openTab(/details/i);
+        fireEvent.click(screen.getByRole('button', { name: 'Unknown' }));
+        expect(screen.getByRole('button', { name: 'Unknown' }).getAttribute('aria-pressed')).toBe('true');
+        fireEvent.click(screen.getByRole('button', { name: /save metadata/i }));
+        await waitFor(() => expect(patched).not.toBeNull());
+        expect(patched.blackAndWhite).toBeNull();
+
+        patched = null;
+        fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
+        fireEvent.click(screen.getByRole('button', { name: /save metadata/i }));
+        await waitFor(() => expect(patched).not.toBeNull());
+        expect(patched.blackAndWhite).toBe(true);
+    });
+});

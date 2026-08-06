@@ -371,7 +371,7 @@ export default function SmartMatchMetadataDialog({
             </TabsContent>
 
             <TabsContent value="details" className="grid gap-3 mt-0">
-              <ComicInfoDetailsFields fields={fields} setField={setField} blackAndWhite={blackAndWhite} setBlackAndWhite={setBlackAndWhite} switchId="sm-bw" />
+              <ComicInfoDetailsFields fields={fields} setField={setField} blackAndWhite={blackAndWhite} setBlackAndWhite={v => setBlackAndWhite(v === true)} switchId="sm-bw" />
             </TabsContent>
 
             <TabsContent value="covers" className="grid gap-4 mt-0">

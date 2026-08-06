@@ -28,6 +28,9 @@ export function TextField({ label, value, onChange, placeholder }: { label: stri
 interface FieldsProps {
   fields: ComicInfoDefaults
   setField: SetComicInfoField
+  /** Helper line above the fields. Default = the series-defaults copy; pass your own for other
+   *  surfaces (the per-issue editor), or null to hide it. */
+  intro?: string | null
 }
 
 /** General-tab extras: Publisher Imprint / Format / Language row + the AgeRating select. */
@@ -55,12 +58,10 @@ export function ComicInfoGeneralExtras({ fields, setField }: FieldsProps) {
 }
 
 /** Credits tab body: the eight comma-separated credit fields. */
-export function ComicInfoCreditsFields({ fields, setField }: FieldsProps) {
+export function ComicInfoCreditsFields({ fields, setField, intro = "Comma-separated names, applied to every issue in this series unless an issue already has its own." }: FieldsProps) {
   return (
     <>
-      <p className="text-[11px] text-muted-foreground -mt-1">
-        Comma-separated names, applied to every issue in this series unless an issue already has its own.
-      </p>
+      {intro !== null && <p className="text-[11px] text-muted-foreground -mt-1">{intro}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <TextField label="Writer" value={fields.writer || ""} onChange={setField("writer")} />
         <TextField label="Penciller" value={fields.penciller || ""} onChange={setField("penciller")} />
@@ -76,12 +77,10 @@ export function ComicInfoCreditsFields({ fields, setField }: FieldsProps) {
 }
 
 /** Story & Tags tab body: story descriptors + the alternate-series row. */
-export function ComicInfoStoryFields({ fields, setField }: FieldsProps) {
+export function ComicInfoStoryFields({ fields, setField, intro = "Comma-separated values, applied to every issue in this series unless an issue already has its own." }: FieldsProps) {
   return (
     <>
-      <p className="text-[11px] text-muted-foreground -mt-1">
-        Comma-separated values, applied to every issue in this series unless an issue already has its own.
-      </p>
+      {intro !== null && <p className="text-[11px] text-muted-foreground -mt-1">{intro}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <TextField label="Genre" value={fields.genre || ""} onChange={setField("genre")} placeholder="Science-Fiction, Superhero…" />
         <TextField label="Tags" value={fields.tags || ""} onChange={setField("tags")} placeholder="ninja, school life…" />
@@ -102,14 +101,20 @@ export function ComicInfoStoryFields({ fields, setField }: FieldsProps) {
 }
 
 interface DetailsProps extends FieldsProps {
-  blackAndWhite: boolean
-  setBlackAndWhite: (v: boolean) => void
+  /** Switch surfaces (matcher, series editor) pass a plain boolean; the tri-state per-issue
+   *  editor passes boolean | null (null = Unknown). */
+  blackAndWhite: boolean | null
+  setBlackAndWhite: (v: boolean | null) => void
+  /** Render B&W as an Unknown/Yes/No segmented control instead of the two-way switch — the
+   *  per-issue editor needs it because an explicit per-issue "No" is a real stored claim
+   *  (#199 Call-3 Beta B), and a switch can't express three states without losing one. */
+  triState?: boolean
   /** Unique switch id per surface — the matcher dialog and the series editor may both be mounted. */
   switchId?: string
 }
 
-/** Details tab body: rating/GTIN, the two-way B&W switch, and the long-text fields. */
-export function ComicInfoDetailsFields({ fields, setField, blackAndWhite, setBlackAndWhite, switchId = "ci-bw" }: DetailsProps) {
+/** Details tab body: rating/GTIN, the B&W control (switch or tri-state), and the long-text fields. */
+export function ComicInfoDetailsFields({ fields, setField, blackAndWhite, setBlackAndWhite, triState = false, switchId = "ci-bw" }: DetailsProps) {
   return (
     <>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -121,10 +126,29 @@ export function ComicInfoDetailsFields({ fields, setField, blackAndWhite, setBla
         <TextField label="GTIN" value={fields.gtin || ""} onChange={setField("gtin")} placeholder="ISBN / ISSN / EAN" />
       </div>
 
-      <div className="flex items-center gap-3 bg-muted/40 p-2.5 rounded-lg border border-border">
-        <Switch id={switchId} checked={blackAndWhite} onCheckedChange={setBlackAndWhite} />
-        <Label htmlFor={switchId} className="cursor-pointer text-xs">Black and White</Label>
-      </div>
+      {triState ? (
+        <div className="flex items-center gap-3 bg-muted/40 p-2.5 rounded-lg border border-border">
+          <Label className="text-xs">Black and White</Label>
+          <div className="flex rounded-md border border-border overflow-hidden ml-auto" role="group" aria-label="Black and White">
+            {([["Unknown", null], ["Yes", true], ["No", false]] as [string, boolean | null][]).map(([label, val]) => (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={blackAndWhite === val}
+                onClick={() => setBlackAndWhite(val)}
+                className={`px-3 h-8 text-xs font-semibold transition-colors ${blackAndWhite === val ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 bg-muted/40 p-2.5 rounded-lg border border-border">
+          <Switch id={switchId} checked={blackAndWhite === true} onCheckedChange={v => setBlackAndWhite(v)} />
+          <Label htmlFor={switchId} className="cursor-pointer text-xs">Black and White</Label>
+        </div>
+      )}
 
       <div className="grid gap-1.5">
         <Label className="text-xs">Notes</Label>

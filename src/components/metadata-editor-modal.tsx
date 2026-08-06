@@ -46,7 +46,18 @@ interface Props {
   onSaved?: (result?: any) => void
 }
 
-const ARRAY_FIELDS = ["writers", "artists", "coverArtists", "colorists", "letterers", "inker", "editor", "translator", "characters", "teams", "locations", "genres", "storyArcs"] as const
+const ARRAY_FIELDS = ["writers", "artists", "coverArtists", "colorists", "letterers", "inker", "editor", "translator", "characters", "teams", "locations", "genres", "storyArcs", "tags"] as const
+
+// #199 Call-3 Beta C: the per-issue string scalars the tabbed editor round-trips verbatim.
+const ISSUE_SCALAR_FIELDS = ["mainCharacterOrTeam", "alternateSeries", "alternateNumber", "storyArcNumber", "gtin", "notes", "scanInformation", "review"] as const
+
+// The shared tab bodies read singular ComicInfoDefaults keys; the issue form stores plural
+// column names. Everything not listed maps 1:1 (inker/editor/translator/tags/…).
+const ISSUE_KEY_MAP: Partial<Record<string, string>> = {
+  writer: "writers", penciller: "artists", colorist: "colorists", letterer: "letterers",
+  coverArtist: "coverArtists", genre: "genres", storyArc: "storyArcs",
+}
+const issueKey = (k: string) => ISSUE_KEY_MAP[k] ?? k
 
 const joinArr = (v: any): string => (Array.isArray(v) ? v.filter(Boolean).join(", ") : (typeof v === "string" ? v : ""))
 const splitArr = (s: string): string[] => (s || "").split(",").map(t => t.trim()).filter(Boolean)
@@ -72,6 +83,9 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
   const [fields, setFields] = useState<ComicInfoDefaults>({})
   const setField = (k: keyof ComicInfoDefaults) => (v: string) => setFields(f => ({ ...f, [k]: v }))
   const [blackAndWhite, setBlackAndWhite] = useState(false)
+  // #199 Call-3 Beta C (issue mode): genuinely tri-state — an explicit per-issue "No" is a real
+  // stored claim, null is Unknown. Distinct from the series switch above on purpose.
+  const [issueBw, setIssueBw] = useState<boolean | null>(null)
 
   // Load current values + the global write-to-file default whenever the dialog opens.
   useEffect(() => {
@@ -161,7 +175,21 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
           locations: joinArr(detail.locations),
           genres: joinArr(detail.genres),
           storyArcs: joinArr(detail.storyArcs),
+          // #199 Call-3 Beta C: the per-issue remainder (Beta B columns) — GET returns them on
+          // both response paths, so these can never load blank over real values.
+          tags: joinArr(detail.tags),
+          mainCharacterOrTeam: detail.mainCharacterOrTeam ?? "",
+          alternateSeries: detail.alternateSeries ?? "",
+          alternateNumber: detail.alternateNumber ?? "",
+          alternateCount: detail.alternateCount != null ? String(detail.alternateCount) : "",
+          storyArcNumber: detail.storyArcNumber ?? "",
+          gtin: detail.gtin ?? "",
+          notes: detail.notes ?? "",
+          scanInformation: detail.scanInformation ?? "",
+          review: detail.review ?? "",
+          communityRating: detail.communityRating != null ? String(detail.communityRating) : "",
         })
+        setIssueBw(detail.blackAndWhite ?? null)
         setLoading(false)
       }
     }
@@ -215,6 +243,13 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
           writeToFile,
         }
         for (const f of ARRAY_FIELDS) payload[f] = splitArr(form[f] || "")
+        // #199 Call-3 Beta C: the per-issue remainder. Scalars round-trip verbatim; the route
+        // validates the typed pair ('' → null, rating clamped, count parsed) and B&W ships the
+        // tri-state value directly (null = Unknown is a real, storable answer).
+        for (const f of ISSUE_SCALAR_FIELDS) payload[f] = form[f] ?? ""
+        payload.communityRating = form.communityRating ?? ""
+        payload.alternateCount = form.alternateCount ?? ""
+        payload.blackAndWhite = issueBw
         res = await fetch("/api/library/issue", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -288,17 +323,12 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
     }
   }
 
-  const arrField = (key: string, label: string) => (
-    <div className="grid gap-1.5">
-      <Label className="text-xs">{label}</Label>
-      <Input
-        value={form[key] || ""}
-        onChange={e => set(key, e.target.value)}
-        placeholder="Comma-separated"
-        className="bg-background border-border h-9"
-      />
-    </div>
-  )
+  // #199 Call-3 Beta C: the shared tab bodies read SINGULAR ComicInfoDefaults keys; the issue
+  // form stores PLURAL column names. This view adapts between them — same components, zero drift.
+  const issueFields = Object.fromEntries(
+    COMIC_INFO_DEFAULT_KEYS.map(k => [k, form[issueKey(k)] ?? ""])
+  ) as ComicInfoDefaults
+  const setIssueField = (k: keyof ComicInfoDefaults) => (v: string) => set(issueKey(k as string), v)
 
   // Shared between the series (tabbed, #199) and issue layouts.
   const lockBanner = locked && (
@@ -401,7 +431,7 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
               </TabsContent>
 
               <TabsContent value="details" className="grid gap-3 mt-0">
-                <ComicInfoDetailsFields fields={fields} setField={setField} blackAndWhite={blackAndWhite} setBlackAndWhite={setBlackAndWhite} switchId="meta-bw" />
+                <ComicInfoDetailsFields fields={fields} setField={setField} blackAndWhite={blackAndWhite} setBlackAndWhite={v => setBlackAndWhite(v === true)} switchId="meta-bw" />
               </TabsContent>
             </div>
 
@@ -409,52 +439,66 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
             {writeToggle}
           </Tabs>
         ) : (
-          <div className="flex-1 min-h-0 overflow-y-auto grid gap-4 py-2 pr-3">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Number</Label>
-                <Input value={form.number || ""} onChange={e => set("number", e.target.value)} className="bg-background border-border h-9" />
-              </div>
-              <div className="grid gap-1.5 col-span-2">
-                <Label className="text-xs">Release Date</Label>
-                <Input value={form.releaseDate || ""} onChange={e => set("releaseDate", e.target.value)} placeholder="YYYY-MM-DD" className="bg-background border-border h-9" />
-              </div>
-            </div>
+          /* #199 Call-3 Beta C: issue mode wears the same four tabs as series mode, rendered from
+             the SAME shared bodies (adapter above), so the two surfaces can never drift. Field
+             STATE lives in `form`, not the tab DOM — inactive Radix tab content unmounts, and the
+             save must still carry every field. */
+          <Tabs defaultValue="general" className="flex-1 min-h-0 flex flex-col">
+            <TabsList className="shrink-0 w-full">
+              <TabsTrigger value="general">General</TabsTrigger>
+              <TabsTrigger value="credits">Credits</TabsTrigger>
+              <TabsTrigger value="story">Story &amp; Tags</TabsTrigger>
+              <TabsTrigger value="details">Details</TabsTrigger>
+            </TabsList>
 
-            <div className="grid gap-1.5">
-              <Label className="text-xs">Title</Label>
-              <Input value={form.name || ""} onChange={e => set("name", e.target.value)} className="bg-background border-border h-9" />
-            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto py-2 pr-3">
+              <TabsContent value="general" className="grid gap-4 mt-0">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="issue-number" className="text-xs">Number</Label>
+                    <Input id="issue-number" value={form.number || ""} onChange={e => set("number", e.target.value)} className="bg-background border-border h-9" />
+                  </div>
+                  <div className="grid gap-1.5 col-span-2">
+                    <Label htmlFor="issue-release-date" className="text-xs">Release Date</Label>
+                    <Input id="issue-release-date" value={form.releaseDate || ""} onChange={e => set("releaseDate", e.target.value)} placeholder="YYYY-MM-DD" className="bg-background border-border h-9" />
+                  </div>
+                </div>
 
-            <div className="grid gap-1.5">
-              <Label className="text-xs">Summary / Description</Label>
-              <Textarea value={form.description || ""} onChange={e => set("description", e.target.value)} rows={4} className="bg-background border-border" />
-            </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="issue-title" className="text-xs">Title</Label>
+                  <Input id="issue-title" value={form.name || ""} onChange={e => set("name", e.target.value)} className="bg-background border-border h-9" />
+                </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {arrField("writers", "Writers")}
-              {arrField("artists", "Pencillers")}
-              {arrField("inker", "Inkers")}
-              {arrField("coverArtists", "Cover Artists")}
-              {arrField("colorists", "Colorists")}
-              {arrField("letterers", "Letterers")}
-              {arrField("editor", "Editors")}
-              {arrField("translator", "Translators")}
-              {arrField("characters", "Characters")}
-              {arrField("teams", "Teams")}
-              {arrField("locations", "Locations")}
-              {arrField("genres", "Genres")}
-              {arrField("storyArcs", "Story Arcs")}
-            </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="issue-summary" className="text-xs">Summary / Description</Label>
+                  <Textarea id="issue-summary" value={form.description || ""} onChange={e => set("description", e.target.value)} rows={4} className="bg-background border-border" />
+                </div>
 
-            <div className="grid gap-1.5">
-              <Label className="text-xs">Universe / Imprint</Label>
-              <Input value={form.universe || ""} onChange={e => set("universe", e.target.value)} className="bg-background border-border h-9" />
+                <div className="grid gap-1.5">
+                  <Label htmlFor="issue-universe" className="text-xs">Universe / Imprint</Label>
+                  <Input id="issue-universe" value={form.universe || ""} onChange={e => set("universe", e.target.value)} className="bg-background border-border h-9" />
+                </div>
+              </TabsContent>
+
+              <TabsContent value="credits" className="grid gap-3 mt-0">
+                <ComicInfoCreditsFields fields={issueFields} setField={setIssueField}
+                  intro="Comma-separated names — this issue's own credits. They always win over the series defaults at embed time." />
+              </TabsContent>
+
+              <TabsContent value="story" className="grid gap-3 mt-0">
+                <ComicInfoStoryFields fields={issueFields} setField={setIssueField}
+                  intro="This issue's own story descriptors. Blank fields fall back to the series defaults at embed time." />
+              </TabsContent>
+
+              <TabsContent value="details" className="grid gap-3 mt-0">
+                <ComicInfoDetailsFields fields={issueFields} setField={setIssueField}
+                  blackAndWhite={issueBw} setBlackAndWhite={setIssueBw} triState switchId="issue-bw" />
+              </TabsContent>
             </div>
 
             {lockBanner}
             {writeToggle}
-          </div>
+          </Tabs>
         )}
 
         <DialogFooter className="shrink-0">

@@ -396,6 +396,19 @@ struct IssueFileMeta {
     inker: Option<String>,
     editor: Option<String>,
     translator: Option<String>,
+    // #199 Call-3 Beta B: the genuinely-per-issue remainder of the ComicInfo schema.
+    tags: Option<String>,
+    main_character_or_team: Option<String>,
+    alternate_series: Option<String>,
+    alternate_number: Option<String>,
+    alternate_count: Option<i32>,
+    story_arc_number: Option<String>,
+    gtin: Option<String>,
+    notes: Option<String>,
+    scan_information: Option<String>,
+    review: Option<String>,
+    black_and_white: Option<bool>,
+    community_rating: Option<f64>,
 }
 
 /// Match state a scanned file's issue row carries (discussion #182, local-first ingest): an issue
@@ -609,6 +622,29 @@ fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
         inker: list(&i.inker),
         editor: list(&i.editor),
         translator: list(&i.translator),
+        // Beta B: same conversion rules as the 5H series fill (comicinfo_series_defaults) — with
+        // one deliberate difference: per-issue <Notes> keeps tagger fingerprints. On the SERIES
+        // they're per-file noise; on the ISSUE they're that file's own provenance, and keeping
+        // them means an embed re-emits what the file said instead of clobbering foreign taggers.
+        tags: list(&i.tags),
+        main_character_or_team: text(&i.main_character_or_team),
+        alternate_series: text(&i.alternate_series),
+        alternate_number: text(&i.alternate_number),
+        alternate_count: text(&i.alternate_count).and_then(|v| v.parse::<i32>().ok()),
+        story_arc_number: text(&i.story_arc_number),
+        gtin: text(&i.gtin),
+        notes: text(&i.notes),
+        scan_information: text(&i.scan_information),
+        review: text(&i.review),
+        black_and_white: text(&i.black_and_white).and_then(|v| match v.to_ascii_lowercase().as_str() {
+            "yes" => Some(true),
+            "no" => Some(false),
+            _ => None,
+        }),
+        community_rating: text(&i.community_rating)
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(0.0, 5.0)),
     }
 }
 
@@ -1132,12 +1168,17 @@ async fn exec_issue_insert(
     db: &Db,
     row: &NewIssueRow,
 ) -> Result<(), sqlx::Error> {
+    // blackAndWhite is a SQL literal, not a bind — pg's boolean column has no portable Any bool
+    // bind (the 5H lesson); TRUE/FALSE/NULL literals parse on both backends.
+    let bw = match row.fm.black_and_white { Some(true) => "true", Some(false) => "false", None => "NULL" };
     sqlx::query(&format!(
         r#"INSERT INTO "Issue"
            (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
             name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator,
+            tags, "mainCharacterOrTeam", "alternateSeries", "alternateNumber", "alternateCount", "storyArcNumber", gtin, notes, "scanInformation", review, "communityRating", "blackAndWhite",
             "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, {now}, {now})"#,
+           VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, {bw}, {now}, {now})"#,
+        bw = bw,
         now = db.now_expr()
     ))
     .bind(&row.issue_id)
@@ -1164,6 +1205,17 @@ async fn exec_issue_insert(
     .bind(&row.fm.inker)
     .bind(&row.fm.editor)
     .bind(&row.fm.translator)
+    .bind(&row.fm.tags)
+    .bind(&row.fm.main_character_or_team)
+    .bind(&row.fm.alternate_series)
+    .bind(&row.fm.alternate_number)
+    .bind(row.fm.alternate_count)
+    .bind(&row.fm.story_arc_number)
+    .bind(&row.fm.gtin)
+    .bind(&row.fm.notes)
+    .bind(&row.fm.scan_information)
+    .bind(&row.fm.review)
+    .bind(row.fm.community_rating)
     .execute(&mut *conn)
     .await
     .map(|_| ())
@@ -2726,6 +2778,38 @@ mod tests {
         // Editor/Translator flow per-issue too (blank here → None, pinned below).
         assert!(m.editor.is_none() && m.translator.is_none());
 
+        // Beta B: the per-issue remainder converts with the 5H rules (parse/clamp/tri-state)…
+        let info_b = ScanComicInfo {
+            tags: Some("noir, one-shot".to_string()),
+            gtin: Some("9791234567897".to_string()),
+            notes: Some("Tagged with ComicTagger 1.6".to_string()),
+            alternate_series: Some("Legends of the Dark Knight".to_string()),
+            alternate_number: Some("19B".to_string()),
+            alternate_count: Some("6".to_string()),
+            story_arc_number: Some("2".to_string()),
+            scan_information: Some("ScanGroup v2".to_string()),
+            review: Some("A classic.".to_string()),
+            main_character_or_team: Some("Batman".to_string()),
+            black_and_white: Some("No".to_string()),
+            community_rating: Some("9.9".to_string()),
+            ..Default::default()
+        };
+        let b = issue_file_meta(Some(&info_b));
+        assert_eq!(b.tags.as_deref(), Some(r#"["noir","one-shot"]"#));
+        assert_eq!(b.gtin.as_deref(), Some("9791234567897"));
+        // Per-issue notes KEEP tagger fingerprints — that's the file's own provenance (unlike the
+        // 5H series fill, which filters them as per-file noise).
+        assert_eq!(b.notes.as_deref(), Some("Tagged with ComicTagger 1.6"));
+        assert_eq!(b.alternate_series.as_deref(), Some("Legends of the Dark Knight"));
+        assert_eq!(b.alternate_number.as_deref(), Some("19B"));
+        assert_eq!(b.alternate_count, Some(6));
+        assert_eq!(b.story_arc_number.as_deref(), Some("2"));
+        assert_eq!(b.scan_information.as_deref(), Some("ScanGroup v2"));
+        assert_eq!(b.review.as_deref(), Some("A classic."));
+        assert_eq!(b.main_character_or_team.as_deref(), Some("Batman"));
+        assert_eq!(b.black_and_white, Some(false), "an explicit No is honored per-issue");
+        assert_eq!(b.community_rating, Some(5.0), "clamped to ComicInfo's 0-5 range");
+
         // Absent fields stay None — never a literal '[]' (the provider-sync fill policies key on NULL).
         let empty = issue_file_meta(Some(&ScanComicInfo::default()));
         assert!(empty.name.is_none() && empty.writers.is_none() && empty.genres.is_none());
@@ -3103,6 +3187,9 @@ mod tests {
                 name TEXT, description TEXT, "releaseDate" TEXT, genres TEXT, writers TEXT, artists TEXT,
                 "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT, teams TEXT, locations TEXT,
                 "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,
+                tags TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
+                "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
+                "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
                 universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
                 "coverUrl" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
         ] {
@@ -3131,12 +3218,14 @@ mod tests {
         sqlx::query(
             r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status,
                    "filePath", "pageCount", name, description, "releaseDate", genres, writers, artists,
-                   "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker)
+                   "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker,
+                   gtin, "alternateNumber", "scanInformation")
                VALUES ('rt_issue', 'rt_series', '900001', 'COMICVINE', 'DEEP_SYNCED', '5', 'DOWNLOADED',
                    $1, 3, 'Night of the Owls', 'A conspiracy of owls.', '2012-05-09', '["Crime","Super-Hero"]',
                    '["Scott Snyder"]', '["Greg Capullo"]', '["Greg Capullo"]', '["FCO Plascencia"]',
                    '["Richard Starkings"]', '["Batman"]', '["Court of Owls"]', '["Gotham City"]',
-                   '["Night of the Owls"]', '["Jonathan Glapion"]')"#,
+                   '["Night of the Owls"]', '["Jonathan Glapion"]',
+                   '9791234567897', '19B', 'ScanGroup v2')"#,
         )
         .bind(&cbz_str)
         .execute(&db.pool).await.unwrap();
@@ -3213,7 +3302,8 @@ mod tests {
         let i = sqlx::query(
             r#"SELECT number, "matchState", "metadataId", "metadataSource", status, "pageCount",
                       name, description, "releaseDate", genres, writers, artists, "coverArtists",
-                      colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator
+                      colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator,
+                      gtin, "alternateNumber", "scanInformation", tags, notes
                FROM "Issue" WHERE "seriesId" = $1"#,
         )
         .bind(&series_id)
@@ -3238,6 +3328,13 @@ mod tests {
         // the file genuinely lists that editor, and the next embed emits the identical XML.
         assert_eq!(i.get::<Option<String>, _>("editor").as_deref(), Some(r#"["Mark Doyle"]"#));
         assert_eq!(i.get::<Option<String>, _>("translator"), None::<String>);
+        // Beta B: the issue's own per-file fields survive the wipe via their ComicInfo tags…
+        assert_eq!(i.get::<Option<String>, _>("gtin").as_deref(), Some("9791234567897"));
+        assert_eq!(i.get::<Option<String>, _>("alternateNumber").as_deref(), Some("19B"));
+        assert_eq!(i.get::<Option<String>, _>("scanInformation").as_deref(), Some("ScanGroup v2"));
+        // …and series-sourced defaults read back per-issue like editor above (per-file semantics).
+        assert_eq!(i.get::<Option<String>, _>("tags").as_deref(), Some(r#"["noir"]"#));
+        assert_eq!(i.get::<Option<String>, _>("notes").as_deref(), Some("Curated series note"));
         assert_eq!(i.get::<Option<String>, _>("coverArtists").as_deref(), Some(r#"["Greg Capullo"]"#));
         assert_eq!(i.get::<Option<String>, _>("colorists").as_deref(), Some(r#"["FCO Plascencia"]"#));
         assert_eq!(i.get::<Option<String>, _>("letterers").as_deref(), Some(r#"["Richard Starkings"]"#));

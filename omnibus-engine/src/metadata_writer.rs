@@ -56,6 +56,12 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
     let base = r#"SELECT i.id, i."filePath", i.number, i.name as issue_name, i.description as issue_desc,
                i.writers, i.artists, i.characters, i."coverArtists", i.colorists, i.letterers, i.teams, i.locations,
                i.inker, i.editor, i.translator,
+               i.tags as issue_tags, i."mainCharacterOrTeam" as issue_main_character, i."alternateSeries" as issue_alt_series,
+               i."alternateNumber" as issue_alt_number, CAST(i."alternateCount" AS TEXT) as issue_alt_count_text,
+               i."storyArcNumber" as issue_story_arc_number, i.gtin as issue_gtin, i.notes as issue_notes,
+               i."scanInformation" as issue_scan_information, i.review as issue_review,
+               CAST(i."communityRating" AS TEXT) as issue_community_rating_text,
+               CAST(i."blackAndWhite" AS INTEGER) as issue_black_and_white_int,
                i."releaseDate", i.universe as issue_universe,
                i.genres, i."storyArcs", i."metadataId" as issue_meta_id, i."metadataSource" as issue_meta_source,
                s.id as series_id, s.name as series_name, s.publisher, s.year, s."folderPath",
@@ -240,26 +246,38 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
     let inker = paired("inker", "series_inker");
     let editor = paired("editor", "series_editor");
     let translator = paired("translator", "series_translator");
-    // Series-only ComicInfo defaults (#199, no per-issue equivalent) — always taken straight from
-    // Series, like Publisher. Set once in the Smart Matcher's General/Credits/Story & Tags/Details tabs.
-    let tags = clean_json_array(g("series_tags").as_deref());
+    // Series-only ComicInfo defaults (#199): uniform-per-run fields, always taken straight from
+    // Series, like Publisher. Everything else below pairs issue-wins since Call-3 Beta B.
     let imprint = g("imprint").unwrap_or_default();
     let format = g("format").unwrap_or_default();
     let language_iso = g("languageISO").unwrap_or_default();
     let age_rating = g("ageRating").unwrap_or_default();
-    let community_rating = g("communityRatingText").unwrap_or_default();
-    let gtin = g("gtin").unwrap_or_default();
-    let notes = g("notes").unwrap_or_default();
-    let scan_information = g("scanInformation").unwrap_or_default();
-    let review = g("review").unwrap_or_default();
-    let main_character_or_team = g("mainCharacterOrTeam").unwrap_or_default();
-    let alternate_series = g("alternateSeries").unwrap_or_default();
-    let alternate_number = g("alternateNumber").unwrap_or_default();
-    let alternate_count = g("alternateCountText").unwrap_or_default();
-    let story_arc_number = g("storyArcNumber").unwrap_or_default();
+    // #199 Call-3 Beta B: the genuinely-per-issue fields flip to the same issue-wins pairing as
+    // the credits — the issue's own non-empty value beats the series default.
+    let scalar_paired = |issue_key: &str, series_key: &str| -> String {
+        g(issue_key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+            .or_else(|| g(series_key))
+            .unwrap_or_default()
+    };
+    let tags = {
+        let iv = clean_json_array(g("issue_tags").as_deref());
+        if !iv.is_empty() { iv } else { clean_json_array(g("series_tags").as_deref()) }
+    };
+    let community_rating = scalar_paired("issue_community_rating_text", "communityRatingText");
+    let gtin = scalar_paired("issue_gtin", "gtin");
+    let notes = scalar_paired("issue_notes", "notes");
+    let scan_information = scalar_paired("issue_scan_information", "scanInformation");
+    let review = scalar_paired("issue_review", "review");
+    let main_character_or_team = scalar_paired("issue_main_character", "mainCharacterOrTeam");
+    let alternate_series = scalar_paired("issue_alt_series", "alternateSeries");
+    let alternate_number = scalar_paired("issue_alt_number", "alternateNumber");
+    let alternate_count = scalar_paired("issue_alt_count_text", "alternateCountText");
+    let story_arc_number = scalar_paired("issue_story_arc_number", "storyArcNumber");
     // CAST to INTEGER in the SELECT (Any driver, the isManga trick); a NULL (never set) reads as
-    // None → "Unknown". The matcher only ever stores true or null, so "No" is never claimed.
-    let black_and_white = row.try_get::<Option<i64>, _>("blackAndWhiteInt").unwrap_or(None);
+    // None → "Unknown". Beta B: the issue's own stored claim (Yes OR No) beats the series default —
+    // a B&W backup issue in a color series emits its own truth.
+    let black_and_white = row.try_get::<Option<i64>, _>("issue_black_and_white_int").unwrap_or(None)
+        .or_else(|| row.try_get::<Option<i64>, _>("blackAndWhiteInt").unwrap_or(None));
     let black_and_white_tag = match black_and_white {
         Some(v) if v != 0 => "Yes",
         Some(_) => "No",
@@ -794,6 +812,9 @@ mod tests {
                 name TEXT, description TEXT, "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
                 writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
                 letterers TEXT, teams TEXT, locations TEXT, inker TEXT, editor TEXT, translator TEXT,
+                tags TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
+                "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
+                "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
                 "metadataId" TEXT, "metadataSource" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
@@ -818,11 +839,11 @@ mod tests {
         ).execute(&db.pool).await.unwrap();
 
         let cbz_str = cbz.to_string_lossy().replace('\\', "/");
-        // The issue has its OWN writers and inker (must win) but no artists/editor/translator
-        // (series defaults must fill in) — Call-3 Beta A made the last three credits paired too.
+        // The issue has its OWN writers/inker (Beta A) and notes/alternateNumber (Beta B) — all
+        // must win; blank artists/editor/translator/tags/etc. fall back to the series defaults.
         sqlx::query(
-            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, writers, inker, "metadataId", "metadataSource")
-               VALUES ('i199', 's199', $1, '1', '["Issue Writer"]', '["Issue Inker"]', '900', 'COMICVINE')"#,
+            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, writers, inker, notes, "alternateNumber", "metadataId", "metadataSource")
+               VALUES ('i199', 's199', $1, '1', '["Issue Writer"]', '["Issue Inker"]', 'Tagged by CT 2024', '19B', '900', 'COMICVINE')"#,
         ).bind(&cbz_str).execute(&db.pool).await.unwrap();
 
         let (ok, fail, sj) = process_embed_job(
@@ -852,12 +873,16 @@ mod tests {
         assert!(xml.contains("<CommunityRating>4.5</CommunityRating>"));
         assert!(xml.contains("<BlackAndWhite>Yes</BlackAndWhite>"));
         assert!(xml.contains("<GTIN>9781234567890</GTIN>"));
-        assert!(xml.contains("<Notes>Some notes</Notes>"));
+        // Beta B pairing: the issue's own notes/alternateNumber win over the series defaults…
+        assert!(xml.contains("<Notes>Tagged by CT 2024</Notes>"), "issue notes must win:\n{xml}");
+        assert!(!xml.contains("Some notes"), "series notes default must not override:\n{xml}");
+        assert!(xml.contains("<AlternateNumber>19B</AlternateNumber>"), "issue alt-number must win:\n{xml}");
+        assert!(!xml.contains("7A"));
+        // …while blank issue fields still fall back to the series defaults.
         assert!(xml.contains("<ScanInformation>Scanned by X</ScanInformation>"));
         assert!(xml.contains("<Review>A review</Review>"));
         assert!(xml.contains("<MainCharacterOrTeam>Batman</MainCharacterOrTeam>"));
         assert!(xml.contains("<AlternateSeries>Alt Series</AlternateSeries>"));
-        assert!(xml.contains("<AlternateNumber>7A</AlternateNumber>"));
         assert!(xml.contains("<AlternateCount>6</AlternateCount>"));
         assert!(xml.contains("<StoryArcNumber>2</StoryArcNumber>"));
 
@@ -871,6 +896,20 @@ mod tests {
         assert_eq!(ok2, 1);
         let xml2 = read_comicinfo_from_zip(&cbz).unwrap().unwrap();
         assert!(xml2.contains("<BlackAndWhite>Unknown</BlackAndWhite>"), "unset must read Unknown:\n{xml2}");
+
+        // Beta B: the issue's OWN B&W claim (an explicit No) beats even a series-level Yes — a
+        // color series' one B&W backup issue emits its own truth.
+        sqlx::query(r#"UPDATE "Series" SET "blackAndWhite" = 1 WHERE id = 's199'"#)
+            .execute(&db.pool).await.unwrap();
+        sqlx::query(r#"UPDATE "Issue" SET "blackAndWhite" = 0 WHERE id = 'i199'"#)
+            .execute(&db.pool).await.unwrap();
+        let (ok3, _, _) = process_embed_job(
+            db.clone(),
+            EmbedRequest { series_id: Some("s199".to_string()), issue_ids: None },
+        ).await.expect("embed job 3");
+        assert_eq!(ok3, 1);
+        let xml3 = read_comicinfo_from_zip(&cbz).unwrap().unwrap();
+        assert!(xml3.contains("<BlackAndWhite>No</BlackAndWhite>"), "issue's explicit No must beat series Yes:\n{xml3}");
 
         let _ = std::fs::remove_dir_all(&base);
     }

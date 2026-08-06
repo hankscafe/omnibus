@@ -53,6 +53,24 @@ export async function GET(request: Request) {
     const parsedInker = safeParse((issue as any).inker);
     const parsedEditor = safeParse((issue as any).editor);
     const parsedTranslator = safeParse((issue as any).translator);
+    const parsedTags = safeParse((issue as any).tags);
+    // #199 Call-3 Beta B: the typed/scalar per-issue remainder, returned on BOTH response paths so
+    // the (Beta C) editor never loads blanks it could then save over. Providers don't supply these —
+    // they come from files, embeds, and admins — so the deep-fetch path returns the stored values.
+    const issueComicInfoRest = {
+        tags: parsedTags,
+        mainCharacterOrTeam: (issue as any).mainCharacterOrTeam ?? null,
+        alternateSeries: (issue as any).alternateSeries ?? null,
+        alternateNumber: (issue as any).alternateNumber ?? null,
+        alternateCount: (issue as any).alternateCount ?? null,
+        storyArcNumber: (issue as any).storyArcNumber ?? null,
+        gtin: (issue as any).gtin ?? null,
+        notes: (issue as any).notes ?? null,
+        scanInformation: (issue as any).scanInformation ?? null,
+        review: (issue as any).review ?? null,
+        blackAndWhite: (issue as any).blackAndWhite ?? null,
+        communityRating: (issue as any).communityRating ?? null,
+    };
 
     const needsDeepFetch = issue.metadataId &&
                            !issue.metadataId.startsWith('unmatched_') &&
@@ -245,6 +263,7 @@ export async function GET(request: Request) {
                             storyArcs: finalStoryArcs,
                             teams: finalTeams,
                             locations: finalLocations,
+                            ...issueComicInfoRest,
                             description: newDescription,
                             hasCustomMetadata: !!issue.hasCustomMetadata
                         });
@@ -274,6 +293,7 @@ export async function GET(request: Request) {
         storyArcs: parsedStoryArcs,
         teams: parsedTeams,
         locations: parsedLocations,
+        ...issueComicInfoRest,
         // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored
         // XSS), resolving provider-relative wiki links against the issue's own source (falling back
         // to the series') so they stop 404ing on the Omnibus origin.
@@ -320,8 +340,10 @@ export async function PATCH(request: Request) {
         }
 
         // Multi-value fields arrive from the editor as arrays; persisted as JSON strings.
-        const ARRAY_FIELDS = ['writers', 'artists', 'coverArtists', 'colorists', 'letterers', 'inker', 'editor', 'translator', 'characters', 'genres', 'storyArcs', 'teams', 'locations'];
-        const SCALAR_FIELDS = ['number', 'name', 'description', 'releaseDate', 'universe'];
+        const ARRAY_FIELDS = ['writers', 'artists', 'coverArtists', 'colorists', 'letterers', 'inker', 'editor', 'translator', 'characters', 'genres', 'storyArcs', 'teams', 'locations', 'tags'];
+        const SCALAR_FIELDS = ['number', 'name', 'description', 'releaseDate', 'universe',
+            // #199 Call-3 Beta B: the per-issue string remainder of the ComicInfo schema.
+            'mainCharacterOrTeam', 'alternateSeries', 'alternateNumber', 'storyArcNumber', 'gtin', 'notes', 'scanInformation', 'review'];
 
         // number is the identity anchor (issue #194): it may be corrected, never blanked.
         // (Previously a blank number reached Prisma as null and died as an opaque 500.)
@@ -350,6 +372,27 @@ export async function PATCH(request: Request) {
                 data[f] = JSON.stringify(arr);
                 changedFields.push(f);
             }
+        }
+
+        // #199 Call-3 Beta B: typed per-issue fields — same diff-only, absent-means-untouched
+        // contract, with the series editor's validation semantics: rating finite + clamped 0-5,
+        // count int-or-null, B&W genuinely tri-state (true/false/null all storable — an explicit
+        // per-issue "No" is a real claim here, unlike the matcher's one-way switch).
+        if (body.communityRating !== undefined) {
+            const raw = body.communityRating;
+            const num = raw === null || raw === '' ? null : Number(raw);
+            const incoming = num !== null && Number.isFinite(num) ? Math.min(5, Math.max(0, num)) : null;
+            if (incoming !== ((existing as any).communityRating ?? null)) { data.communityRating = incoming; changedFields.push('communityRating'); }
+        }
+        if (body.alternateCount !== undefined) {
+            const raw = body.alternateCount;
+            const num = raw === null || raw === '' ? NaN : parseInt(String(raw), 10);
+            const incoming = Number.isNaN(num) ? null : num;
+            if (incoming !== ((existing as any).alternateCount ?? null)) { data.alternateCount = incoming; changedFields.push('alternateCount'); }
+        }
+        if (body.blackAndWhite !== undefined) {
+            const incoming = body.blackAndWhite === null ? null : !!body.blackAndWhite;
+            if (incoming !== ((existing as any).blackAndWhite ?? null)) { data.blackAndWhite = incoming; changedFields.push('blackAndWhite'); }
         }
 
         // Zero changes → zero writes: no lock, no DEEP_SYNCED stamp, no ComicInfo embed. The

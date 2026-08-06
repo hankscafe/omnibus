@@ -836,6 +836,22 @@ export const Importer = {
          const inkerStr = xmlMeta?.inker?.length ? JSON.stringify(xmlMeta.inker) : null;
          const editorStr = xmlMeta?.editor?.length ? JSON.stringify(xmlMeta.editor) : null;
          const translatorStr = xmlMeta?.translator?.length ? JSON.stringify(xmlMeta.translator) : null;
+         const tagsStr = xmlMeta?.tags?.length ? JSON.stringify(xmlMeta.tags) : null;
+         // #199 Call-3 Beta B: fill-blank per-issue remainder from the file's ComicInfo (typed
+         // values pre-converted by the extractor; null = the file offered nothing).
+         const restFill = {
+             mainCharacterOrTeam: xmlMeta?.mainCharacterOrTeam ?? null,
+             alternateSeries: xmlMeta?.alternateSeries ?? null,
+             alternateNumber: xmlMeta?.alternateNumber ?? null,
+             alternateCount: xmlMeta?.alternateCount ?? null,
+             storyArcNumber: xmlMeta?.storyArcNumber ?? null,
+             gtin: xmlMeta?.gtin ?? null,
+             notes: xmlMeta?.notes ?? null,
+             scanInformation: xmlMeta?.scanInformation ?? null,
+             review: xmlMeta?.review ?? null,
+             blackAndWhite: xmlMeta?.blackAndWhite ?? null,
+             communityRating: xmlMeta?.communityRating ?? null,
+         };
 
          const allSeriesIssues = await prisma.issue.findMany({
              where: { seriesId: series.id }
@@ -865,6 +881,8 @@ export const Importer = {
                      inker: (existingIssue as any).inker && (existingIssue as any).inker !== "[]" ? (existingIssue as any).inker : inkerStr,
                      editor: (existingIssue as any).editor && (existingIssue as any).editor !== "[]" ? (existingIssue as any).editor : editorStr,
                      translator: (existingIssue as any).translator && (existingIssue as any).translator !== "[]" ? (existingIssue as any).translator : translatorStr,
+                     tags: (existingIssue as any).tags && (existingIssue as any).tags !== "[]" ? (existingIssue as any).tags : tagsStr,
+                     ...Object.fromEntries(Object.entries(restFill).map(([k, v]) => [k, (existingIssue as any)[k] ?? v])),
                      metadataId: existingIssue.metadataId?.startsWith('unmatched') ? targetMetaId : existingIssue.metadataId,
                      metadataSource: existingIssue.metadataSource === 'LOCAL' ? targetMetaSource : existingIssue.metadataSource,
                      matchState: existingIssue.matchState === 'UNMATCHED' ? matchState : existingIssue.matchState
@@ -893,7 +911,9 @@ export const Importer = {
                      locations: locationsStr,
                      inker: inkerStr,
                      editor: editorStr,
-                     translator: translatorStr
+                     translator: translatorStr,
+                     tags: tagsStr,
+                     ...restFill
                  } as any
              });
          }

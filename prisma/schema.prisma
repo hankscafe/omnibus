@@ -255,6 +255,21 @@ model Issue {
   inker           String?  // JSON array; ComicInfo <Inker>
   editor          String?  // JSON array; ComicInfo <Editor>
   translator      String?  // JSON array; ComicInfo <Translator>
+  // #199 Call-3 Beta B: the genuinely-per-issue remainder of the ComicInfo schema. Series columns
+  // of the same names stay as embed-time fill-blanks defaults (imprint/format/language/ageRating
+  // remain series-only by design — uniform-per-run semantics).
+  tags            String?  // JSON array; ComicInfo <Tags>
+  mainCharacterOrTeam String? // ComicInfo <MainCharacterOrTeam>
+  alternateSeries String?  // ComicInfo <AlternateSeries>
+  alternateNumber String?  // ComicInfo <AlternateNumber>
+  alternateCount  Int?     // ComicInfo <AlternateCount>
+  storyArcNumber  String?  // ComicInfo <StoryArcNumber>
+  gtin            String?  // ComicInfo <GTIN> (ISBN/ISSN/EAN — per-file by nature)
+  notes           String?  // ComicInfo <Notes> (per-file tagger provenance survives embeds now)
+  scanInformation String?  // ComicInfo <ScanInformation>
+  review          String?  // ComicInfo <Review>
+  blackAndWhite   Boolean? // ComicInfo <BlackAndWhite>; true=Yes, false=No, null=Unknown
+  communityRating Float?   // ComicInfo <CommunityRating>, clamped 0-5 at the API
   hasCustomMetadata Boolean @default(false)
   hasCustomCover  Boolean @default(false) // Admin set a custom issue cover (in the Smart Matcher); sync must not overwrite coverUrl
 

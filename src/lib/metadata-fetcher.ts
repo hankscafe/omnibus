@@ -11,6 +11,7 @@ import { omnibusQueue } from './queue';
 import { markSystemFlag, countApiUsage } from './utils/system-flags';
 import { cachedCvGet } from './metadata/metadata-cache';
 import { isSameIssue } from '@/lib/utils/issue-parser';
+import { resolveSyncedName, detailNameWrite } from '@/lib/utils/synced-name';
 import { findLocalCoverBasename, providerCoverBlocked } from '@/lib/utils/cover-plan';
 
 // Providers rarely report when a series ends, so Omnibus guesses: no new issue
@@ -37,6 +38,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     // cover is never overwritten; in 'archive' mode an existing local/extracted cover file wins.
     // This Node fallback path used to download provider art unconditionally.
     const coverSource = (await prisma.systemSetting.findUnique({ where: { key: 'cover_source' } }))?.value || 'metadata';
+    // file_metadata_priority: ComicInfo-derived values only get filled, never replaced. Read once —
+    // the name resolver (both provider branches) and the Metron detail pass all honor it.
+    const fillOnly = (await prisma.systemSetting.findUnique({ where: { key: 'file_metadata_priority' } }))?.value === 'true';
 
     if (metadataSource === 'METRON') {
         try {
@@ -150,7 +154,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
 
                 const issueDataPayload = {
-                    name: isLocked ? targetRecord!.name : issue.name,
+                    // #199 round 3: Metron list names are composites ("X-Men (1991) #154") — the
+                    // shared resolver lets them fill blanks but never clobber a real story title
+                    // (detail-fetched or ComicInfo-read), and honors lock + file priority.
+                    name: resolveSyncedName(targetRecord?.name, issue.name, issueNumStr, isLocked, fillOnly),
                     releaseDate: isLocked ? targetRecord!.releaseDate : issue.releaseDate,
                     description: issue.description,
                     coverUrl: issue.coverUrl,
@@ -206,14 +213,16 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 }
             }
 
-            // Opt-in per-issue credit enrichment (metron_detail_credits): the issue_list carries no
-            // credits, so each not-yet-deep-synced issue costs one /issue/{id}/ detail call. Budgeted
+            // Per-issue title + credit enrichment: the issue_list carries no credits and no story
+            // titles, so each not-yet-deep-synced issue costs one /issue/{id}/ detail call. Budgeted
             // against Metron's 5,000/day window with a reserve — leftovers stay non-DEEP_SYNCED and
             // resume on the next sync. Engine parity: metadata.rs metron_detail_credit_pass. Runs
-            // before the EMBED_METADATA queue below so the fetched credits reach the archives too.
-            const detailCreditsOn = (await prisma.systemSetting.findUnique({ where: { key: 'metron_detail_credits' } }))?.value === 'true';
-            if (detailCreditsOn) {
-                const fillOnly = (await prisma.systemSetting.findUnique({ where: { key: 'file_metadata_priority' } }))?.value === 'true';
+            // before the EMBED_METADATA queue below so the fetched values reach the archives too.
+            // #199 round 3: no metron_detail_credits gate here — every Node caller is a targeted
+            // match-time sync (match/request/import; the scheduled sweep is engine-only), and the
+            // matcher's contract is that a corrected issue ID brings the issue's real title and
+            // credits on its own. The opt-in still governs the engine's scheduled sweep.
+            {
                 // Locked (hasCustomMetadata) issues are excluded outright: the merge policy would
                 // keep every existing column anyway, so the detail call would be a pure quota burn.
                 const candidates = await prisma.issue.findMany({
@@ -244,6 +253,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                         await prisma.issue.update({
                             where: { id: candidate.id },
                             data: {
+                                // The issue's own story title finally lands (#199 round 3):
+                                // undefined leaves the column untouched, same as the credits below.
+                                name: detailNameWrite(candidate.name, detail.storyTitle, candidate.number, fillOnly) ?? undefined,
                                 writers: mergeCredits(candidate.writers, detail.writers),
                                 artists: mergeCredits(candidate.artists, detail.artists),
                                 coverArtists: mergeCredits(candidate.coverArtists, detail.coverArtists),
@@ -471,7 +483,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
 
             const issueDataPayload = {
-                name: isLocked ? targetRecord!.name : cvIssue.name,
+                // Shared resolver (#199 round 3): keeps lock + file-priority semantics and stops a
+                // null/generic provider name from wiping a real story title (engine parity).
+                name: resolveSyncedName(targetRecord?.name, cvIssue.name, issueNumStr, isLocked, fillOnly),
                 releaseDate: isLocked ? targetRecord!.releaseDate : (cvIssue.store_date || cvIssue.cover_date || null),
                 description: cvIssue.description || cvIssue.deck || null,
                 coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,

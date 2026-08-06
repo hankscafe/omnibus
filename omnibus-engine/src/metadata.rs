@@ -671,7 +671,9 @@ async fn fetch_comicvine(
                 (None, None, None, None, false, None)
             };
 
-            let name_val = prefer_existing(existing_name, cv_name, is_locked, file_priority);
+            // #199 round 3: shared resolver — a null/generic provider name can no longer wipe a
+            // real story title; lock + file-priority semantics unchanged (Node parity).
+            let name_val = resolve_synced_name(existing_name, cv_name, &issue_num, is_locked, file_priority);
             let release_val = if is_locked { existing_release } else { issue_date.clone() };
             // A locked (manually edited) issue keeps its description; file-priority keeps a non-empty
             // ComicInfo-derived one; otherwise take the provider's.
@@ -1106,9 +1108,10 @@ async fn fetch_metron(
     let metron_total = series_data["issue_count"].as_i64().unwrap_or(0);
     if !full_fetch && status_str == "Ended" && metron_total > 0 && local_count >= metron_total {
         log::info!("[Metadata] {} is Ended and complete ({}/{}) — skipping Metron issue fetch.", series_name, local_count, metron_total);
-        // Credit enrichment still runs on this shortcut path — otherwise an Ended-and-complete
+        // Detail enrichment still runs on this shortcut path — otherwise an Ended-and-complete
         // series could never be backfilled after the admin enables metron_detail_credits.
-        if detail_credits {
+        // full_fetch (targeted match-time syncs) always qualifies — see the main-path gate below.
+        if detail_credits || full_fetch {
             metron_detail_credits_nonfatal(db, client, &auth, series_id, series_name, file_priority).await?;
         }
         return Ok(0);
@@ -1272,7 +1275,10 @@ async fn fetch_metron(
             existing_genres
         };
 
-        let name_val: Option<String> = prefer_existing(existing_name, Some(issue_name), is_locked, file_priority);
+        // #199 round 3: Metron list names are composites ("X-Men (1991) #154") — the shared
+        // resolver lets them fill blanks but never clobber a real story title that the detail
+        // pass (or a ComicInfo read) already landed. Lock + file priority unchanged.
+        let name_val: Option<String> = resolve_synced_name(existing_name, Some(issue_name), &issue_num, is_locked, file_priority);
         let release_val: Option<String> = if is_locked { existing_release } else { issue_date.clone() };
         // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
         let cover_val: Option<String> = if has_custom_cover { existing_cover } else { issue_cover.clone() };
@@ -1353,7 +1359,11 @@ async fn fetch_metron(
         }
     }
 
-    if detail_credits {
+    // #199 round 3: a targeted (full_fetch) sync always runs the detail pass — that's the
+    // match-time path, where the contract is "the right ID brings the real title + credits".
+    // The metron_detail_credits opt-in still decides for the scheduled sweep, and the daily
+    // budget guard inside the pass applies to both.
+    if detail_credits || full_fetch {
         metron_detail_credits_nonfatal(db, client, &auth, series_id, series_name, file_priority).await?;
     }
 
@@ -1393,8 +1403,10 @@ async fn metron_detail_credits_nonfatal(
     }
 }
 
-/// Opt-in per-issue Metron credit enrichment (metron_detail_credits): the issue_list endpoint
-/// carries no credits, so each issue costs one /issue/{id}/ detail call. Budget-gated against the
+/// Per-issue Metron detail enrichment — credits AND the story title (#199 round 3), since the
+/// issue_list endpoint carries neither; each issue costs one /issue/{id}/ detail call. Runs for
+/// every targeted (match-time) sync, and for the scheduled sweep only when the
+/// metron_detail_credits opt-in is set. Budget-gated against the
 /// 5,000/day Metron window with a reserve so normal syncing never starves — issues left over stay
 /// non-DEEP_SYNCED and are picked up on the next sync (same deferral model as the unmatched sweep,
 /// discussion #177). Fetched credits merge through the never-wipe policy (issue #179) and the issue
@@ -1414,7 +1426,7 @@ async fn metron_detail_credit_pass(
     // Locked (hasCustomMetadata) issues are excluded outright: the merge policy would keep every
     // existing column anyway, so the detail call would be a pure quota burn.
     let rows = sqlx::query(
-        r#"SELECT id, "metadataId", number, writers, artists, "coverArtists", colorists, letterers, characters, teams, "storyArcs"
+        r#"SELECT id, "metadataId", number, name, writers, artists, "coverArtists", colorists, letterers, characters, teams, "storyArcs"
            FROM "Issue"
            WHERE "seriesId" = $1 AND "metadataSource" = 'METRON' AND "metadataId" IS NOT NULL
              AND "matchState" <> 'DEEP_SYNCED' AND CAST("hasCustomMetadata" AS INTEGER) = 0"#,
@@ -1452,6 +1464,14 @@ async fn metron_detail_credit_pass(
 
         let credits = metron_issue_credits(&data);
         let col = |name: &str| -> Option<String> { row.try_get::<Option<String>, _>(name).unwrap_or(None) };
+        // #199 round 3: the story title finally lands with the credits. None → COALESCE keeps
+        // the current name (a detail without a real title changes nothing).
+        let name_write = detail_name_write(
+            col("name").as_deref(),
+            metron_detail_story_title(&data),
+            &issue_num,
+            file_priority,
+        );
         let writers_val = merge_credit_json(col("writers"), &credits.writers, false, file_priority);
         let artists_val = merge_credit_json(col("artists"), &credits.artists, false, file_priority);
         let cover_artists_val = merge_credit_json(col("coverArtists"), &credits.cover_artists, false, file_priority);
@@ -1466,12 +1486,14 @@ async fn metron_detail_credit_pass(
 
         let res = sqlx::query(
             r#"UPDATE "Issue" SET writers=$1, artists=$2, "coverArtists"=$3, colorists=$4, letterers=$5,
-               characters=$6, teams=$7, "storyArcs"=$8, inker=$10, editor=$11, translator=$12, "matchState"='DEEP_SYNCED' WHERE id=$9"#,
+               characters=$6, teams=$7, "storyArcs"=$8, inker=$10, editor=$11, translator=$12,
+               name=COALESCE($13, name), "matchState"='DEEP_SYNCED' WHERE id=$9"#,
         )
         .bind(&writers_val).bind(&artists_val).bind(&cover_artists_val).bind(&colorists_val)
         .bind(&letterers_val).bind(&characters_val).bind(&teams_val).bind(&story_arcs_val)
         .bind(&issue_id)
         .bind(&inker_val).bind(&editor_val).bind(&translator_val)
+        .bind(&name_write)
         .execute(&db.pool).await;
 
         if let Err(e) = res {
@@ -1771,6 +1793,109 @@ fn prefer_existing(existing: Option<String>, provider: Option<String>, locked: b
     }
     let has = existing.as_deref().map(|e| !e.trim().is_empty()).unwrap_or(false);
     if fill_only && has { existing } else { provider }
+}
+
+/// True for an "Issue 154" / "Issue #154" placeholder, any number — the matcher's insert
+/// default and Metron's list fallback both produce these, and they carry no story information.
+/// A "number-ish" char for generic-name detection: digits, dots, and the vulgar fractions the
+/// number pipeline understands (issue #200 — "#½" is a real issue number).
+fn numberish(c: char) -> bool {
+    c.is_ascii_digit() || c == '.' || c == '½' || c == '¼' || c == '¾'
+}
+
+fn issue_placeholder(name: &str) -> bool {
+    let rest = match name.get(..5) {
+        Some(p) if p.eq_ignore_ascii_case("issue") => name[5..].trim_start(),
+        _ => return false,
+    };
+    let digits = rest.strip_prefix('#').unwrap_or(rest).trim_start();
+    !digits.is_empty() && digits.chars().all(numberish)
+}
+
+/// #199 round 3: true for names that carry no story information for this row — empty, an
+/// "Issue N" placeholder, or a name that merely ENDS with this row's own "#154" (bare or the
+/// list composite "X-Men (1991) #154"). A story suffix ("… #154: Lifedeath") is NOT generic.
+/// EXACT twin: src/lib/utils/synced-name.ts syncedNameIsGeneric.
+fn synced_name_is_generic(name: &str, number: &str) -> bool {
+    let n = name.trim();
+    if n.is_empty() {
+        return true;
+    }
+    if issue_placeholder(n) {
+        return true;
+    }
+    if let Some(idx) = n.rfind('#') {
+        let tail = n[idx + 1..].trim();
+        if !tail.is_empty() && tail.chars().all(numberish) && is_same_issue(tail, number) {
+            return true;
+        }
+    }
+    false
+}
+
+/// #199 round 3: what a LIST sync writes into Issue.name. The Issue.name column holds the raw
+/// STORY TITLE (ComicVine's list supplies exactly that), but Metron's issue_list has no story
+/// titles — its names are composites, which may fill blanks or replace another generic but
+/// must never clobber a real title the detail pass (or a ComicInfo read) already landed.
+/// An empty provider name never blanks an existing one (never-wipe, issue #179).
+/// EXACT twin: src/lib/utils/synced-name.ts resolveSyncedName.
+fn resolve_synced_name(
+    existing: Option<String>,
+    incoming: Option<String>,
+    number: &str,
+    locked: bool,
+    fill_only: bool,
+) -> Option<String> {
+    if locked {
+        return existing;
+    }
+    let ex_has = existing.as_deref().map(|e| !e.trim().is_empty()).unwrap_or(false);
+    if fill_only && ex_has {
+        return existing;
+    }
+    let inc = match incoming.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => s.to_string(),
+        None => return existing,
+    };
+    if ex_has
+        && synced_name_is_generic(&inc, number)
+        && !synced_name_is_generic(existing.as_deref().unwrap_or(""), number)
+    {
+        return existing;
+    }
+    Some(inc)
+}
+
+/// #199 round 3: what the Metron DETAIL pass writes into Issue.name — None means "leave the
+/// column alone" (bound through COALESCE). The detail payload is the issue's own id-verified
+/// record, so its story title beats a list composite or placeholder; only file priority
+/// protecting a REAL existing title (not a placeholder it should be rescuing) stops the write.
+/// Locked rows never reach the detail pass. EXACT twin: synced-name.ts detailNameWrite.
+fn detail_name_write(
+    existing: Option<&str>,
+    story_title: Option<String>,
+    number: &str,
+    fill_only: bool,
+) -> Option<String> {
+    let story = story_title.as_deref().map(str::trim).filter(|s| !s.is_empty())?.to_string();
+    let ex_has = existing.map(|e| !e.trim().is_empty()).unwrap_or(false);
+    if fill_only && ex_has && !synced_name_is_generic(existing.unwrap_or(""), number) {
+        return None;
+    }
+    Some(story)
+}
+
+/// Story title from a Metron /issue/{id}/ detail payload: `title`, else the first entry of the
+/// `name` array (Metron's story-name list), else a plain-string `name`. Placeholders
+/// ("Issue 154") and empties yield None. Parity: MetronProvider.getIssueDetails storyTitle.
+fn metron_detail_story_title(data: &serde_json::Value) -> Option<String> {
+    data["title"]
+        .as_str()
+        .or_else(|| data["name"].as_array().and_then(|a| a.first()).and_then(|v| v.as_str()))
+        .or_else(|| data["name"].as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !issue_placeholder(s))
+        .map(str::to_string)
 }
 
 fn cv_is_ended(v: &serde_json::Value) -> bool {
@@ -2297,5 +2422,76 @@ mod tests {
         // series as an object with a name.
         let obj_series = serde_json::json!({"series": {"name": "X-Men"}});
         assert_eq!(metron_issue_name(&obj_series, "7"), "X-Men #7");
+    }
+
+    // ==== #199 round 3: story titles must survive list syncs (Metron's issue_list only has
+    // composites), and the detail pass must land them in the first place. Twin tests:
+    // __tests__/lib/utils/synced-name.test.ts. ====
+
+    #[test]
+    fn synced_name_generic_detection() {
+        // Placeholders and composites carry no story information for the row…
+        assert!(synced_name_is_generic("", "154"));
+        assert!(synced_name_is_generic("Issue 154", "154"));
+        assert!(synced_name_is_generic("Issue #7", "154")); // any number — a stale placeholder is junk
+        assert!(synced_name_is_generic("#154", "154"));
+        assert!(synced_name_is_generic("X-Men (1991) #154", "154"));
+        assert!(synced_name_is_generic("X-Men (1991) #0154", "154")); // padding-insensitive pairing
+        assert!(synced_name_is_generic("Wizard #½", "0.5")); // fraction numbers count too (#200)
+        // …a real title, or a composite WITH a story suffix, does.
+        assert!(!synced_name_is_generic("Lifedeath", "154"));
+        assert!(!synced_name_is_generic("X-Men (1991) #154: Lifedeath", "154"));
+        // A different trailing number is not THIS row's composite.
+        assert!(!synced_name_is_generic("Uncanny X-Men #500", "154"));
+    }
+
+    #[test]
+    fn resolve_synced_name_protects_real_titles() {
+        let ex = Some("Lifedeath".to_string());
+        // A Metron list composite may not clobber a detail-fetched story title…
+        assert_eq!(resolve_synced_name(ex.clone(), Some("X-Men (1991) #154".into()), "154", false, false), ex);
+        // …but it fills a blank, replaces a placeholder, and a REAL provider title still wins.
+        assert_eq!(
+            resolve_synced_name(None, Some("X-Men (1991) #154".into()), "154", false, false),
+            Some("X-Men (1991) #154".into())
+        );
+        assert_eq!(
+            resolve_synced_name(Some("Issue 154".into()), Some("X-Men (1991) #154".into()), "154", false, false),
+            Some("X-Men (1991) #154".into())
+        );
+        assert_eq!(
+            resolve_synced_name(ex.clone(), Some("Lifedeath (Part I)".into()), "154", false, false),
+            Some("Lifedeath (Part I)".into())
+        );
+        // Provider nothing never blanks a name (never-wipe, issue #179).
+        assert_eq!(resolve_synced_name(ex.clone(), None, "154", false, false), ex);
+        assert_eq!(resolve_synced_name(ex.clone(), Some("  ".into()), "154", false, false), ex);
+        // Lock and file-priority outrank everything.
+        assert_eq!(resolve_synced_name(ex.clone(), Some("Provider".into()), "154", true, false), ex);
+        assert_eq!(resolve_synced_name(ex.clone(), Some("Provider".into()), "154", false, true), ex);
+    }
+
+    #[test]
+    fn detail_name_write_lands_and_respects_file_priority() {
+        // The detail story title lands over a blank, a placeholder, or a list composite…
+        assert_eq!(detail_name_write(None, Some("Lifedeath".into()), "154", false), Some("Lifedeath".into()));
+        assert_eq!(detail_name_write(Some("Issue 154"), Some("Lifedeath".into()), "154", false), Some("Lifedeath".into()));
+        assert_eq!(detail_name_write(Some("X-Men (1991) #154"), Some("Lifedeath".into()), "154", false), Some("Lifedeath".into()));
+        // …file priority protects only a REAL existing title, not a placeholder it should rescue.
+        assert_eq!(detail_name_write(Some("From ComicInfo"), Some("Lifedeath".into()), "154", true), None);
+        assert_eq!(detail_name_write(Some("Issue 154"), Some("Lifedeath".into()), "154", true), Some("Lifedeath".into()));
+        // No real title in the detail → leave the column alone (COALESCE keeps the name).
+        assert_eq!(detail_name_write(Some("Lifedeath"), None, "154", false), None);
+    }
+
+    #[test]
+    fn metron_detail_story_title_extraction() {
+        // `title` wins; Metron's story-name array is the fallback; placeholders never land.
+        assert_eq!(metron_detail_story_title(&serde_json::json!({"title": "Lifedeath"})), Some("Lifedeath".into()));
+        assert_eq!(metron_detail_story_title(&serde_json::json!({"name": ["Lifedeath", "Backup Story"]})), Some("Lifedeath".into()));
+        assert_eq!(metron_detail_story_title(&serde_json::json!({"name": "Lifedeath"})), Some("Lifedeath".into()));
+        assert_eq!(metron_detail_story_title(&serde_json::json!({"title": "Issue 154"})), None);
+        assert_eq!(metron_detail_story_title(&serde_json::json!({"name": []})), None);
+        assert_eq!(metron_detail_story_title(&serde_json::json!({})), None);
     }
 }

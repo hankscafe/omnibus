@@ -13,6 +13,7 @@ import { COMIC_INFO_DEFAULT_KEYS, type ComicInfoDefaults } from "@/lib/utils/com
 import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
 import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload, Loader2, RefreshCw } from "lucide-react"
 import { resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
+import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 
 // #199 ComicInfo defaults: the field list + types live in the shared lib module (the API routes
 // import it too) and the tab bodies come from the shared component module — the series metadata
@@ -79,6 +80,10 @@ interface Props {
   // ID from it — reported back to the page so Accept binds the corrected issue.
   /** Current issue number for the loose file (editable here). */
   issueNumber?: string
+  /** The exact provider issue ID currently bound to this loose file — drives the read-only
+   *  "bound issue" confirmation card so the admin can SEE which comic the ID points at
+   *  (#199 round 3). Kept current by the page through onIssueIdChange / Issue Mapping. */
+  issueId?: string
   /** Fires on every edit of the number field, keeping the page's Issue Mapping in sync. */
   onIssueNumberChange?: (v: string) => void
   /** Fires with the freshly-resolved exact issue ID after a successful refresh. */
@@ -126,7 +131,7 @@ export function shouldEmbedIssueCover(
 export default function SmartMatchMetadataDialog({
   open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true,
   showIssueCover = false, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive, onSave,
-  issueNumber, onIssueNumberChange, onIssueIdChange, seriesMetadataId, metadataSource,
+  issueNumber, issueId, onIssueNumberChange, onIssueIdChange, seriesMetadataId, metadataSource,
 }: Props) {
   const { toast } = useToast()
   // #199 round 2: set while "Refresh from number" is re-resolving the exact issue ID.
@@ -304,26 +309,31 @@ export default function SmartMatchMetadataDialog({
           {/* #199 round 2 (loose files): fix a misrecognized issue number and re-resolve the exact
               provider issue ID from it, without leaving the editor. */}
           {showIssueCover && (
-            <div className="flex items-end gap-2 pb-4 border-b border-border">
-              <div className="grid gap-1.5 flex-1">
-                <Label htmlFor="sm-issue-number" className="text-[11px] uppercase tracking-wider text-muted-foreground font-bold">Issue Number</Label>
-                <Input
-                  id="sm-issue-number"
-                  value={issueNumber || ""}
-                  onChange={e => onIssueNumberChange?.(e.target.value)}
-                  placeholder="e.g. 154"
-                  className="bg-background border-border h-9"
-                />
+            <div className="grid gap-2.5 pb-4 border-b border-border">
+              <div className="flex items-end gap-2">
+                <div className="grid gap-1.5 flex-1">
+                  <Label htmlFor="sm-issue-number" className="text-[11px] uppercase tracking-wider text-muted-foreground font-bold">Issue Number</Label>
+                  <Input
+                    id="sm-issue-number"
+                    value={issueNumber || ""}
+                    onChange={e => onIssueNumberChange?.(e.target.value)}
+                    placeholder="e.g. 154"
+                    className="bg-background border-border h-9"
+                  />
+                </div>
+                <Button
+                  type="button" size="sm" variant="outline" disabled={refreshingIssueId}
+                  onClick={handleRefreshIssueId}
+                  title="Wrong issue matched (right series, wrong number)? Fix the number, then re-resolve the exact issue ID from it."
+                  className="shrink-0 h-9 border-primary/30 text-primary hover:bg-primary/10 font-bold"
+                >
+                  {refreshingIssueId ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
+                  Refresh from number
+                </Button>
               </div>
-              <Button
-                type="button" size="sm" variant="outline" disabled={refreshingIssueId}
-                onClick={handleRefreshIssueId}
-                title="Wrong issue matched (right series, wrong number)? Fix the number, then re-resolve the exact issue ID from it."
-                className="shrink-0 h-9 border-primary/30 text-primary hover:bg-primary/10 font-bold"
-              >
-                {refreshingIssueId ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
-                Refresh from number
-              </Button>
+              {/* #199 round 3: show WHICH comic the bound ID points at — title, cover, credits —
+                  so a wrong binding is visible before Accept, not after import. */}
+              <SmartMatchBoundIssue issueId={issueId} provider={metadataSource} />
             </div>
           )}
 

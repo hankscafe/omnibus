@@ -18,6 +18,7 @@ import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
 import { buildManualSuggestion, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
+import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 
 // Auto-scan results (the ComicVine/Metron match suggestions) are kept in sessionStorage so a page
@@ -1444,6 +1445,12 @@ export default function SmartMatchPage() {
                                                 />
                                             </div>
                                         </div>
+                                        {/* #199 round 3: the bound ID gets a face — title, cover, credits —
+                                            so the auto-map (or a refresh) can be verified before Accept. */}
+                                        <SmartMatchBoundIssue
+                                            issueId={issueOverrides[manualMatchTarget.id]?.issueId ?? exactIssueId}
+                                            provider={manualMatchResult?.metadataSource || searchProvider}
+                                        />
                                         <div className="space-y-1">
                                             <Label className="text-[11px] text-muted-foreground uppercase">Issue Cover (optional)</Label>
                                             <div className="flex items-center gap-3">
@@ -1556,6 +1563,9 @@ export default function SmartMatchPage() {
                 // match — the dialog's General tab lets the admin fix the number and re-resolve the
                 // exact issue ID right there. Both stores stay in sync with the Issue Mapping picker.
                 issueNumber={metaEditorTarget?.isRawFile ? (issueOverrides[metaEditorTarget.id]?.issueNumber ?? extractIssueNumber(metaEditorTarget.name || '')) : undefined}
+                // #199 round 3: the bound-issue confirmation card inside the dialog reads the same
+                // per-item binding the Issue Mapping picker maintains, so all three stay in step.
+                issueId={metaEditorTarget?.isRawFile ? (issueOverrides[metaEditorTarget.id]?.issueId || undefined) : undefined}
                 onIssueNumberChange={(v) => {
                     if (!metaEditorTarget) return;
                     setExactIssueNumber(v);

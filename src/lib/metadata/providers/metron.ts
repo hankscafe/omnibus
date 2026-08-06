@@ -386,7 +386,11 @@ export class MetronProvider implements IMetadataProvider {
             locations: [],
             seriesId: (!parsedSeriesId || isNaN(parsedSeriesId)) ? null : parsedSeriesId,
             seriesName: seriesName || null,
-            publisher: issue.publisher?.name || "Metron"
+            publisher: issue.publisher?.name || "Metron",
+            // The raw story title, separate from the display composite above — the sync's
+            // Issue.name convention is raw titles (parity with ComicVine), so the detail
+            // pass needs it unwrapped. Placeholders ("Issue 154") stay out (#199 round 3).
+            storyTitle: issueTitle && !isGeneric ? issueTitle : null
         };
     }
 }

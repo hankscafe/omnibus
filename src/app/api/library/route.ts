@@ -190,14 +190,19 @@ export async function GET(request: Request) {
     // starved infinite-scroll appends and made the library visibly jitter between adjacent-letter
     // items while scrolling. The names index below shares this orderBy, so the jump bar's offsets
     // are computed against the same total order the pages realize.
+    // The alpha sorts carry a `year` secondary (#201): same-name series are everywhere (rebooted
+    // volumes share a title), and without it their order fell to `id` = creation order — which
+    // only LOOKED like year order for scan-born series (folders are named "Series (Year)", so an
+    // alphabetical scan creates volumes oldest-first). Request/match-born volumes exposed the
+    // arbitrariness. Z-A mirrors to year desc so the reversed list is the exact reverse.
     let orderBy: any = {};
     switch (sort) {
-        case 'alpha_desc': orderBy = [{ name: 'desc' }, { id: 'desc' }]; break;
+        case 'alpha_desc': orderBy = [{ name: 'desc' }, { year: 'desc' }, { id: 'desc' }]; break;
         case 'year_desc': orderBy = [{ year: 'desc' }, { name: 'asc' }, { id: 'asc' }]; break;
         case 'year_asc': orderBy = [{ year: 'asc' }, { name: 'asc' }, { id: 'asc' }]; break;
         case 'count_desc': orderBy = [{ issues: { _count: 'desc' } }, { name: 'asc' }, { id: 'asc' }]; break;
         case 'random': orderBy = { id: 'asc' }; break;
-        default: orderBy = [{ name: 'asc' }, { id: 'asc' }];
+        default: orderBy = [{ name: 'asc' }, { year: 'asc' }, { id: 'asc' }];
     }
 
     if (namesOnly) {

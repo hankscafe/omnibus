@@ -29,8 +29,10 @@ export async function GET(req: Request) {
         take: limit + 1,
         // `id` tiebreaker (v1.4.1): OFFSET pagination needs a total order — on PostgreSQL, bare
         // name-sorted pages could overlap/gap on exact-name ties, duplicating or dropping series
-        // across OPDS catalog pages (same defect as the library browse fix).
-        orderBy: [{ name: 'asc' }, { id: 'asc' }]
+        // across OPDS catalog pages (same defect as the library browse fix). `year` secondary
+        // (#201): same-name volumes read oldest-first instead of creation-order, matching the
+        // library browse.
+        orderBy: [{ name: 'asc' }, { year: 'asc' }, { id: 'asc' }]
     });
 
     const hasNext = seriesList.length > limit;

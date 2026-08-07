@@ -171,7 +171,8 @@ describe('API Route: Library Advanced Search', () => {
             expect(call.select).toEqual({ name: true });
             // Total order incl. tiebreaker (v1.4.1) — the index must be computed against the SAME
             // order the page windows realize, or the bar's offsets drift off the real positions.
-            expect(call.orderBy).toEqual([{ name: 'asc' }, { id: 'asc' }]);
+            // Year secondary rides along (#201) because the index shares the page orderBy.
+            expect(call.orderBy).toEqual([{ name: 'asc' }, { year: 'asc' }, { id: 'asc' }]);
             expect(call.skip).toBeUndefined();
             expect(call.take).toBeUndefined();
         });
@@ -208,11 +209,15 @@ describe('API Route: Library Advanced Search', () => {
             return mocks.findManySeries.mock.calls[0][0].orderBy;
         };
 
-        it('alpha_asc ends in id', async () => {
-            expect(await orderByFor('alpha_asc')).toEqual([{ name: 'asc' }, { id: 'asc' }]);
+        // #201 (anacronismo): the alpha sorts ALSO carry a `year` secondary — without it,
+        // same-name volumes fell to id = creation order, which only looked year-sorted for
+        // scan-born series (folders scan alphabetically as "Series (Year)"). X-Men volumes
+        // accumulated via requests/matches read as randomly shuffled.
+        it('alpha_asc orders same-name volumes oldest-first and ends in id', async () => {
+            expect(await orderByFor('alpha_asc')).toEqual([{ name: 'asc' }, { year: 'asc' }, { id: 'asc' }]);
         });
-        it('alpha_desc ends in id', async () => {
-            expect(await orderByFor('alpha_desc')).toEqual([{ name: 'desc' }, { id: 'desc' }]);
+        it('alpha_desc mirrors the year secondary so Z-A is the exact reverse', async () => {
+            expect(await orderByFor('alpha_desc')).toEqual([{ name: 'desc' }, { year: 'desc' }, { id: 'desc' }]);
         });
         it('year sorts end in id (year ties are rampant)', async () => {
             expect(await orderByFor('year_desc')).toEqual([{ year: 'desc' }, { name: 'asc' }, { id: 'asc' }]);

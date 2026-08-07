@@ -120,7 +120,9 @@ function SeriesContent() {
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteFiles, setDeleteFiles] = useState(true);
+  // #200 follow-up (anacronismo): destructive file deletion is OPT-IN — removing a series from
+  // the library must not silently take the files with it. Matches the bulk-delete default.
+  const [deleteFiles, setDeleteFiles] = useState(false);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
   const [seriesDownloadProgress, setSeriesDownloadProgress] = useState<number | null>(null);
 
@@ -128,7 +130,8 @@ function SeriesContent() {
   // Page Manager (issue #189): exploded page view for the selected issue, admin-only.
   const [pageManagerOpen, setPageManagerOpen] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<any>(null);
-  const [deleteIssueFile, setDeleteIssueFile] = useState(true);
+  // Same opt-in rule as the series delete above (#200 follow-up) — one control, one default.
+  const [deleteIssueFile, setDeleteIssueFile] = useState(false);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
 
   const [isSelectionMode, setIsSelectionMode] = useState(false);

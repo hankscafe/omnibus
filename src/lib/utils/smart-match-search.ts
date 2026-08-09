@@ -16,6 +16,10 @@ export interface ManualSuggestion {
     metadataSource: string
     /** The volume's per-issue stubs ({id, issue_number, name}) for Issue Mapping cross-reference. */
     rawIssues: any[]
+    /** #199 round 4: the volume's aggregated credits as dialog-key CSV strings — the metadata
+     *  editor's "fill empty fields from provider" source. Absent when the payload carried none
+     *  (e.g. auto-scan's lightweight suggestions). */
+    credits?: Record<string, string>
 }
 
 /** Strips the ComicVine 4050- prefix and anything that can't be part of a provider id/slug. */
@@ -68,6 +72,18 @@ export async function resolveIssueIdByNumber(opts: {
 
 /** Builds the stored suggestion from an /api/issue-details volume payload. */
 export function buildManualSuggestion(data: any, provider: string): ManualSuggestion {
+    // Volume-level credit arrays → dialog-key CSVs (#199 round 4). Only non-empty groups are
+    // kept, and a payload with none at all yields no credits field (the fill button hides).
+    const joined: Record<string, string> = {}
+    const addCredit = (dialogKey: string, arr: any) => {
+        if (Array.isArray(arr) && arr.length) joined[dialogKey] = arr.filter(Boolean).join(', ')
+    }
+    addCredit('writer', data.writers); addCredit('penciller', data.artists); addCredit('inker', data.inkers)
+    addCredit('colorist', data.colorists); addCredit('letterer', data.letterers); addCredit('coverArtist', data.coverArtists)
+    addCredit('editor', data.editors); addCredit('translator', data.translators); addCredit('genre', data.genres)
+    addCredit('characters', data.characters); addCredit('teams', data.teams); addCredit('locations', data.locations)
+    addCredit('storyArc', data.storyArcs)
+
     return {
         id: data.id || data.volumeId,
         name: data.name,
@@ -79,5 +95,6 @@ export function buildManualSuggestion(data: any, provider: string): ManualSugges
         description: data.description,
         metadataSource: provider,
         rawIssues: data.issues || [], // Hold onto raw issues for cross-referencing IDs
+        ...(Object.keys(joined).length ? { credits: joined } : {}),
     }
 }

@@ -115,6 +115,33 @@ export default function SmartMatchPage() {
     const [exactIssueId, setExactIssueId] = useState("");
     const [exactIssueNumber, setExactIssueNumber] = useState("");
     const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string, coverImageBase64?: string, coverFromArchive?: boolean }>>({});
+    // #199 round 4: per-item "local evidence" (ComicInfo.xml / series.json / scan-banked row),
+    // fetched lazily and cached for the session. null = fetched, nothing found.
+    const [prefills, setPrefills] = useState<Record<string, any>>({});
+    const prefillFetches = useRef<Record<string, Promise<any>>>({});
+    // One id-assist attempt per item per session — a failed lookup falls back to normal search
+    // without retry loops.
+    const attemptedIdAssist = useRef<Set<string>>(new Set());
+
+    const fetchPrefill = (item: any): Promise<any> => {
+        if (!item?.folderPath) return Promise.resolve(null);
+        if (item.id in prefills) return Promise.resolve(prefills[item.id]);
+        if (!prefillFetches.current[item.id]) {
+            prefillFetches.current[item.id] = (async () => {
+                try {
+                    const res = await fetch(`/api/admin/match-prefill?path=${encodeURIComponent(item.folderPath)}`);
+                    const data = await res.json().catch(() => null);
+                    const p = res.ok && data?.hasContent ? data.prefill : null;
+                    setPrefills(prev => ({ ...prev, [item.id]: p }));
+                    return p;
+                } catch {
+                    setPrefills(prev => ({ ...prev, [item.id]: null }));
+                    return null;
+                }
+            })();
+        }
+        return prefillFetches.current[item.id];
+    };
     // Issue #189 follow-up: whether picked issue covers are ALSO baked into the archive as page 0
     // on Accept (default on, remembered). One switch governs every cover picked on this page.
     const [embedIssueCovers, setEmbedIssueCovers] = useState(true);
@@ -625,16 +652,72 @@ export default function SmartMatchPage() {
 
                 setIssueOverrides(newOverrides);
                 toast({ title: "Series Selected", description: "Review the metadata and issue mappings, then click Apply Match." });
+                return suggestionData;
 
             } else {
                 throw new Error(data.error || "Couldn't load series details");
             }
         } catch (e: any) {
             toast({ title: "Lookup Failed", description: e.message, variant: "destructive" });
+            return null;
         } finally {
             setIsManualMatching(false);
         }
     };
+
+    // #199 round 4 id-assist: when the Search Match dialog opens for an item whose FILES carry a
+    // provider id (ComicInfo tags/Web/Notes, or series.json's comicid), jump straight to the exact
+    // lookup — the admin lands on the resolved series with the mapping (and, for a tagged loose
+    // file, the exact issue binding) already in place. Best-effort: any failure just leaves the
+    // normal search UI. One attempt per item; file evidence outranks the filename automap.
+    useEffect(() => {
+        const t = manualMatchTarget;
+        if (!manualMatchOpen || !t || manualMatchResult || isManualMatching || isBulkManualMatch) return;
+        const p = prefills[t.id];
+        if (!p?.ids || attemptedIdAssist.current.has(t.id)) return;
+        const volId = p.ids.cvVolumeId || p.ids.metronSeriesId;
+        const volProvider = p.ids.cvVolumeId ? 'COMICVINE' : 'METRON';
+        const issueId = p.ids.cvIssueId || p.ids.metronIssueId;
+        const issueProvider = p.ids.cvIssueId ? 'COMICVINE' : 'METRON';
+        if (!volId && !issueId) return;
+        attemptedIdAssist.current.add(t.id);
+        (async () => {
+            try {
+                let vid = volId ? String(volId) : '';
+                let provider = volId ? volProvider : issueProvider;
+                if (!vid && issueId) {
+                    // Only an issue id — one detail call resolves its volume, then the normal path runs.
+                    const r = await fetch(`/api/issue-details?id=${issueId}&type=issue&provider=${issueProvider}`);
+                    const d = await r.json().catch(() => null);
+                    if (r.ok && d?.volumeId) vid = String(d.volumeId);
+                }
+                if (!vid) return;
+                const result = await resolveVolumeSelection(vid, provider);
+                if (!result) return;
+                if (t.isRawFile) {
+                    const fileNum = (p.issue?.number || '').trim();
+                    const boundId = issueId ? String(issueId) : (fileNum ? findIssueIdByNumber(result.rawIssues, fileNum) : '');
+                    if (fileNum || boundId) {
+                        setIssueOverrides(prev => ({
+                            ...prev,
+                            [t.id]: {
+                                ...prev[t.id],
+                                issueNumber: fileNum || prev[t.id]?.issueNumber || '',
+                                issueId: boundId || prev[t.id]?.issueId || '',
+                            }
+                        }));
+                        if (fileNum) setExactIssueNumber(fileNum);
+                        if (boundId) setExactIssueId(boundId);
+                    }
+                }
+                toast({
+                    title: "Matched from your files",
+                    description: `${result.name} — resolved from the ${p.ids.cvVolumeId || p.ids.cvIssueId ? 'ComicVine' : 'Metron'} id in this item's own metadata. Verify and Apply.`,
+                });
+            } catch { /* best-effort: the search UI is still right there */ }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [manualMatchOpen, manualMatchTarget, manualMatchResult, isManualMatching, isBulkManualMatch, prefills]);
 
     // PRIMARY: search the provider by series name — the same endpoint Fix Match and the request
     // flow already use — and let the admin pick from a list instead of hunting provider IDs.
@@ -797,7 +880,10 @@ export default function SmartMatchPage() {
     };
 
     // Open the per-item metadata editor, seeding from the item's current suggestion / lookup result.
-    const openMetaEditor = (target: any, seedSource: any) => {
+    // Awaits the item's file-side prefill first (#199 round 4) so the dialog opens with the
+    // library's own metadata already in the fields — a local read, so the wait is imperceptible.
+    const openMetaEditor = async (target: any, seedSource: any) => {
+        await fetchPrefill(target).catch(() => null);
         setMetaEditorTarget(target);
         setMetaEditorSeed(seedSource ? {
             name: seedSource.name,
@@ -809,6 +895,9 @@ export default function SmartMatchPage() {
             // issue's exact provider ID without a Search Match round-trip.
             metadataId: seedSource.id,
             metadataSource: seedSource.metadataSource || searchProvider,
+            // #199 round 4: the volume's aggregated credits ride the seed so the dialog's
+            // "fill empty fields from provider" always uses THIS item's match, never a stale one.
+            credits: seedSource.credits,
         } : null);
         setMetaEditorOpen(true);
     };
@@ -1096,6 +1185,10 @@ export default function SmartMatchPage() {
                                             setIdMatchOpen(false);
                                             setExactIssueId(issueOverrides[series.id]?.issueId || "");
                                             setExactIssueNumber(issueOverrides[series.id]?.issueNumber || "");
+                                            // #199 round 4: kick off the local-evidence read — if the
+                                            // files carry a provider id, the id-assist effect takes it
+                                            // from here and resolves the series without a search.
+                                            fetchPrefill(series);
                                         }}
                                     >
                                         <Search className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Search Match</span>
@@ -1578,6 +1671,10 @@ export default function SmartMatchPage() {
                 }}
                 seriesMetadataId={metaEditorSeed?.metadataId}
                 metadataSource={metaEditorSeed?.metadataSource}
+                // #199 round 4: the library's own metadata seeds the fields (file-first), and the
+                // matched volume's credits back the explicit "fill empty fields" action.
+                prefill={metaEditorTarget ? (prefills[metaEditorTarget.id] || undefined) : undefined}
+                providerFields={metaEditorSeed?.credits ?? (metaEditorTarget ? suggestions[metaEditorTarget.id]?.credits : undefined)}
             />
 
             {/* --- PAGE PREVIEW DIALOG: flip through an unmatched file before matching it --- */}

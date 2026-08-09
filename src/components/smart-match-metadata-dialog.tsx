@@ -52,6 +52,41 @@ interface Seed {
   image?: string
 }
 
+/** #199 round 4: the library's own metadata for this item (server match-prefill payload) —
+ *  values the files already carry, tagged with their source for badging. */
+export interface DialogPrefill {
+  fields: Record<string, { value: string; source: string }>
+  blackAndWhite?: { value: boolean; source: string }
+  issue?: { number: string | null; title: string | null }
+}
+
+/** The seeding rule (#199 round 4), exported for tests: an admin's saved override wins, the
+ *  library's own files speak next, the provider suggestion only fills what neither claimed. */
+export function seedValue(
+  override: string | null | undefined,
+  prefill: { value: string } | undefined,
+  suggestion: string | null | undefined,
+): string {
+  if (override != null && String(override).trim() !== '') return String(override)
+  if (prefill?.value) return prefill.value
+  return suggestion != null ? String(suggestion) : ''
+}
+
+/** Which fields a provider-credit fill would touch: empty ones only — a fill can never overwrite
+ *  the admin's or the files' values (#199 round 4, the never-destroy rule). Exported for tests. */
+export function providerFillPlan(
+  current: Record<string, string | undefined>,
+  provider: Record<string, string> | undefined,
+): Record<string, string> {
+  const plan: Record<string, string> = {}
+  for (const [k, v] of Object.entries(provider || {})) {
+    if (!v || !String(v).trim()) continue
+    if (current[k] && String(current[k]).trim() !== '') continue
+    plan[k] = String(v)
+  }
+  return plan
+}
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -92,6 +127,12 @@ interface Props {
   seriesMetadataId?: string | number
   /** COMICVINE or METRON — the provider seriesMetadataId belongs to. */
   metadataSource?: string
+  /** #199 round 4: the item's own file-side metadata (ComicInfo.xml / series.json / scan) —
+   *  seeds fields ahead of the provider suggestion, with source badges. */
+  prefill?: DialogPrefill
+  /** #199 round 4: the matched volume's aggregated credits (dialog-key CSVs) — the source for
+   *  the explicit "fill empty fields from provider" action. Absent → the action hides. */
+  providerFields?: Record<string, string>
 }
 
 // Mirrors the token substitution in /api/library/match-series EXACTLY so the preview matches the
@@ -132,6 +173,7 @@ export default function SmartMatchMetadataDialog({
   open, onOpenChange, targetLabel, seed, folderPattern, initialOverride, defaultWriteToFile = true,
   showIssueCover = false, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive, onSave,
   issueNumber, issueId, onIssueNumberChange, onIssueIdChange, seriesMetadataId, metadataSource,
+  prefill, providerFields,
 }: Props) {
   const { toast } = useToast()
   // #199 round 2: set while "Refresh from number" is re-resolving the exact issue ID.
@@ -158,16 +200,18 @@ export default function SmartMatchMetadataDialog({
   const setField = (k: keyof ComicInfoDefaults) => (v: string) => setFields(f => ({ ...f, [k]: v }))
   const [blackAndWhite, setBlackAndWhite] = useState(false)
 
-  // Re-seed each time the dialog opens (a new target / fresh override). Prefer the existing override,
-  // then the suggestion seed, then blank.
+  // Re-seed each time the dialog opens (a new target / fresh override). Precedence (#199 round 4):
+  // the admin's saved override, then the library's OWN files (ComicInfo.xml / series.json / scan),
+  // then the provider suggestion — curated data always outranks a provider guess.
   useEffect(() => {
     if (!open) return
-    setName(initialOverride?.name ?? seed?.name ?? "")
-    setYear(initialOverride?.year ?? (seed?.year != null ? String(seed.year) : ""))
-    setPublisher(initialOverride?.publisher ?? seed?.publisher ?? "")
-    setUniverse(initialOverride?.universe ?? "")
-    setSeriesGroup(initialOverride?.seriesGroup ?? "")
-    setDescription(initialOverride?.description ?? seed?.description ?? "")
+    const pf = prefill?.fields
+    setName(seedValue(initialOverride?.name, pf?.name, seed?.name))
+    setYear(seedValue(initialOverride?.year, pf?.year, seed?.year != null ? String(seed.year) : ''))
+    setPublisher(seedValue(initialOverride?.publisher, pf?.publisher, seed?.publisher))
+    setUniverse(seedValue(initialOverride?.universe, pf?.universe, undefined))
+    setSeriesGroup(seedValue(initialOverride?.seriesGroup, pf?.seriesGroup, undefined))
+    setDescription(seedValue(initialOverride?.description, pf?.description, seed?.description))
     setWriteToFile(initialOverride?.writeToFile ?? defaultWriteToFile)
     setCoverDataUrl(initialOverride?.coverImageBase64 ?? null)
     // A previously-chosen issue cover means the opt-in was on; seed it back into the slot it came
@@ -175,8 +219,8 @@ export default function SmartMatchMetadataDialog({
     // slot so a re-save keeps its provenance and still refuses to embed it (#199).
     setIssueCoverDataUrl(initialIssueCoverFromArchive ? null : (initialIssueCover ?? null))
     setUseArchiveCover(!!initialIssueCover)
-    setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, initialOverride?.[k] ?? ""])) as ComicInfoDefaults)
-    setBlackAndWhite(initialOverride?.blackAndWhite ?? false)
+    setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, seedValue(initialOverride?.[k], pf?.[k], undefined)])) as ComicInfoDefaults)
+    setBlackAndWhite(initialOverride?.blackAndWhite ?? prefill?.blackAndWhite?.value ?? false)
     // Intentionally seed on open only — editing fields shouldn't reset them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -211,6 +255,19 @@ export default function SmartMatchMetadataDialog({
   }, [open, showIssueCover, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive])
 
   const preview = buildFolderPreview(folderPattern, { name, year, publisher, universe, seriesGroup })
+
+  // Provenance chip for a core field whose CURRENT value still equals what the files supplied —
+  // it disappears the moment the admin edits, so the badge never lies (#199 round 4).
+  const fileBadge = (key: string, current: string) => {
+    const p = prefill?.fields?.[key]
+    if (!p || p.value !== current) return null
+    const label = p.source === 'series.json' ? 'series.json' : p.source === 'comicinfo' ? 'ComicInfo' : 'library scan'
+    return (
+      <span className="ml-1.5 text-[9px] uppercase tracking-wide font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 rounded px-1 py-px align-middle">
+        {label}
+      </span>
+    )
+  }
 
   // Reads the picked file into a data URL via `setUrl` (shared by the series + issue cover pickers).
   const pickImage = (e: React.ChangeEvent<HTMLInputElement>, setUrl: (v: string) => void) => {
@@ -255,6 +312,35 @@ export default function SmartMatchMetadataDialog({
     }
   }
 
+  // #199 round 4: explicit provider gap-fill — empty fields only, never an overwrite. The plan
+  // helper is the tested contract; this just applies it to the right state slots.
+  const handleProviderFill = () => {
+    const current: Record<string, string | undefined> = {
+      name, year, publisher, description,
+      ...Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, fields[k]])),
+    }
+    const provider: Record<string, string> = {
+      ...(providerFields || {}),
+      ...(seed?.name ? { name: seed.name } : {}),
+      ...(seed?.year != null ? { year: String(seed.year) } : {}),
+      ...(seed?.publisher ? { publisher: seed.publisher } : {}),
+      ...(seed?.description ? { description: seed.description } : {}),
+    }
+    const plan = providerFillPlan(current, provider)
+    const keys = Object.keys(plan)
+    if (!keys.length) {
+      toast({ title: 'Nothing to fill', description: 'Every field the provider knows already has a value.' })
+      return
+    }
+    if (plan.name !== undefined) setName(plan.name)
+    if (plan.year !== undefined) setYear(plan.year)
+    if (plan.publisher !== undefined) setPublisher(plan.publisher)
+    if (plan.description !== undefined) setDescription(plan.description)
+    const defaultKeys = keys.filter(k => (COMIC_INFO_DEFAULT_KEYS as readonly string[]).includes(k))
+    if (defaultKeys.length) setFields(f => ({ ...f, ...Object.fromEntries(defaultKeys.map(k => [k, plan[k]])) }))
+    toast({ title: 'Gaps filled from provider', description: `${keys.length} empty field${keys.length === 1 ? '' : 's'} filled — your existing values were left untouched.` })
+  }
+
   const handleSave = () => {
     // Opt-in only: uploaded image wins, else the archive cover; off → the provider supplies it.
     const issueCover = useArchiveCover ? (issueCoverDataUrl || archiveCoverDataUrl || undefined) : undefined
@@ -291,6 +377,30 @@ export default function SmartMatchMetadataDialog({
             issue when you Accept the match (the series is locked from auto-sync).
           </DialogDescription>
         </DialogHeader>
+
+        {/* #199 round 4: your files speak first. The summary says how much they said; the fill
+            action is the ONLY way provider data enters an empty field, and it never overwrites. */}
+        {(() => {
+          const prefilledCount = Object.keys(prefill?.fields || {}).length + (prefill?.blackAndWhite ? 1 : 0)
+          const hasProviderFill = Object.keys(providerFields || {}).length > 0
+          if (!prefilledCount && !hasProviderFill) return null
+          return (
+            <div className="shrink-0 flex items-center justify-between gap-3 bg-muted/40 border border-border rounded-lg px-3 py-2">
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                {prefilledCount > 0
+                  ? `${prefilledCount} field${prefilledCount === 1 ? '' : 's'} pre-filled from your files' metadata — provider data never overwrites them.`
+                  : 'No ComicInfo.xml / series.json metadata found for this item.'}
+              </p>
+              {hasProviderFill && (
+                <Button type="button" size="sm" variant="outline" onClick={handleProviderFill}
+                  title="Fill only the fields that are still empty using the matched volume's credits — existing values are never touched."
+                  className="shrink-0 h-7 text-[11px] border-primary/30 text-primary hover:bg-primary/10 font-bold">
+                  Fill empty fields from provider
+                </Button>
+              )}
+            </div>
+          )
+        })()}
 
         {/* #199 (concept by CapitanoNemo78): the full ComicInfo default set, tabbed so General stays
             as light as the old single-scroll dialog. Folder preview + write-file switch live OUTSIDE
@@ -338,17 +448,17 @@ export default function SmartMatchMetadataDialog({
           )}
 
           <div className="grid gap-1.5">
-            <Label className="text-xs">Series Name</Label>
+            <Label className="text-xs">Series Name{fileBadge('name', name)}</Label>
             <Input value={name} onChange={e => setName(e.target.value)} className="bg-background border-border h-9" />
           </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div className="grid gap-1.5">
-              <Label className="text-xs">Year</Label>
+              <Label className="text-xs">Year{fileBadge('year', year)}</Label>
               <Input value={year} onChange={e => setYear(e.target.value)} placeholder="e.g. 2016" className="bg-background border-border h-9" />
             </div>
             <div className="grid gap-1.5 col-span-2">
-              <Label className="text-xs">Publisher</Label>
+              <Label className="text-xs">Publisher{fileBadge('publisher', publisher)}</Label>
               <Input value={publisher} onChange={e => setPublisher(e.target.value)} className="bg-background border-border h-9" />
             </div>
           </div>
@@ -367,7 +477,7 @@ export default function SmartMatchMetadataDialog({
           <ComicInfoGeneralExtras fields={fields} setField={setField} />
 
           <div className="grid gap-1.5">
-            <Label className="text-xs">Summary / Description</Label>
+            <Label className="text-xs">Summary / Description{fileBadge('description', description)}</Label>
             <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={4} className="bg-background border-border" />
           </div>
             </TabsContent>

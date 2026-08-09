@@ -6,9 +6,37 @@
 // number normalization + cross-reference drive the Issue Mapping auto-fill for BOTH flows.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-    buildManualSuggestion, cleanProviderId, findIssueIdByNumber, normalizeIssueNumber,
+    buildKeepCarry, buildManualSuggestion, cleanProviderId, findIssueIdByNumber, normalizeIssueNumber,
     resolveIssueIdByNumber,
 } from '../../src/lib/utils/smart-match-search';
+
+// #199 round 4 Beta B: keep-mode's silent carry — the files' CONTENT fields land and lock at
+// Accept even when the admin never opened the editor. Identity (name/year/publisher) stays with
+// the chosen match; an empty prefill changes nothing at all.
+describe('buildKeepCarry', () => {
+    it('carries content fields + the lock, never identity', () => {
+        const carry = buildKeepCarry({
+            fields: {
+                name: { value: 'Dylan Dog', source: 'series.json' },      // identity — must NOT carry
+                year: { value: '1986', source: 'series.json' },           // identity — must NOT carry
+                description: { value: 'Curated.', source: 'series.json' },
+                writer: { value: 'Tiziano Sclavi', source: 'comicinfo' },
+                imprint: { value: 'Bonelli', source: 'scan' },
+            },
+            blackAndWhite: { value: true, source: 'comicinfo' },
+        });
+        expect(carry).toEqual({
+            description: 'Curated.', writer: 'Tiziano Sclavi', imprint: 'Bonelli',
+            blackAndWhite: true, lockMetadata: true,
+        });
+    });
+
+    it('returns null (no payload change, no lock) when the files supplied nothing carryable', () => {
+        expect(buildKeepCarry(null)).toBe(null);
+        expect(buildKeepCarry({ fields: {} })).toBe(null);
+        expect(buildKeepCarry({ fields: { name: { value: 'Identity Only', source: 'scan' } } })).toBe(null);
+    });
+});
 
 describe('cleanProviderId', () => {
     it('strips the ComicVine 4050- prefix', () => {

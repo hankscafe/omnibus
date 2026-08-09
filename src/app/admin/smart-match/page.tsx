@@ -16,7 +16,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import { buildManualSuggestion, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
+import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
@@ -452,10 +452,22 @@ export default function SmartMatchPage() {
     };
 
     // The exact single-accept payload, shared by the per-row accept, Accept Selected, and Accept
-    // All — so every path carries the same admin overrides and issue-exact fields.
-    const buildMatchPayload = (series: any, suggestion: any) => {
+    // All — so every path carries the same admin overrides and issue-exact fields. Async since
+    // #199 round 4 Beta B: keep-mode reads the item's local evidence at Accept time so curation
+    // carries (and locks) even when the admin never opened the editor.
+    const buildMatchPayload = async (series: any, suggestion: any) => {
         const issueOv = issueOverrides[series.id] || {};
         const meta = metadataOverrides[series.id];
+        const dataMode = meta?.dataMode ?? 'keep';
+        // Keep-mode auto-carry: no saved override → the files' CONTENT fields still land and lock.
+        // A saved override supersedes it entirely (the dialog seeded from the same prefill, so the
+        // admin's save already contains the files' values plus their edits). Replace mode never
+        // carries file data — that's its meaning.
+        const prefill = (!meta && dataMode === 'keep') ? await fetchPrefill(series).catch(() => null) : null;
+        const keepCarry = prefill ? buildKeepCarry(prefill) : null;
+        const issueTitle = series.isRawFile
+            ? (meta?.issueTitle ?? (dataMode === 'keep' ? (prefill?.issue?.title ?? undefined) : undefined))
+            : undefined;
         return {
             oldFolderPath: series.folderPath,
             cvId: suggestion.id,
@@ -479,7 +491,9 @@ export default function SmartMatchPage() {
                 // …but the B&W switch is two-way by design: false clears a mistaken Yes back to
                 // unset (the route stores null, never a false "No" claim).
                 blackAndWhite: !!meta.blackAndWhite,
-            } : {}),
+            } : (keepCarry ?? {})),
+            dataMode,
+            ...(issueTitle ? { issueTitle } : {}),
             exactIssueId: issueOv.issueId || undefined,
             exactIssueNumber: issueOv.issueNumber || undefined,
             issueCoverImageBase64: issueOv.coverImageBase64 || undefined,
@@ -497,7 +511,7 @@ export default function SmartMatchPage() {
             const res = await fetch('/api/library/match-series', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(buildMatchPayload(series, suggestion))
+                body: JSON.stringify(await buildMatchPayload(series, suggestion))
             });
 
             if (res.ok) {
@@ -578,7 +592,7 @@ export default function SmartMatchPage() {
                     const res = await fetch('/api/library/match-series/bulk', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ items: chunk.map(s => buildMatchPayload(s, suggestions[s.id])) })
+                        body: JSON.stringify({ items: await Promise.all(chunk.map(s => buildMatchPayload(s, suggestions[s.id]))) })
                     });
                     const data = await res.json().catch(() => ({}));
                     results = res.ok && Array.isArray(data.results)

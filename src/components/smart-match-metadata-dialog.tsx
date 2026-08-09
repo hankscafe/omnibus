@@ -41,6 +41,13 @@ export interface SmartMatchOverride extends ComicInfoDefaults {
   issueCoverFromArchive?: boolean
   writeToFile?: boolean
   locked?: boolean
+  /** #199 round 4 Beta B: 'keep' (default) = the files' data is primary, provider fills gaps;
+   *  'replace' = explicit provider rewrite — Accept re-embeds ComicInfo.xml and regenerates
+   *  series.json from the dialog's (provider-seeded) values. */
+  dataMode?: 'keep' | 'replace'
+  /** Loose files only: the issue's own title. Written to the issue on Accept; when an exact
+   *  issue id is bound, the route locks the issue and lands provider credits in the same write. */
+  issueTitle?: string
 }
 
 interface Seed {
@@ -199,12 +206,29 @@ export default function SmartMatchMetadataDialog({
   const [fields, setFields] = useState<ComicInfoDefaults>({})
   const setField = (k: keyof ComicInfoDefaults) => (v: string) => setFields(f => ({ ...f, [k]: v }))
   const [blackAndWhite, setBlackAndWhite] = useState(false)
+  // #199 round 4 Beta B: keep = files primary (default); replace = explicit provider rewrite.
+  const [dataMode, setDataMode] = useState<'keep' | 'replace'>('keep')
+  // Loose files only: the issue's own title (file-prefilled, editable).
+  const [issueTitle, setIssueTitle] = useState('')
 
-  // Re-seed each time the dialog opens (a new target / fresh override). Precedence (#199 round 4):
-  // the admin's saved override, then the library's OWN files (ComicInfo.xml / series.json / scan),
-  // then the provider suggestion — curated data always outranks a provider guess.
-  useEffect(() => {
-    if (!open) return
+  // Field seeding, shared by dialog-open and the keep/replace switch (#199 round 4 Beta B).
+  // keep: the admin's saved override, then the library's OWN files, then the provider suggestion.
+  // replace: provider-fresh — the suggestion's core fields + the matched volume's credits; prior
+  // edits and file values are deliberately discarded (that's what "replace" means, and the
+  // warning copy says so).
+  const applySeed = (mode: 'keep' | 'replace') => {
+    if (mode === 'replace') {
+      setName(seed?.name ?? '')
+      setYear(seed?.year != null ? String(seed.year) : '')
+      setPublisher(seed?.publisher ?? '')
+      setUniverse('')
+      setSeriesGroup('')
+      setDescription(seed?.description ?? '')
+      setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, providerFields?.[k] ?? ''])) as ComicInfoDefaults)
+      setBlackAndWhite(false)
+      setIssueTitle('')
+      return
+    }
     const pf = prefill?.fields
     setName(seedValue(initialOverride?.name, pf?.name, seed?.name))
     setYear(seedValue(initialOverride?.year, pf?.year, seed?.year != null ? String(seed.year) : ''))
@@ -212,6 +236,17 @@ export default function SmartMatchMetadataDialog({
     setUniverse(seedValue(initialOverride?.universe, pf?.universe, undefined))
     setSeriesGroup(seedValue(initialOverride?.seriesGroup, pf?.seriesGroup, undefined))
     setDescription(seedValue(initialOverride?.description, pf?.description, seed?.description))
+    setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, seedValue(initialOverride?.[k], pf?.[k], undefined)])) as ComicInfoDefaults)
+    setBlackAndWhite(initialOverride?.blackAndWhite ?? prefill?.blackAndWhite?.value ?? false)
+    setIssueTitle(seedValue(initialOverride?.issueTitle, prefill?.issue?.title ? { value: prefill.issue.title } : undefined, undefined))
+  }
+
+  // Re-seed each time the dialog opens (a new target / fresh override).
+  useEffect(() => {
+    if (!open) return
+    const mode = initialOverride?.dataMode ?? 'keep'
+    setDataMode(mode)
+    applySeed(mode)
     setWriteToFile(initialOverride?.writeToFile ?? defaultWriteToFile)
     setCoverDataUrl(initialOverride?.coverImageBase64 ?? null)
     // A previously-chosen issue cover means the opt-in was on; seed it back into the slot it came
@@ -219,11 +254,16 @@ export default function SmartMatchMetadataDialog({
     // slot so a re-save keeps its provenance and still refuses to embed it (#199).
     setIssueCoverDataUrl(initialIssueCoverFromArchive ? null : (initialIssueCover ?? null))
     setUseArchiveCover(!!initialIssueCover)
-    setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, seedValue(initialOverride?.[k], pf?.[k], undefined)])) as ComicInfoDefaults)
-    setBlackAndWhite(initialOverride?.blackAndWhite ?? prefill?.blackAndWhite?.value ?? false)
     // Intentionally seed on open only — editing fields shouldn't reset them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // Flipping the mode reseeds the fields to match its meaning; the admin can still edit after.
+  const handleModeChange = (mode: 'keep' | 'replace') => {
+    if (mode === dataMode) return
+    setDataMode(mode)
+    applySeed(mode)
+  }
 
   // Fetch the comic's own cover (archive first page) when the dialog opens for a loose file. Stored as
   // a data URL so it serves the preview AND rides the existing issueCoverImageBase64 save path verbatim.
@@ -363,6 +403,8 @@ export default function SmartMatchMetadataDialog({
       issueCoverFromArchive: issueCover && !issueCoverDataUrl ? true : undefined,
       writeToFile,
       locked: true,
+      dataMode,
+      ...(showIssueCover ? { issueTitle: issueTitle.trim() || undefined } : {}),
     })
     onOpenChange(false)
   }
@@ -440,6 +482,24 @@ export default function SmartMatchMetadataDialog({
                   {refreshingIssueId ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
                   Refresh from number
                 </Button>
+              </div>
+              {/* #199 round 4 Beta B: the issue's OWN title — file-prefilled, editable. Accept
+                  writes it to the issue; with an exact id bound, the route locks the issue and
+                  lands provider credits in the same write so the lock never starves it. */}
+              <div className="grid gap-1.5">
+                <Label htmlFor="sm-issue-title" className="text-[11px] uppercase tracking-wider text-muted-foreground font-bold">
+                  Issue Title
+                  {prefill?.issue?.title && issueTitle === prefill.issue.title && (
+                    <span className="ml-1.5 text-[9px] uppercase tracking-wide font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 rounded px-1 py-px align-middle">ComicInfo</span>
+                  )}
+                </Label>
+                <Input
+                  id="sm-issue-title"
+                  value={issueTitle}
+                  onChange={e => setIssueTitle(e.target.value)}
+                  placeholder="e.g. L'alba dei morti viventi (optional)"
+                  className="bg-background border-border h-9"
+                />
               </div>
               {/* #199 round 3: show WHICH comic the bound ID points at — title, cover, credits —
                   so a wrong binding is visible before Accept, not after import. */}
@@ -590,6 +650,39 @@ export default function SmartMatchMetadataDialog({
               {preview || <span className="text-muted-foreground italic">Will use the series name once filled in.</span>}
             </div>
           </div>
+
+        {/* #199 round 4 Beta B: the data-source decision, explicit and safe-by-default. Keep =
+            the files' values stay primary (what the fields show right now under keep seeding);
+            Replace = provider rewrite, reseeding the fields and saying exactly what Accept will
+            do to the files. Plain buttons on purpose (the tri-state B&W precedent — drivable,
+            testable, no Radix portal). */}
+        <div className="grid gap-1.5 mt-1 shrink-0">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => handleModeChange('keep')}
+              className={`text-xs font-bold rounded-lg border px-3 py-2 transition-colors ${dataMode === 'keep'
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                : 'border-border text-muted-foreground hover:bg-muted'}`}
+            >
+              Keep my data, fill gaps
+            </button>
+            <button
+              type="button"
+              onClick={() => handleModeChange('replace')}
+              className={`text-xs font-bold rounded-lg border px-3 py-2 transition-colors ${dataMode === 'replace'
+                ? 'border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-400'
+                : 'border-border text-muted-foreground hover:bg-muted'}`}
+            >
+              Replace with provider data
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            {dataMode === 'keep'
+              ? 'Your files’ metadata stays primary; provider data only fills what’s empty. This protection also applies if you never open this dialog.'
+              : '⚠ Provider data replaces these fields. On Accept, ComicInfo.xml is rewritten with them and this series’ series.json is regenerated. Your files’ previous metadata values are not kept.'}
+          </p>
+        </div>
 
         <div className="flex items-center gap-3 bg-muted/40 p-3 rounded-lg border border-border mt-1 shrink-0">
           <Switch id="sm-write-file" checked={writeToFile} onCheckedChange={setWriteToFile} />

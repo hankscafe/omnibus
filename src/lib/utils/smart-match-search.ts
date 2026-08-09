@@ -70,6 +70,38 @@ export async function resolveIssueIdByNumber(opts: {
     return findIssueIdByNumber(data.issues, opts.issueNumber)
 }
 
+// #199 round 4 Beta B: the CONTENT fields keep-mode carries from the files when the admin never
+// opened the editor — description + the ComicInfo defaults + universe/seriesGroup. The identity
+// trio (name/year/publisher) deliberately stays with the admin's chosen match: matching IS the
+// identity decision; the files own the curation.
+const KEEP_CARRY_KEYS = [
+    'universe', 'seriesGroup', 'description',
+    'imprint', 'format', 'languageISO', 'ageRating', 'writer', 'penciller', 'inker', 'colorist',
+    'letterer', 'coverArtist', 'editor', 'translator', 'genre', 'tags', 'characters', 'teams',
+    'locations', 'mainCharacterOrTeam', 'storyArc', 'storyArcNumber', 'alternateSeries',
+    'alternateNumber', 'alternateCount', 'communityRating', 'gtin', 'notes', 'scanInformation', 'review',
+] as const
+
+/** #199 round 4 Beta B (keep mode): with NO saved override, Accept still carries the files' own
+ *  CONTENT into the match payload and locks the series — viewing the dialog was never required
+ *  for curation to survive. Returns null when the files supplied nothing carryable (payload and
+ *  lock behavior then stay exactly pre-Beta-B). Exported for tests. */
+export function buildKeepCarry(prefill: {
+    fields?: Record<string, { value: string; source: string }>
+    blackAndWhite?: { value: boolean; source: string }
+} | null | undefined): Record<string, any> | null {
+    if (!prefill?.fields) return null
+    const carry: Record<string, any> = {}
+    for (const k of KEEP_CARRY_KEYS) {
+        const v = prefill.fields[k]?.value
+        if (v && v.trim()) carry[k] = v
+    }
+    if (prefill.blackAndWhite?.value === true) carry.blackAndWhite = true
+    if (Object.keys(carry).length === 0) return null
+    carry.lockMetadata = true
+    return carry
+}
+
 /** Builds the stored suggestion from an /api/issue-details volume payload. */
 export function buildManualSuggestion(data: any, provider: string): ManualSuggestion {
     // Volume-level credit arrays → dialog-key CSVs (#199 round 4). Only non-empty groups are

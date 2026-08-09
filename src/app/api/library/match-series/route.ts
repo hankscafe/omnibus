@@ -23,6 +23,54 @@ import { comicInfoDefaultsUpdateFragment } from '@/lib/utils/comicinfo-fields';
 import { countArchivePages } from '@/lib/utils/archive-pages';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { findLocalCoverBasename } from '@/lib/utils/cover-plan';
+import { parseComicVineCredits } from '@/lib/utils';
+
+// #199 round 4 Beta B: only non-empty credit groups become columns (never write a literal '[]' —
+// issue #179), stringified to the Issue JSON-array convention.
+const creditColumns = (groups: Record<string, string[] | undefined>): Record<string, string> =>
+    Object.fromEntries(
+        Object.entries(groups)
+            .filter(([, v]) => Array.isArray(v) && v.length > 0)
+            .map(([k, v]) => [k, JSON.stringify(v)])
+    );
+
+// #199 round 4 Beta B: the lock-pairs-with-credits rule. An admin-titled issue gets locked so
+// syncs can't overwrite the title — but a row-level lock also excludes the issue from credit
+// enrichment, so the credits must land IN THE SAME WRITE. Returns the credit columns on success
+// (possibly {} when the provider genuinely has none — locking is then harmless), or null when the
+// fetch failed — the caller then writes the title WITHOUT the lock rather than starving the issue.
+async function fetchIssueCreditsForImport(provider: string, issueMetaId: string): Promise<Record<string, string> | null> {
+    try {
+        if (provider === 'METRON') {
+            const detail = await new MetronProvider().getIssueDetails(issueMetaId);
+            return creditColumns({
+                writers: detail.writers, artists: detail.artists, coverArtists: detail.coverArtists,
+                colorists: detail.colorists, letterers: detail.letterers, inker: detail.inker,
+                editor: detail.editor, translator: detail.translator, characters: detail.characters,
+                teams: detail.teams, locations: detail.locations, storyArcs: detail.storyArcs,
+            });
+        }
+        const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
+        if (!setting?.value || setting.value === '********') return null;
+        const res = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4000-${issueMetaId}/`, {
+            params: {
+                api_key: setting.value, format: 'json',
+                field_list: 'person_credits,character_credits,team_credits,location_credits,story_arc_credits,concepts',
+            },
+        });
+        const d = res.data?.results;
+        if (!d) return null;
+        const p = parseComicVineCredits(d.person_credits, d.character_credits, d.concepts, d.story_arc_credits, d.team_credits, d.location_credits);
+        return creditColumns({
+            writers: p.writers, artists: p.artists, coverArtists: p.coverArtists, colorists: p.colorists,
+            letterers: p.letterers, inker: p.inkers, editor: p.editors, translator: p.translators,
+            characters: p.characters, teams: p.teams, locations: p.locations, storyArcs: p.storyArcs,
+        });
+    } catch (e) {
+        Logger.log(`[Match Series] Issue-credit fetch failed for ${provider} ${issueMetaId}: ${getErrorMessage(e)} — the title will be written unlocked.`, 'warn');
+        return null;
+    }
+}
 
 export async function POST(request: Request) {
   try {
@@ -32,7 +80,8 @@ export async function POST(request: Request) {
     if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     const req = (await request.json()) as any;
     const { oldFolderPath, cvId, metadataId, metadataSource, name, year, publisher, exactIssueId, exactIssueNumber,
-            universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64, issueCoverEmbed } = req;
+            universe, seriesGroup, description, lockMetadata, writeToFile, coverImageBase64, issueCoverImageBase64, issueCoverEmbed,
+            dataMode, issueTitle } = req;
 
     const targetMetaId = metadataId ? metadataId.toString() : (cvId ? cvId.toString() : null);
     const targetSource = metadataSource || 'COMICVINE';
@@ -436,6 +485,25 @@ export async function POST(request: Request) {
                                 }
                             }
 
+                            // #199 round 4 Beta B: the issue's own title (file-prefilled in keep mode,
+                            // or admin-typed). Lock pairs with credits: with an exact provider id the
+                            // credits land in the same write and the row locks (syncs then preserve
+                            // everything, and the locked row never needed enrichment). Without an id —
+                            // or when the credit fetch fails — the title writes UNLOCKED so the issue
+                            // can still be enriched; the name-precedence guard (beta.007) keeps list
+                            // composites from clobbering a real title either way.
+                            if (issueTitle && String(issueTitle).trim() && finalIssueId) {
+                                const titleVal = String(issueTitle).trim();
+                                const credits = targetIssueMetaId
+                                    ? await fetchIssueCreditsForImport(targetSource, targetIssueMetaId.toString())
+                                    : null;
+                                await prisma.issue.update({
+                                    where: { id: finalIssueId },
+                                    data: { name: titleVal, ...(credits !== null ? { hasCustomMetadata: true, ...credits } : {}) },
+                                }).catch(e => Logger.log(`[Match Series] Failed to write the issue title: ${getErrorMessage(e)}`, 'warn'));
+                                Logger.log(`[Match Series] Issue title "${titleVal}" written${credits !== null ? ` + locked with ${Object.keys(credits).length} provider credit group(s)` : ' (unlocked — no exact id or the credit fetch failed)'}.`, 'info');
+                            }
+
                             // --- Per-issue custom cover from the Smart Matcher — written keyed by issue id
                             //     (in CONFIG/uploads, like avatars) + hasCustomCover so the sync never clobbers it.
                             if (issueCoverImageBase64 && finalIssueId) {
@@ -529,6 +597,16 @@ export async function POST(request: Request) {
         
         if (existingRecord?.id) {
             await omnibusQueue.add('METADATA_SYNC', { type: 'METADATA_SYNC', seriesIds: [existingRecord.id] }, { jobId: `METADATA_SYNC_MATCH_${existingRecord.id}_${Date.now()}` });
+
+            // #199 round 4 Beta B (replace mode): the admin explicitly chose a provider rewrite —
+            // regenerate this series' series.json NOW instead of waiting for the scheduled export
+            // sweep (the job forwards a targeted series_ids list to the engine's Mylar-spec writer).
+            if (dataMode === 'replace') {
+                await omnibusQueue.add('EXPORT_SERIES_JSON',
+                    { type: 'EXPORT_SERIES_JSON', seriesId: existingRecord.id },
+                    { jobId: `EXPORT_SJ_REPLACE_${existingRecord.id}_${Date.now()}` }
+                ).catch(e => Logger.log(`[Match Series] Couldn't queue the series.json regeneration: ${getErrorMessage(e)}`, 'warn'));
+            }
         }
 
         // When the admin supplied custom metadata, embed it (SeriesGroup/Universe/Description) into the

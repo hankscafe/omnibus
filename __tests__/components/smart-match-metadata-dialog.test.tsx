@@ -41,6 +41,61 @@ describe('shouldEmbedIssueCover (#199 gate)', () => {
     });
 });
 
+describe('SmartMatchMetadataDialog keep/replace + issue title (#199 round 4 Beta B)', () => {
+    beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true,
+            blob: async () => new Blob([Uint8Array.from([1, 2, 3])], { type: 'image/jpeg' }),
+            json: async () => ({}),
+        }));
+    });
+
+    const prefill = {
+        fields: {
+            name: { value: 'Dylan Dog', source: 'comicinfo' },
+            writer: { value: 'Tiziano Sclavi', source: 'comicinfo' },
+        },
+        issue: { number: '1', title: "L'alba dei morti viventi" },
+    };
+    const seed = { name: 'Provider Name', year: 1986, publisher: 'Provider Pub', description: 'Provider desc' };
+
+    it('keep mode (default) seeds file-first and saves dataMode + the file-prefilled issue title', () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} seed={seed} prefill={prefill} onSave={onSave} />);
+
+        // The files outranked the provider suggestion in the fields…
+        expect(screen.getByDisplayValue('Dylan Dog')).toBeTruthy();
+        expect(screen.getByDisplayValue("L'alba dei morti viventi")).toBeTruthy();
+
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+        expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+            dataMode: 'keep',
+            issueTitle: "L'alba dei morti viventi",
+            name: 'Dylan Dog',
+            writer: 'Tiziano Sclavi',
+        }));
+    });
+
+    it('replace reseeds provider-fresh, discards file values, and saves dataMode replace', () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps} seed={seed} prefill={prefill} onSave={onSave} />);
+
+        fireEvent.click(screen.getByRole('button', { name: /replace with provider data/i }));
+
+        // Provider values took the fields; the files' values are gone (that's what replace means).
+        expect(screen.getByDisplayValue('Provider Name')).toBeTruthy();
+        expect(screen.queryByDisplayValue('Dylan Dog')).toBeNull();
+        expect(screen.queryByDisplayValue("L'alba dei morti viventi")).toBeNull();
+
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+        const saved = onSave.mock.calls[0][0];
+        expect(saved.dataMode).toBe('replace');
+        expect(saved.issueTitle).toBeUndefined();
+        expect(saved.writer).toBeUndefined();
+        expect(saved.name).toBe('Provider Name');
+    });
+});
+
 describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {
     beforeEach(() => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({

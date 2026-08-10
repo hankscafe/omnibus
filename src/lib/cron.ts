@@ -209,7 +209,10 @@ export function initCronJobs() {
                       const torNum = parseFloat(extractIssueNumber(torNameLower));
 
                       const reqYear = seriesYearMap.get(r.volumeId);
-                      const torYearMatch = torNameLower.match(/[\(\[]?(19|20)\d{2}[\)\]]?/);
+                      // #202: group 1 must capture the WHOLE year — /(19|20)\d{2}/ captured the
+                      // literal "19"/"20", so every dated torrent failed this gate. Engine twin:
+                      // search_engine.rs re_year_find.
+                      const torYearMatch = torNameLower.match(/[\(\[]?((?:19|20)\d{2})[\)\]]?/);
                       const torYear = torYearMatch ? torYearMatch[1] : null;
 
                       if (reqYear && torYear && reqYear !== torYear) {

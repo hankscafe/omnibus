@@ -201,6 +201,10 @@ export function initWorker() {
                     // known-bad releases.
                     const freshReq = await prisma.request.findUnique({ where: { id: requestId } });
                     let dynamicYear: string | null = year ? String(year) : null;
+                    // #202: the engine anchors PACK candidates on series_year (beta.069) — that must
+                    // be the Series row's START year, not the job's per-issue year, or a sibling pack
+                    // ("Batman '66 (Collection) (2013-2018)") passes ±1 against mid-run issue years.
+                    let seriesStartYear: string | null = null;
                     let allowPacksForThisRequest = false;
                     let failedItems: string[] = [];
                     // Release date of the specifically-requested issue (when resolvable), used in the
@@ -213,6 +217,9 @@ export function initWorker() {
                             const reqSource = (freshReq as any).metadataSource || 'COMICVINE';
                             const localSeries = await prisma.series.findFirst({ where: { metadataId: freshReq.volumeId, metadataSource: reqSource } });
                             if (localSeries) {
+                                if (localSeries.year && localSeries.year > 0) {
+                                    seriesStartYear = String(localSeries.year);
+                                }
                                 // If they own 0 files for this series, ALWAYS allow packs.
                                 const downloadedIssuesCount = await prisma.issue.count({
                                     where: { seriesId: localSeries.id, filePath: { not: null } }
@@ -261,7 +268,9 @@ export function initWorker() {
                                 request_id: requestId,
                                 name,
                                 year: dynamicYear,
-                                series_year: year ? String(year) : null,
+                                // #202: real series start year when known; the job's year is the
+                                // per-issue anchor and only serves as a fallback here.
+                                series_year: seriesStartYear ?? (year ? String(year) : null),
                                 allow_packs: allowPacksForThisRequest,
                                 is_manga: isManga || false,
                                 skip_indexers: skipIndexers || false,

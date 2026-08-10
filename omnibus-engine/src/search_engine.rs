@@ -468,17 +468,68 @@ fn reverse_noise_set() -> &'static std::collections::HashSet<String> {
     })
 }
 
-/// OFF-SERIES REVERSE GUARD core: the release title's core series words (tags/years/issue numbers/
-/// noise stripped) that the request does NOT contain. Non-empty = the release belongs to a
-/// differently-titled series that merely CONTAINS the requested words — "Savage Wolverine #1" for a
-/// "Wolverine #1" request, "Wolverine - Blood Hunt 003" for "Wolverine #3". The required-words check
-/// can never catch these (it only detects MISSING words), and the ±1 year guard is defeated by
-/// facsimile/reprint years. Shared by the Prowlarr, Anna's Archive, and GetComics automation filters.
+/// OFF-SERIES REVERSE GUARD core: the release title's core series words (tags/years/noise stripped)
+/// that the request does NOT contain. Non-empty = the release belongs to a differently-titled series
+/// that merely CONTAINS the requested words — "Savage Wolverine #1" for a "Wolverine #1" request,
+/// "Wolverine - Blood Hunt 003" for "Wolverine #3", "Batman 66 030" for "Batman #30" (#202). The
+/// required-words check can never catch these (it only detects MISSING words), and the ±1 year guard
+/// is defeated by facsimile/reprint years — or, for same-era siblings like Batman '66, by a genuinely
+/// identical release year. Shared by the Prowlarr, Anna's Archive, and GetComics automation filters.
 pub(crate) fn off_series_extra_words(title_lower: &str, significant_query_words: &[String]) -> Vec<String> {
     core_series_words(title_lower, reverse_noise_set())
         .into_iter()
         .filter(|t| !significant_query_words.contains(t))
         .collect()
+}
+
+/// Query-side words for the off-series reverse guard: the request name reduced by the SAME
+/// core_series_words pipeline the release-title side uses, so numeric series words ("Batman '66")
+/// and issue numbers tokenize identically on both sides and the guard can never self-reject (#202).
+pub(crate) fn guard_query_words(clean_original: &str) -> Vec<String> {
+    core_series_words(clean_original, reverse_noise_set())
+}
+
+/// Pack-title vocabulary treated as noise by the PACK variant of the reverse guard (#202): the words
+/// a legitimate bundle wraps around the series name ("Complete Collection", "Vol. 1-9 + Annuals").
+/// Anything else ("Arkham City Game Spin-Offs") is evidence of a differently-titled product.
+fn pack_noise_set() -> &'static std::collections::HashSet<String> {
+    static SET: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| {
+        let mut s = reverse_noise_set().clone();
+        for w in ["story", "arc", "arcs", "pack", "packs", "complete", "collection", "collections",
+                  "bundle", "run", "chronological", "omnibus", "compendium", "hc", "hardcover",
+                  "trade", "paperback", "book", "books", "issues", "specials", "extras", "annuals",
+                  "part", "parts", "plus"] {
+            s.insert(w.to_string());
+        }
+        s
+    })
+}
+
+/// PACK variant of the reverse guard (#202 — packs previously had a blanket exemption, which is how
+/// "Batman – Arkham City Game Spin-Offs Collection (2011-2016)" qualified as a Batman (2011) pack).
+/// Bundle vocabulary and NUMERIC tokens are noise here — ranges and counts are pack-normal
+/// ("Vol. 1-9", "52 Issues"), and the series-year anchor owns numeric discrimination ("Batman '66
+/// (Collection) (2013-…)" dies on year, not words) — but a word the request lacks still rejects.
+pub(crate) fn off_series_pack_extra_words(title_lower: &str, guard_words: &[String]) -> Vec<String> {
+    core_series_words(title_lower, pack_noise_set())
+        .into_iter()
+        .filter(|t| !t.chars().all(|c| c.is_ascii_digit()) && !guard_words.contains(t))
+        .collect()
+}
+
+/// Year anchor for a candidate: pack-shaped titles are dated by their SERIES span, not the requested
+/// issue's release year (beta.069: "Wolverine Complete Collection (2024)" legitimately serves a 2026
+/// issue; #202: "Batman '66 (Collection) (2013-2018)" must NOT pass ±1 against a 2012 issue of
+/// Batman (2011)). Per-CANDIDATE on purpose — a pack can surface from a numbered query, where the
+/// query-level year is the per-issue one. Singles keep the per-issue anchor (the long-running-series
+/// per-issue-release-year override lives there — deliberately untouched).
+pub(crate) fn pack_anchor_year(is_pack_shaped: bool, series_year: Option<&str>, req_year: Option<&str>) -> Option<String> {
+    if is_pack_shaped {
+        series_year.or(req_year).map(|s| s.to_string())
+    } else {
+        req_year.map(|s| s.to_string())
+    }
 }
 
 /// Core-title match-ratio reverse-validation (parity with prowlarr.ts:147-167).
@@ -492,28 +543,46 @@ fn fails_match_ratio(significant_query_words: &[String], result_words: &[String]
     match_ratio < ratio_config && extra_words > 2
 }
 
-/// Reduce a release title to its core series words: strip [tags], (year)/(group), bare years and
-/// issue/cover numbers, then drop noise. What remains should be ONLY the series name. Used by the
-/// beta.068 reverse guard to detect a differently-titled series (e.g. "Wolverine - Blood Hunt 003").
+/// Reduce a release title to its core series words: strip [tags], (year)/(group) and bare years,
+/// then drop noise. What remains should be ONLY the series name (plus, since #202, its standalone
+/// numbers). Used by the beta.068 reverse guard to detect a differently-titled series.
+///
+/// #202: STANDALONE numeric tokens are KEPT, zero-stripped ("030" → "30") — "Batman '66" differs
+/// from "Batman" only by the 66, and the old strip-all-numbers rule made the two identical here.
+/// This is safe for legit releases because (a) the query side runs the same pipeline
+/// (guard_query_words), so the request's own number token is present for matching, and (b) the
+/// single-issue number guard runs BEFORE the reverse guard, so a surviving candidate's issue number
+/// always equals the request's. Digits inside MIXED tokens ("v2", "c012") still strip like before —
+/// a volume/chapter marker is not a series word.
 fn core_series_words(title: &str, noise: &HashSet<String>) -> Vec<String> {
     static RE_BRACKETS: OnceLock<Regex> = OnceLock::new();
     static RE_PARENS: OnceLock<Regex> = OnceLock::new();
     static RE_YEAR: OnceLock<Regex> = OnceLock::new();
-    static RE_NUM: OnceLock<Regex> = OnceLock::new();
+    static RE_DIGITS: OnceLock<Regex> = OnceLock::new();
+    static RE_ZEROS: OnceLock<Regex> = OnceLock::new();
     let re_brackets = RE_BRACKETS.get_or_init(|| Regex::new(r"\[[^\]]*\]").unwrap());
     let re_parens = RE_PARENS.get_or_init(|| Regex::new(r"\([^)]*\)").unwrap());
     let re_year = RE_YEAR.get_or_init(|| Regex::new(r"\b(?:19|20)\d{2}\b").unwrap());
-    let re_num = RE_NUM.get_or_init(|| Regex::new(r"#?\d+(?:\.\d+)?").unwrap());
+    let re_digits = RE_DIGITS.get_or_init(|| Regex::new(r"\d+").unwrap());
+    let re_zeros = RE_ZEROS.get_or_init(|| Regex::new(r"^0+(\d)").unwrap());
     let t = title.to_lowercase();
     let t = re_brackets.replace_all(&t, " ");
     let t = re_parens.replace_all(&t, " ");
     let t = re_year.replace_all(&t, " ");
-    let t = re_num.replace_all(&t, " ");
     let cleaned: String = t.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
     cleaned
         .split_whitespace()
-        .filter(|w| w.chars().count() > 2 && !noise.contains(*w))
-        .map(|s| s.to_string())
+        .filter_map(|w| {
+            if w.chars().all(|c| c.is_ascii_digit()) {
+                // Standalone number: a numeric series word ("66") or the issue number — keep,
+                // padding-normalized so "005" ↔ "5" can never manufacture a mismatch.
+                Some(re_zeros.replace(w, "$1").into_owned())
+            } else {
+                let stripped = re_digits.replace_all(w, "");
+                let sw = stripped.as_ref();
+                if sw.chars().count() > 2 && !noise.contains(sw) { Some(sw.to_string()) } else { None }
+            }
+        })
         .collect()
 }
 
@@ -600,6 +669,11 @@ pub async fn filter_and_score(
         .cloned()
         .collect();
 
+    // Reverse-guard query words (#202): numeric-inclusive, built by the SAME pipeline as the title
+    // side so "Batman '66" requests keep their 66. The match-ratio list above stays alpha-only — its
+    // math is deliberately untouched by #202.
+    let reverse_guard_words = guard_query_words(&clean_original);
+
     // The reverse-guard noise set now lives in reverse_noise_set() (shared with the GetComics filter).
 
     // Evaluate each result: None = rejected; Some(year_unconfirmed) = kept, where `true` marks an
@@ -679,18 +753,28 @@ pub async fn filter_and_score(
         // Annual rejection is GetComics/DDL-only in Node (getcomics.ts:258-262); prowlarr.ts has none.
         if is_ddl && !is_looking_for_annual && title_lower.contains("annual") { return None; }
 
-        // REVERSE GUARD (single-issue only): the required-word/ratio checks can't tell the requested
-        // series from a differently-titled one that merely CONTAINS its words — "Wolverine - Blood
-        // Hunt 003" for "Wolverine #3", "Savage Wolverine #1" for "Wolverine #1". Reject a single-
-        // issue release whose core title (tags/year/issue stripped) introduces a series word the
-        // request lacks. Skipped for packs, which legitimately carry extra words ("Complete
-        // Collection"). Applies to Prowlarr (beta.068) AND Anna's Archive — GetComics results run
-        // the same guard inside getcomics::search (they bypass this filter via skip_relevance).
-        if req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
-            let extra = off_series_extra_words(&title_lower, &significant_query_words);
-            if !extra.is_empty() {
-                log::debug!("[Automation Debug] Discarding off-series release \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
-                return None;
+        // REVERSE GUARD: the required-word/ratio checks can't tell the requested series from a
+        // differently-titled one that merely CONTAINS its words — "Wolverine - Blood Hunt 003" for
+        // "Wolverine #3", "Savage Wolverine #1" for "Wolverine #1", "Batman 66 030" for "Batman #30"
+        // (#202). Reject a single-issue release whose core title (tags/year stripped) introduces a
+        // series word the request lacks. Packs are no longer blanket-exempt (#202): they run the
+        // pack variant, which allows bundle vocabulary and numerics ("Complete Collection",
+        // "Vol. 1-9") but still rejects foreign words ("Arkham City Game Spin-Offs"). Applies to
+        // Prowlarr (beta.068) AND Anna's Archive — GetComics results run the same guards inside
+        // getcomics::search (they bypass this filter via skip_relevance).
+        if req_num.is_some() && !reverse_guard_words.is_empty() {
+            if !is_pack {
+                let extra = off_series_extra_words(&title_lower, &reverse_guard_words);
+                if !extra.is_empty() {
+                    log::debug!("[Automation Debug] Discarding off-series release \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
+                    return None;
+                }
+            } else {
+                let extra = off_series_pack_extra_words(&title_lower, &reverse_guard_words);
+                if !extra.is_empty() {
+                    log::debug!("[Automation Debug] Discarding off-series PACK \"{}\" — extra series words {:?} not in requested \"{}\".", res.title, extra, clean_original);
+                    return None;
+                }
             }
         }
 
@@ -895,25 +979,106 @@ mod tests {
     // Field incident: a monitor search for "Wolverine #1" (2024 series) matched GetComics'
     // "Savage Wolverine #1 (2025)" facsimile — the required-words check only catches MISSING words,
     // the ±1 year guard was defeated by the reprint year, and the reverse guard was Prowlarr-only.
+    // #202 UPDATE: query lists now come from guard_query_words (same pipeline as the title side), so
+    // they include the issue-number token — standalone numerics are series words now, and a legit
+    // release's own number always has its twin in the request (the number guard runs first).
     #[test]
     fn off_series_extra_words_flags_prefixed_sibling_series() {
-        let wolverine = vec!["wolverine".to_string()];
+        let wolverine = vec!["wolverine".to_string(), "1".to_string()];
 
         // The incident title: "savage" is an extra core-series word the request lacks → reject.
         assert_eq!(off_series_extra_words("savage wolverine #1 (2025)", &wolverine), vec!["savage"]);
         // The original beta.068 case must keep failing on the DDL path too.
-        assert_eq!(off_series_extra_words("wolverine - blood hunt 003 (2024) (digital)", &wolverine), vec!["hunt"]);
+        let wolverine3 = vec!["wolverine".to_string(), "3".to_string()];
+        assert_eq!(off_series_extra_words("wolverine - blood hunt 003 (2024) (digital)", &wolverine3), vec!["hunt"]);
 
-        // Legitimate releases survive: scene tags/groups/years/issue numbers are noise, not series words.
+        // Legitimate releases survive: scene tags/groups/years are noise, and the release's own issue
+        // number ("001" → "1") matches the request's number token instead of counting as extra.
         assert!(off_series_extra_words("wolverine 001 (2024) (f) (digital) (marika-empire)", &wolverine).is_empty());
         // Variant keywords are noise (the variant guard owns that rejection, not this one).
         assert!(off_series_extra_words("wolverine 001 facsimile edition (2025)", &wolverine).is_empty());
 
         // A multi-word request keeps its own words: "Dark Wolverine #1" matches dark wolverine releases.
-        let dark = vec!["dark".to_string(), "wolverine".to_string()];
+        let dark = vec!["dark".to_string(), "wolverine".to_string(), "1".to_string()];
         assert!(off_series_extra_words("dark wolverine 001 (2009) (digital)", &dark).is_empty());
         // ...and the plain-Wolverine request still rejects the dark sibling.
         assert_eq!(off_series_extra_words("dark wolverine 001 (2009)", &wolverine), vec!["dark"]);
+    }
+
+    // ==== #202: numeric series names. "Batman 66 030 (2014)" carried the ONE discriminating token —
+    // the 66 — in numeric form, and the old strip-all-numbers rule erased it before comparison, so a
+    // Batman (2011) request happily downloaded Batman '66 usenet singles (same issue number, same
+    // release year — title equivalence was the only guard that could fire, and it couldn't see).
+    #[test]
+    fn off_series_extra_words_sees_numeric_series_names() {
+        let batman30 = vec!["batman".to_string(), "30".to_string()];
+
+        // The field incident title: "66" survives as an extra series word → reject.
+        assert_eq!(
+            off_series_extra_words("batman 66 030 (2014) (digital) (son of ultron-empire)", &batman30),
+            vec!["66"]
+        );
+        // The RIGHT release for the same request stays clean (issue number matches the query token).
+        assert!(off_series_extra_words("batman 030 (2014) (digital) (zone-empire)", &batman30).is_empty());
+
+        // Symmetry: an actual Batman '66 request carries the 66 and accepts its own releases.
+        let batman66 = vec!["batman".to_string(), "66".to_string(), "30".to_string()];
+        assert!(off_series_extra_words("batman 66 030 (2014) (digital)", &batman66).is_empty());
+
+        // Padding never manufactures a mismatch ("005" ↔ "5"), and decimals split identically on
+        // both sides ("023.1" → 23 + 1, same as the request's "23.1").
+        let batman5 = vec!["batman".to_string(), "5".to_string()];
+        assert!(off_series_extra_words("batman 005 (2012) (digital)", &batman5).is_empty());
+        let batman231 = vec!["batman".to_string(), "23".to_string(), "1".to_string()];
+        assert!(off_series_extra_words("batman 023.1 (2013) (digital)", &batman231).is_empty());
+    }
+
+    // ==== #202: the query side runs the SAME pipeline as the title side, so numerics tokenize
+    // identically ("#30" and "030" both become "30") and the guard can never self-reject.
+    #[test]
+    fn guard_query_words_mirror_title_side_tokenization() {
+        assert_eq!(guard_query_words("batman #30"), vec!["batman".to_string(), "30".to_string()]);
+        assert_eq!(guard_query_words("batman 66 30"), vec!["batman".to_string(), "66".to_string(), "30".to_string()]);
+        assert_eq!(guard_query_words("wolverine 3"), vec!["wolverine".to_string(), "3".to_string()]);
+        // Stop/noise words drop out exactly like the title side ("the", "vol").
+        assert_eq!(guard_query_words("the batman vol 2 5"), vec!["batman".to_string(), "2".to_string(), "5".to_string()]);
+    }
+
+    // ==== #202: packs lose the blanket reverse-guard exemption. Bundle vocabulary and numerics
+    // (ranges, counts, "'66") are pack-normal noise here — the series-year anchor owns numeric
+    // discrimination — but a WORD the request lacks still marks a different product.
+    #[test]
+    fn pack_reverse_guard_rejects_off_series_packs_only() {
+        let batman = vec!["batman".to_string(), "5".to_string()];
+
+        // The field incident pack: every qualifier word is evidence, none of it is pack vocabulary.
+        assert_eq!(
+            off_series_pack_extra_words("batman – arkham city game spin-offs collection (2011-2016)", &batman),
+            vec!["arkham", "city", "game", "spin", "offs"]
+        );
+        // Sibling-prefix pack: caught by the word, not the year.
+        assert_eq!(off_series_pack_extra_words("batman beyond complete collection (2013)", &batman), vec!["beyond"]);
+
+        // Legitimate bundles for the requested series survive, however they're decorated.
+        assert!(off_series_pack_extra_words("batman (2011) complete collection", &batman).is_empty());
+        assert!(off_series_pack_extra_words("batman vol. 1 - 9 + annuals (2011 - 2016) collection", &batman).is_empty());
+        assert!(off_series_pack_extra_words("batman #1 – 57 story arc bundle", &batman).is_empty());
+
+        // "Batman '66 (Collection)" reduces to a bare numeric extra — deliberately IGNORED here
+        // (ranges/counts are pack-normal); the series-year anchor is the guard that kills it.
+        assert!(off_series_pack_extra_words("batman '66 (collection) (2013-2018)", &batman).is_empty());
+    }
+
+    // ==== #202: pack candidates anchor on the SERIES year regardless of which query surfaced them
+    // (a pack can ride in on a numbered query, where req_year is the per-issue year).
+    #[test]
+    fn pack_year_anchor_prefers_series_year() {
+        assert_eq!(pack_anchor_year(true, Some("2011"), Some("2012")), Some("2011".to_string()));
+        // No series year known → fall back to the request year rather than dropping the guard.
+        assert_eq!(pack_anchor_year(true, None, Some("2012")), Some("2012".to_string()));
+        // Singles keep the per-issue anchor (the long-running-series fix lives here — untouched).
+        assert_eq!(pack_anchor_year(false, Some("2011"), Some("2025")), Some("2025".to_string()));
+        assert_eq!(pack_anchor_year(false, Some("2011"), None), None);
     }
 
     #[test]
@@ -921,11 +1086,20 @@ mod tests {
         // Mirrors the stop-word half of the production reverse_noise ("blood" is a stop word).
         let noise: HashSet<String> = ["the", "a", "an", "of", "and", "or", "vol", "volume", "issue", "black", "white", "blood"]
             .iter().map(|s| s.to_string()).collect();
-        // "blood" is noise (dropped), the (year) + issue number strip → "hunt" survives as an EXTRA series
-        // word not present in a "Wolverine #3" request, so the reverse guard would discard this off-series grab.
-        assert_eq!(core_series_words("Wolverine - Blood Hunt 003 (2026)", &noise), vec!["wolverine".to_string(), "hunt".to_string()]);
-        // A plain issue of the requested series reduces to only the series word — nothing extra, so it's kept.
-        assert_eq!(core_series_words("Wolverine 003 (2026) (digital)", &noise), vec!["wolverine".to_string()]);
+        // "blood" is noise (dropped), the (year) strips → "hunt" survives as an EXTRA series word not
+        // present in a "Wolverine #3" request. #202: the issue number now survives too (as "3", zero-
+        // stripped) — on a legit release it matches the request's own number token instead of tripping.
+        assert_eq!(
+            core_series_words("Wolverine - Blood Hunt 003 (2026)", &noise),
+            vec!["wolverine".to_string(), "hunt".to_string(), "3".to_string()]
+        );
+        // A plain issue of the requested series reduces to series word + its number — nothing extra.
+        assert_eq!(
+            core_series_words("Wolverine 003 (2026) (digital)", &noise),
+            vec!["wolverine".to_string(), "3".to_string()]
+        );
+        // Mixed tokens still shed their digits like before (a volume marker is not a series word).
+        assert_eq!(core_series_words("Hellboy v2 004 (2004)", &noise), vec!["hellboy".to_string(), "4".to_string()]);
     }
 
     #[test]

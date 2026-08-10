@@ -603,11 +603,9 @@ pub async fn search(
         .map(|s| s.to_string())
         .collect();
 
-    // Significant request words for the off-series reverse guard (same shape as filter_and_score).
-    let significant_query_words: Vec<String> = original_query_words.iter()
-        .filter(|w| w.chars().count() > 2)
-        .cloned()
-        .collect();
+    // Reverse-guard request words (#202): numeric-inclusive, built by the SAME pipeline as the
+    // release-title side (lock-step with filter_and_score's reverse_guard_words).
+    let reverse_guard_words = crate::search_engine::guard_query_words(&clean_original);
 
     // Interactive: fan each incoming query out into the upstream variant set (+ a de-padded form so a
     // "003" request still matches GetComics' "#3" post titles). See interactive_query_variants.
@@ -687,6 +685,13 @@ pub async fn search(
                 let title_lower = title.to_lowercase();
                 let mut is_relevant = true;
 
+                // Pack-SHAPED title: bundle keyword, or a multi-issue/volume RANGE ("#0 – 9",
+                // "Vol. 1 – 4") — GetComics bundles older runs as ranges with no pack KEYWORD.
+                // Computed pre-year-check for the #202 series-year anchor; ACCEPTANCE as a pack
+                // still requires allow_bulk_packs below.
+                let is_pack_shaped = pack_terms.iter().any(|t| title_lower.contains(t))
+                    || parse_issue_range(&title_lower).is_some();
+
                 // --- BASELINE FILTERS (both automated and interactive, beta.035) ---
 
                 // 1. Enforce the core series name: every significant query word must appear. For a
@@ -714,8 +719,19 @@ pub async fn search(
                 }
 
                 // 2. Enforce the release year (±1 variance between ComicVine and uploaders).
+                // #202: automated pack-shaped candidates anchor on the SERIES year (fallback:
+                // request year), per-CANDIDATE — a pack can surface from a numbered query whose
+                // req_year is the per-issue release year, which is exactly how "Batman '66
+                // (Collection) (2013-2018)" passed ±1 against 2012-2014 issues of Batman (2011).
+                // Singles keep the per-issue anchor (the long-running-series release-year override
+                // is untouched); interactive keeps the old per-request anchor (humans pick).
                 if is_relevant {
-                    if let Some(ry) = &req_year {
+                    let anchor_year = if is_interactive {
+                        req_year.clone()
+                    } else {
+                        crate::search_engine::pack_anchor_year(is_pack_shaped, series_year, req_year.as_deref())
+                    };
+                    if let Some(ry) = &anchor_year {
                         if let Some(ty) = crate::search_engine::find_title_year(&title_lower) {
                             if let (Ok(ryn), Ok(tyn)) = (ry.parse::<i32>(), ty.parse::<i32>()) {
                                 if (ryn - tyn).abs() > 1 { is_relevant = false; }
@@ -726,11 +742,10 @@ pub async fn search(
 
                 // --- STRICT AUTOMATION-ONLY FILTERS ---
                 if !is_interactive && is_relevant {
-                    // A multi-issue/volume RANGE in the title ("#0 – 9", "Vol. 1 – 4") is the most reliable
-                    // batch signal — GetComics bundles older runs as ranges with no pack KEYWORD. Treat those
-                    // as packs too (when bulk is enabled) so volume-batches aren't rejected as unwanted TPBs.
-                    let is_pack = allow_bulk_packs
-                        && (pack_terms.iter().any(|t| title_lower.contains(t)) || parse_issue_range(&title_lower).is_some());
+                    // Pack ACCEPTANCE = pack-shaped + bulk enabled (shape computed above so the
+                    // year anchor could use it; ranges count so volume-batches aren't rejected as
+                    // unwanted TPBs).
+                    let is_pack = allow_bulk_packs && is_pack_shaped;
 
                     // TPB guard: reject collected editions when a single issue was requested.
                     if req_num.is_some() && !is_looking_for_omnibus && !is_pack {
@@ -764,14 +779,24 @@ pub async fn search(
                     // facsimile of it auto-downloaded for the 2024 Wolverine series; the required-
                     // word check only catches MISSING words and the ±1 year guard was defeated by
                     // the reprint year). Reject a single-issue post whose core series words include
-                    // one the request lacks — same guard Prowlarr has run since beta.068. Packs are
-                    // exempt (they legitimately carry extra words); interactive search never reaches
-                    // this block, so manual picks stay unrestricted.
-                    if is_relevant && req_num.is_some() && !is_pack && !significant_query_words.is_empty() {
-                        let extra = crate::search_engine::off_series_extra_words(&title_lower, &significant_query_words);
-                        if !extra.is_empty() {
-                            log::debug!("[GetComics Debug] Discarding off-series post \"{}\" — extra series words {:?} not in requested \"{}\".", title, extra, clean_original);
-                            is_relevant = false;
+                    // one the request lacks — same guard Prowlarr has run since beta.068. #202:
+                    // packs are no longer blanket-exempt — they run the pack variant, which allows
+                    // bundle vocabulary and numerics but still rejects foreign words ("Arkham City
+                    // Game Spin-Offs"). Interactive search never reaches this block, so manual
+                    // picks stay unrestricted.
+                    if is_relevant && req_num.is_some() && !reverse_guard_words.is_empty() {
+                        if !is_pack {
+                            let extra = crate::search_engine::off_series_extra_words(&title_lower, &reverse_guard_words);
+                            if !extra.is_empty() {
+                                log::debug!("[GetComics Debug] Discarding off-series post \"{}\" — extra series words {:?} not in requested \"{}\".", title, extra, clean_original);
+                                is_relevant = false;
+                            }
+                        } else {
+                            let extra = crate::search_engine::off_series_pack_extra_words(&title_lower, &reverse_guard_words);
+                            if !extra.is_empty() {
+                                log::debug!("[GetComics Debug] Discarding off-series PACK \"{}\" — extra series words {:?} not in requested \"{}\".", title, extra, clean_original);
+                                is_relevant = false;
+                            }
                         }
                     }
 

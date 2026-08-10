@@ -152,6 +152,59 @@ describe('Cron Logic: Automated Download Checker', () => {
         );
     });
 
+    // ==== #202: the fallback matcher's year gate captured group 1 of /(19|20)\d{2}/ — the literal
+    // "20" — so every DATED torrent failed the year comparison ("Req: 2011 vs Tor: 20") and could
+    // only ever pair via the exact-name/link tiers. These pin the fixed capture both ways.
+    it('pairs a dated torrent with its request when the release year matches the series year (#202)', async () => {
+        mocks.requestFindMany.mockImplementation(async (args) => {
+            if (args.where.status === 'DOWNLOADING') return [{
+                id: 'req_dated_ok',
+                status: 'DOWNLOADING',
+                activeDownloadName: 'Batman #1',
+                volumeId: 'vol_1'
+            }];
+            return [];
+        });
+        mocks.getAllActiveDownloads.mockResolvedValue([{
+            id: 'torrent_hash_dated',
+            name: 'Batman 001 (2016) (Digital)',
+            progress: '100'
+        }]);
+        mocks.seriesFindMany.mockResolvedValue([{ metadataId: 'vol_1', year: 2016 }]);
+
+        initCronJobs();
+        await mocks.cronCb.current();
+
+        expect(mocks.importRequest).toHaveBeenCalledWith('req_dated_ok');
+    });
+
+    it('still refuses to pair a dated torrent whose year disagrees (#202 keeps the gate strict)', async () => {
+        mocks.requestFindMany.mockImplementation(async (args) => {
+            if (args.where.status === 'DOWNLOADING') return [{
+                id: 'req_dated_wrong',
+                status: 'DOWNLOADING',
+                activeDownloadName: 'Batman #1',
+                volumeId: 'vol_1'
+            }];
+            return [];
+        });
+        mocks.getAllActiveDownloads.mockResolvedValue([{
+            id: 'torrent_hash_wrongyear',
+            name: 'Batman 001 (2014) (Digital)',
+            progress: '100'
+        }]);
+        mocks.seriesFindMany.mockResolvedValue([{ metadataId: 'vol_1', year: 2016 }]);
+
+        initCronJobs();
+        await mocks.cronCb.current();
+
+        expect(mocks.importRequest).not.toHaveBeenCalledWith('req_dated_wrong');
+        expect(loggerLog).toHaveBeenCalledWith(
+            expect.stringContaining('Year mismatch (Req: 2016 vs Tor: 2014)'),
+            'debug'
+        );
+    });
+
     it('releases parked batch siblings stranded by a permanently-failed (terminal) lead', async () => {
         const deadLink = 'http://getcomics/batch-pack.cbz';
 

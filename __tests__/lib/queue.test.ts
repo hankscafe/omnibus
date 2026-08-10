@@ -597,6 +597,31 @@ describe('Cron: BullMQ Worker Router', () => {
         expect(body.allow_packs).toBe(true);
     });
 
+    // ==== #202: the engine anchors PACK candidates on series_year (beta.069), but the queue was
+    // filling that field from the job's per-issue year — "Batman '66 (Collection) (2013-2018)"
+    // passed ±1 against 2012-2014 issue years of Batman (2011); against 2011 it fails. The Series
+    // row's start year is already fetched for the pack decision — send it.
+    it('sends the Series start year as series_year while year keeps the per-issue anchor (#202)', async () => {
+        initWorker();
+        mocks.requestFindUnique.mockResolvedValue({ id: 'req_sy', volumeId: '101', metadataSource: 'COMICVINE', activeDownloadName: 'Batman #5', failedLinks: '[]' });
+        mocks.seriesFindFirst.mockResolvedValue({ id: 's1', metadataId: '101', metadataSource: 'COMICVINE', year: 2011 });
+        mocks.issueCount.mockResolvedValue(0);
+        mocks.issueFindMany.mockResolvedValue([{ number: '5', releaseDate: '2012-03-14' }]);
+        mocks.engineFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false }) });
+
+        // Volume-request child jobs are enqueued with the ISSUE's year (log-proven shape).
+        await mocks.workerCb.current({
+            id: 'job_series_year',
+            data: { type: 'SEARCH_AND_DOWNLOAD', requestId: 'req_sy', name: 'Batman #5', year: '2012', isManga: false, skipIndexers: false },
+            updateProgress: vi.fn()
+        });
+
+        const searchCall = mocks.engineFetch.mock.calls.find((c: any[]) => String(c[0]).includes('/api/automation/search'));
+        const body = JSON.parse(searchCall![1].body);
+        expect(body.year).toBe('2012');        // per-issue lane: the long-running-series anchor, untouched
+        expect(body.series_year).toBe('2011'); // pack lane: the series start year the anchor was designed for
+    });
+
     it('parks the request as STALLED when every DDL hoster candidate fails (no more orphaned DOWNLOADING)', async () => {
         initWorker();
         mocks.requestFindUnique.mockResolvedValue({ id: 'req_ddl', volumeId: '0', failedLinks: '[]' });

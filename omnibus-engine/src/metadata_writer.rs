@@ -62,6 +62,7 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
                i."scanInformation" as issue_scan_information, i.review as issue_review,
                CAST(i."communityRating" AS TEXT) as issue_community_rating_text,
                CAST(i."blackAndWhite" AS INTEGER) as issue_black_and_white_int,
+               CAST(i."isAnnual" AS INTEGER) as issue_is_annual,
                i."releaseDate", i.universe as issue_universe,
                i.genres, i."storyArcs", i."metadataId" as issue_meta_id, i."metadataSource" as issue_meta_source,
                s.id as series_id, s.name as series_name, s.publisher, s.year, s."folderPath",
@@ -249,7 +250,11 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
     // Series-only ComicInfo defaults (#199): uniform-per-run fields, always taken straight from
     // Series, like Publisher. Everything else below pairs issue-wins since Call-3 Beta B.
     let imprint = g("imprint").unwrap_or_default();
-    let format = g("format").unwrap_or_default();
+    // #203: an annual row's <Format> is its domain — "Annual" wins over the series default so the
+    // flag survives the ComicInfo round-trip (scan reads Format back) even for files whose NAME
+    // lacks the token. Non-annual rows keep the series value exactly as before.
+    let issue_is_annual = row.try_get::<i64, _>("issue_is_annual").map(|v| v != 0).unwrap_or(false);
+    let format = if issue_is_annual { "Annual".to_string() } else { g("format").unwrap_or_default() };
     let language_iso = g("languageISO").unwrap_or_default();
     let age_rating = g("ageRating").unwrap_or_default();
     // #199 Call-3 Beta B: the genuinely-per-issue fields flip to the same issue-wins pairing as
@@ -809,6 +814,7 @@ mod tests {
                 gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT, "mainCharacterOrTeam" TEXT,
                 "alternateSeries" TEXT, "alternateNumber" TEXT, "alternateCount" INTEGER, "storyArcNumber" TEXT)"#,
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
+                "isAnnual" INTEGER DEFAULT 0,
                 name TEXT, description TEXT, "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
                 writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
                 letterers TEXT, teams TEXT, locations TEXT, inker TEXT, editor TEXT, translator TEXT,

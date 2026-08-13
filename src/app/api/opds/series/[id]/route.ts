@@ -43,6 +43,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     }
 
     const sortedIssues = series.issues.sort((a, b) => {
+        // #203: annuals shelve AFTER the main run (same order as the series page), then by number.
+        const domain = ((a as any).isAnnual ? 1 : 0) - ((b as any).isAnnual ? 1 : 0);
+        if (domain !== 0) return domain;
         // Added the '-' character to the regex to preserve negative numbers
         const numA = parseFloat(a.number.replace(/[^0-9.-]/g, '')) || 0;
         const numB = parseFloat(b.number.replace(/[^0-9.-]/g, '')) || 0;
@@ -80,7 +83,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
         entries.push(`
   <entry>
-    <title>${escapeXml(issue.name || `${series.name} #${issue.number}`)}</title>
+    <title>${escapeXml(issue.name || `${series.name}${(issue as any).isAnnual ? ' Annual' : ''} #${issue.number}`)}</title>
     <id>urn:omnibus:issue:${issue.id}</id>
     <updated>${new Date().toISOString()}</updated>
     <author><name>${escapeXml(series.publisher || 'Unknown')}</name></author>

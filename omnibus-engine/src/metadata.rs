@@ -564,8 +564,11 @@ async fn fetch_comicvine(
         // Re-fetch the series' issues each page so issues created on earlier pages are visible to
         // isSameIssue. Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping).
         // metadataId rides along for the number-anchored pairing (issue #194 (c1)).
+        // #203: annual rows are EXCLUDED outright — number is the pairing identity anchor, and an
+        // annual's numbers belong to a DIFFERENT provider volume; without this, the parent volume's
+        // "#1" data lands on "Annual #1" via the number-only heal.
         let existing_issues = sqlx::query(
-            r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "seriesId" = $1"#,
+            r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
         )
         .bind(series_id)
         .fetch_all(&db.pool)
@@ -588,7 +591,7 @@ async fn fetch_comicvine(
         let mut by_cv: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
         if !page_cv_ids.is_empty() {
             let sql = format!(
-                r#"SELECT id, number, "seriesId", name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE' AND "seriesId" <> $1"#,
+                r#"SELECT id, number, "seriesId", name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE' AND "seriesId" <> $1 AND "isAnnual" = false"#,
                 Db::in_placeholders(2, page_cv_ids.len())
             );
             let mut q = sqlx::query(&sql).bind(series_id);
@@ -1153,8 +1156,10 @@ async fn fetch_metron(
 
     // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping). metadataId rides
     // along for the number-anchored pairing (issue #194 (c1)).
+    // #203: annual rows are EXCLUDED outright — their numbers belong to a different provider
+    // volume, and the number-only heal would otherwise stamp the parent volume's data onto them.
     let existing_issues = sqlx::query(
-        r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres FROM "Issue" WHERE "seriesId" = $1"#,
+        r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
     )
     .bind(series_id)
     .fetch_all(&db.pool)
@@ -1175,7 +1180,7 @@ async fn fetch_metron(
     let mut by_meta: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
     if !all_meta_ids.is_empty() {
         let sql = format!(
-            r#"SELECT id, number, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState", genres FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON' AND "seriesId" <> $1"#,
+            r#"SELECT id, number, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState", genres FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON' AND "seriesId" <> $1 AND "isAnnual" = false"#,
             Db::in_placeholders(2, all_meta_ids.len())
         );
         let mut q = sqlx::query(&sql).bind(series_id);

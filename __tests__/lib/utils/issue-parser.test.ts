@@ -1,7 +1,7 @@
 // __tests__/lib/utils/issue-parser.test.ts
 // Removed X of Y testing since hasn't been implemented yet
 import { describe, it, expect } from 'vitest';
-import { extractIssueNumber, isSameIssue, parseIssueRange, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
+import { extractIssueNumber, describeIssueFromFilename, isSameIssue, parseIssueRange, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 
 describe('Utility: Issue Number Parser', () => {
     describe('isSameIssue()', () => {
@@ -135,5 +135,47 @@ describe('Vulgar fraction issue numbers (#200)', () => {
         expect(extractIssueNumber('X-Men #½ (1998).cbz', 'X-Men')).toBe('0.5');
         expect(extractIssueNumber('Wizard #1½.cbz')).toBe('1.5');
         expect(extractIssueNumber('Gen13 #¾ (1994).cbz')).toBe('0.75'); // that one exists too
+    });
+});
+
+// ==== #203 Phase 0: annuals are their own numbering domain. "Batman Annual 001.cbz" used to parse
+// as plain issue "1" and collide with the real #1 (phantom duplicate warnings + row churn in the
+// series reconciler). describeIssueFromFilename returns the number PLUS an isAnnual flag; the old
+// extractIssueNumber keeps its exact contract by delegating (its callers stay untouched).
+// Parity: omnibus-engine scanner.rs issue_descriptor_from_filename.
+describe('Annual detection (#203 Phase 0)', () => {
+    it('flags annual filenames and prefers the number adjacent to the token', () => {
+        expect(describeIssueFromFilename('Batman Annual 001 (2012).cbz')).toEqual({ number: '1', isAnnual: true });
+        expect(describeIssueFromFilename('Batman Annual #3.cbz')).toEqual({ number: '3', isAnnual: true });
+        expect(describeIssueFromFilename('Detective Comics Annual 011 (2023) (Webrip).cbz')).toEqual({ number: '11', isAnnual: true });
+    });
+
+    it('treats a year-labeled annual with no own number as annual #1 (the one-shot form)', () => {
+        expect(describeIssueFromFilename('Superman 2021 Annual.cbz')).toEqual({ number: '1', isAnnual: true });
+        expect(describeIssueFromFilename('Superman Annual (2021).cbz')).toEqual({ number: '1', isAnnual: true });
+    });
+
+    it('keeps regular issues unflagged, including bracketed annual CROSS-REFERENCES', () => {
+        expect(describeIssueFromFilename('Batman 005 (2013).cbz')).toEqual({ number: '5', isAnnual: false });
+        // "[Annual 2]" is a tie-in pointer on a regular issue, not the issue's own identity —
+        // the cross-reference stripper owns it (same behavior as "(of 12)" markers).
+        expect(describeIssueFromFilename('Batman 005 [Annual 2] (2013).cbz')).toEqual({ number: '5', isAnnual: false });
+    });
+
+    it('detects the annual token only as a whole word', () => {
+        expect(describeIssueFromFilename('Annualized Returns 003.cbz')).toEqual({ number: '3', isAnnual: false });
+    });
+
+    it('carries the flag through the series-name-hint path', () => {
+        expect(describeIssueFromFilename('Batman Annual 001 (2012).cbz', 'Batman')).toEqual({ number: '1', isAnnual: true });
+        // A series literally NAMED "... Annual" consumes the token as its own prefix: files inside
+        // it can't collide with a main run, so they stay unflagged — deliberate.
+        expect(describeIssueFromFilename('Batman Annual 001 (2012).cbz', 'Batman Annual')).toEqual({ number: '1', isAnnual: false });
+    });
+
+    it('extractIssueNumber is byte-identical to before (pure delegation)', () => {
+        expect(extractIssueNumber('Batman Annual 001 (2012).cbz')).toBe('1');
+        expect(extractIssueNumber('Batman 005 (2013).cbz')).toBe('5');
+        expect(extractIssueNumber('X-Men #½ (1998).cbz')).toBe('0.5');
     });
 });

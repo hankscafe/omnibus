@@ -231,6 +231,11 @@ model Issue {
   metadataSource  String   @default("COMICVINE")
   matchState      String?  @default("UNMATCHED")
   number          String
+  // #203 Phase 0: annuals are their own numbering domain — "Annual #1" never collides with "#1".
+  // Part of numbering identity: every same-number comparison must also compare this flag, and
+  // annual rows are excluded from parent-volume provider pairing (their issues belong to a
+  // different provider volume, linked in a later phase).
+  isAnnual        Boolean  @default(false)
   status          String   @default("WANTED")
   filePath        String?
   pageCount       Int      @default(0)

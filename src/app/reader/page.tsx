@@ -274,7 +274,10 @@ function ReaderContent() {
 
         if (seriesData && seriesData.downloadedIssues) {
             if (seriesData.isManga) setSettings(s => ({ ...s, readingMode: 'rtl' }));
-            const sortedIssues = [...seriesData.downloadedIssues].sort((a, b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
+            // #203: annuals read AFTER the main run — same order as the series page and OPDS, so
+            // "next issue" from the run's finale is Annual #1, not a mid-run jump.
+            const sortedIssues = [...seriesData.downloadedIssues].sort((a, b) =>
+                (((a as any).isAnnual ? 1 : 0) - ((b as any).isAnnual ? 1 : 0)) || ((a.parsedNum ?? 0) - (b.parsedNum ?? 0)));
             const currentIdx = sortedIssues.findIndex((issue: any) => issue.fullPath === filePath);
             if (currentIdx > -1 && currentIdx < sortedIssues.length - 1) {
                 setNextIssue({ path: sortedIssues[currentIdx + 1].fullPath, name: sortedIssues[currentIdx + 1].name });

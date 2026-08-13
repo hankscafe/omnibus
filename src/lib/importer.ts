@@ -10,7 +10,7 @@ import { SystemNotifier } from './notifications';
 import { syncSeriesMetadata } from './metadata-fetcher'; 
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
-import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { isSameIssue, extractIssueNumber, annualFlagForSignals } from '@/lib/utils/issue-parser';
 import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
@@ -824,7 +824,10 @@ export const Importer = {
       if (series?.id) {
          let issueNum = extractIssueNumber(fileName);
          if (xmlMeta?.number) issueNum = xmlMeta.number;
-         
+         // #203: annual domain — part of numbering identity, so the dedupe below never pairs
+         // "Annual #1" with the plain #1. Signals: ComicInfo <Format> / <Number> shape / filename.
+         const isAnnual = annualFlagForSignals(xmlMeta?.format, xmlMeta?.number, fileName);
+
          const writersStr = xmlMeta?.writers?.length ? JSON.stringify(xmlMeta.writers) : null;
          const artistsStr = xmlMeta?.artists?.length ? JSON.stringify(xmlMeta.artists) : null;
          const charsStr = xmlMeta?.characters?.length ? JSON.stringify(xmlMeta.characters) : null;
@@ -856,7 +859,7 @@ export const Importer = {
          const allSeriesIssues = await prisma.issue.findMany({
              where: { seriesId: series.id }
          });
-         const existingIssue = allSeriesIssues.find(i => isSameIssue(i.number, issueNum));
+         const existingIssue = allSeriesIssues.find(i => (((i as any).isAnnual ?? false) === isAnnual) && isSameIssue(i.number, issueNum));
          const targetMetaId = xmlMeta?.metadataIssueId ? xmlMeta.metadataIssueId.toString() : `unmatched_${Math.random()}`;
          const targetMetaSource = xmlMeta?.metadataIssueId ? xmlMeta.metadataSource : 'LOCAL';
          const matchState = xmlMeta?.metadataIssueId ? 'MATCHED' : 'UNMATCHED';
@@ -895,9 +898,10 @@ export const Importer = {
                      metadataId: targetMetaId,
                      metadataSource: targetMetaSource,
                      matchState: matchState,
-                     number: issueNum, 
-                     status: 'DOWNLOADED', 
-                     filePath: finalPath, 
+                     number: issueNum,
+                     isAnnual,
+                     status: 'DOWNLOADED',
+                     filePath: finalPath,
                      pageCount,
                      name: xmlMeta?.title || null,
                      description: xmlMeta?.summary || null,

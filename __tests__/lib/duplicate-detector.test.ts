@@ -19,18 +19,21 @@ vi.mock('fs-extra', () => ({
 
 import { findDuplicateGroups, filenamesDisagree } from '@/lib/duplicate-detector';
 
-const issue = (id: string, seriesId: string, number: string, filePath: string, seriesName = 'Batman', metadataId: string | null = null, metadataSource: string | null = null) =>
-    ({ id, seriesId, number, filePath, series: { name: seriesName, metadataId, metadataSource } });
+const issue = (id: string, seriesId: string, number: string, filePath: string, seriesName = 'Batman', metadataId: string | null = null, metadataSource: string | null = null, isAnnual = false) =>
+    ({ id, seriesId, number, isAnnual, filePath, series: { name: seriesName, metadataId, metadataSource } });
 
-// Drive both prisma calls from one dataset: groupBy returns the (seriesId, number) pairs the DB would
-// report with count > 1, and findMany returns the issues in those candidate series (as the real
-// `seriesId in seriesIds` query would).
+// Drive both prisma calls from one dataset: groupBy returns the (seriesId, number, isAnnual) tuples
+// the DB would report with count > 1 (#203: the annual domain joined the grouping key), and findMany
+// returns the issues in those candidate series (as the real `seriesId in seriesIds` query would).
 function setIssues(issues: ReturnType<typeof issue>[]) {
     const counts = new Map<string, number>();
-    for (const i of issues) counts.set(`${i.seriesId} ${i.number}`, (counts.get(`${i.seriesId} ${i.number}`) || 0) + 1);
+    for (const i of issues) {
+        const k = `${i.seriesId} ${i.isAnnual ? 1 : 0} ${i.number}`;
+        counts.set(k, (counts.get(k) || 0) + 1);
+    }
     const groups = [...counts.entries()]
         .filter(([, n]) => n > 1)
-        .map(([k, n]) => { const [seriesId, number] = k.split(' '); return { seriesId, number, _count: { seriesId: n } }; });
+        .map(([k, n]) => { const [seriesId, ann, number] = k.split(' '); return { seriesId, number, isAnnual: ann === '1', _count: { seriesId: n } }; });
     mocks.issueGroupBy.mockResolvedValue(groups);
     const candidateSeries = new Set(groups.map(g => g.seriesId));
     mocks.issueFindMany.mockResolvedValue(issues.filter(i => candidateSeries.has(i.seriesId)));
@@ -63,6 +66,28 @@ describe('findDuplicateGroups', () => {
         ]);
         const groups = await findDuplicateGroups();
         expect(groups).toHaveLength(0);
+    });
+
+    // #203 Phase 0: the annual domain is part of the grouping key — the anacronismo layout
+    // ("Batman Annual 001" co-located with "Batman 001") stops producing phantom duplicates.
+    it('does NOT flag a co-located annual sharing its number with a regular issue', async () => {
+        setIssues([
+            issue('a', 's1', '1', '/lib/s1/Batman 001.cbz'),
+            issue('b', 's1', '1', '/lib/s1/Batman Annual 001.cbz', 'Batman', null, null, true),
+        ]);
+        const groups = await findDuplicateGroups();
+        expect(groups).toHaveLength(0);
+    });
+
+    it('still flags two files inside the SAME annual domain, reported with the flag', async () => {
+        setIssues([
+            issue('a', 's1', '1', '/lib/s1/Batman Annual 001.cbz', 'Batman', null, null, true),
+            issue('b', 's1', '1', '/lib/s1/Batman Annual 01 (2012).cbz', 'Batman', null, null, true),
+        ]);
+        const groups = await findDuplicateGroups();
+        expect(groups).toHaveLength(1);
+        expect(groups[0].isAnnual).toBe(true);
+        expect(groups[0].issueNumber).toBe('1');
     });
 
     it('keys by series, so the same number across different series is not a duplicate', async () => {

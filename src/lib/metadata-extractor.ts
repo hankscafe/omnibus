@@ -196,6 +196,9 @@ export async function parseComicInfo(filePath: string) {
             storyArcNumber: info.StoryArcNumber ? String(info.StoryArcNumber).trim() : null,
             gtin: info.GTIN ? String(info.GTIN).trim() : null,
             notes: info.Notes ? String(info.Notes).trim() : null,
+            // #203: <Format> is an annual-domain signal (annualFlagForSignals) — exposed for the
+            // importer; not itself imported as issue data (Format stays a series-level default).
+            format: info.Format ? String(info.Format).trim() : null,
             scanInformation: info.ScanInformation ? String(info.ScanInformation).trim() : null,
             review: info.Review ? String(info.Review).trim() : null,
             blackAndWhite: (() => { const v = String(info.BlackAndWhite ?? '').trim().toLowerCase(); return v === 'yes' ? true : v === 'no' ? false : null; })(),

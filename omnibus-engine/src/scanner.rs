@@ -359,19 +359,89 @@ fn comicinfo_number_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"^(-?)0*(\d+(?:\.\d+)?[a-zA-Z]*)$").unwrap())
 }
 
-/// Issue number for a scanned file (discussion #182): the file's own ComicInfo `<Number>` wins —
-/// it's the tagger's ground truth, where filename parsing only guesses — with the filename as the
-/// fallback. Plain numeric shapes normalize like the filename parser's output (leading zeros
-/// stripped, sign kept) so is_same_issue dedupe and sorting behave identically for both origins;
-/// fancier numbers ("½", "1.MU") are stored verbatim.
-fn issue_number_for_file(info: Option<&ScanComicInfo>, file_name: &str, series_hint: Option<&str>) -> String {
-    if let Some(num) = info.and_then(|i| i.number.as_deref()).map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(caps) = comicinfo_number_re().captures(num) {
-            return format!("{}{}", &caps[1], &caps[2]);
-        }
-        return num.to_string();
+/// Byte range of the first whole-word "annual" (case-insensitive) in `s`, or None. Word-bounded
+/// manually — the regex crate has no lookaround — so "Annualized" never matches (#203). ASCII
+/// byte-window compare keeps indices valid inside UTF-8 (a continuation byte counts as a
+/// boundary, same as Node's `[a-zA-Z]` lookarounds).
+pub(crate) fn find_annual_token(s: &str) -> Option<(usize, usize)> {
+    let b = s.as_bytes();
+    if b.len() < 6 {
+        return None;
     }
-    issue_number_from_filename(file_name, series_hint)
+    for i in 0..=b.len() - 6 {
+        if b[i..i + 6].eq_ignore_ascii_case(b"annual") {
+            let before_ok = i == 0 || !b[i - 1].is_ascii_alphabetic();
+            let after_ok = i + 6 >= b.len() || !b[i + 6].is_ascii_alphabetic();
+            if before_ok && after_ok {
+                return Some((i, i + 6));
+            }
+        }
+    }
+    None
+}
+
+/// Issue number + annual flag for a scanned file (discussion #182 / #203 Phase 0): the file's own
+/// ComicInfo `<Number>` wins — it's the tagger's ground truth, where filename parsing only guesses —
+/// with the filename as the fallback. Plain numeric shapes normalize like the filename parser's
+/// output (leading zeros stripped, sign kept) so is_same_issue dedupe and sorting behave identically
+/// for both origins; fancier numbers ("½", "1.MU") are stored verbatim.
+///
+/// Annual-ness (#203) is a separate signal set: ComicInfo `<Format>` naming Annual, an
+/// "Annual N"-shaped `<Number>`, or the filename token — the FILENAME is consulted for the flag
+/// even when ComicInfo supplies the number, because Mylar-style names carry the token while their
+/// ComicInfo often doesn't.
+fn issue_descriptor_for_file(
+    info: Option<&ScanComicInfo>,
+    file_name: &str,
+    series_hint: Option<&str>,
+) -> (String, bool) {
+    let format_annual = info
+        .and_then(|i| i.format.as_deref())
+        .map(|f| find_annual_token(f).is_some())
+        .unwrap_or(false);
+    if let Some(num) = info.and_then(|i| i.number.as_deref()).map(str::trim).filter(|s| !s.is_empty()) {
+        let filename_annual = issue_descriptor_from_filename(file_name, series_hint).1;
+        // "<Number>Annual 3</Number>": the tagger put the domain in the number — strip the token,
+        // keep its numbering ("Annual" alone = the one-shot form, #1).
+        if let Some((start, end)) = find_annual_token(num) {
+            if start == 0 {
+                let rest = num[end..].trim_start_matches(['#', ' ']).trim();
+                let n = if rest.is_empty() {
+                    "1".to_string()
+                } else if let Some(caps) = comicinfo_number_re().captures(rest) {
+                    format!("{}{}", &caps[1], &caps[2])
+                } else {
+                    rest.to_string()
+                };
+                return (n, true);
+            }
+        }
+        if let Some(caps) = comicinfo_number_re().captures(num) {
+            return (format!("{}{}", &caps[1], &caps[2]), format_annual || filename_annual);
+        }
+        return (num.to_string(), format_annual || filename_annual);
+    }
+    let (number, filename_annual) = issue_descriptor_from_filename(file_name, series_hint);
+    (number, filename_annual || format_annual)
+}
+
+/// Test-facing shim: the historical number-only contract, delegating to the descriptor (#203).
+#[cfg(test)]
+fn issue_number_for_file(info: Option<&ScanComicInfo>, file_name: &str, series_hint: Option<&str>) -> String {
+    issue_descriptor_for_file(info, file_name, series_hint).0
+}
+
+/// The annual FLAG alone (#203), for callers that keep their own number semantics (watched_sync's
+/// number is ComicInfo-only by design, and its ComicInfo type is its own). Signals: ComicInfo
+/// `<Format>`, an "Annual…"-shaped `<Number>`, or the filename token.
+pub(crate) fn annual_flag_for_signals(format: Option<&str>, number: Option<&str>, file_name: &str) -> bool {
+    if format.is_some_and(|f| find_annual_token(f).is_some()) {
+        return true;
+    }
+    if number.is_some_and(|n| find_annual_token(n).is_some()) {
+        return true;
+    }
+    issue_descriptor_from_filename(file_name, None).1
 }
 
 /// Per-issue narrative/credit columns from a file's own ComicInfo (discussion #177). Comma-separated
@@ -977,7 +1047,13 @@ fn strip_series_prefix(file_name: &str, series: &str) -> Option<String> {
     Some(file_name[i..].to_string())
 }
 
+/// Test-facing shim: the historical number-only contract, delegating to the descriptor (#203).
+#[cfg(test)]
 fn issue_number_from_filename(file_name: &str, series_hint: Option<&str>) -> String {
+    issue_descriptor_from_filename(file_name, series_hint).0
+}
+
+fn issue_descriptor_from_filename(file_name: &str, series_hint: Option<&str>) -> (String, bool) {
     // Issue #200: "#½" must parse as "#0.5" instead of falling through every digit rule to the
     // "1" default. Normalized once here (idempotent through the recursive hint call below).
     let normalized = crate::metadata::normalize_fraction_numbers(file_name);
@@ -985,21 +1061,23 @@ fn issue_number_from_filename(file_name: &str, series_hint: Option<&str>) -> Str
     // 2026-07-25 worklist item 9 (Kaiju No. 8): digits that belong to the TITLE must not be read as
     // issue numbers. When the caller knows the series, its name is stripped as a prefix first; a
     // filename that IS just the series name parses as a one-shot ("1") instead of the title digit.
-    // Parity twin: src/lib/utils/issue-parser.ts extractIssueNumber.
+    // A series literally named "… Annual" consumes its own token here, so its files stay unflagged —
+    // inside such a series there is no main run to collide with (#203, deliberate).
+    // Parity twin: src/lib/utils/issue-parser.ts describeIssueFromFilename.
     if let Some(series) = series_hint {
         if let Some(rest) = strip_series_prefix(file_name, series) {
             if rest != file_name {
-                if rest.bytes().any(|b| b.is_ascii_digit()) {
-                    return issue_number_from_filename(&rest, None);
+                if rest.bytes().any(|b| b.is_ascii_digit()) || find_annual_token(&rest).is_some() {
+                    return issue_descriptor_from_filename(&rest, None);
                 }
-                return "1".to_string();
+                return ("1".to_string(), false);
             }
         }
     }
-    issue_number_from_filename_unhinted(file_name)
+    issue_descriptor_from_filename_unhinted(file_name)
 }
 
-fn issue_number_from_filename_unhinted(file_name: &str) -> String {
+fn issue_descriptor_from_filename_unhinted(file_name: &str) -> (String, bool) {
     static RE_BRACKET: OnceLock<Regex> = OnceLock::new();
     static RE_CROSSREF: OnceLock<Regex> = OnceLock::new();
     static RE_CROSSREF_KEEP: OnceLock<Regex> = OnceLock::new();
@@ -1047,9 +1125,28 @@ fn issue_number_from_filename_unhinted(file_name: &str) -> String {
         })
         .to_string();
 
+    // 3b (#203): whole-word "Annual" AFTER the cross-ref strip, so "[Annual 2]" on a regular
+    // issue stays a tie-in pointer (stripped above) and never flags the file. When flagged, the
+    // number ADJACENT to the token wins ("Batman Annual 001", "… Annual #3"); otherwise the token
+    // is spliced out and the normal rules run — a year-labeled one-shot ("Superman 2021 Annual")
+    // lands as Annual #1 via the default. Parity: issue-parser.ts describeIssueFromFilename.
+    static RE_ANNUAL_ADJ: OnceLock<Regex> = OnceLock::new();
+    let re_annual_adj = RE_ANNUAL_ADJ
+        .get_or_init(|| Regex::new(r"^\s*#?\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)").unwrap());
+    let mut is_annual = false;
+    let clean = if let Some((start, end)) = find_annual_token(&clean) {
+        is_annual = true;
+        if let Some(caps) = re_annual_adj.captures(&clean[end..]) {
+            return (strip_leading_zeros(&caps[1]), true);
+        }
+        format!("{} {}", &clean[..start], &clean[end..])
+    } else {
+        clean
+    };
+
     // 4. HIGHEST PRIORITY: explicit negative marker.
     if let Some(caps) = re_negative.captures(&clean) {
-        return format!("-{}", strip_leading_zeros(&caps[1]));
+        return (format!("-{}", strip_leading_zeros(&caps[1])), is_annual);
     }
 
     // 5. Explicit issue marker (#, "issue", "chapter"). The "issue"/"ch" tokens must not be glued
@@ -1061,7 +1158,7 @@ fn issue_number_from_filename_unhinted(file_name: &str) -> String {
         if !starts_with_hash && m0.start() > 0 && bytes[m0.start() - 1].is_ascii_alphabetic() {
             continue;
         }
-        return strip_leading_zeros(&caps[1]);
+        return (strip_leading_zeros(&caps[1]), is_annual);
     }
 
     // 6. Temporarily hide Volume tokens (recording the first volume number as a tertiary fallback).
@@ -1108,14 +1205,14 @@ fn issue_number_from_filename_unhinted(file_name: &str) -> String {
                 continue; // looks like a year, not an issue number
             }
         }
-        return stripped;
+        return (stripped, is_annual);
     }
 
     // 8. TERTIARY PRIORITY: the volume number.
     if let Some(v) = volume_num {
-        return v;
+        return (v, is_annual);
     }
-    "1".to_string()
+    ("1".to_string(), is_annual)
 }
 
 fn trailing_year_re() -> &'static Regex {
@@ -1153,6 +1250,8 @@ struct NewIssueRow {
     source: String,
     match_state: &'static str,
     number: String,
+    // #203: annuals are their own numbering domain — part of the row's numbering identity.
+    is_annual: bool,
     file: String,
     page_count: i32,
     fm: IssueFileMeta,
@@ -1172,16 +1271,18 @@ async fn exec_issue_insert(
     db: &Db,
     row: &NewIssueRow,
 ) -> Result<(), sqlx::Error> {
-    // blackAndWhite is a SQL literal, not a bind — pg's boolean column has no portable Any bool
-    // bind (the 5H lesson); TRUE/FALSE/NULL literals parse on both backends.
+    // blackAndWhite/isAnnual are SQL literals, not binds — pg's boolean column has no portable
+    // Any bool bind (the 5H lesson); TRUE/FALSE/NULL literals parse on both backends.
     let bw = match row.fm.black_and_white { Some(true) => "true", Some(false) => "false", None => "NULL" };
+    let annual = if row.is_annual { "true" } else { "false" };
     sqlx::query(&format!(
         r#"INSERT INTO "Issue"
-           (id, "seriesId", "metadataId", "metadataSource", "matchState", number, status, "filePath", "pageCount",
+           (id, "seriesId", "metadataId", "metadataSource", "matchState", number, "isAnnual", status, "filePath", "pageCount",
             name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator,
             tags, "mainCharacterOrTeam", "alternateSeries", "alternateNumber", "alternateCount", "storyArcNumber", gtin, notes, "scanInformation", review, "communityRating", "blackAndWhite",
             "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, {bw}, {now}, {now})"#,
+           VALUES ($1, $2, $3, $4, $5, $6, {annual}, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, {bw}, {now}, {now})"#,
+        annual = annual,
         bw = bw,
         now = db.now_expr()
     ))
@@ -1711,7 +1812,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let folder_id_nums: Vec<(Option<String>, String)> = files.iter().enumerate().map(|(idx, file)| {
             let fname = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
             let finfo = infos.get(idx).and_then(|o| o.as_ref());
-            (finfo.map(derive_meta).and_then(|d| d.metadata_issue_id), issue_number_for_file(finfo, &fname, Some(&clean_name)))
+            (finfo.map(derive_meta).and_then(|d| d.metadata_issue_id), issue_descriptor_for_file(finfo, &fname, Some(&clean_name)).0)
         }).collect();
         let conflicted_ids = folder_conflicted_issue_ids(&folder_id_nums);
 
@@ -1719,7 +1820,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         for (idx, file) in files.iter().enumerate() {
             let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
             let file_info = infos.get(idx).and_then(|o| o.as_ref());
-            let issue_num = issue_number_for_file(file_info, &file_name, Some(&clean_name));
+            let (issue_num, is_annual) = issue_descriptor_for_file(file_info, &file_name, Some(&clean_name));
             let file_derived = file_info.map(derive_meta);
             let fm = issue_file_meta(file_info);
             let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
@@ -1745,6 +1846,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                 source: issue_source,
                 match_state: issue_match_state,
                 number: issue_num,
+                is_annual,
                 file: file.clone(),
                 page_count,
                 fm,
@@ -1851,12 +1953,15 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     // in so two new files sharing a number within one scan don't both insert.
     let involved_series: Vec<String> = parsed_files.iter().map(|(sid, _, _)| sid.clone())
         .collect::<std::collections::HashSet<_>>().into_iter().collect();
-    let mut series_issue_nums: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
-    let mut series_meta_nums: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
+    // #203: tuples carry isAnnual — the annual domain is part of numbering identity, so "Annual #1"
+    // neither repoints onto nor conflicts with plain "#1". Read via CAST(... AS INTEGER) per the
+    // Any-driver bool rule.
+    let mut series_issue_nums: std::collections::HashMap<String, Vec<(String, String, bool)>> = std::collections::HashMap::new();
+    let mut series_meta_nums: std::collections::HashMap<String, Vec<(String, String, bool)>> = std::collections::HashMap::new();
     if !involved_series.is_empty() {
         // Portable IN (...) list — see the ghost-purge note above on `= ANY($1)`.
         let ph = Db::in_placeholders(1, involved_series.len());
-        let sql = format!(r#"SELECT "seriesId", id, number, "metadataId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
+        let sql = format!(r#"SELECT "seriesId", id, number, CAST("isAnnual" AS INTEGER) AS is_annual, "metadataId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
         let mut q = sqlx::query(&sql);
         for sid in &involved_series {
             q = q.bind(sid);
@@ -1864,12 +1969,13 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let rows = q.fetch_all(&db.pool).await.unwrap_or_default();
         for r in rows {
             let sid = r.get::<String, _>("seriesId");
+            let row_annual = r.try_get::<i64, _>("is_annual").map(|v| v != 0).unwrap_or(false);
             series_issue_nums.entry(sid.clone()).or_default()
-                .push((r.get::<String, _>("id"), r.get::<String, _>("number")));
-            // (metadataId, number) per series for the embedded-id conflict check below (#194 (c2)).
+                .push((r.get::<String, _>("id"), r.get::<String, _>("number"), row_annual));
+            // (metadataId, number, isAnnual) per series for the embedded-id conflict check below (#194 (c2)).
             if let Ok(Some(mid)) = r.try_get::<Option<String>, _>("metadataId") {
                 if !mid.is_empty() && !mid.starts_with("unmatched") {
-                    series_meta_nums.entry(sid).or_default().push((mid, r.get::<String, _>("number")));
+                    series_meta_nums.entry(sid).or_default().push((mid, r.get::<String, _>("number"), row_annual));
                 }
             }
         }
@@ -1885,12 +1991,13 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         // The folder-derived series name isn't in scope on this path (files landing in EXISTING
         // series); the file's own embedded ComicInfo series tag is the next-best title hint.
         let series_hint = info.as_ref().and_then(|i| i.series.as_deref().map(|s| s.to_string()));
-        let issue_num = issue_number_for_file(info.as_ref(), &file_name, series_hint.as_deref());
+        let (issue_num, is_annual) = issue_descriptor_for_file(info.as_ref(), &file_name, series_hint.as_deref());
 
-        // Dedupe against the series' existing issues by number. On a match the file was renamed/moved —
-        // repoint the existing row's filePath rather than inserting a second row for the same issue.
+        // Dedupe against the series' existing issues by number AND annual domain (#203) — a renamed
+        // "Batman Annual 001" repoints its annual row, never the plain #1. On a match the file was
+        // renamed/moved — repoint the existing row's filePath rather than inserting a second row.
         let dup_id: Option<String> = series_issue_nums.get(&series_id)
-            .and_then(|v| v.iter().find(|(_, n)| crate::metadata::is_same_issue(n, &issue_num)).map(|(id, _)| id.clone()));
+            .and_then(|v| v.iter().find(|(_, n, ann)| *ann == is_annual && crate::metadata::is_same_issue(n, &issue_num)).map(|(id, _, _)| id.clone()));
         if let Some(eid) = dup_id {
             // Repointed file: refresh the page count too (a 0-count row may finally have a readable zip).
             let page_count = count_pages_blocking(&file).await;
@@ -1905,9 +2012,10 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             Some(d) => match &d.metadata_issue_id {
                 // #194 (c2): an embedded id already held by a same-series row with a DIFFERENT
                 // number is provably mistagged for one of the two — don't import it; the next
-                // sync's number-anchored pairing links this row correctly.
+                // sync's number-anchored pairing links this row correctly. #203: a different
+                // annual DOMAIN counts as a different number ("#1" vs "Annual #1" can't share an id).
                 Some(id) if series_meta_nums.get(&series_id).is_some_and(|v|
-                    v.iter().any(|(mid, num)| mid == id && !crate::metadata::is_same_issue(num, &issue_num))
+                    v.iter().any(|(mid, num, ann)| mid == id && !(crate::metadata::is_same_issue(num, &issue_num) && *ann == is_annual))
                 ) => {
                     log::warn!("[Scanner] Embedded issue id {} on \"{}\" conflicts with an existing issue of a different number — ignoring it (issue #194 guard).", id, file_name);
                     (format!("unmatched_{}", Uuid::new_v4()), d.metadata_source.clone(), "UNMATCHED")
@@ -1922,7 +2030,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         let page_count = count_pages_blocking(&file).await;
         // Track the number so another file with the same number later in this batch dedupes
         // against it instead of inserting a second row.
-        series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone()));
+        series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone(), is_annual));
         pending_writes.push(PendingIssueWrite::Insert(Box::new(NewIssueRow {
             issue_id,
             series_id,
@@ -1930,6 +2038,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             source: issue_source,
             match_state: issue_match_state,
             number: issue_num,
+            is_annual,
             file,
             page_count,
             fm,
@@ -2902,6 +3011,50 @@ mod tests {
         assert_eq!(issue_number_from_filename("Batman Vol 4.cbz", None), "4");
     }
 
+    // #203 Phase 0: annuals are their own numbering domain — "Batman Annual 001" used to parse as
+    // plain issue "1" and collide with the real #1. Mirrors the Node describeIssueFromFilename tests.
+    #[test]
+    fn annual_descriptor_flags_and_numbers() {
+        let d = |f: &str, h: Option<&str>| issue_descriptor_from_filename(f, h);
+        assert_eq!(d("Batman Annual 001 (2012).cbz", None), ("1".to_string(), true));
+        assert_eq!(d("Batman Annual #3.cbz", None), ("3".to_string(), true));
+        assert_eq!(d("Detective Comics Annual 011 (2023) (Webrip).cbz", None), ("11".to_string(), true));
+        // Year-labeled one-shot forms land as Annual #1 via the default.
+        assert_eq!(d("Superman 2021 Annual.cbz", None), ("1".to_string(), true));
+        assert_eq!(d("Superman Annual (2021).cbz", None), ("1".to_string(), true));
+        // Regular issues stay unflagged — including bracketed annual CROSS-REFERENCES, which the
+        // cross-ref stripper owns ("[Annual 2]" is a tie-in pointer, not this file's identity).
+        assert_eq!(d("Batman 005 (2013).cbz", None), ("5".to_string(), false));
+        assert_eq!(d("Batman 005 [Annual 2] (2013).cbz", None), ("5".to_string(), false));
+        // Whole-word only.
+        assert_eq!(d("Annualized Returns 003.cbz", None), ("3".to_string(), false));
+        // The series-name hint carries the flag through; a series literally NAMED "… Annual"
+        // consumes the token as its own prefix — no main run to collide with, so unflagged.
+        assert_eq!(d("Batman Annual 001 (2012).cbz", Some("Batman")), ("1".to_string(), true));
+        assert_eq!(d("Batman Annual 001 (2012).cbz", Some("Batman Annual")), ("1".to_string(), false));
+    }
+
+    // #203: ComicInfo signals — <Format> names the domain, an "Annual N"-shaped <Number> both
+    // names it and numbers it, and the FILENAME token still flags a file whose ComicInfo number
+    // is plain (the Mylar shape: "Batman Annual #001.cbz" tagged with Number=1, no Format).
+    #[test]
+    fn annual_descriptor_for_file_reads_comicinfo_signals() {
+        let num = |n: &str| ScanComicInfo { number: Some(n.to_string()), ..Default::default() };
+        assert_eq!(
+            issue_descriptor_for_file(Some(&ScanComicInfo { number: Some("2".to_string()), format: Some("Annual".to_string()), ..Default::default() }), "x.cbz", None),
+            ("2".to_string(), true)
+        );
+        assert_eq!(issue_descriptor_for_file(Some(&num("Annual 3")), "x.cbz", None), ("3".to_string(), true));
+        assert_eq!(issue_descriptor_for_file(Some(&num("Annual")), "x.cbz", None), ("1".to_string(), true));
+        assert_eq!(
+            issue_descriptor_for_file(Some(&num("001")), "Batman Annual 001 (2012).cbz", None),
+            ("1".to_string(), true)
+        );
+        // Plain everything stays plain.
+        assert_eq!(issue_descriptor_for_file(Some(&num("007")), "Batman 007.cbz", None), ("7".to_string(), false));
+        assert_eq!(issue_descriptor_for_file(None, "Batman 007.cbz", None), ("7".to_string(), false));
+    }
+
     #[test]
     fn derive_meta_from_comicvine_web() {
         let info = ScanComicInfo {
@@ -3192,7 +3345,7 @@ mod tests {
                 "alternateCount" INTEGER, "storyArcNumber" TEXT,
                 "createdAt" TEXT, "updatedAt" TEXT, UNIQUE("metadataSource", "metadataId"))"#,
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataId" TEXT, "metadataSource" TEXT,
-                "matchState" TEXT, number TEXT, status TEXT, "filePath" TEXT, "pageCount" INTEGER DEFAULT 0,
+                "matchState" TEXT, number TEXT, "isAnnual" INTEGER DEFAULT 0, status TEXT, "filePath" TEXT, "pageCount" INTEGER DEFAULT 0,
                 name TEXT, description TEXT, "releaseDate" TEXT, genres TEXT, writers TEXT, artists TEXT,
                 "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT, teams TEXT, locations TEXT,
                 "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,

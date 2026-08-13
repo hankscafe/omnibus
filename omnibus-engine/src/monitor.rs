@@ -122,7 +122,10 @@ async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<Issu
         cover_url: r.get("coverUrl"),
     }).collect();
 
-    let issue_rows = sqlx::query(r#"SELECT id, "seriesId", number, "filePath", "releaseDate" FROM "Issue""#).fetch_all(&db.pool).await?;
+    // #203: annual rows are invisible to the monitor — its candidates come from the PARENT
+    // provider volume, so an owned "Annual #1" must never satisfy an is_already_in_library
+    // check for the regular #1 (nor pair with provider skeletons by number).
+    let issue_rows = sqlx::query(r#"SELECT id, "seriesId", number, "filePath", "releaseDate" FROM "Issue" WHERE "isAnnual" = false"#).fetch_all(&db.pool).await?;
     let mut issues: HashMap<String, Vec<IssueRec>> = HashMap::new();
     for r in &issue_rows {
         let sid: String = r.get("seriesId");

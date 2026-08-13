@@ -50,7 +50,27 @@ function stripSeriesPrefix(filename: string, seriesName: string): string | null 
     return filename.slice(i);
 }
 
+// #203 Phase 0: the number alone can't say WHICH numbering domain a file belongs to — "Batman
+// Annual 001" is Annual #1, not issue #1, and treating them alike produced phantom duplicates.
+// Callers that create or reconcile Issue rows should use this descriptor; extractIssueNumber
+// stays as a pure delegation for the many callers that only need the number.
+export interface IssueDescriptor { number: string; isAnnual: boolean }
+
 export function extractIssueNumber(filename: string, seriesName?: string): string {
+    return describeIssueFromFilename(filename, seriesName).number;
+}
+
+// The annual FLAG alone (#203), for callers whose NUMBER comes from ComicInfo rather than the
+// filename (the importer). Signals: ComicInfo <Format>, an "Annual…"-shaped <Number>, or the
+// filename token. Parity: omnibus-engine scanner.rs annual_flag_for_signals.
+export function annualFlagForSignals(format: string | null | undefined, number: string | null | undefined, filename: string): boolean {
+    const token = /(?<![a-zA-Z])annual(?![a-zA-Z])/i;
+    if (format && token.test(format)) return true;
+    if (number && token.test(number)) return true;
+    return describeIssueFromFilename(filename).isAnnual;
+}
+
+export function describeIssueFromFilename(filename: string, seriesName?: string): IssueDescriptor {
     // Issue #200: "#½" must parse as "#0.5", not fall through every digit rule to the "1" default
     // (which collided a renamed half-issue with the real #1). Normalized once here — the recursive
     // series-hint call below re-normalizes harmlessly (idempotent).
@@ -58,12 +78,16 @@ export function extractIssueNumber(filename: string, seriesName?: string): strin
     // 2026-07-25 worklist item 9 (Kaiju No. 8): digits that belong to the TITLE must not be read as
     // issue numbers. When the caller knows the series, its name is stripped as a prefix first; a
     // filename that IS just the series name parses as a one-shot ("1") instead of the title digit.
-    // Callers without the series in hand get the unhinted behavior unchanged.
+    // Callers without the series in hand get the unhinted behavior unchanged. A series literally
+    // named "… Annual" consumes its own token here, so its files stay unflagged — inside such a
+    // series there is no main run to collide with (#203, deliberate).
     if (seriesName) {
         const rest = stripSeriesPrefix(filename, seriesName);
         if (rest !== null && rest !== filename) {
-            if (/\d/.test(rest)) return extractIssueNumber(rest);
-            return "1";
+            if (/\d/.test(rest) || /(?<![a-zA-Z])annual(?![a-zA-Z])/i.test(rest)) {
+                return describeIssueFromFilename(rest);
+            }
+            return { number: "1", isAnnual: false };
         }
     }
     let clean = filename.replace(/\.\w+$/, '');
@@ -75,9 +99,22 @@ export function extractIssueNumber(filename: string, seriesName?: string): strin
     const crossRefRegex = /[\[\(][^[\]()]*[a-zA-Z]+[^[\]()]*\d+[^[\]()]*[\]\)]/g;
     clean = clean.replace(crossRefRegex, (match) => {
         if (match.match(/(?:#|issue|ch(?:apter)?|vol(?:ume)?|v\s*\.)/i)) return match;
-        return ''; 
+        return '';
     });
-         
+
+    // #203: whole-word "Annual" AFTER the cross-ref strip, so "[Annual 2]" on a regular issue
+    // stays a tie-in pointer (stripped above) and never flags the file. When flagged, the number
+    // ADJACENT to the token wins ("Batman Annual 001", "… Annual #3"); otherwise the token is
+    // removed and the normal rules run — a year-labeled one-shot ("Superman 2021 Annual") lands
+    // as Annual #1 via the default. Parity: scanner.rs issue_descriptor_from_filename.
+    const annualTokenRegex = /(?<![a-zA-Z])annual(?![a-zA-Z])/i;
+    const isAnnual = annualTokenRegex.test(clean);
+    if (isAnnual) {
+        const adjacent = clean.match(/(?<![a-zA-Z])annual\s*#?\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+        if (adjacent) return { number: adjacent[1].replace(/^0+(?=\d)/, ''), isAnnual: true };
+        clean = clean.replace(/(?<![a-zA-Z])annual(?![a-zA-Z])/gi, ' ');
+    }
+
     // 3. HIGHEST PRIORITY: Explicit markers
     
     // GUARDED NEGATIVE CHECK: Only match if the negative sign is explicitly preceded by an identifier.
@@ -85,11 +122,11 @@ export function extractIssueNumber(filename: string, seriesName?: string): strin
     // This entirely prevents common title hyphens (e.g. "Title - 001.cbz") from becoming negative issues.
     const explicitNegative = clean.match(/(?:#\s*-|issue\s+#?-|issue\s+-|ch(?:apter)?\s+-|vol(?:ume)?\s+-|v\s*-)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (explicitNegative) {
-        return "-" + explicitNegative[1].replace(/^0+(?=\d)/, '');
+        return { number: "-" + explicitNegative[1].replace(/^0+(?=\d)/, ''), isAnnual };
     }
 
     const issueMatch = clean.match(/(?:#|(?<=^|[^a-zA-Z])(?:issue\s*#?|ch(?:apter)?\.?))\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-    if (issueMatch) return issueMatch[1].replace(/^0+(?=\d)/, '');
+    if (issueMatch) return { number: issueMatch[1].replace(/^0+(?=\d)/, ''), isAnnual };
 
     // 4. Temporarily hide Volume tokens
     let volumeNum: string | null = null;
@@ -107,16 +144,18 @@ export function extractIssueNumber(filename: string, seriesName?: string): strin
         for (let i = matches.length - 1; i >= 0; i--) {
             const matchVal = matches[i][1].replace(/^0+(?=\d)/, '');
             const numVal = parseFloat(matchVal);
-            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) continue; 
-            return matchVal;
+            if (numVal >= 1900 && numVal <= 2099 && !matchVal.match(/[a-zA-Z]/)) continue;
+            return { number: matchVal, isAnnual };
         }
     }
-         
+
     // 6. TERTIARY PRIORITY: Volume number
-    if (volumeNum) return volumeNum;
-         
-    Logger.log(`[Issue Extractor Debug] Failed to match any extraction rule for "${filename}". Defaulting to "1"`, 'debug');
-    return "1";
+    if (volumeNum) return { number: volumeNum, isAnnual };
+
+    if (!isAnnual) {
+        Logger.log(`[Issue Extractor Debug] Failed to match any extraction rule for "${filename}". Defaulting to "1"`, 'debug');
+    }
+    return { number: "1", isAnnual };
 }
 
 // Detects a multi-issue / multi-volume RANGE in a release title — e.g. "#0 – 9", "#1-100",

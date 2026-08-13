@@ -432,7 +432,7 @@ export default function DiagnosticsPage() {
                                 return (
                                     <div key={key} className={`bg-muted/30 border rounded-lg p-4 ${mispair ? 'border-amber-500/40' : 'border-border'}`}>
                                         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                                            <h4 className="font-bold text-foreground">{group.seriesName} <Badge variant="secondary">Issue #{group.issueNumber}</Badge>
+                                            <h4 className="font-bold text-foreground">{group.seriesName} <Badge variant="secondary">{group.isAnnual ? 'Annual' : 'Issue'} #{group.issueNumber}</Badge>
                                                 {mispair && <Badge variant="outline" className="ml-1 border-amber-500/60 text-amber-500"><AlertTriangle className="w-3 h-3 mr-1" /> Suspected mispair</Badge>}
                                             </h4>
                                             <div className="flex items-center gap-3">

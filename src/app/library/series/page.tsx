@@ -522,10 +522,12 @@ function SeriesContent() {
             toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
             return;
         }
-        // Issue #200: parsedNum is NaN→null for anything parseFloat can't read (a "½" pre-fix, an
-        // "Annual" forever) — fall back to the raw stored number so a request never says "#null".
+        // Issue #200: parsedNum is NaN→null for anything parseFloat can't read (a "½" pre-fix) —
+        // fall back to the raw stored number so a request never says "#null". #203: annuals carry
+        // their domain in the composite ("Series Annual #N"), which also flips the downloader's
+        // annual-aware search guards for such a request.
         const reqNum = (issue.parsedNum ?? issue.number ?? '').toString();
-        let compositeName = `${seriesInfo.name} #${reqNum}`;
+        let compositeName = `${seriesInfo.name}${issue.isAnnual ? ' Annual' : ''} #${reqNum}`;
         if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${reqNum}`)) {
             compositeName += `: ${issue.name}`;
         } else if (issue.name && issue.name.includes(`#${reqNum}`)) {
@@ -1737,7 +1739,7 @@ function SeriesContent() {
                                       {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-primary" style={{ width: `${issue.readProgress}%` }} /></div>}
                                     </div>
                                     <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
-                                      <div><h5 className={cn("font-bold text-base line-clamp-2 leading-tight", isRead ? 'text-muted-foreground' : 'text-foreground')}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span>}</div>
+                                      <div><h5 className={cn("font-bold text-base line-clamp-2 leading-tight", isRead ? 'text-muted-foreground' : 'text-foreground')}>{issue.name}</h5>{issue.parsedNum !== null && <span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">{issue.isAnnual ? 'Annual' : 'Issue'} #{issue.parsedNum}</span>}</div>
                                       <div className="flex flex-wrap items-center gap-1.5 mt-3">
                                         <Button size="sm" variant={isSelected && !isSelectionMode ? "default" : "outline"} className="flex-1 font-bold shadow-md min-w-[70px]" asChild onClick={(e) => { if (isSelectionMode) { e.preventDefault(); } else { e.stopPropagation(); } }}>
                                             <Link href={`/reader?path=${encodeURIComponent(issue.fullPath)}&series=${encodeURIComponent(folderPath || '')}`}>
@@ -1815,7 +1817,7 @@ function SeriesContent() {
                                                   </td>
                                                   <td className="px-4 py-3 font-bold">
                                                       <div className={cn("line-clamp-2 leading-tight", isRead ? 'text-muted-foreground' : 'text-foreground')}>{issue.name}</div>
-                                                      {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</div>}
+                                                      {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">{issue.isAnnual ? 'Annual' : 'Issue'} #{issue.parsedNum}</div>}
                                                   </td>
                                                   <td className="px-4 py-3 text-center">
                                                       {isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3 mr-1"/> Read</Badge> : issue.readProgress > 0 ? <Badge className="bg-primary border-0 text-primary-foreground text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : <span className="text-muted-foreground text-xs">-</span>}
@@ -1912,7 +1914,7 @@ function SeriesContent() {
                                       <div key={issue.id} onClick={() => setActiveIssue(issue)} className="flex gap-4 p-4 bg-muted/30 border border-border/50 rounded-xl shadow-sm opacity-80 hover:opacity-100 transition-all cursor-pointer">
                                         <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border grayscale">{issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}</div>
                                         <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
-                                            <div><h5 className="font-bold text-base line-clamp-2 text-foreground leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</span></div>
+                                            <div><h5 className="font-bold text-base line-clamp-2 text-foreground leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">{issue.isAnnual ? 'Annual' : 'Issue'} #{issue.parsedNum}</span></div>
                                             <div className="flex flex-wrap items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] border-border hover:bg-muted uppercase tracking-wider min-w-[80px]" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
                                         </div>
                                       </div>
@@ -1943,7 +1945,7 @@ function SeriesContent() {
                                                       </td>
                                                       <td className="px-4 py-3 font-bold">
                                                           <div className="line-clamp-2 leading-tight text-foreground">{issue.name}</div>
-                                                          {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">Issue #{issue.parsedNum}</div>}
+                                                          {issue.parsedNum !== null && <div className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">{issue.isAnnual ? 'Annual' : 'Issue'} #{issue.parsedNum}</div>}
                                                       </td>
                                                       <td className="px-4 py-3 text-right">
                                                           {isAlreadyRequested ? (

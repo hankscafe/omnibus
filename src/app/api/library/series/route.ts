@@ -10,7 +10,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
-import { extractIssueNumber, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
+import { describeIssueFromFilename, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeDescription, providerWikiBase } from '@/lib/utils/sanitize';
 import { safeParse } from '@/lib/utils/safe-parse';
@@ -108,16 +108,21 @@ export async function GET(request: Request) {
         // wide Issue row twice (the post-reconciliation re-fetch below reads the full rows).
         let existingIssues: any[] = await prisma.issue.findMany({
             where: { seriesId: seriesRecord.id },
-            select: { id: true, number: true, metadataId: true, filePath: true },
+            select: { id: true, number: true, isAnnual: true, metadataId: true, filePath: true },
         });
         const dbIssueMap = new Map();
         const idsToDelete: string[] = [];
-        
+
+        // #203: the annual domain is part of the grouping key ("annual:1" vs "1") — before this,
+        // a co-located "Batman Annual 001" and the real #1 landed in one group and the ranking
+        // DELETED one of the rows every visit (row churn). ':' can't appear in a number, so the
+        // prefix can't collide with letter-suffixed numbers like "12a".
         const issuesByNum = new Map<string, any[]>();
         for (const issue of existingIssues) {
             const stdNum = issue.number.replace(/^0+(?=\d)/, '');
-            if (!issuesByNum.has(stdNum)) issuesByNum.set(stdNum, []);
-            issuesByNum.get(stdNum)!.push(issue);
+            const key = `${issue.isAnnual ? 'annual:' : ''}${stdNum}`;
+            if (!issuesByNum.has(key)) issuesByNum.set(key, []);
+            issuesByNum.get(key)!.push(issue);
         }
 
         for (const [stdNum, issues] of Array.from(issuesByNum.entries())) {
@@ -151,49 +156,55 @@ export async function GET(request: Request) {
         if (folderExists) {
             const files = await fs.promises.readdir(folderPath);
 
-            const filesByNum = new Map<string, string[]>();
+            const filesByNum = new Map<string, { number: string; isAnnual: boolean; files: string[] }>();
             for (const file of files) {
                 if (COMIC_EXT_REGEX.test(file)) {
                     // Series-name hint keeps title digits (Kaiju No. 8) out of the issue number —
                     // without it every volume parsed as #8 and collapsed into one dup-flagged row.
-                    const stdNum = extractIssueNumber(file, seriesRecord?.name || undefined);
-                    if (!filesByNum.has(stdNum)) filesByNum.set(stdNum, []);
-                    filesByNum.get(stdNum)!.push(file);
+                    // #203: files group by (annual domain, number) — "Batman Annual 001" and
+                    // "Batman 001" are different slots, not a duplicate pair.
+                    const desc = describeIssueFromFilename(file, seriesRecord?.name || undefined);
+                    const key = `${desc.isAnnual ? 'annual:' : ''}${desc.number}`;
+                    const entry = filesByNum.get(key);
+                    if (entry) entry.files.push(file);
+                    else filesByNum.set(key, { number: desc.number, isAnnual: desc.isAnnual, files: [file] });
                 }
             }
 
-            for (const [stdNum, fileList] of filesByNum.entries()) {
-                if (fileList.length > 1) {
+            for (const [key, group] of filesByNum.entries()) {
+                if (group.files.length > 1) {
                     duplicatesList.push({
-                        issueNumber: stdNum,
-                        files: fileList
+                        issueNumber: group.number,
+                        isAnnual: group.isAnnual,
+                        files: group.files
                     });
                 }
 
-                const file = fileList[0];
+                const file = group.files[0];
                 const fullPath = path.join(folderPath, file);
                 activeFilePaths.add(fullPath);
-                
-                const existingIssue = dbIssueMap.get(stdNum);
+
+                const existingIssue = dbIssueMap.get(key);
 
                 if (existingIssue) {
                     if (existingIssue.filePath !== fullPath) {
-                        updateOperations.push(prisma.issue.update({ 
-                            where: { id: existingIssue.id }, 
-                            data: { filePath: fullPath, status: "DOWNLOADED" } 
+                        updateOperations.push(prisma.issue.update({
+                            where: { id: existingIssue.id },
+                            data: { filePath: fullPath, status: "DOWNLOADED" }
                         }));
                     }
-                } else if (!creatingNums.has(stdNum)) {
-                    createsToFire.push({ 
-                        seriesId: seriesRecord.id, 
-                        metadataId: `unmatched_${Math.random()}`, 
-                        metadataSource: 'LOCAL', 
+                } else if (!creatingNums.has(key)) {
+                    createsToFire.push({
+                        seriesId: seriesRecord.id,
+                        metadataId: `unmatched_${Math.random()}`,
+                        metadataSource: 'LOCAL',
                         matchState: 'UNMATCHED',
-                        number: stdNum, 
-                        status: "DOWNLOADED", 
+                        number: group.number,
+                        isAnnual: group.isAnnual,
+                        status: "DOWNLOADED",
                         filePath: fullPath
                     });
-                    creatingNums.add(stdNum); 
+                    creatingNums.add(key);
                 }
             }
         }
@@ -239,7 +250,9 @@ export async function GET(request: Request) {
             const formatted = {
                 id: issue.id,
                 cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
-                name: issue.name || `${seriesRecord.name} #${issue.number}`,
+                // #203: annuals compose as "Series Annual #N" and carry the flag for the page/OPDS.
+                name: issue.name || `${seriesRecord.name}${(issue as any).isAnnual ? ' Annual' : ''} #${issue.number}`,
+                isAnnual: (issue as any).isAnnual ?? false,
                 // Issue #200: normalize vulgar fractions ("½" → 0.5) or parseFloat yields NaN,
                 // which serializes to null and turned half-issue requests into "#null" searches.
                 // The raw number rides along so the page can always fall back to a real string.
@@ -261,8 +274,11 @@ export async function GET(request: Request) {
         }
     }
 
-    downloadedIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
-    missingIssues.sort((a,b) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0));
+    // #203: annuals read AFTER the main run (Mylar-style), then by number within each domain.
+    const domainThenNumber = (a: any, b: any) =>
+        ((a.isAnnual ? 1 : 0) - (b.isAnnual ? 1 : 0)) || ((a.parsedNum ?? 0) - (b.parsedNum ?? 0));
+    downloadedIssues.sort(domainThenNumber);
+    missingIssues.sort(domainThenNumber);
     
     const finalSeriesCoverUrl = seriesRecord?.coverUrl && (seriesRecord.coverUrl.startsWith('http') || seriesRecord.coverUrl.match(/^[a-zA-Z]:\\/))
         ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 

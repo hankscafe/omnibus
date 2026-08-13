@@ -25,6 +25,8 @@ export interface DuplicateGroup {
     seriesMetadataId: string | null;
     seriesMetadataSource: string | null;
     issueNumber: string;
+    /** #203: the group's numbering domain — annual groups are reported as "Annual #N". */
+    isAnnual: boolean;
     files: DuplicateFile[];
     /** True when the group's filenames disagree about which issue they are (issue #196): two
      *  DIFFERENT comics are wearing the same DB number — a metadata mispair, not a real duplicate.
@@ -48,8 +50,10 @@ export async function findDuplicateGroups(): Promise<DuplicateGroup[]> {
     // Let the DB find the (series, number) pairs that actually have more than one file-bearing record
     // instead of hydrating every downloaded issue (+ its full Series row) into Node. This health check
     // runs every 15 min, so on a 100k-issue library the old full scan moved hundreds of MB each time.
+    // #203: isAnnual is part of the grouping key — "Batman Annual #1" beside "Batman #1" is a
+    // co-located annual, not a duplicate.
     const candidates = await prisma.issue.groupBy({
-        by: ['seriesId', 'number'],
+        by: ['seriesId', 'number', 'isAnnual'],
         where: { filePath: { not: null } },
         _count: { seriesId: true },
         having: { seriesId: { _count: { gt: 1 } } },
@@ -62,16 +66,16 @@ export async function findDuplicateGroups(): Promise<DuplicateGroup[]> {
     const issues = await prisma.issue.findMany({
         where: { filePath: { not: null }, seriesId: { in: seriesIds } },
         select: {
-            id: true, number: true, seriesId: true, filePath: true,
+            id: true, number: true, isAnnual: true, seriesId: true, filePath: true,
             series: { select: { name: true, metadataId: true, metadataSource: true } },
         },
     });
 
-    // Group by (series, issue number) in memory first — cheap, no filesystem access.
+    // Group by (series, annual domain, issue number) in memory first — cheap, no filesystem access.
     const groups = new Map<string, any[]>();
     for (const issue of issues) {
         if (!issue.filePath) continue;
-        const key = `${issue.seriesId}_${issue.number}`;
+        const key = `${issue.seriesId}_${issue.isAnnual ? 'annual' : 'issue'}_${issue.number}`;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key)!.push(issue);
     }
@@ -104,6 +108,7 @@ export async function findDuplicateGroups(): Promise<DuplicateGroup[]> {
             seriesMetadataId: present[0].series?.metadataId ?? null,
             seriesMetadataSource: present[0].series?.metadataSource ?? null,
             issueNumber: present[0].number,
+            isAnnual: present[0].isAnnual ?? false,
             files,
             suspectedMispair: filenamesDisagree(files.map(f => f.parsedNumber)),
         });

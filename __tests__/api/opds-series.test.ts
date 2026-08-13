@@ -108,4 +108,25 @@ describe('API Route: OPDS Series Feed (/api/opds/series/[id])', () => {
         expect(xml).toContain('pse:count="0"');
         expect(mocks.updateIssue).not.toHaveBeenCalled();
     });
+
+    // #203 Phase 0: annuals shelve AFTER the main run (Panels reads the feed order), and a
+    // nameless annual entry composes its domain into the title instead of masquerading as #1.
+    it('orders annuals after the main run and titles them "Series Annual #N"', async () => {
+        mocks.findUniqueSeries.mockResolvedValue(baseSeries([
+            { id: 'iss_a1', number: '1', isAnnual: true, name: null, filePath: '/comics/batman annual 01.cbz', pageCount: 30, coverUrl: null, description: null },
+            { id: 'iss_2', number: '2', isAnnual: false, name: null, filePath: '/comics/batman 02.cbz', pageCount: 20, coverUrl: null, description: null },
+            { id: 'iss_1', number: '1', isAnnual: false, name: null, filePath: '/comics/batman 01.cbz', pageCount: 22, coverUrl: null, description: null },
+        ]));
+
+        const res = await GET(createReq(), { params: createParams() }) as Response;
+        const xml = await res.text();
+
+        expect(xml).toContain('<title>Batman Annual #1</title>');
+        const posRun1 = xml.indexOf('<title>Batman #1</title>');
+        const posRun2 = xml.indexOf('<title>Batman #2</title>');
+        const posAnnual = xml.indexOf('<title>Batman Annual #1</title>');
+        expect(posRun1).toBeGreaterThan(-1);
+        expect(posRun1).toBeLessThan(posRun2);
+        expect(posRun2).toBeLessThan(posAnnual);
+    });
 });

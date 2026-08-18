@@ -1,6 +1,6 @@
 {
   "name": "omnibus",
-  "version": "1.4.5-beta.001",
+  "version": "1.4.5-beta.002",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -43,10 +43,10 @@
     "react-is": "^19.2.5",
     "react-virtuoso": "^4.18.10",
     "recharts": "^3.7.0",
-    "sanitize-html": "^2.17.2",
+    "sanitize-html": "^2.17.7",
     "sharp": "^0.35.3",
     "tailwind-merge": "^3.4.0",
-    "undici": "^7.28.0"
+    "undici": "^7.29.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

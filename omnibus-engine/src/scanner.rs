@@ -1326,6 +1326,164 @@ async fn exec_issue_insert(
     .map(|_| ())
 }
 
+/// Whether a parsed file offered ANY narrative value worth writing (guards the 5I heal from
+/// issuing no-op UPDATEs for files that carry no ComicInfo).
+fn issue_file_meta_has_any(fm: &IssueFileMeta) -> bool {
+    fm.name.is_some() || fm.description.is_some() || fm.release_date.is_some()
+        || fm.genres.is_some() || fm.writers.is_some() || fm.artists.is_some()
+        || fm.cover_artists.is_some() || fm.colorists.is_some() || fm.letterers.is_some()
+        || fm.characters.is_some() || fm.teams.is_some() || fm.locations.is_some()
+        || fm.story_arcs.is_some() || fm.inker.is_some() || fm.editor.is_some()
+        || fm.translator.is_some() || fm.tags.is_some() || fm.main_character_or_team.is_some()
+        || fm.alternate_series.is_some() || fm.alternate_number.is_some()
+        || fm.alternate_count.is_some() || fm.story_arc_number.is_some() || fm.gtin.is_some()
+        || fm.notes.is_some() || fm.scan_information.is_some() || fm.review.is_some()
+        || fm.community_rating.is_some() || fm.black_and_white.is_some()
+}
+
+/// Fill-blank UPDATE for the 5I bare-row heal: every column takes the file's value only when the
+/// row's is blank — a provider, manual, or earlier value always wins. blackAndWhite is a SQL
+/// literal (the Any-driver bool rule); identity fields (number, isAnnual, matchState, ids) are
+/// deliberately absent — this heal is narrative-only.
+fn bare_issue_fill_sql(bw: &str, now: &str) -> String {
+    let list = |col: &str, n: usize| {
+        format!(r#"{col} = CASE WHEN {col} IS NOT NULL AND {col} <> '' AND {col} <> '[]' THEN {col} ELSE ${n} END"#)
+    };
+    format!(
+        r#"UPDATE "Issue" SET
+           name = COALESCE(NULLIF(name, ''), $1, name),
+           description = COALESCE(NULLIF(description, ''), $2, description),
+           "releaseDate" = COALESCE(NULLIF("releaseDate", ''), $3, "releaseDate"),
+           {genres}, {writers}, {artists}, {cover_artists}, {colorists}, {letterers},
+           {characters}, {teams}, {locations}, {story_arcs}, {inker}, {editor}, {translator}, {tags},
+           "mainCharacterOrTeam" = COALESCE(NULLIF("mainCharacterOrTeam", ''), $18, "mainCharacterOrTeam"),
+           "alternateSeries" = COALESCE(NULLIF("alternateSeries", ''), $19, "alternateSeries"),
+           "alternateNumber" = COALESCE(NULLIF("alternateNumber", ''), $20, "alternateNumber"),
+           "alternateCount" = COALESCE("alternateCount", $21),
+           "storyArcNumber" = COALESCE(NULLIF("storyArcNumber", ''), $22, "storyArcNumber"),
+           gtin = COALESCE(NULLIF(gtin, ''), $23, gtin),
+           notes = COALESCE(NULLIF(notes, ''), $24, notes),
+           "scanInformation" = COALESCE(NULLIF("scanInformation", ''), $25, "scanInformation"),
+           review = COALESCE(NULLIF(review, ''), $26, review),
+           "communityRating" = COALESCE("communityRating", $27),
+           "blackAndWhite" = CASE WHEN "blackAndWhite" IS NULL THEN {bw} ELSE "blackAndWhite" END,
+           "updatedAt" = {now}
+           WHERE id = $28"#,
+        genres = list("genres", 4),
+        writers = list("writers", 5),
+        artists = list("artists", 6),
+        cover_artists = list(r#""coverArtists""#, 7),
+        colorists = list("colorists", 8),
+        letterers = list("letterers", 9),
+        characters = list("characters", 10),
+        teams = list("teams", 11),
+        locations = list("locations", 12),
+        story_arcs = list(r#""storyArcs""#, 13),
+        inker = list("inker", 14),
+        editor = list("editor", 15),
+        translator = list("translator", 16),
+        tags = list("tags", 17),
+        bw = bw,
+        now = now
+    )
+}
+
+/// 5I (#203 field report): rows born OUTSIDE the scanner — the Node series-page reconciler
+/// registers newly-seen files as bare number+domain+file rows — never met their file's ComicInfo,
+/// so an annual's own title/synopsis/credits stayed invisible and views fell back to series
+/// values. Heal: any file-backed row whose narrative core is entirely blank (name, description,
+/// writers) gets its file's ComicInfo read back, fill-blank per column. Rows whose files carry no
+/// ComicInfo yield nothing and are re-probed next scan (the 5D posture: cheap archive-entry read).
+async fn heal_bare_issue_rows(db: &Db, library_id: &str, scan_workers: usize) -> usize {
+    let candidates = sqlx::query(
+        r#"SELECT i.id AS iid, i."filePath" AS fp FROM "Issue" i
+           JOIN "Series" s ON i."seriesId" = s.id
+           WHERE s."libraryId" = $1 AND i."filePath" IS NOT NULL AND i."filePath" <> ''
+             AND (i.name IS NULL OR i.name = '')
+             AND (i.description IS NULL OR i.description = '')
+             AND (i.writers IS NULL OR i.writers = '' OR i.writers = '[]')"#,
+    )
+    .bind(library_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    if candidates.is_empty() {
+        return 0;
+    }
+
+    let sem = Arc::new(Semaphore::new(scan_workers.max(1)));
+    let mut set: JoinSet<Option<(String, IssueFileMeta)>> = JoinSet::new();
+    for row in candidates {
+        let iid: String = row.get("iid");
+        let Some(fp) = row.try_get::<Option<String>, _>("fp").unwrap_or(None) else { continue };
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.ok();
+            tokio::task::spawn_blocking(move || {
+                parse_comic_info(Path::new(&fp)).map(|info| (iid, issue_file_meta(Some(&info))))
+            })
+            .await
+            .ok()
+            .flatten()
+        });
+    }
+    let mut updates: Vec<(String, IssueFileMeta)> = Vec::new();
+    while let Some(res) = set.join_next().await {
+        let Ok(Some((iid, fm))) = res else { continue };
+        if issue_file_meta_has_any(&fm) {
+            updates.push((iid, fm));
+        }
+    }
+
+    let mut healed = 0;
+    for chunk in updates.chunks(WRITE_CHUNK) {
+        let Some(mut tx) = begin_write_tx(db, "5I bare-row heal").await else { continue };
+        let mut n = 0;
+        for (iid, fm) in chunk {
+            let bw = match fm.black_and_white { Some(true) => "true", Some(false) => "false", None => "NULL" };
+            if sqlx::query(&bare_issue_fill_sql(bw, db.now_expr()))
+                .bind(&fm.name)
+                .bind(&fm.description)
+                .bind(&fm.release_date)
+                .bind(&fm.genres)
+                .bind(&fm.writers)
+                .bind(&fm.artists)
+                .bind(&fm.cover_artists)
+                .bind(&fm.colorists)
+                .bind(&fm.letterers)
+                .bind(&fm.characters)
+                .bind(&fm.teams)
+                .bind(&fm.locations)
+                .bind(&fm.story_arcs)
+                .bind(&fm.inker)
+                .bind(&fm.editor)
+                .bind(&fm.translator)
+                .bind(&fm.tags)
+                .bind(&fm.main_character_or_team)
+                .bind(&fm.alternate_series)
+                .bind(&fm.alternate_number)
+                .bind(fm.alternate_count)
+                .bind(&fm.story_arc_number)
+                .bind(&fm.gtin)
+                .bind(&fm.notes)
+                .bind(&fm.scan_information)
+                .bind(&fm.review)
+                .bind(fm.community_rating)
+                .bind(iid)
+                .execute(&mut *tx)
+                .await
+                .is_ok()
+            {
+                n += 1;
+            }
+        }
+        if tx.commit().await.is_ok() {
+            healed += n;
+        }
+    }
+    healed
+}
+
 /// Open a flush transaction, logging (not propagating) failure — scan phases skip a chunk that
 /// can't get a transaction rather than aborting the whole scan, matching the per-row error
 /// posture the autocommit code had.
@@ -2440,6 +2598,14 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         }
     }
 
+    // ---------------------------------------------------------
+    // 5I. BARE-ROW NARRATIVE READ-BACK (#203 field report)
+    // ---------------------------------------------------------
+    let healed = heal_bare_issue_rows(&db, &library_id, cfg.scan_workers).await;
+    if healed > 0 {
+        log::info!("[Scan] Read ComicInfo back into {} bare issue row(s) (fill-blank only, #203).", healed);
+    }
+
     // A big scan appends thousands of WAL frames; SQLite's passive auto-checkpoint often can't
     // drain them while the Node app keeps read snapshots open, and every reader slows as the WAL
     // grows (issue #183). Reclaim it now that the write burst is over. TRUNCATE waits on the
@@ -3287,6 +3453,89 @@ mod tests {
             za.by_index(i).map(|e| e.name().eq_ignore_ascii_case("comicinfo.xml")).unwrap_or(false)
         });
         assert!(has_comicinfo, "embed job wrote ComicInfo.xml into the fixture cbz");
+    }
+
+    // ------------------------------------------------------------------
+    // #203 field report (anacronismo): rows born from the Node series-page reconciler carry only
+    // number/domain/filePath — no narrative fields — so an annual's own ComicInfo.xml was never
+    // read and views fell back to the series synopsis. Scan step 5I heals every such bare
+    // file-backed row by reading its file's ComicInfo, fill-blank; filled rows are never touched.
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn bare_row_heal_reads_comicinfo_fill_blank_only() {
+        let base = std::env::temp_dir().join(format!("omnibus_5i_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let series_dir = base.join("Batman (2011)");
+        std::fs::create_dir_all(&series_dir).expect("create fixture series dir");
+
+        // The annual cbz carries its OWN ComicInfo (the Mylar shape) — title, synopsis, writer.
+        let annual_cbz = series_dir.join("Batman Annual 001 (2012).cbz");
+        {
+            use std::io::Write as _;
+            let f = File::create(&annual_cbz).expect("create annual cbz");
+            let mut zw = zip::ZipWriter::new(f);
+            zw.start_file("ComicInfo.xml", zip::write::FileOptions::default()).unwrap();
+            zw.write_all(br#"<?xml version="1.0"?><ComicInfo><Title>First Annual</Title><Number>1</Number><Format>Annual</Format><Summary>The annual's own synopsis.</Summary><Writer>Scott Snyder</Writer><Year>2012</Year><Month>5</Month></ComicInfo>"#).unwrap();
+            zw.start_file("01.jpg", zip::write::FileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.finish().unwrap();
+        }
+        // A second file whose ComicInfo must NOT overwrite its already-filled row.
+        let filled_cbz = series_dir.join("Batman 001 (2011).cbz");
+        {
+            use std::io::Write as _;
+            let f = File::create(&filled_cbz).expect("create filled cbz");
+            let mut zw = zip::ZipWriter::new(f);
+            zw.start_file("ComicInfo.xml", zip::write::FileOptions::default()).unwrap();
+            zw.write_all(br#"<?xml version="1.0"?><ComicInfo><Title>WRONG</Title><Summary>WRONG</Summary><Writer>WRONG</Writer></ComicInfo>"#).unwrap();
+            zw.finish().unwrap();
+        }
+
+        let db_file = base.join("heal.db");
+        File::create(&db_file).expect("pre-create sqlite file");
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+        for ddl in [
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "libraryId" TEXT, "folderPath" TEXT, name TEXT)"#,
+            r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, number TEXT, "isAnnual" INTEGER DEFAULT 0,
+                "filePath" TEXT, name TEXT, description TEXT, "releaseDate" TEXT, genres TEXT, writers TEXT, artists TEXT,
+                "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT, teams TEXT, locations TEXT,
+                "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT, tags TEXT, "mainCharacterOrTeam" TEXT,
+                "alternateSeries" TEXT, "alternateNumber" TEXT, "alternateCount" INTEGER, "storyArcNumber" TEXT,
+                gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT, "communityRating" REAL,
+                "blackAndWhite" INTEGER, "updatedAt" TEXT)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
+        }
+        sqlx::query(r#"INSERT INTO "Series" (id, "libraryId", "folderPath", name) VALUES ('s1', 'lib1', $1, 'Batman')"#)
+            .bind(series_dir.to_string_lossy().to_string()).execute(&db.pool).await.unwrap();
+        // Bare row (the reconciler shape): number + domain + file, nothing narrative.
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "isAnnual", "filePath") VALUES ('i_annual', 's1', '1', 1, $1)"#)
+            .bind(annual_cbz.to_string_lossy().to_string()).execute(&db.pool).await.unwrap();
+        // Filled row: every narrative-core field present — must be untouched.
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "isAnnual", "filePath", name, description, writers) VALUES ('i_filled', 's1', '1', 0, $1, 'Real Name', 'Real Desc', '["Real Writer"]')"#)
+            .bind(filled_cbz.to_string_lossy().to_string()).execute(&db.pool).await.unwrap();
+
+        let healed = heal_bare_issue_rows(&db, "lib1", 2).await;
+        assert_eq!(healed, 1, "exactly the bare row heals");
+
+        let row = sqlx::query(r#"SELECT name, description, writers, "releaseDate" FROM "Issue" WHERE id = 'i_annual'"#)
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(row.get::<String, _>("name"), "First Annual");
+        assert_eq!(row.get::<String, _>("description"), "The annual's own synopsis.");
+        assert!(row.get::<String, _>("writers").contains("Scott Snyder"));
+        assert_eq!(row.get::<String, _>("releaseDate"), "2012-05-01");
+
+        let filled = sqlx::query(r#"SELECT name, description, writers FROM "Issue" WHERE id = 'i_filled'"#)
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(filled.get::<String, _>("name"), "Real Name");
+        assert_eq!(filled.get::<String, _>("description"), "Real Desc");
+        assert_eq!(filled.get::<String, _>("writers"), r#"["Real Writer"]"#);
+
+        // Idempotent: the healed row no longer matches the bare predicate.
+        assert_eq!(heal_bare_issue_rows(&db, "lib1", 2).await, 0, "second pass is a no-op");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     // ------------------------------------------------------------------

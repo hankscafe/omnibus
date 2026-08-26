@@ -28,6 +28,27 @@ export function AccessSecurityTab({ s }: { s: SettingsBag }) {
     <>
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-foreground"><Shield className="w-5 h-5 text-primary" /> Account Registration</CardTitle>
+                    <CardDescription className="text-muted-foreground">Control whether new users can sign themselves up from the login page.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="flex items-center space-x-2 bg-muted/30 p-4 rounded-lg border border-border">
+                        <Switch
+                            id="allow-registration-toggle"
+                            checked={config.allow_registration !== "false"}
+                            onCheckedChange={(c) => setConfig({...config, allow_registration: c ? "true" : "false"})}
+                            className="scale-110 sm:scale-100"
+                        />
+                        <div className="grid gap-1">
+                            <Label htmlFor="allow-registration-toggle" className="cursor-pointer font-bold text-base text-foreground">Allow user self-registration</Label>
+                            <p className="text-xs text-muted-foreground">When off, the login page hides Register and the API refuses new sign-ups. Admins can still create accounts from the Users list, and a fresh install&apos;s first-run setup is never blocked.</p>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-border bg-background">
+                <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-foreground"><Fingerprint className="w-5 h-5 text-primary" /> Single Sign-On (SSO)</CardTitle>
                     <CardDescription className="text-muted-foreground">Integrate Omnibus with an OpenID Connect (OIDC) identity provider like Authelia, Authentik, or Keycloak.</CardDescription>
                 </CardHeader>

@@ -46,6 +46,25 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Native registration is disabled. Please log in via your Identity Provider." }, { status: 403 });
     }
 
+    // --- Admin toggle: disable self-registration (admins still create users via Admin → Users). ---
+    // Absent/anything-but-'false' = enabled, so existing installs are untouched. Fail-open on a
+    // transient DB error like the force-SSO read above (the approval flow remains the backstop).
+    // BOOTSTRAP EXEMPTION: a zero-user install must always be able to create its first admin —
+    // the setup wizard runs through this route, and a restored config with the toggle off must
+    // never brick a fresh database.
+    try {
+        const allowSetting = await prisma.systemSetting.findUnique({ where: { key: 'allow_registration' } });
+        if (allowSetting?.value === 'false') {
+            const userCount = await prisma.user.count();
+            if (userCount > 0) {
+                rateLimit.trackFailure();
+                return NextResponse.json({ error: "Self-registration is disabled. Ask an administrator for an account." }, { status: 403 });
+            }
+        }
+    } catch (e) {
+        // Missing mock or transient DB error — registration stays open rather than bricking setup.
+    }
+
     // FIX: Prevent ridiculous username lengths
     if (username.length > 50) {
         rateLimit.trackFailure();

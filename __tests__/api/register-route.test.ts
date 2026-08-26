@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
     userCreate: vi.fn(),
     userFindFirst: vi.fn(),
     userUpdate: vi.fn(),
+    userCount: vi.fn(),
+    settingFindUnique: vi.fn().mockResolvedValue(null),
     log: vi.fn(),
     sendDiscord: vi.fn().mockResolvedValue(null),
     sendEmail: vi.fn().mockResolvedValue(null),
@@ -22,8 +24,10 @@ vi.mock('@/lib/db', () => ({
         user: {
             create: mocks.userCreate,
             findFirst: mocks.userFindFirst,
-            update: mocks.userUpdate
+            update: mocks.userUpdate,
+            count: mocks.userCount
         },
+        systemSetting: { findUnique: mocks.settingFindUnique },
         // Library seeding on registration (Phase 2) touches these.
         library: { findMany: vi.fn().mockResolvedValue([]) },
         userLibraryAccess: { deleteMany: vi.fn(), createMany: vi.fn() }
@@ -102,5 +106,48 @@ describe('API Route: POST /api/auth/register', () => {
         // Assert Discord and Email alerts WERE sent to the admins
         expect(discordSendAlert).toHaveBeenCalled();
         expect(mocks.sendEmail).toHaveBeenCalled();
+    });
+});
+// Adam's admin-controls ask (2026-08-19): admins can turn OFF self-registration while keeping
+// Admin -> Users manual creation. The gate lives in this route (server-side enforcement; the login
+// page only hides the affordance) and NEVER blocks a zero-user install's first-admin bootstrap.
+describe('allow_registration gate', () => {
+    const settingImpl = (allowValue: string | null) => (args: any) =>
+        Promise.resolve(args?.where?.key === 'allow_registration' && allowValue !== null ? { value: allowValue } : null);
+
+    it('refuses registration with 403 when disabled and users already exist', async () => {
+        mocks.settingFindUnique.mockImplementation(settingImpl('false'));
+        mocks.userCount.mockResolvedValue(3);
+
+        const res = await POST(createReq({ username: 'Newcomer', email: 'new@test.com', password: 'SuperSecretPassword123!' }));
+        expect(res.status).toBe(403);
+        const data = await res.json();
+        expect(data.error).toContain('Self-registration is disabled');
+        expect(mocks.userCreate).not.toHaveBeenCalled();
+    });
+
+    it('still creates the FIRST admin on a zero-user install even when disabled (bootstrap exemption)', async () => {
+        mocks.settingFindUnique.mockImplementation(settingImpl('false'));
+        mocks.userCount.mockResolvedValue(0);
+        mocks.queryRaw.mockResolvedValueOnce([]);
+        mocks.userCreate.mockResolvedValueOnce({ id: 'user_boot', username: 'FirstAdmin' });
+        mocks.userFindFirst.mockResolvedValueOnce({ id: 'user_boot' });
+        mocks.userUpdate.mockResolvedValueOnce({ id: 'user_boot', username: 'FirstAdmin', role: 'ADMIN', isApproved: true });
+
+        const res = await POST(createReq({ username: 'FirstAdmin', email: 'boot@test.com', password: 'SuperSecretPassword123!' }));
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.message).toBe('Admin account created successfully.');
+    });
+
+    it('stays open by default when the setting row is absent', async () => {
+        mocks.settingFindUnique.mockImplementation(settingImpl(null));
+        mocks.queryRaw.mockResolvedValueOnce([]);
+        mocks.userCreate.mockResolvedValueOnce({ id: 'user_n', username: 'Normal' });
+        mocks.userFindFirst.mockResolvedValueOnce({ id: 'someone_else' });
+
+        const res = await POST(createReq({ username: 'Normal', email: 'n@test.com', password: 'SuperSecretPassword123!' }));
+        expect(res.status).toBe(200);
+        expect(mocks.userCreate).toHaveBeenCalled();
     });
 });

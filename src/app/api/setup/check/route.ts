@@ -30,10 +30,17 @@ export async function GET() {
             where: { key: 'oidc_force_sso' }
         });
         const forceSso = forceSsoSetting?.value === 'true';
-        
-        return NextResponse.json({ requiresSetup: !isComplete, forceSso });
+
+        // Self-registration toggle for the login page's Register affordance (display only — the
+        // register API enforces it server-side). Absent = enabled.
+        const allowRegSetting = await prisma.systemSetting.findUnique({
+            where: { key: 'allow_registration' }
+        });
+        const registrationEnabled = allowRegSetting?.value !== 'false';
+
+        return NextResponse.json({ requiresSetup: !isComplete, forceSso, registrationEnabled });
     } catch (error) {
         Logger.log(`Setup Check Error: ${getErrorMessage(error)}`, 'error');
-        return NextResponse.json({ requiresSetup: true, forceSso: false });
+        return NextResponse.json({ requiresSetup: true, forceSso: false, registrationEnabled: true });
     }
 }

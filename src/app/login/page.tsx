@@ -27,6 +27,8 @@ export default function LoginPage() {
   const [ssoLoading, setSsoLoading] = useState(false)
   const [ssoProvider, setSsoProvider] = useState<boolean>(false)
   const [nativeAuthEnabled, setNativeAuthEnabled] = useState<boolean>(true)
+  // Self-registration toggle (admin setting; display-only here — the register API enforces it).
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean>(true)
   
   // 2FA State
   const [showTwoFactor, setShowTwoFactor] = useState(false)
@@ -49,6 +51,7 @@ export default function LoginPage() {
           if (data.requiresSetup) {
               router.push('/setup');
           } else {
+              if (data.registrationEnabled === false) setRegistrationEnabled(false);
               // --- NEW: Check for the bypass parameter and force SSO ---
               const params = new URLSearchParams(window.location.search);
               const isLocalBypass = params.get('local') === 'true';
@@ -388,7 +391,7 @@ export default function LoginPage() {
                     <Button variant="link" type="button" onClick={() => toggleView('login')} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
                         &larr; Back to Login
                     </Button>
-                ) : (
+                ) : (registrationEnabled || view === 'register') && (
                     <Button variant="link" type="button" onClick={() => toggleView(view === 'register' ? 'login' : 'register')} className="text-xs text-muted-foreground hover:text-primary h-auto p-0">
                         {view === 'register' ? "Already have an account? Log in." : "Need an account? Register here."}
                     </Button>

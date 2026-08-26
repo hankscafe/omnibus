@@ -137,6 +137,16 @@ export const DiscordNotifier = {
           if (payload.email) embed.fields.push({ name: "Email", value: payload.email, inline: true });
           break;
 
+        case 'issue_reported':
+          embed.title = "🛠️ New Issue Report";
+          embed.description = `A user reported a problem with **${payload.title || "a series"}**.`;
+          embed.color = 15105570; // Orange
+          appendMetadata();
+          if (payload.user) embed.fields.push({ name: "Reported By", value: payload.user, inline: true });
+          // Discord caps field values at 1024 chars — a long report is truncated, never dropped.
+          if (payload.description) embed.fields.push({ name: "Report", value: payload.description.length > 1000 ? payload.description.slice(0, 997) + '…' : payload.description, inline: false });
+          break;
+
         case 'system_alert':
           embed.title = "⚠️ System Health Alert";
           embed.description = payload.description || "A system event requires attention.";

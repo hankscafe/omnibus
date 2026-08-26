@@ -10,6 +10,7 @@ const DEFAULT_TEMPLATES: Record<string, string> = {
     request_approved: `<h2 style="color: #f8fafc; margin-top: 0;">Request Accepted</h2>\n<p>Your request has been approved by <strong>{{user}}</strong>. It has been sent to the download client and will be available in your library shortly.</p>\n<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 20px; background-color: #0f172a; border-radius: 8px; border: 1px solid #334155;"><tr><td width="120" valign="top" style="padding: 16px;"><img src="{{imageUrl}}" alt="Cover" style="width: 100px; height: 150px; object-fit: cover; border-radius: 4px; background-color: #1e293b;" /></td><td valign="top" style="padding: 16px 16px 16px 0;"><h3 style="color: #f8fafc; margin: 0 0 8px 0; font-size: 18px;">{{title}}</h3><p style="color: #94a3b8; font-size: 13px; margin: 0 0 12px 0;"><strong>Requested by:</strong> {{requester}}<br/><strong>Date:</strong> {{date}}</p><p style="color: #cbd5e1; font-size: 14px; margin: 0; line-height: 1.5;">{{description}}</p></td></tr></table>`,
     pending_request: `<h2 style="color: #f8fafc; margin-top: 0;">Approval Required</h2>\n<p>A new request has been submitted and is waiting for your approval.</p>\n<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 20px; background-color: #0f172a; border-radius: 8px; border: 1px solid #334155;"><tr><td width="120" valign="top" style="padding: 16px;"><img src="{{imageUrl}}" alt="Cover" style="width: 100px; height: 150px; object-fit: cover; border-radius: 4px; background-color: #1e293b;" /></td><td valign="top" style="padding: 16px 16px 16px 0;"><h3 style="color: #f8fafc; margin: 0 0 8px 0; font-size: 18px;">{{title}}</h3><p style="color: #94a3b8; font-size: 13px; margin: 0 0 12px 0;"><strong>Requested by:</strong> {{requester}}<br/><strong>Date:</strong> {{date}}</p><p style="color: #cbd5e1; font-size: 14px; margin: 0; line-height: 1.5;">{{description}}</p></td></tr></table>`,
     pending_account: `<h2 style="color: #f8fafc; margin-top: 0;">Account Approval Required</h2>\n<p>A new user <strong>{{user}}</strong> ({{email}}) has registered and is waiting for approval to access the server.</p>`,
+    issue_reported: `<h2 style="color: #f8fafc; margin-top: 0;">New Issue Report</h2>\n<p><strong>{{user}}</strong> reported a problem with <strong>{{title}}</strong> on {{date}}:</p>\n<p style="color: #cbd5e1; font-size: 14px; line-height: 1.5; background-color: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px;">{{description}}</p>\n<p style="color: #94a3b8; font-size: 13px;">Review and resolve it under Admin &rarr; Reports.</p>`,
     password_reset: `<h2 style="color: #f8fafc; margin-top: 0;">Password Reset Request</h2>\n<p>Hello <strong>{{user}}</strong>,</p>\n<p>We received a request to reset your Omnibus password. Click the secure link below to set a new password:</p>\n<br/><p><a href="{{resetLink}}" style="background-color: #3b82f6; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; display: inline-block;">Reset Your Password</a></p>\n<br/><p style="color: #94a3b8; font-size: 13px;">If you did not request this, please safely ignore this email.</p>`,
     weekly_digest: `<h2 style="color: #f8fafc; margin-top: 0; font-size: 24px; font-weight: 800;">This Week's Additions</h2>\n<p style="color: #cbd5e1; font-size: 15px; margin-bottom: 24px;">Here are the latest issues that have been downloaded and added to your library over the past 7 days.</p>\n{{comics_html}}\n{{manga_html}}`
 };
@@ -152,8 +153,13 @@ export const Mailer = {
                  subject = `New Account Pending: ${payload.user}`;
                  content = await this.getTemplate('pending_account', variables);
                  break;
+             case 'issue_reported':
+                 to = await this.getAdminEmails();
+                 subject = `New Issue Report: ${payload.title}`;
+                 content = await this.getTemplate('issue_reported', variables);
+                 break;
              default:
-                 return; 
+                 return;
          }
 
          if (to.length === 0) {

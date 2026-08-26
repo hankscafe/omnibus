@@ -34,6 +34,7 @@ export const SYSTEM_EVENTS = [
   { id: "download_failed", label: "Comic Download Failed", desc: "Alerts when Prowlarr or the download client fails." },
   { id: "pending_account", label: "Pending Account", desc: "Includes new user's username, email, and registration date." },
   { id: "account_approved", label: "Account Approved", desc: "Alerts when an admin approves a new user account." },
+  { id: "issue_reported", label: "Issue Report Submitted", desc: "Alerts when a user reports a problem with a series from its library page." },
   { id: "system_alert", label: "System Health", desc: "Triggers for disk space warnings or critical errors." },
   { id: "duplicate_files", label: "Duplicate Files Found", desc: "Alerts when new duplicate comic files are detected anywhere in the library." },
   { id: "update_available", label: "System Update Available", desc: "Alerts when a new version of Omnibus is published to GitHub." },

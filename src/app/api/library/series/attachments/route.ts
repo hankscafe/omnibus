@@ -20,6 +20,19 @@ import { omnibusQueue } from '@/lib/queue';
 const VALID_SOURCES = ['COMICVINE', 'METRON'];
 const VALID_KINDS = ['ANNUAL', 'COLLECTED'];
 
+/**
+ * Queue the series.json regeneration WITHOUT awaiting it. A `await queue.add(...)` never settles
+ * when Redis is down or wedged, which would hang this response long after the work it reports on
+ * finished (beta.027's settings-save dot, same shape). The export is a durability convenience —
+ * the next scheduled sweep writes the file anyway — so it must never gate the answer.
+ */
+function queueSeriesJsonExport(seriesId: string, tag: string) {
+    void omnibusQueue.add('EXPORT_SERIES_JSON',
+        { type: 'EXPORT_SERIES_JSON', seriesId },
+        { jobId: `EXPORT_SJ_${tag}_${Date.now()}` }
+    ).catch(e => Logger.log(`[Attachments API] Couldn't queue the series.json export: ${getErrorMessage(e)}`, 'warn'));
+}
+
 async function requireAdmin() {
     const session = await getServerSession(await getAuthOptions());
     if (session?.user?.role !== 'ADMIN') return null;
@@ -135,11 +148,10 @@ export async function POST(request: Request) {
         }
 
         // Record the attachment in series.json right away — that file is half of the zero-API
-        // restore, so it must not wait for the next scheduled export.
-        await omnibusQueue.add('EXPORT_SERIES_JSON',
-            { type: 'EXPORT_SERIES_JSON', seriesId },
-            { jobId: `EXPORT_SJ_ATTACH_${attachment.id}_${Date.now()}` }
-        ).catch(e => Logger.log(`[Attachments API] Couldn't queue the series.json export: ${getErrorMessage(e)}`, 'warn'));
+        // restore, so it must not wait for the next scheduled export. FIRE-AND-FORGET: a queue add
+        // against a dead/wedged Redis never settles, and awaiting it would hang the whole response
+        // long after the import itself succeeded (the beta.027 settings-save incident, exactly).
+        queueSeriesJsonExport(seriesId, `ATTACH_${attachment.id}`);
 
         await AuditLogger.log('ATTACH_VOLUME', {
             seriesId, seriesName: series.name, metadataSource, volumeId, kind, summary,
@@ -198,10 +210,7 @@ export async function DELETE(request: Request) {
         });
         await prisma.attachedVolume.delete({ where: { id: attachmentId } });
 
-        await omnibusQueue.add('EXPORT_SERIES_JSON',
-            { type: 'EXPORT_SERIES_JSON', seriesId: attachment.seriesId },
-            { jobId: `EXPORT_SJ_DETACH_${attachmentId}_${Date.now()}` }
-        ).catch(e => Logger.log(`[Attachments API] Couldn't queue the series.json export: ${getErrorMessage(e)}`, 'warn'));
+        queueSeriesJsonExport(attachment.seriesId, `DETACH_${attachmentId}`);
 
         await AuditLogger.log('DETACH_VOLUME', {
             seriesId: attachment.seriesId, volumeId: attachment.volumeId,

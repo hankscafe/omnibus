@@ -72,9 +72,13 @@ export async function POST(request: NextRequest) {
         // --- NEW: Calculate Issue Year from the target issue's release date (fallback to Volume Year) ---
         const issueYear = targetIssue.releaseDate ? targetIssue.releaseDate.toString().split('-')[0] : safeYear;
 
-        const filePatternToUse = series.isManga 
-            ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
-            : (config.file_naming_pattern || "{Series} #{Issue}");
+        // #203 Phase 1: linking a file to an ANNUAL issue names it the Mylar way (engine parity:
+        // renamer.rs ANNUAL_FILE_PATTERN), outranking the manga template.
+        const filePatternToUse = (targetIssue as any).isAnnual
+            ? "{Series} Annual #{Issue} ({IssueYear})"
+            : series.isManga
+                ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
+                : (config.file_naming_pattern || "{Series} #{Issue}");
 
         // --- NEW: Add Issue Title extraction & cleanup ---
         let cleanIssueName = targetIssue.name || "";

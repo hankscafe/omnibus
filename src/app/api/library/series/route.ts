@@ -261,6 +261,9 @@ export async function GET(request: Request) {
                 // #203: annuals compose as "Series Annual #N" and carry the flag for the page/OPDS.
                 name: issue.name || `${seriesRecord.name}${(issue as any).isAnnual ? ' Annual' : ''} #${issue.number}`,
                 isAnnual: (issue as any).isAnnual ?? false,
+                // #203 Phase 1: which attached volume this annual belongs to (null = none yet), so
+                // the Annuals panel can tell "claimed" apart from "still on its own".
+                attachedVolumeId: (issue as any).attachedVolumeId ?? null,
                 // Issue #200: normalize vulgar fractions ("½" → 0.5) or parseFloat yields NaN,
                 // which serializes to null and turned half-issue requests into "#null" searches.
                 // The raw number rides along so the page can always fall back to a real string.

@@ -104,7 +104,14 @@ export async function POST(request: NextRequest) {
                     cleanIssueName = "";
                 }
 
-                const newFileName = (series.isManga ? activeMangaFilePattern : filePattern)
+                // #203 Phase 1: the preview has to promise what the renamer will actually do — an
+                // annual takes the Mylar-shaped name (engine parity: renamer.rs ANNUAL_FILE_PATTERN),
+                // outranking the manga template.
+                const patternForIssue = (issue as any).isAnnual
+                    ? "{Series} Annual #{Issue} ({IssueYear})"
+                    : (series.isManga ? activeMangaFilePattern : filePattern);
+
+                const newFileName = patternForIssue
                     .replace(/{Publisher}/gi, safePublisher)
                     .replace(/{Series}/gi, safeName)
                     .replace(/{Year}/gi, safeYear)

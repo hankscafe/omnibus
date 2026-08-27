@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import MetadataEditorModal from "@/components/metadata-editor-modal"
 import PageManagerModal from "@/components/page-manager-modal"
+import { AnnualsManager } from "@/components/annuals-manager"
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
 // hide the element rather than show the browser's broken-image glyph. (The issue grid had no onError, so
@@ -390,6 +391,22 @@ function SeriesContent() {
   const displayCover = activeIssue?.coverUrl || seriesInfo.cover;
   
   const hasCreators = writers.length > 0 || artists.length > 0 || coverArtists.length > 0 || colorists.length > 0 || letterers.length > 0;
+
+  // #203 Phase 1: a quiet re-read of the series payload after an attach/detach — the issue lists
+  // change (claimed rows, new missing entries) but nothing else on the page should flicker.
+  const reloadIssues = async () => {
+      if (!folderPath) return;
+      try {
+          const res = await fetch(`/api/library/series?path=${encodeURIComponent(folderPath)}&t=${Date.now()}`, { cache: 'no-store' });
+          const data = await res.json();
+          if (data.error) return;
+          setDownloadedIssues(data.downloadedIssues || []);
+          setMissingIssues(data.missingIssues || []);
+          setDuplicates(data.duplicates || []);
+      } catch (e) {
+          Logger.log(`[Series] Couldn't refresh the issue lists after an attachment change: ${getErrorMessage(e)}`, 'debug');
+      }
+  };
 
   const handleScanDirectory = async () => {
       if (!folderPath) return;
@@ -1665,8 +1682,10 @@ function SeriesContent() {
                       </p>
                       <div className="space-y-3 pt-2">
                           {duplicates.map(dup => (
-                              <div key={dup.issueNumber} className="flex flex-col bg-background p-3 rounded-lg border border-border shadow-sm">
-                                  <p className="font-bold text-sm mb-2 text-foreground">Issue #{dup.issueNumber}</p>
+                              // #203: annual and main-run duplicates are different slots — the key
+                              // must carry the domain too, and the label should name it.
+                              <div key={`${dup.isAnnual ? 'annual' : 'issue'}_${dup.issueNumber}`} className="flex flex-col bg-background p-3 rounded-lg border border-border shadow-sm">
+                                  <p className="font-bold text-sm mb-2 text-foreground">{dup.isAnnual ? 'Annual' : 'Issue'} #{dup.issueNumber}</p>
                                   <div className="flex flex-col gap-2 pl-4 border-l-2 border-muted">
                                       {dup.files.map((file: string, idx: number) => (
                                           <p key={idx} className="text-xs font-mono text-muted-foreground break-all">{file}</p>
@@ -1676,6 +1695,17 @@ function SeriesContent() {
                           ))}
                       </div>
                   </div>
+              )}
+
+              {/* --- ANNUALS: ATTACHED VOLUMES (#203 Phase 1) --- */}
+              {isAdmin && seriesInfo.id && (
+                  <AnnualsManager
+                      seriesId={seriesInfo.id}
+                      seriesName={seriesInfo.name}
+                      defaultProvider={seriesInfo.metadataSource}
+                      unattachedAnnuals={downloadedIssues.filter(i => i.isAnnual && !i.attachedVolumeId).length}
+                      onChanged={reloadIssues}
+                  />
               )}
 
               {/* --- DOWNLOADED ISSUES SECTION --- */}

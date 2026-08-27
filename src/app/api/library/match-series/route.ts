@@ -14,7 +14,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getServerSession } from 'next-auth/next';
 import { omnibusQueue } from '@/lib/queue';
-import { extractIssueNumber, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
+import { describeIssueFromFilename, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
@@ -377,13 +377,19 @@ export async function POST(request: Request) {
                 Logger.log(`[Match Series Debug] Evaluating exact target file for rename: "${file}"`, 'debug');
                 
                 // Proceed with exact overrides
+                // #203: the annual domain comes from the FILE either way — an admin's exact-number
+                // override says which number, never which domain ("Annual 3" is still an annual when
+                // the admin corrects it to 3).
+                const fileDescriptor = describeIssueFromFilename(file, realName);
+                const isAnnualFile = fileDescriptor.isAnnual;
+
                 if (exactIssueNumber) {
                     issueNumStr = exactIssueNumber;
                     targetIssueMetaId = exactIssueId || null;
                     Logger.log(`[Match Series Debug] Using exact issue override: ${issueNumStr}`, 'debug');
                 } else {
-                    issueNumStr = extractIssueNumber(file, realName);
-                    Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}' via auto-extraction.`, 'debug');
+                    issueNumStr = fileDescriptor.number;
+                    Logger.log(`[Match Series Debug] Extracted issue '${issueNumStr}'${isAnnualFile ? ' (annual)' : ''} via auto-extraction.`, 'debug');
                 }
                 
                 if (issueNumStr) {
@@ -393,9 +399,12 @@ export async function POST(request: Request) {
                     let formattedNum = issueNumStr;
                     if (!issueNumStr.includes('.') && issueNumStr.length === 1) formattedNum = `0${issueNumStr}`;
                     
-                    const filePatternToUse = isManga 
-                        ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
-                        : (config.file_naming_pattern || "{Series} #{Issue}");
+                    // #203 Phase 1: an annual keeps the Mylar-shaped name wherever it's named.
+                    const filePatternToUse = isAnnualFile
+                        ? "{Series} Annual #{Issue} ({IssueYear})"
+                        : isManga
+                            ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
+                            : (config.file_naming_pattern || "{Series} #{Issue}");
                         
                     const issueYear = existingRecord ? (existingRecord.year?.toString() || safeYear) : safeYear;
                         
@@ -433,6 +442,9 @@ export async function POST(request: Request) {
                         const updatePayload: any = {
                             filePath: newFilePath,
                             number: issueNumStr,
+                            // #203: the domain is part of numbering identity — a matched annual has
+                            // to BE an annual row, or it collides with the main run's same number.
+                            isAnnual: isAnnualFile,
                             seriesId: existingRecord.id,
                             // Persist the page total so OPDS (pse:count) can stream this issue.
                             pageCount: await countArchivePages(newFilePath)
@@ -445,8 +457,10 @@ export async function POST(request: Request) {
                         }
 
                         try {
+                            // #203: find within the SAME domain — "Annual #1" must never adopt the
+                            // main run's "#1" row (Phase 0's rule, applied at the match surface too).
                             const existingIssue = await prisma.issue.findFirst({
-                                where: { seriesId: existingRecord.id, number: issueNumStr }
+                                where: { seriesId: existingRecord.id, number: issueNumStr, isAnnual: isAnnualFile }
                             });
 
                             let finalIssueId;

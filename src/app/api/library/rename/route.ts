@@ -179,7 +179,13 @@ export async function POST(request: NextRequest) {
             }
             if (isNegative) paddedNum = '-' + paddedNum;
 
-            const patternToUse = s.isManga ? activeMangaFilePattern : activeFilePattern;
+            // #203 Phase 1: annuals get the Mylar-shaped name they exist to interoperate with —
+            // "Batman Annual #001 (2012)", the year being the annual's own. Fixed in v1 (engine
+            // parity: renamer.rs), because the point is matching what Mylar/Komga expect beside the
+            // main run; the tokens still flow through the same substitution + sanitize chain.
+            const patternToUse = (issue as any).isAnnual
+                ? "{Series} Annual #{Issue} ({IssueYear})"
+                : (s.isManga ? activeMangaFilePattern : activeFilePattern);
             const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : (s.year?.toString() || '0000');
 
             let cleanIssueName = issue.name || "";

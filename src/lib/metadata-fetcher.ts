@@ -114,8 +114,12 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             const issues = await metron.getSeriesIssues(metadataId);
             let syncedCount = 0;
             
+            // #203: annual rows are NEVER pairing candidates for the parent volume — their issues
+            // belong to a different provider volume (linked through AttachedVolume in Phase 1), so a
+            // number match here would steal an annual's identity. Engine parity: the pair snapshots
+            // in metadata.rs carry the same WHERE "isAnnual" = false.
             const allSeriesIssues = await prisma.issue.findMany({
-                where: { seriesId: series.id }
+                where: { seriesId: series.id, isAnnual: false }
             });
 
             let latestDateMs = 0;
@@ -146,7 +150,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                         continue;
                     }
                     const global = await prisma.issue.findFirst({
-                        where: { metadataId: issue.sourceId, metadataSource: 'METRON', seriesId: { not: series.id } }
+                        where: { metadataId: issue.sourceId, metadataSource: 'METRON', seriesId: { not: series.id }, isAnnual: false }
                     });
                     if (global && isSameIssue(global.number, issueNumStr)) { targetRecord = global; crossSeries = true; }
                 }
@@ -442,8 +446,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         
         const cvIssues = data.results || [];
 
+        // #203 safety rule (see the Metron branch above): annual rows are excluded from the parent
+        // volume's pairing snapshot outright.
         const allSeriesIssuesForCv = await prisma.issue.findMany({
-            where: { seriesId: series.id }
+            where: { seriesId: series.id, isAnnual: false }
         });
 
         for (const cvIssue of cvIssues) {
@@ -475,7 +481,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 // Cross-series adoption only when id AND number agree (a mispaired global id match
                 // is never a steal target).
                 const global = await prisma.issue.findFirst({
-                    where: { metadataId: cvIdStr, metadataSource: 'COMICVINE', seriesId: { not: series.id } }
+                    where: { metadataId: cvIdStr, metadataSource: 'COMICVINE', seriesId: { not: series.id }, isAnnual: false }
                 });
                 if (global && isSameIssue(global.number, issueNumStr)) { targetRecord = global; crossSeries = true; }
             }

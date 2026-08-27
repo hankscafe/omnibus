@@ -717,7 +717,12 @@ export const Importer = {
     }
     
     const issueYearFromMeta = xmlMeta?.year ? xmlMeta.year.toString() : seriesYearFromMeta.toString();
-    const filePatToUse = isManga ? mangaFilePattern : filePattern;
+    // #203 Phase 1: an imported annual lands under the Mylar-shaped name (engine parity:
+    // renamer.rs / watched_sync.rs) so it reads correctly beside the main run from the first write.
+    const isAnnualImport = annualFlagForSignals(xmlMeta?.format, xmlMeta?.number, rawFileName);
+    const filePatToUse = isAnnualImport
+        ? "{Series} Annual #{Issue} ({IssueYear})"
+        : (isManga ? mangaFilePattern : filePattern);
     
     const issueTitle = xmlMeta?.title || "";
     const universeName = xmlMeta?.universe || "";

@@ -77,9 +77,11 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
                CAST(s."blackAndWhite" AS INTEGER) AS "blackAndWhiteInt",
                s.gtin, s.notes, s."scanInformation", s.review,
                s."mainCharacterOrTeam", s."alternateSeries", s."alternateNumber",
-               CAST(s."alternateCount" AS TEXT) AS "alternateCountText", s."storyArcNumber"
+               CAST(s."alternateCount" AS TEXT) AS "alternateCountText", s."storyArcNumber",
+               av."volumeId" as attached_volume_id, av."metadataSource" as attached_source
         FROM "Issue" i
         JOIN "Series" s ON i."seriesId" = s.id
+        LEFT JOIN "AttachedVolume" av ON i."attachedVolumeId" = av.id
         WHERE LOWER(i."filePath") LIKE '%.cbz'"#;
     // LOWER(): SQLite LIKE is case-insensitive but Postgres LIKE is not — without it, files with
     // an uppercase .CBZ extension were silently skipped on the Postgres profile.
@@ -112,20 +114,29 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
     let mut conflicted_ids: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     if !involved_series.is_empty() {
         let sql = format!(
-            r#"SELECT "seriesId", "metadataId", number FROM "Issue" WHERE "seriesId" IN ({}) AND "metadataId" IS NOT NULL AND "metadataId" <> '' AND "metadataId" NOT LIKE 'unmatched%'"#,
+            // #203 Phase 1: isAnnual joins the comparison. Annual rows now carry REAL provider ids
+            // (from their attached volume), so "same id, different number" is no longer the only
+            // way an id can be provably wrong — "same id on both an annual and a main-run row" is
+            // wrong too, and the domain-blind compare would have called those two a match.
+            r#"SELECT "seriesId", "metadataId", number, CAST("isAnnual" AS INTEGER) AS is_annual FROM "Issue" WHERE "seriesId" IN ({}) AND "metadataId" IS NOT NULL AND "metadataId" <> '' AND "metadataId" NOT LIKE 'unmatched%'"#,
             Db::in_placeholders(1, involved_series.len())
         );
         let mut q = sqlx::query(&sql);
         for sid in &involved_series { q = q.bind(sid); }
         let id_rows = q.fetch_all(&db.pool).await.unwrap_or_default();
-        let mut first_num: std::collections::HashMap<(String, String), String> = std::collections::HashMap::new();
+        let mut first_num: std::collections::HashMap<(String, String), (String, bool)> = std::collections::HashMap::new();
         for r in id_rows {
             let key = (r.get::<String, _>("seriesId"), r.get::<String, _>("metadataId"));
             let num = r.get::<String, _>("number");
+            let annual = r.try_get::<i64, _>("is_annual").map(|v| v != 0).unwrap_or(false);
             match first_num.get(&key) {
-                Some(seen) if !crate::metadata::is_same_issue(seen, &num) => { conflicted_ids.insert(key); }
+                Some((seen, seen_annual))
+                    if !crate::metadata::is_same_issue(seen, &num) || *seen_annual != annual =>
+                {
+                    conflicted_ids.insert(key);
+                }
                 Some(_) => {}
-                None => { first_num.insert(key, num); }
+                None => { first_num.insert(key, (num, annual)); }
             }
         }
     }
@@ -318,8 +329,15 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
 
     let issue_meta_id = g("issue_meta_id");
     let issue_meta_source = g("issue_meta_source").unwrap_or_default();
-    let series_meta_id = g("series_meta_id");
-    let series_meta_source = g("series_meta_source").unwrap_or_default();
+    // #203 Phase 1 — THE ZERO-API RESTORE MECHANISM. An annual belongs to its ATTACHED volume, not
+    // to the parent series' volume, so its file must carry the attached volume's id. series.json
+    // restores the attachment LIST after a wipe; these embedded ids are what re-link each FILE to
+    // the right attachment on the next scan — a full rebuild with zero provider calls (#182's
+    // invariant). Rows with no attachment are unchanged: the series' own volume id, as always.
+    let (series_meta_id, series_meta_source) = match (g("attached_volume_id"), g("attached_source")) {
+        (Some(vol), Some(src)) if !vol.is_empty() => (Some(vol), src),
+        _ => (g("series_meta_id"), g("series_meta_source").unwrap_or_default()),
+    };
 
     // Never emit placeholder unmatched_* ids, and never emit a suspect (omitted) id — an id baked
     // into a file outlives the DB and would re-poison future scans (issue #194 (c3)).
@@ -591,9 +609,33 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
     let imprint: Option<String> = series.try_get::<Option<String>, _>("imprint").unwrap_or(None).filter(|s| !s.is_empty());
     let age_rating: Option<String> = series.try_get::<Option<String>, _>("ageRating").unwrap_or(None).filter(|s| !s.is_empty());
 
+    // #203 Phase 1: the attachment LIST, namespaced under our own key so the file stays a valid
+    // Mylar series.json (consumers ignore keys they don't know) and we never imitate a
+    // Mylar-internal structure. This is half of the zero-API restore: series.json says WHICH
+    // volumes are attached, the annual files' own ComicInfo says which one each file came from.
+    let attachment_rows = sqlx::query(
+        r#"SELECT "metadataSource", "volumeId", kind, name, "startYear" FROM "AttachedVolume" WHERE "seriesId" = $1 ORDER BY "createdAt" ASC"#,
+    )
+    .bind(series_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    let attached_volumes: Vec<serde_json::Value> = attachment_rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "source": r.try_get::<String, _>("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string()),
+                "volume_id": r.try_get::<String, _>("volumeId").unwrap_or_default(),
+                "kind": r.try_get::<String, _>("kind").unwrap_or_else(|_| "ANNUAL".to_string()),
+                "name": r.try_get::<Option<String>, _>("name").unwrap_or(None),
+                "start_year": r.try_get::<Option<i32>, _>("startYear").unwrap_or(None),
+            })
+        })
+        .collect();
+
     // Mylar series.json schema v1.0.2. Unknown values are null, never "": Komga ignores nulls
     // but chokes on blanks. https://github.com/mylar3/mylar3/wiki/series.json-schema-(version-1.0.2)
-    let series_json = serde_json::json!({
+    let mut series_json = serde_json::json!({
         "version": "1.0.2",
         "metadata": {
             "type": "comicSeries",
@@ -614,6 +656,11 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
             "status": if is_ended { "Ended" } else { "Continuing" }
         }
     });
+    // Only present when there IS something to record — an unattached series' file is byte-identical
+    // to what it was before Phase 1.
+    if !attached_volumes.is_empty() {
+        series_json["omnibus"] = serde_json::json!({ "attached_volumes": attached_volumes });
+    }
 
     log::debug!("[Metadata Writer Debug] Exporting Mylar-spec series.json to: {:?}", json_path);
     match std::fs::write(&json_path, serde_json::to_string_pretty(&series_json).unwrap_or_default()) {
@@ -821,7 +868,11 @@ mod tests {
                 tags TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
                 "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
                 "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
-                "metadataId" TEXT, "metadataSource" TEXT)"#,
+                "metadataId" TEXT, "metadataSource" TEXT, "attachedVolumeId" TEXT)"#,
+            // #203 Phase 1: the embed SELECT LEFT JOINs this for an annual's attached volume id.
+            r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
+                "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
+                "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }
@@ -916,6 +967,108 @@ mod tests {
         assert_eq!(ok3, 1);
         let xml3 = read_comicinfo_from_zip(&cbz).unwrap().unwrap();
         assert!(xml3.contains("<BlackAndWhite>No</BlackAndWhite>"), "issue's explicit No must beat series Yes:\n{xml3}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #203 Phase 1 — the two halves of the zero-API restore, proven together through the real embed
+    // job: series.json records WHICH volumes are attached, and each annual FILE records which one it
+    // belongs to. A wipe → rescan can rebuild the whole lane from these two facts alone.
+    #[tokio::test]
+    async fn annual_files_carry_their_attached_volume_id_and_series_json_lists_it() {
+        let base = std::env::temp_dir().join(format!("omnibus_av_writer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let folder = base.join("Batman (2011)");
+        std::fs::create_dir_all(&folder).unwrap();
+        let make_cbz = |name: &str| {
+            let p = folder.join(name);
+            let f = File::create(&p).unwrap();
+            let mut zw = ZipWriter::new(f);
+            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.finish().unwrap();
+            p
+        };
+        let main_cbz = make_cbz("Batman 001.cbz");
+        let annual_cbz = make_cbz("Batman Annual 001.cbz");
+
+        let db_file = base.join("av.db");
+        File::create(&db_file).unwrap();
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+        for ddl in [
+            r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, publisher TEXT, year INTEGER,
+                "folderPath" TEXT, universe TEXT, "seriesGroup" TEXT, "isManga" INTEGER DEFAULT 0,
+                "metadataId" TEXT, "metadataSource" TEXT, genres TEXT, description TEXT, status TEXT,
+                "bookType" TEXT, "cvId" INTEGER, "remoteCoverUrl" TEXT, "coverUrl" TEXT, imprint TEXT,
+                "ageRating" TEXT, "seriesJsonWritten" INTEGER DEFAULT 0,
+                writers TEXT, artists TEXT, "coverArtists" TEXT, colorists TEXT, letterers TEXT,
+                characters TEXT, teams TEXT, locations TEXT, "storyArcs" TEXT,
+                inker TEXT, editor TEXT, translator TEXT, tags TEXT, format TEXT,
+                "languageISO" TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
+                gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT, "mainCharacterOrTeam" TEXT,
+                "alternateSeries" TEXT, "alternateNumber" TEXT, "alternateCount" INTEGER, "storyArcNumber" TEXT)"#,
+            r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
+                "isAnnual" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, name TEXT, description TEXT,
+                "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
+                writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
+                letterers TEXT, teams TEXT, locations TEXT, inker TEXT, editor TEXT, translator TEXT,
+                tags TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
+                "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
+                "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
+                "metadataId" TEXT, "metadataSource" TEXT)"#,
+            r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
+                "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
+                "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
+        }
+
+        let folder_str = folder.to_string_lossy().replace('\\', "/");
+        sqlx::query(
+            r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "metadataId", "metadataSource", status)
+               VALUES ('s203', 'Batman', 'DC Comics', 2011, $1, '42821', 'COMICVINE', 'Ongoing')"#,
+        ).bind(&folder_str).execute(&db.pool).await.unwrap();
+        sqlx::query(
+            r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear")
+               VALUES ('att1', 's203', 'COMICVINE', '49197', 'ANNUAL', 'Batman Annual', 2012)"#,
+        ).execute(&db.pool).await.unwrap();
+        sqlx::query(
+            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, "isAnnual", "metadataId", "metadataSource")
+               VALUES ('i_main', 's203', $1, '1', 0, '300001', 'COMICVINE')"#,
+        ).bind(main_cbz.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+        sqlx::query(
+            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, "isAnnual", "attachedVolumeId", "metadataId", "metadataSource")
+               VALUES ('i_annual', 's203', $1, '1', 1, 'att1', '400001', 'COMICVINE')"#,
+        ).bind(annual_cbz.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+
+        let (ok, fail, sj) = process_embed_job(
+            db.clone(),
+            EmbedRequest { series_id: Some("s203".to_string()), issue_ids: None },
+        ).await.expect("embed job");
+        assert_eq!((ok, fail, sj), (2, 0, 1), "both files embedded, one series.json written");
+
+        // The annual's file names the ATTACHED volume — this is what re-links it after a wipe.
+        let annual_xml = read_comicinfo_from_zip(&annual_cbz).unwrap().expect("annual ComicInfo");
+        assert!(annual_xml.contains("<ComicVineVolumeId>49197</ComicVineVolumeId>"), "annual must carry its attached volume id:\n{annual_xml}");
+        assert!(annual_xml.contains("<Format>Annual</Format>"), "Phase 0's domain marker still rides along:\n{annual_xml}");
+        // The main run is untouched by any of this — it still names the series' own volume.
+        let main_xml = read_comicinfo_from_zip(&main_cbz).unwrap().expect("main ComicInfo");
+        assert!(main_xml.contains("<ComicVineVolumeId>42821</ComicVineVolumeId>"), "a main-run file keeps the series volume:\n{main_xml}");
+
+        // series.json carries the attachment list under OUR namespace, leaving the Mylar spec intact.
+        let raw = std::fs::read_to_string(folder.join("series.json")).expect("series.json written");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert_eq!(parsed["version"], "1.0.2");
+        assert_eq!(parsed["metadata"]["name"], "Batman");
+        // Mylar counts annuals in total_issues, and so do we — observable behavior, not internals.
+        assert_eq!(parsed["metadata"]["total_issues"], 2);
+        let attached = &parsed["omnibus"]["attached_volumes"];
+        assert_eq!(attached[0]["volume_id"], "49197");
+        assert_eq!(attached[0]["source"], "COMICVINE");
+        assert_eq!(attached[0]["kind"], "ANNUAL");
+        assert_eq!(attached[0]["start_year"], 2012);
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -202,6 +202,7 @@ model Series {
   updatedAt       DateTime @default(now()) @updatedAt
 
   issues          Issue[]
+  attachedVolumes AttachedVolume[]
   favorites       Favorite[]
   follows         SeriesFollow[]
   collectionItems CollectionItem[]
@@ -236,6 +237,12 @@ model Issue {
   // annual rows are excluded from parent-volume provider pairing (their issues belong to a
   // different provider volume, linked in a later phase).
   isAnnual        Boolean  @default(false)
+  // #203 Phase 1: the provider volume this row was imported from when it does NOT belong to the
+  // parent series' own volume (annuals today, collected editions on the same rails later). Pairing
+  // inside an attached lane is ID-anchored, never number-anchored — the number stays pure user
+  // curation, so a manual chronological renumbering can never break the provider link.
+  attachedVolumeId String?
+  attachedVolume  AttachedVolume? @relation(fields: [attachedVolumeId], references: [id], onDelete: SetNull)
   status          String   @default("WANTED")
   filePath        String?
   pageCount       Int      @default(0)
@@ -292,6 +299,32 @@ model Issue {
   @@index([releaseDate]) // global calendar range-scans Issue.releaseDate (ISO YYYY-MM-DD, lexical = chronological)
   @@index([seriesId, releaseDate]) // library-wide issues view: per-series releaseDate scans when filtered by a Series field
   @@index([filePath]) // reader progress GET/POST resolve an issue by its exact stored path (per page-turn)
+  @@index([attachedVolumeId]) // the per-attachment sync lane scans its own rows on every refresh
+}
+
+// #203 Phase 1 (concept by anacronismo): a provider volume manually attached to a series whose own
+// volume doesn't contain it — an annual run today, a collected-edition run on the same rails later
+// (fork-review #7). ComicVine models annuals as separate volumes with NO machine link to the parent,
+// which is why Mylar makes this manual too; a series can hold several attachments at once (the
+// Amazing Spider-Man case: one numbered annual volume plus a one-off volume per year).
+model AttachedVolume {
+  id             String   @id @default(cuid())
+  seriesId       String
+  series         Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  metadataSource String   @default("COMICVINE")
+  volumeId       String   // the provider volume/series id (CV 4050-<id> without the prefix, Metron series id)
+  kind           String   @default("ANNUAL") // "COLLECTED" is reserved for the #7 phase — the rails ship now
+  name           String?  // provider volume name, cached so the UI needn't re-fetch to label an attachment
+  startYear      Int?
+  issueCount     Int      @default(0) // issues imported from this volume, refreshed by each sync pass
+  lastSyncedAt   DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  issues         Issue[]
+
+  @@unique([seriesId, metadataSource, volumeId])
+  @@index([seriesId])
 }
 
 model IssueReport {

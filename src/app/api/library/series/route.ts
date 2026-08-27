@@ -108,7 +108,7 @@ export async function GET(request: Request) {
         // wide Issue row twice (the post-reconciliation re-fetch below reads the full rows).
         let existingIssues: any[] = await prisma.issue.findMany({
             where: { seriesId: seriesRecord.id },
-            select: { id: true, number: true, isAnnual: true, metadataId: true, filePath: true },
+            select: { id: true, number: true, isAnnual: true, metadataId: true, filePath: true, attachedVolumeId: true },
         });
         const dbIssueMap = new Map();
         const idsToDelete: string[] = [];
@@ -141,7 +141,15 @@ export async function GET(request: Request) {
                 return (rb[0] - ra[0]) || (rb[1] - ra[1]) || (rb[2] - ra[2]);
             });
             dbIssueMap.set(stdNum, issues[0]);
-            for (let i = 1; i < issues.length; i++) idsToDelete.push(issues[i].id);
+            // #203 Phase 1: a row belonging to an ATTACHED volume is never a dedupe casualty. Two
+            // one-off annual volumes both arriving as "#1" (the Amazing Spider-Man case) are a real,
+            // supported state — the user renumbers them to slot chronologically, and until they do,
+            // the duplicate warning is the nudge. Deleting one here would destroy a provider link
+            // the user made by hand.
+            for (let i = 1; i < issues.length; i++) {
+                if (issues[i].attachedVolumeId) continue;
+                idsToDelete.push(issues[i].id);
+            }
         }
 
         if (idsToDelete.length > 0) {

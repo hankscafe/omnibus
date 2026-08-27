@@ -275,6 +275,21 @@ struct SeriesJsonInfo {
     booktype: Option<String>,
     /// Mapped to Omnibus status values: "Ended" | "Ongoing".
     status: Option<String>,
+    /// #203 Phase 1: our own `omnibus.attached_volumes` block. Half of the zero-API restore — the
+    /// file says WHICH volumes are attached to this series; each annual file's ComicInfo says which
+    /// one it came from. Absent in a foreign (Mylar-written) series.json, which is the point of the
+    /// namespace.
+    attached_volumes: Vec<AttachedVolumeSeed>,
+}
+
+/// One attachment as recorded in series.json.
+#[derive(Debug, Clone)]
+struct AttachedVolumeSeed {
+    source: String,
+    volume_id: String,
+    kind: String,
+    name: Option<String>,
+    start_year: Option<i32>,
 }
 
 fn parse_series_json(content: &str) -> Option<SeriesJsonInfo> {
@@ -292,6 +307,30 @@ fn parse_series_json(content: &str) -> Option<SeriesJsonInfo> {
         .map(|y| y as i32)
         .filter(|y| *y != 0);
     let status = get_str("status").map(|s| if s.eq_ignore_ascii_case("ended") { "Ended".to_string() } else { "Ongoing".to_string() });
+    // #203 Phase 1: our namespaced block. A missing/foreign shape is simply no attachments — this
+    // must never make an otherwise-valid Mylar series.json unparseable.
+    let attached_volumes = v
+        .get("omnibus")
+        .and_then(|o| o.get("attached_volumes"))
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| {
+                    let volume_id = e.get("volume_id")
+                        .and_then(|x| x.as_str().map(str::to_string).or_else(|| x.as_i64().map(|n| n.to_string())))
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())?;
+                    Some(AttachedVolumeSeed {
+                        source: e.get("source").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).unwrap_or("COMICVINE").to_string(),
+                        volume_id,
+                        kind: e.get("kind").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).unwrap_or("ANNUAL").to_string(),
+                        name: e.get("name").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(str::to_string),
+                        start_year: e.get("start_year").and_then(|x| x.as_i64()).map(|y| y as i32).filter(|y| *y != 0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Some(SeriesJsonInfo {
         comicid,
         name: get_str("name"),
@@ -300,6 +339,7 @@ fn parse_series_json(content: &str) -> Option<SeriesJsonInfo> {
         description: get_str("description_text"),
         booktype: get_str("booktype"),
         status,
+        attached_volumes,
     })
 }
 
@@ -434,6 +474,27 @@ fn issue_number_for_file(info: Option<&ScanComicInfo>, file_name: &str, series_h
 /// The annual FLAG alone (#203), for callers that keep their own number semantics (watched_sync's
 /// number is ComicInfo-only by design, and its ComicInfo type is its own). Signals: ComicInfo
 /// `<Format>`, an "Annual…"-shaped `<Number>`, or the filename token.
+/// The file whose ComicInfo speaks for the FOLDER. #203 Phase 1: an attached annual's file carries
+/// its ATTACHED volume's id (that's what restores the link with zero API calls), so an annual must
+/// never be the folder's identity witness while a main-run file exists — otherwise a rescan of
+/// "Batman (2011)" could adopt the annual volume as the series itself. An all-annual folder
+/// legitimately falls back to the first file.
+fn identity_info<'a>(files: &[String], infos: &'a [Option<ScanComicInfo>]) -> Option<&'a ScanComicInfo> {
+    let non_annual = files.iter().enumerate().find(|(idx, file)| {
+        let info = infos.get(*idx).and_then(|o| o.as_ref());
+        let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
+        !annual_flag_for_signals(
+            info.and_then(|i| i.format.as_deref()),
+            info.and_then(|i| i.number.as_deref()),
+            &file_name,
+        )
+    });
+    match non_annual {
+        Some((idx, _)) => infos.get(idx).and_then(|o| o.as_ref()),
+        None => infos.first().and_then(|o| o.as_ref()),
+    }
+}
+
 pub(crate) fn annual_flag_for_signals(format: Option<&str>, number: Option<&str>, file_name: &str) -> bool {
     if format.is_some_and(|f| find_annual_token(f).is_some()) {
         return true;
@@ -1252,6 +1313,9 @@ struct NewIssueRow {
     number: String,
     // #203: annuals are their own numbering domain — part of the row's numbering identity.
     is_annual: bool,
+    /// #203 Phase 1: the AttachedVolume this file belongs to, restored from local evidence alone —
+    /// series.json listed the attachment, the file's own ComicInfo named its volume.
+    attached_volume_id: Option<String>,
     file: String,
     page_count: i32,
     fm: IssueFileMeta,
@@ -1280,8 +1344,8 @@ async fn exec_issue_insert(
            (id, "seriesId", "metadataId", "metadataSource", "matchState", number, "isAnnual", status, "filePath", "pageCount",
             name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator,
             tags, "mainCharacterOrTeam", "alternateSeries", "alternateNumber", "alternateCount", "storyArcNumber", gtin, notes, "scanInformation", review, "communityRating", "blackAndWhite",
-            "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, {annual}, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, {bw}, {now}, {now})"#,
+            "attachedVolumeId", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, $6, {annual}, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, {bw}, $36, {now}, {now})"#,
         annual = annual,
         bw = bw,
         now = db.now_expr()
@@ -1321,6 +1385,7 @@ async fn exec_issue_insert(
     .bind(&row.fm.scan_information)
     .bind(&row.fm.review)
     .bind(row.fm.community_rating)
+    .bind(&row.attached_volume_id)
     .execute(&mut *conn)
     .await
     .map(|_| ())
@@ -1852,7 +1917,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             .unwrap_or((Vec::new(), None));
 
             let folder_name = Path::new(&folder_path).file_name().unwrap_or_default().to_string_lossy().to_string();
-            let first_info = infos.first().and_then(|o| o.as_ref());
+            let first_info = identity_info(&files, &infos);
             let (clean_name, year, publisher) = derive_folder_basics(first_info, sj.as_ref(), &folder_name);
             // 3-tier manga detection runs HERE (in the bounded parallel phase) instead of one-at-a-time in
             // the sequential insert loop below — otherwise the AniList HTTP call (10s timeout, 3rd tier)
@@ -1877,7 +1942,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
         log::debug!("[Scanner Debug] Indexing new folder ({} archives): {}", files.len(), folder_path);
 
-        let first_info = infos.first().and_then(|o| o.as_ref());
+        let first_info = identity_info(&files, &infos);
         let mut derived = first_info.map(derive_meta);
 
         // series.json identity (discussion #177): the Mylar-spec comicid is the ComicVine VOLUME id —
@@ -1974,6 +2039,22 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         }).collect();
         let conflicted_ids = folder_conflicted_issue_ids(&folder_id_nums);
 
+        // #203 Phase 1 — the zero-API restore. series.json told us WHICH volumes are attached; the
+        // ids are minted here so each annual file can be linked in the same transaction. A file
+        // finds its attachment by the volume id its own ComicInfo carries, which means a manually
+        // renumbered annual restores onto the right volume no matter what its number says.
+        let attachment_seeds: Vec<(String, AttachedVolumeSeed)> = sj
+            .as_ref()
+            .map(|j| j.attached_volumes.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|seed| (Uuid::new_v4().to_string(), seed))
+            .collect();
+        let attachment_by_volume: std::collections::HashMap<(String, String), String> = attachment_seeds
+            .iter()
+            .map(|(id, seed)| ((seed.source.clone(), seed.volume_id.clone()), id.clone()))
+            .collect();
+
         let mut issue_rows: Vec<NewIssueRow> = Vec::with_capacity(files.len());
         for (idx, file) in files.iter().enumerate() {
             let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -1997,6 +2078,21 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
             let page_count = count_pages_blocking(file).await;
 
+            // Only an ANNUAL file can restore an attachment link, and only to a volume series.json
+            // actually lists — a stale embedded id from a detached volume simply finds no match.
+            let attached_volume_id = if is_annual && !attachment_by_volume.is_empty() {
+                file_derived.as_ref().and_then(|d| {
+                    let key = if let Some(m) = d.metron_id {
+                        ("METRON".to_string(), m.to_string())
+                    } else {
+                        ("COMICVINE".to_string(), d.cv_id?.to_string())
+                    };
+                    attachment_by_volume.get(&key).cloned()
+                })
+            } else {
+                None
+            };
+
             issue_rows.push(NewIssueRow {
                 issue_id: Uuid::new_v4().to_string(),
                 series_id: series_id.clone(),
@@ -2005,6 +2101,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                 match_state: issue_match_state,
                 number: issue_num,
                 is_annual,
+                attached_volume_id,
                 file: file.clone(),
                 page_count,
                 fm,
@@ -2062,6 +2159,33 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                 continue;
             }
             Ok(_) => {}
+        }
+
+        // #203 Phase 1: the attachments themselves, restored from series.json before the issues that
+        // point at them. A failure here costs the links, never the folder — the issues still index
+        // (as plain annual rows) and a re-attach in the UI rebuilds the lane.
+        for (attachment_id, seed) in &attachment_seeds {
+            if let Err(e) = sqlx::query(&format!(
+                r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear", "issueCount", "createdAt", "updatedAt")
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 0, {now}, {now})
+                   ON CONFLICT DO NOTHING"#,
+                now = db.now_expr()
+            ))
+            .bind(attachment_id)
+            .bind(&series_id)
+            .bind(&seed.source)
+            .bind(&seed.volume_id)
+            .bind(&seed.kind)
+            .bind(&seed.name)
+            .bind(seed.start_year)
+            .execute(&mut *tx)
+            .await
+            {
+                log::warn!("[Scanner] Couldn't restore attached volume {} ({}) for {}: {:?}", seed.volume_id, seed.source, clean_name, e);
+            }
+        }
+        if !attachment_seeds.is_empty() {
+            log::info!("[Scan] Restored {} attached volume(s) for {} from series.json (no provider calls).", attachment_seeds.len(), clean_name);
         }
 
         let mut folder_issue_count = 0;
@@ -2143,6 +2267,34 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     // any transaction opens (invariant above). The dedupe fold-in stays order-dependent: a number
     // gathered earlier in this batch parks in series_issue_nums so a later same-number file
     // repoints against it instead of double-inserting, even though the INSERT itself flushes later.
+    // #203 Phase 1: attachments already on these series, keyed by (series, source, provider volume
+    // id). A new annual FILE landing in an attached series binds itself here — same zero-API rule as
+    // the fresh-folder restore: the file's own ComicInfo names its volume.
+    let attachments_by_series: std::collections::HashMap<(String, String, String), String> = {
+        let series_ids: Vec<String> = parsed_files.iter().map(|(sid, _, _)| sid.clone())
+            .collect::<std::collections::HashSet<_>>().into_iter().collect();
+        let mut map = std::collections::HashMap::new();
+        if !series_ids.is_empty() {
+            let sql = format!(
+                r#"SELECT id, "seriesId", "metadataSource", "volumeId" FROM "AttachedVolume" WHERE "seriesId" IN ({})"#,
+                Db::in_placeholders(1, series_ids.len())
+            );
+            let mut q = sqlx::query(&sql);
+            for sid in &series_ids { q = q.bind(sid); }
+            for r in q.fetch_all(&db.pool).await.unwrap_or_default() {
+                map.insert(
+                    (
+                        r.get::<String, _>("seriesId"),
+                        r.try_get::<String, _>("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string()),
+                        r.get::<String, _>("volumeId"),
+                    ),
+                    r.get::<String, _>("id"),
+                );
+            }
+        }
+        map
+    };
+
     let mut pending_writes: Vec<PendingIssueWrite> = Vec::new();
     for (series_id, file, info) in parsed_files {
         let file_name = Path::new(&file).file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -2186,6 +2338,20 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
         let issue_id = Uuid::new_v4().to_string();
         let page_count = count_pages_blocking(&file).await;
+        // An annual file whose embedded volume id names one of this series' attachments joins that
+        // lane immediately (see the map above); everything else stays an unattached annual row.
+        let attached_volume_id = if is_annual {
+            derived.as_ref().and_then(|d| {
+                let (source, vol) = if let Some(m) = d.metron_id {
+                    ("METRON".to_string(), m.to_string())
+                } else {
+                    ("COMICVINE".to_string(), d.cv_id?.to_string())
+                };
+                attachments_by_series.get(&(series_id.clone(), source, vol)).cloned()
+            })
+        } else {
+            None
+        };
         // Track the number so another file with the same number later in this batch dedupes
         // against it instead of inserting a second row.
         series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone(), is_annual));
@@ -2197,6 +2363,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             match_state: issue_match_state,
             number: issue_num,
             is_annual,
+            attached_volume_id,
             file,
             page_count,
             fm,
@@ -2500,6 +2667,99 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     }
 
     // ---------------------------------------------------------
+    // 5J. RESTORE ATTACHED VOLUMES FOR EXISTING SERIES (#203 Phase 1 — zero-API restore)
+    // ---------------------------------------------------------
+    // 5A restores attachments for folders indexed fresh; this covers the series that were ALREADY
+    // in the DB when their series.json arrived (a restored backup, a library copied in alongside an
+    // existing install). Deliberately narrow: only series that hold an unattached annual FILE and
+    // own no attachment at all — for everyone else this query returns nothing and costs one scan.
+    let restore_candidates = sqlx::query(
+        r#"SELECT DISTINCT s.id, s."folderPath" FROM "Series" s
+           JOIN "Issue" i ON i."seriesId" = s.id AND i."isAnnual" = true AND i."attachedVolumeId" IS NULL
+                             AND i."filePath" IS NOT NULL AND i."filePath" <> ''
+           WHERE s."libraryId" = $1 AND s."folderPath" IS NOT NULL AND s."folderPath" <> ''
+             AND NOT EXISTS (SELECT 1 FROM "AttachedVolume" av WHERE av."seriesId" = s.id)"#,
+    )
+    .bind(&library_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+
+    for row in restore_candidates {
+        let series_id: String = row.get("id");
+        let folder: String = row.get("folderPath");
+        let seeds = match tokio::task::spawn_blocking(move || read_series_json(Path::new(&folder))).await {
+            Ok(Some(sj)) if !sj.attached_volumes.is_empty() => sj.attached_volumes,
+            _ => continue,
+        };
+
+        let mut by_volume: std::collections::HashMap<(String, String), String> = std::collections::HashMap::new();
+        for seed in &seeds {
+            let attachment_id = Uuid::new_v4().to_string();
+            if sqlx::query(&format!(
+                r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear", "issueCount", "createdAt", "updatedAt")
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 0, {now}, {now})
+                   ON CONFLICT DO NOTHING"#,
+                now = db.now_expr()
+            ))
+            .bind(&attachment_id)
+            .bind(&series_id)
+            .bind(&seed.source)
+            .bind(&seed.volume_id)
+            .bind(&seed.kind)
+            .bind(&seed.name)
+            .bind(seed.start_year)
+            .execute(&db.pool)
+            .await
+            .is_ok()
+            {
+                by_volume.insert((seed.source.clone(), seed.volume_id.clone()), attachment_id);
+            }
+        }
+        if by_volume.is_empty() {
+            continue;
+        }
+
+        // Each unattached annual file names its own volume in its ComicInfo — that's the link.
+        let annual_rows = sqlx::query(
+            r#"SELECT id, "filePath" FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = true AND "attachedVolumeId" IS NULL AND "filePath" IS NOT NULL AND "filePath" <> ''"#,
+        )
+        .bind(&series_id)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap_or_default();
+
+        let mut linked = 0;
+        for ar in annual_rows {
+            let issue_id: String = ar.get("id");
+            let file: String = ar.get("filePath");
+            let info = tokio::task::spawn_blocking(move || parse_comic_info(Path::new(&file))).await.unwrap_or(None);
+            let Some(d) = info.as_ref().map(derive_meta) else { continue };
+            let key = if let Some(m) = d.metron_id {
+                ("METRON".to_string(), m.to_string())
+            } else if let Some(c) = d.cv_id {
+                ("COMICVINE".to_string(), c.to_string())
+            } else {
+                continue;
+            };
+            let Some(attachment_id) = by_volume.get(&key) else { continue };
+            if sqlx::query(r#"UPDATE "Issue" SET "attachedVolumeId" = $1 WHERE id = $2"#)
+                .bind(attachment_id)
+                .bind(&issue_id)
+                .execute(&db.pool)
+                .await
+                .is_ok()
+            {
+                linked += 1;
+            }
+        }
+        log::info!(
+            "[Scan] Restored {} attached volume(s) and re-linked {} annual file(s) from series.json (no provider calls).",
+            by_volume.len(), linked
+        );
+    }
+
+    // ---------------------------------------------------------
     // 5G. RE-STAMP CREDIT-COMPLETE ISSUES (discussion #182 — local-first ingest)
     // ---------------------------------------------------------
     // Libraries scanned by pre-beta.090 builds carry issues whose ComicInfo credits already sit in
@@ -2647,6 +2907,70 @@ async fn delete_issue(db: &Db, issue_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==== #203 Phase 1: attached volumes — the zero-API restore reads its own namespaced block. ====
+
+    #[test]
+    fn parse_series_json_reads_the_omnibus_attached_volumes_block() {
+        let content = r#"{
+            "version": "1.0.2",
+            "metadata": { "name": "Batman", "comicid": 42821, "year": 2011 },
+            "omnibus": { "attached_volumes": [
+                { "source": "COMICVINE", "volume_id": "49197", "kind": "ANNUAL", "name": "Batman Annual", "start_year": 2012 },
+                { "source": "METRON", "volume_id": 7788, "kind": "ANNUAL" }
+            ] }
+        }"#;
+        let sj = parse_series_json(content).expect("parses");
+        assert_eq!(sj.comicid, Some(42821));
+        assert_eq!(sj.attached_volumes.len(), 2);
+        assert_eq!(sj.attached_volumes[0].source, "COMICVINE");
+        assert_eq!(sj.attached_volumes[0].volume_id, "49197");
+        assert_eq!(sj.attached_volumes[0].start_year, Some(2012));
+        // A numeric volume_id and the defaulted kind/source still restore.
+        assert_eq!(sj.attached_volumes[1].volume_id, "7788");
+        assert_eq!(sj.attached_volumes[1].kind, "ANNUAL");
+        assert!(sj.attached_volumes[1].name.is_none());
+    }
+
+    #[test]
+    fn parse_series_json_without_our_block_is_unchanged() {
+        // A Mylar-written file has no "omnibus" key — it must still parse, with zero attachments.
+        let content = r#"{"version":"1.0.2","metadata":{"name":"Batman","comicid":42821}}"#;
+        let sj = parse_series_json(content).expect("parses");
+        assert!(sj.attached_volumes.is_empty());
+        // Neither does a malformed block cost us the rest of the file.
+        let junk = r#"{"version":"1.0.2","metadata":{"name":"Batman"},"omnibus":{"attached_volumes":"nope"}}"#;
+        assert!(parse_series_json(junk).expect("parses").attached_volumes.is_empty());
+    }
+
+    #[test]
+    fn folder_identity_never_comes_from_an_annual_while_a_main_run_file_exists() {
+        // The annual sorts first and its ComicInfo names the ATTACHED volume (49197). Reading the
+        // folder's identity from it would re-point "Batman (2011)" at the annual volume.
+        let files = vec![
+            "/c/Batman/Batman Annual 001.cbz".to_string(),
+            "/c/Batman/Batman 001.cbz".to_string(),
+        ];
+        let infos = vec![
+            Some(ScanComicInfo { series: Some("Batman".into()), format: Some("Annual".into()), comic_vine_volume_id: Some("49197".into()), ..Default::default() }),
+            Some(ScanComicInfo { series: Some("Batman".into()), comic_vine_volume_id: Some("42821".into()), ..Default::default() }),
+        ];
+        let picked = identity_info(&files, &infos).expect("an identity witness");
+        assert_eq!(picked.comic_vine_volume_id.as_deref(), Some("42821"));
+
+        // An all-annual folder has no main run to prefer — it speaks for itself.
+        let only_annual = vec![files[0].clone()];
+        let only_annual_infos = vec![Some(ScanComicInfo {
+            series: Some("Batman".into()),
+            format: Some("Annual".into()),
+            comic_vine_volume_id: Some("49197".into()),
+            ..Default::default()
+        })];
+        assert_eq!(
+            identity_info(&only_annual, &only_annual_infos).and_then(|i| i.comic_vine_volume_id.as_deref()),
+            Some("49197")
+        );
+    }
 
     // ==== Discussion #182: local-first ingest — file-complete issues skip provider enrichment. ====
 
@@ -3602,7 +3926,11 @@ mod tests {
                 "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
                 "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
                 universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
-                "coverUrl" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+                "coverUrl" TEXT, "attachedVolumeId" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+            // #203 Phase 1: the round-trip's embed + series.json legs both reach for it.
+            r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
+                "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
+                "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }

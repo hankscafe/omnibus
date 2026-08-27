@@ -251,6 +251,11 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, rate_lim
         }
         ok_count += 1;
 
+        // #203 Phase 1: the series' attached volumes (annuals) ride along with its own refresh —
+        // an id-anchored lane per attachment, run AFTER the parent volume so a newly-scanned annual
+        // file is already a row by the time the claim looks for it. Never fatal to the series.
+        crate::attached_volumes::sync_series_attachments(&db, &client, &series_id).await;
+
         // Embed the (now-refreshed) DB values into the archives via the full-tag writer
         // (unified on metadata_writer::process_embed_job — no more duplicate 4-tag writer).
         let embed_payload = crate::metadata_writer::EmbedRequest { series_id: Some(series_id.clone()), issue_ids: None };
@@ -848,7 +853,7 @@ fn metron_header_i64(resp: &reqwest::Response, name: &str, default: i64) -> i64 
 /// Metron HTTP GET with burst-rate-limit handling + retry/backoff (parity with metron.ts fetchWithBackoff).
 /// `if_modified_since`: RFC 7231 date for conditional detail requests (metron.cloud best-practices) --
 /// the server answers 304 with no body when the resource is unchanged; callers must branch on status.
-async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &str, timeout_secs: u64, max_retries: u32, if_modified_since: Option<&str>) -> anyhow::Result<(u16, serde_json::Value)> {
+pub(crate) async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &str, timeout_secs: u64, max_retries: u32, if_modified_since: Option<&str>) -> anyhow::Result<(u16, serde_json::Value)> {
     // Shared response cache (metadata_cache_enabled): conditional requests bypass it — their whole
     // point is asking Metron "did this change". A hit skips the per-attempt api_usage logging below
     // entirely (it isn't an upstream call).
@@ -947,7 +952,7 @@ async fn metron_fetch(db: &Db, client: &Client, auth: &(String, String), url: &s
 }
 
 /// Builds the issue display name (parity with metron.ts getSeriesIssues name logic).
-fn metron_issue_name(issue: &serde_json::Value, number: &str) -> String {
+pub(crate) fn metron_issue_name(issue: &serde_json::Value, number: &str) -> String {
     let series_name = issue["series"].as_str().map(|s| s.to_string())
         .or_else(|| issue["series"]["name"].as_str().map(|s| s.to_string()))
         .unwrap_or_default();
@@ -1792,7 +1797,7 @@ pub(crate) fn merge_credit_json(existing: Option<String>, fetched: &[String], lo
 
 /// Narrative-field write policy: locked keeps existing; file_metadata_priority keeps a non-empty
 /// existing value; otherwise the provider's value applies (exact legacy semantics when fill_only=false).
-fn prefer_existing(existing: Option<String>, provider: Option<String>, locked: bool, fill_only: bool) -> Option<String> {
+pub(crate) fn prefer_existing(existing: Option<String>, provider: Option<String>, locked: bool, fill_only: bool) -> Option<String> {
     if locked {
         return existing;
     }
@@ -1844,7 +1849,7 @@ fn synced_name_is_generic(name: &str, number: &str) -> bool {
 /// must never clobber a real title the detail pass (or a ComicInfo read) already landed.
 /// An empty provider name never blanks an existing one (never-wipe, issue #179).
 /// EXACT twin: src/lib/utils/synced-name.ts resolveSyncedName.
-fn resolve_synced_name(
+pub(crate) fn resolve_synced_name(
     existing: Option<String>,
     incoming: Option<String>,
     number: &str,
@@ -1912,7 +1917,7 @@ fn cv_is_ended(v: &serde_json::Value) -> bool {
     }
 }
 
-fn json_num_string(v: &serde_json::Value) -> Option<String> {
+pub(crate) fn json_num_string(v: &serde_json::Value) -> Option<String> {
     if let Some(s) = v.as_str() {
         return if s.is_empty() { None } else { Some(s.to_string()) };
     }
@@ -1926,7 +1931,7 @@ fn json_num_string(v: &serde_json::Value) -> Option<String> {
 }
 
 /// Parses YYYY / YYYY-MM / YYYY-MM-DD into epoch milliseconds (UTC midnight).
-fn parse_date_ms(s: &str) -> Option<i64> {
+pub(crate) fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim();
     let full = match s.len() {
         4 => format!("{}-01-01", s),

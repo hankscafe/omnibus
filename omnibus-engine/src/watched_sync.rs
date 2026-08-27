@@ -331,7 +331,17 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
             let _ = std::fs::create_dir_all(&dest_folder);
 
             let formatted_num = if issue_num.len() == 1 { format!("0{}", issue_num) } else { issue_num.clone() };
-            let pattern_to_use = if is_manga { &manga_file_pattern } else { &file_pattern };
+            // #203 Phase 1: an annual arriving through the watched folder is named the Mylar way
+            // ("Batman Annual #001 (2012)") — parity with renamer.rs and the Node importer, so a
+            // file lands under the same name whichever door it came through.
+            let annual_pattern = "{Series} Annual #{Issue} ({IssueYear})".to_string();
+            let pattern_to_use = if is_annual {
+                &annual_pattern
+            } else if is_manga {
+                &manga_file_pattern
+            } else {
+                &file_pattern
+            };
             
             let new_filename = clean_naming_leftovers(&pattern_to_use
                 .replace("{Publisher}", &clean_fs_name(&publisher))

@@ -270,4 +270,37 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         // Nothing inserted — both provider issues landed on existing rows.
         expect(mocks.issueCreate).not.toHaveBeenCalled();
     });
+
+    it('never pairs a parent-volume issue with an annual row (#203 safety rule)', async () => {
+        // "Batman Annual #1" sits in the parent folder. The parent volume's own #1 must land on a
+        // NEW row — pairing it with the annual would steal the annual's identity, which is exactly
+        // the collision Phase 0 abolished everywhere else.
+        mocks.issueFindMany.mockResolvedValue([]); // the exclusion belongs in the query itself
+        mocks.issueFindFirst.mockResolvedValue(null);
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) {
+                return { data: { results: { name: 'Batman', start_year: '2011', publisher: { name: 'DC Comics' }, image: null } } };
+            }
+            if (url.includes('/issues/')) {
+                return {
+                    data: {
+                        number_of_total_results: 1,
+                        results: [{ id: 300001, issue_number: '1', name: 'The Court', store_date: '2011-09-01' }],
+                    }
+                };
+            }
+            return { data: Buffer.from('img') };
+        });
+        mocks.existsSync.mockReturnValue(false);
+
+        const result = await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect(result.success).toBe(true);
+
+        // The in-series snapshot the pairing runs against must exclude annual rows outright.
+        const snapshot = mocks.issueFindMany.mock.calls.map(c => c[0]).find(a => a?.where?.seriesId === 'series_1');
+        expect(snapshot.where.isAnnual).toBe(false);
+        // The cross-series adoption probe carries the same exclusion.
+        const adoption = mocks.issueFindFirst.mock.calls.map(c => c[0]).find(a => a?.where?.metadataId === '300001');
+        expect(adoption?.where?.isAnnual).toBe(false);
+    });
 });

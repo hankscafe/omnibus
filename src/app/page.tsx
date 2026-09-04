@@ -11,6 +11,7 @@ import { RecentlyAdded } from "@/components/recently-added"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useToast } from "@/components/ui/use-toast"
 import { 
   Bell, 
   ArrowRight, 
@@ -30,11 +31,14 @@ import { getErrorMessage } from "@/lib/utils/error"
 
 export default function Home() {
   const { data: session } = useSession()
+  const { toast } = useToast()
   const [pendingCount, setPendingCount] = useState(0)
   const [openReportsCount, setOpenReportsCount] = useState(0)
   const [manualDownloadsCount, setManualDownloadsCount] = useState(0)
   const [pendingUsersCount, setPendingUsersCount] = useState(0)
   const [unmatchedCount, setUnmatchedCount] = useState(0)
+  // Front-page library scan (admin): queued, never awaited to completion.
+  const [isQueueingScan, setIsQueueingScan] = useState(false)
   const [updateData, setUpdateData] = useState<{ updateAvailable: boolean, currentVersion: string, latestVersion: string } | null>(null)
   const [showFirstSteps, setShowFirstSteps] = useState(false) 
   const isAdmin = session?.user?.role === 'ADMIN'
@@ -176,12 +180,71 @@ export default function Home() {
     }
   }
 
+  /**
+   * Queue a library scan from the front page. Deliberately fire-and-report rather than fire-and-
+   * wait: the job runs in the background, so the honest feedback is "queued", and the unmatched
+   * banner above appears on its own once the scan finds something to match.
+   */
+  const triggerLibraryScan = async () => {
+    setIsQueueingScan(true);
+    try {
+      // The queue's Redis client retries forever (maxRetriesPerRequest: null), so a wedged Redis
+      // would leave this request — and this button — hanging indefinitely. Give up after 10s and
+      // say something true, rather than spinning at the admin.
+      const res = await fetch('/api/admin/jobs/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job: 'library' }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      toast({
+        title: "Scan queued",
+        description: "New files will show up in the library, and anything unidentified lands in the Smart Matcher.",
+      });
+    } catch (e: unknown) {
+      const timedOut = e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError');
+      toast({
+        title: "Couldn't start the scan",
+        description: timedOut
+          ? "The job queue didn't answer — check that Redis is reachable, then try Admin → Scheduled Jobs."
+          : getErrorMessage(e),
+        variant: "destructive",
+      });
+    } finally {
+      setIsQueueingScan(false);
+    }
+  };
+
   return (
     <div className="bg-transparent min-h-full pb-20 transition-colors duration-300">
       <div className="container mx-auto px-6 py-12 space-y-10">
         
         {/* Admin Notification Banners */}
         <div className="space-y-4">
+
+          {/* Drop files in, scan, match — without a detour through Admin → Scheduled Jobs. The
+              watched-folder sweep still runs on its own every 15 minutes; this is for the admin who
+              has just moved a batch in by hand and wants it picked up now (field report by
+              robotshavehearts2). Always available, because the moment you most want it is BEFORE
+              anything shows up as unmatched. */}
+          {isAdmin && (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={triggerLibraryScan}
+                disabled={isQueueingScan}
+                className="h-8 font-bold border-border text-muted-foreground hover:bg-muted"
+                title="Queue a library scan for files you've just added"
+              >
+                {isQueueingScan
+                  ? <><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> Queueing…</>
+                  : <><FolderSearch className="w-3.5 h-3.5 mr-2" /> Scan library</>}
+              </Button>
+            </div>
+          )}
 
           {isAdmin && showFirstSteps && (
             <Alert className="bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-900/50 animate-in fade-in slide-in-from-top-4 relative shadow-sm">

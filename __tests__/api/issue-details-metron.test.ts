@@ -61,7 +61,7 @@ describe('GET /api/issue-details (METRON volume branch)', () => {
         mocks.settingUpsert.mockResolvedValue({});
         mocks.getSeriesDetails.mockResolvedValue(seriesDetails);
         mocks.getSeriesIssues.mockResolvedValue([
-            metadataIssue('900', '154', 'Dragonero #154: La Signora Dei Lupi'),
+            { ...metadataIssue('900', '154', 'Dragonero #154: La Signora Dei Lupi'), coverUrl: 'http://metron/154.jpg' },
             metadataIssue('901', '155', 'Dragonero #155'),
         ]);
     });
@@ -72,9 +72,12 @@ describe('GET /api/issue-details (METRON volume branch)', () => {
 
         expect(res.status).toBe(200);
         expect(mocks.getSeriesIssues).toHaveBeenCalledWith('123');
+        // `image` rides along with the stub shape (field report by robotshavehearts2): Metron's
+        // issue_list already carries each cover, so the Smart Matcher's bulk mapping can show
+        // thumbnails without a single extra provider call. A coverless issue maps to null.
         expect(data.issues).toEqual([
-            { id: '900', issue_number: '154', name: 'Dragonero #154: La Signora Dei Lupi' },
-            { id: '901', issue_number: '155', name: 'Dragonero #155' },
+            { id: '900', issue_number: '154', name: 'Dragonero #154: La Signora Dei Lupi', image: 'http://metron/154.jpg' },
+            { id: '901', issue_number: '155', name: 'Dragonero #155', image: null },
         ]);
         expect(data.count).toBe(78);
     });

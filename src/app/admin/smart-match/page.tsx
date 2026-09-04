@@ -94,6 +94,9 @@ export default function SmartMatchPage() {
     // visibleUnmatched below.
     const [unmatched, setUnmatched] = useState<any[]>([]);
     const [showIgnored, setShowIgnored] = useState(false);
+    // Provider cover per bound issue id, for the bulk mapping table. Filled from the volume payload
+    // where the provider already gave us covers (Metron), otherwise in ONE batch call (ComicVine).
+    const [issueCovers, setIssueCovers] = useState<Record<string, string>>({});
     const [suggestions, setSuggestions] = useState<Record<string, any>>({});
     const [isScanning, setIsScanning] = useState(false);
     const [processingId, setProcessingId] = useState<string | null>(null);
@@ -676,6 +679,17 @@ export default function SmartMatchPage() {
                 });
 
                 setIssueOverrides(newOverrides);
+                // Covers for everything the auto-map just bound, so the bulk table can be verified
+                // by eye. Metron hands them over with the volume; ComicVine needs one batch call.
+                // BULK ONLY: single-item matching already shows the bound issue's cover in the
+                // confirmation card below the ID field, so a batch call there would be redundant.
+                if (isBulkManualMatch) {
+                    loadIssueCovers(
+                        itemsToMap.map(id => newOverrides[id]?.issueId).filter(Boolean) as string[],
+                        suggestionData.rawIssues,
+                        provider,
+                    );
+                }
                 toast({ title: "Series Selected", description: "Review the metadata and issue mappings, then click Apply Match." });
                 return suggestionData;
 
@@ -923,6 +937,36 @@ export default function SmartMatchPage() {
             // Say plainly that it will return, rather than leaving the admin to discover it later.
             setUnmatched(prev => prev.map(s => (s.id === id ? { ...s, isIgnored: false } : s)));
             toast({ title: "Couldn't save that", description: `${getErrorMessage(e)} — it will still be listed as unmatched.`, variant: "destructive" });
+        }
+    };
+
+    /**
+     * Cover thumbnails for the bulk mapping table. Anything the volume payload already carries
+     * (Metron's issue_list does) is used as-is; the rest go to the batch route in one request, so a
+     * 30-file selection costs one provider call rather than thirty. Failure is silent — a missing
+     * thumbnail must never block a match.
+     */
+    const loadIssueCovers = async (issueIds: string[], rawIssues: any[] | undefined, provider: string) => {
+        const fromVolume: Record<string, string> = {};
+        for (const raw of rawIssues || []) {
+            const url = raw?.image?.thumb_url || raw?.image?.small_url || (typeof raw?.image === 'string' ? raw.image : null);
+            if (raw?.id != null && url) fromVolume[String(raw.id)] = url;
+        }
+        if (Object.keys(fromVolume).length > 0) setIssueCovers(prev => ({ ...prev, ...fromVolume }));
+
+        const missing = Array.from(new Set(issueIds.map(String).filter(id => id && !fromVolume[id])));
+        if (missing.length === 0) return;
+
+        try {
+            const res = await fetch('/api/issue-details/covers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: missing, provider }),
+            });
+            const data = await res.json();
+            if (res.ok && data?.covers) setIssueCovers(prev => ({ ...prev, ...data.covers }));
+        } catch (e: unknown) {
+            Logger.log(`[Smart Match] Couldn't load issue cover thumbnails: ${getErrorMessage(e)}`, 'debug');
         }
     };
 
@@ -1693,8 +1737,24 @@ export default function SmartMatchPage() {
                                     
                                     return (
                                         <div key={id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 p-2.5 border border-border rounded-lg bg-muted/20 items-center">
-                                            <div className="sm:col-span-5 truncate text-xs font-medium text-foreground" title={item.name}>
-                                                {item.name}
+                                            <div className="sm:col-span-5 flex items-center gap-2 min-w-0">
+                                                {/* The bound issue's own cover — the fastest way to
+                                                    confirm a mapping without leaving the app. */}
+                                                <div className="w-8 h-11 shrink-0 rounded border border-border bg-muted overflow-hidden flex items-center justify-center">
+                                                    {issueCovers[issueOverrides[id]?.issueId || ''] ? (
+                                                        <img
+                                                            src={issueCovers[issueOverrides[id]?.issueId || '']}
+                                                            alt=""
+                                                            className="w-full h-full object-cover"
+                                                            onError={e => { e.currentTarget.style.visibility = 'hidden'; }}
+                                                        />
+                                                    ) : (
+                                                        <BookOpen className="w-3.5 h-3.5 text-muted-foreground/40" />
+                                                    )}
+                                                </div>
+                                                <span className="truncate text-xs font-medium text-foreground" title={item.name}>
+                                                    {item.name}
+                                                </span>
                                             </div>
                                             <div className="sm:col-span-2">
                                                 <Input
@@ -1709,6 +1769,13 @@ export default function SmartMatchPage() {
                                                     placeholder="Issue ID"
                                                     value={issueOverrides[id]?.issueId || ""}
                                                     onChange={e => setIssueOverrides(prev => ({ ...prev, [id]: { ...prev[id], issueId: e.target.value, issueNumber: prev[id]?.issueNumber || "" } }))}
+                                                    // A hand-typed id gets its cover on blur, not per keystroke.
+                                                    onBlur={e => {
+                                                        const typed = e.target.value.trim();
+                                                        if (typed && !issueCovers[typed]) {
+                                                            loadIssueCovers([typed], manualMatchResult?.rawIssues, manualMatchResult?.metadataSource || searchProvider);
+                                                        }
+                                                    }}
                                                     className="h-8 text-xs bg-background border-border"
                                                 />
                                             </div>

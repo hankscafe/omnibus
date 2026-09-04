@@ -123,7 +123,10 @@ export async function GET(request: Request) {
                 siteUrl: `https://metron.cloud/series/${details?.sourceId}/`,
                 // Bypass strict TypeScript checking for these dynamic API fields
                 count: (details as any)?.issueCount || (details as any)?.count_of_issues || seriesIssues.length || "?",
-                issues: seriesIssues.map(i => ({ id: i.sourceId, issue_number: i.issueNumber, name: i.name })),
+                // `image` rides along at no extra cost — the issue_list already carries each cover,
+                // and the Smart Matcher's bulk mapping shows it so an admin can verify a binding by
+                // eye instead of opening the provider's site (field report by robotshavehearts2).
+                issues: seriesIssues.map(i => ({ id: i.sourceId, issue_number: i.issueNumber, name: i.name, image: i.coverUrl })),
                 writers: [], artists: [], coverArtists: [], colorists: [], letterers: [],
                 characters: [], teams: [], locations: [], genres: [], storyArcs: [],
                 htmlDescription: sanitizeDescription(details?.description, providerWikiBase('METRON'))
